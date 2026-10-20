@@ -31,18 +31,18 @@ class PodContacts(BoundResource):
     """
 
     def list(
-        self, *, limit: int = 50, before: str | None = None
+        self, *, limit: int = 50, cursor: str | None = None
     ) -> ContactListResponse:
         """The pod's contacts, newest first.
 
-        Page by passing the last page's ``next_before`` as ``before``; it is
+        Page by passing the last page's ``next_cursor`` as ``cursor``; it is
         opaque, and absent on the last page.
         """
         return self._call(
             contact_list,
             self._pod_uuid(),
             limit=limit,
-            before=before if before is not None else UNSET,
+            cursor=cursor if cursor is not None else UNSET,
         )
 
     def get(self, contact_id: str | UUID) -> ContactResponse:
@@ -69,6 +69,7 @@ class PodContacts(BoundResource):
         text: str,
         kind: str | None = None,
         client_message_id: str | None = None,
+        idempotency_key: str | None = None,
     ) -> OutreachResponse:
         """Write to a contact first, on one of their handles.
 
@@ -77,7 +78,8 @@ class PodContacts(BoundResource):
         contact's channel at that handle's place -- opened if new -- and is
         sent from there: the response is the line and its delivery, ``PENDING``
         until it goes. ``kind`` (``EMAIL``, ``PHONE``, ...) only when the value
-        could name two handles; the same ``client_message_id`` twice is one line.
+        could name two handles; the same ``client_message_id`` (or
+        ``idempotency_key`` from the same caller) twice is one line.
         """
         body: dict[str, object] = {"handle": handle, "text": text}
         if kind is not None:
@@ -90,6 +92,7 @@ class PodContacts(BoundResource):
             as_uuid(contact_id),
             body=body,
             body_model=OutreachRequest,
+            idempotency_key=(idempotency_key if idempotency_key is not None else UNSET),
         )
 
     def export(

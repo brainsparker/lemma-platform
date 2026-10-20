@@ -30,7 +30,7 @@ from app.modules.datastore.domain.file_entities import (
     DatastoreFileUpdateEntity,
 )
 from app.modules.datastore.domain.errors import DatastoreDomainError
-from app.core.authorization.authz_epoch import bump_pod_authz_epoch
+from app.core.authorization.authz_epoch import bump_pod_files_epoch
 from app.modules.datastore.events.file_work import (
     cleanup_payload,
     add_file_cleanup_work,
@@ -266,7 +266,7 @@ class FileUseCases:
                     pod_id=cleanup.pod_id,
                     payload=cleanup_payload(cleanup),
                 )
-            scope.uow.after_commit(lambda: bump_pod_authz_epoch(pod_id))
+            scope.uow.after_commit(lambda: bump_pod_files_epoch(pod_id))
         if in_process:
             # e2e runs no ingestion worker for this; purge here, still with no
             # connection held.

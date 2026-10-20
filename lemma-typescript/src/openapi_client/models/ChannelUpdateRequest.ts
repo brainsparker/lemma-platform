@@ -19,7 +19,7 @@ export type ChannelUpdateRequest = {
     agents_answer?: (boolean | null);
     archived?: (boolean | null);
     /**
-     * A member's user id; `null` unassigns.
+     * `me`, or a member's user id; `null` unassigns.
      */
     assignee?: (string | null);
     hand_back_after_hours?: (number | null);

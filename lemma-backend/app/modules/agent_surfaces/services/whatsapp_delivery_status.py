@@ -3,9 +3,11 @@
 Cloud API answers a send with 200 and reports most failures afterwards, in a
 ``statuses`` webhook naming the message id -- a recipient outside the 24-hour
 window (131047), a number that cannot receive (131026). Every send of a line
-records that id on its delivery row, so the report finds the row by it and
-marks it ``DEAD`` with the reason a member reads. An id that is not on any
-row (a progress post, an onboarding step) is only logged.
+records that id on its delivery row as soon as Meta answers -- before the
+outcome is recorded -- so the report finds the row by it, however early it
+comes, and marks that one delivery ``DEAD`` with the reason a member reads.
+An id that is not on any row (a progress post, an onboarding step) is only
+logged.
 
 Applied beside ``group_updates`` on every webhook, before the message paths and
 never instead of them.
@@ -16,7 +18,10 @@ from __future__ import annotations
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.ingress_request import SurfaceIngressRequest
-from app.modules.channels.contracts.deliveries import delivery_undelivered
+from app.modules.channels.contracts.deliveries import (
+    delivery_by_external,
+    delivery_undelivered,
+)
 from app.modules.agent_surfaces.platforms.whatsapp.parser import (
     WhatsAppFailedDelivery,
     failed_deliveries,
@@ -53,15 +58,15 @@ async def apply_delivery_statuses(
     if request.payload.get("object") != "whatsapp_business_account":
         return
     for failure in failed_deliveries(request.payload):
-        marked = await delivery_undelivered(
-            uow,
-            platform="WHATSAPP",
-            external_message_id=failure.message_id,
-            reason=failure_reason(failure),
+        delivery = await delivery_by_external(
+            uow, platform="WHATSAPP", external_message_id=failure.message_id
+        )
+        marked = delivery is not None and await delivery_undelivered(
+            uow, delivery.id, reason=failure_reason(failure)
         )
         logger.warning(
             "agent_surfaces.whatsapp.delivery_failed.degraded",
             error_code=failure.code,
             reason=failure.reason,
-            deliveries_marked=marked,
+            deliveries_marked=int(marked),
         )

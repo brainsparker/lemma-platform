@@ -64,6 +64,7 @@ from app.modules.agent.services.run_limits import (
     harness_usage_limits,
     make_stop_checker,
 )
+from app.modules.agent.services.channel_background import with_channel_background
 from app.modules.agent.services.run_message_writer import RunMessageWriter
 from app.modules.agent.services.run_phase_spans import (
     record_history_size,
@@ -559,6 +560,7 @@ class AgentRunnerService:
                     window,
                     conversation_id=agent_run.conversation_id,
                     run_id=agent_run.id,
+                    read_channel=partial(with_channel_background, uow),
                 )
                 if Audience.of(conversation).answers_outsiders and not run_is_private(
                     agent_run.metadata

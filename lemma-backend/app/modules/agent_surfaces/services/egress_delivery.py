@@ -47,6 +47,7 @@ from app.modules.agent_surfaces.domain.ports import (
 from app.modules.agent_surfaces.infrastructure.adapters.registry import (
     SurfacePlatformAdapterRegistry,
 )
+from app.modules.agent_surfaces.platforms.delivery import note_tried
 from app.modules.agent_surfaces.services.agent_naming import agent_name_for_surface
 from app.modules.agent_surfaces.services.credential_resolver import (
     SurfaceCredentialResolver,
@@ -295,7 +296,7 @@ class SurfaceDelivery:
         Only a group's conversation can hold such a run, so nothing else pays
         for the lookup.
         """
-        if source.kind is not SourceKind.SHARED:
+        if source.kind is not SourceKind.CHAT:
             return False
         started = await agent_conversations.lemma_message_run_started_at(
             self.uow, conversation_id
@@ -404,6 +405,7 @@ class SurfaceDelivery:
         """
         # No connection held for the platform call; see `connection_released`.
         async with connection_released(self.uow.session):
+            note_tried(target.surface.surface_type.value)
             try:
                 receipt = await target.adapter.deliver(
                     credentials=target.credentials,

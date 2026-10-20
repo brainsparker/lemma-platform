@@ -15,6 +15,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     String,
     Text,
@@ -51,6 +52,14 @@ class ConversationModel(UUIDAuditBase):
 
     __tablename__ = "agent_conversations"
     __table_args__ = (
+        # A channel of the conversation's own pod. Its channel going leaves the
+        # conversation in no channel -- never in no pod.
+        ForeignKeyConstraint(
+            ["channel_id", "pod_id"],
+            ["channels.id", "channels.pod_id"],
+            name="fk_agent_conversations_channel",
+            ondelete="SET NULL (channel_id)",
+        ),
         # The history list's order, `(last_activity_at, id)` descending. The
         # agent-scoped one is on the same COALESCE the listing spells out.
         Index(
@@ -123,11 +132,7 @@ class ConversationModel(UUIDAuditBase):
     )
     #: The channel this conversation's agent works in, when it lives on one.
     #: A conversation started in Lemma, and an agent's own task, have none.
-    channel_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("channels.id", ondelete="SET NULL"),
-        index=True,
-        nullable=True,
-    )
+    channel_id: Mapped[UUID | None] = mapped_column(index=True, nullable=True)
     organization_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("organizations.id", ondelete="CASCADE"),
         index=True,

@@ -1,8 +1,10 @@
-"""Who has spoken in channels, and where a shared place's source is.
+"""Who has spoken in channels.
 
-Two reads behind a list of groups, each asked once for all of them: everybody
-who said something in each channel, and the source each of the pod's groups
-is. A page of a few hundred groups is then two statements, not a few per group.
+Asked once for a whole list of groups: everybody who said something in each
+channel, from their seats -- each seat keeps when its person last spoke and
+the name they spoke under (``channel_members.last_spoke_at``, ``last_name``,
+written as the line is posted) -- so the read is one statement over the
+seats, never over the lines.
 """
 
 from __future__ import annotations
@@ -12,21 +14,14 @@ from datetime import datetime
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import func, select
-from sqlalchemy.dialects.postgresql import aggregate_order_by
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.channels.domain.entities import (
-    Principal,
-    SenderKind,
-)
-from app.modules.channels.infrastructure.models import (
-    ChannelMessageModel,
-)
+from app.modules.channels.domain.entities import Principal
+from app.modules.channels.infrastructure.models import ChannelMemberModel
 
 #: Ceilings on one read. A pod lists at most a few hundred groups.
 MAX_SPEAKERS = 5000
-_MAX_SOURCES = 2000
 
 
 class Speaker(BaseModel):
@@ -51,36 +46,27 @@ class SpeakerReads:
         """The people who spoke in these channels, once per channel, newest first.
 
         Agents are not speakers: an agent is attached to a channel, never one
-        of the people in it.
+        of the people in it. Somebody taken out of the channel since is not
+        in it to list.
         """
         if not channel_ids:
             return []
-        message = ChannelMessageModel
-        last_said_at = func.max(message.created_at)
+        seat = ChannelMemberModel
         rows = (
             await self.session.execute(
                 select(
-                    message.channel_id,
-                    message.sender_user_id,
-                    message.sender_contact_id,
-                    # The name they spoke under last, not the largest one.
-                    func.array_agg(
-                        aggregate_order_by(message.sender_name, message.seq.desc())
-                    )[1],
-                    last_said_at,
+                    seat.channel_id,
+                    seat.user_id,
+                    seat.contact_id,
+                    seat.last_name,
+                    seat.last_spoke_at,
                 )
                 .where(
-                    message.channel_id.in_(sorted(channel_ids)),
-                    message.sender_kind != SenderKind.AGENT.value,
-                    (message.sender_user_id.is_not(None))
-                    | (message.sender_contact_id.is_not(None)),
+                    seat.channel_id.in_(sorted(channel_ids)),
+                    seat.agent_id.is_(None),
+                    seat.last_spoke_at.is_not(None),
                 )
-                .group_by(
-                    message.channel_id,
-                    message.sender_user_id,
-                    message.sender_contact_id,
-                )
-                .order_by(last_said_at.desc())
+                .order_by(seat.last_spoke_at.desc(), seat.id)
                 .limit(max(1, min(limit, MAX_SPEAKERS)))
             )
         ).all()

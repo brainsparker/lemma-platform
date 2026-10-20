@@ -9,6 +9,7 @@ import type { ConversationType } from './ConversationType.js';
 export type ConversationResponse = {
     agent_id?: (string | null);
     agent_runtime?: (AgentRuntimeConfig | null);
+    channel_id?: (string | null);
     created_at: string;
     /**
      * A question, approval or Agent Host permission request here is waiting on the conversation's owner. Not implied by status: a WAITING conversation may be waiting on a timer, and a permission request waits inside a RUNNING one.

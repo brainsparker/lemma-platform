@@ -6,7 +6,7 @@ import { displayAgentName, initialsOf, isPodDefaultAgent } from "./agent-names";
 import { listStamp } from "./stamp";
 import { readableName } from "@/library/reading";
 import { readPodRoles } from "./pod-roles";
-import { everyPage, readCap, readContact, readContacts, readOrigins, readWidget } from "./contacts";
+import { everyPage, readCap, readContact, readContacts, readOrigins, readWidget, type OutreachSent } from "./contacts";
 import { readOpening } from "./public-rows";
 import type { OpenTableRequest, UpdateTableRequest, WebWidgetCreateRequest, WebWidgetUpdateRequest } from "lemma-sdk";
 import {
@@ -660,7 +660,7 @@ export const liveSource: PodSource = {
     async surfaceChannels(podId, name) { return lemma(podId).podSurfaces.channels(podId, name); },
     async updateSurface(podId, name, patch) { await lemma(podId).podSurfaces.update(podId, name, patch); },
     async listContacts(podId) {
-        return everyPage(async (before) => readContacts(await lemma(podId).contacts.list(podId, { limit: 200, before })));
+        return everyPage(async (cursor) => readContacts(await lemma(podId).contacts.list(podId, { limit: 200, cursor })));
     },
     async renameContact(podId, contactId, name) {
         return readContact(await lemma(podId).contacts.rename(podId, contactId, name));
@@ -671,15 +671,20 @@ export const liveSource: PodSource = {
     async exportContact(podId, contactId) {
         return lemma(podId).contacts.export(podId, contactId);
     },
-    async followUpContact(podId, contactId, message) {
-        /* A contact is written to in their channel: the line goes to the place
-           they last wrote from, and is carried there after it is posted. */
-        const found = await lemma(podId).channels.list(podId, { kind: "CONTACT", contactId, limit: 1 });
-        const channel = found.items?.[0];
-        if (!channel) throw Object.assign(new Error("No channel"), { code: "no_conversation" });
-        await lemma(podId).channels.post(podId, channel.id, { text: message });
-        const place = channel.sources?.[0]?.platform ?? null;
-        return { channelId: channel.id, platform: place };
+    async followUpContact(podId, contactId, message, handle, clientMessageId) {
+        const sent = await lemma(podId).contacts.outreach(podId, contactId, {
+            handle: handle.value,
+            kind: handle.kind as Parameters<ReturnType<typeof lemma>["contacts"]["outreach"]>[2]["kind"],
+            text: message,
+            client_message_id: clientMessageId,
+        });
+        return {
+            channelId: sent.line.channel_id,
+            lineId: sent.line.id,
+            platform: sent.delivery.platform ?? null,
+            status: sent.delivery.status as OutreachSent["status"],
+            reason: sent.delivery.reason ?? null,
+        };
     },
     async listWidgets(podId) {
         return ((await lemma(podId).contacts.widgets.list(podId)).items ?? []).map(readWidget);
@@ -1353,6 +1358,9 @@ export const liveSource: PodSource = {
             limit: CONVERSATION_PAGE_SIZE,
             page_token: cursor ?? undefined,
             search: search || undefined,
+            /* The chats list is the conversations of no channel: a channel's
+               -- the member's own, a group's, a contact's -- open from it. */
+            in_channel: false,
         };
         /* `list` with no agent is every bot's; `listDefault` is the space's own. */
         const listed = everyone

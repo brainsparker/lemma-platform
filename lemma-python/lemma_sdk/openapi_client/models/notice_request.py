@@ -14,24 +14,19 @@ class NoticeRequest:
     """
     Attributes:
         text (str):
-        to (str): The member to tell: a pod member id, user id, or email address.
     """
 
     text: str
-    to: str
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         text = self.text
-
-        to = self.to
 
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
             {
                 "text": text,
-                "to": to,
             }
         )
 
@@ -42,11 +37,8 @@ class NoticeRequest:
         d = dict(src_dict)
         text = d.pop("text")
 
-        to = d.pop("to")
-
         notice_request = cls(
             text=text,
-            to=to,
         )
 
         notice_request.additional_properties = d

@@ -8,6 +8,7 @@ reader sees that it was given, and for whom, not what it said.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
@@ -30,14 +31,27 @@ from app.modules.channels.domain.entities import (
     Principal,
     QuestionKind,
     QuestionState,
+    SenderKind,
 )
-from app.modules.channels.domain.parts import MAX_PARTS, Part
+from app.modules.channels.domain.parts import MAX_PARTS, MentionPart, Part
 from app.modules.channels.domain.projection import withheld_from
 
 #: How much of a line a preview shows.
 PREVIEW_CHARS = 140
 
 JsonObject = dict[str, object]
+
+
+class LineDelivery(BaseModel):
+    """Where a line went outside Lemma, as its writer is shown on it."""
+
+    id: UUID = Field(description="The delivery; retry it by this id.")
+    source_id: UUID | None = None
+    platform: str | None = None
+    status: DeliveryStatus
+    reason: str | None = Field(
+        default=None, description="Why it was skipped, failed or given up."
+    )
 
 
 class QuestionResponse(BaseModel):
@@ -96,6 +110,14 @@ class ChannelMessageResponse(BaseModel):
     edited_at: datetime | None = None
     deleted: bool = False
     question: QuestionResponse | None = None
+    delivered: list[LineDelivery] | None = Field(
+        default=None,
+        description=(
+            "Only on the reader's own line: each place outside Lemma it went "
+            "to, and what became of it. Pushes to members are not listed here "
+            "(`…/deliveries` has every send)."
+        ),
+    )
     created_at: datetime
 
 
@@ -152,9 +174,14 @@ class ChannelPostRequest(BaseModel):
 
 
 class ChannelEditRequest(BaseModel):
-    text: str = Field(min_length=1, max_length=20_000)
+    """Absent is unchanged; ``null`` clears the parts. The text cannot be
+    cleared: delete the line instead."""
+
+    text: str | None = Field(default=None, min_length=1, max_length=20_000)
     parts: list[Part] | None = Field(
-        default=None, max_length=MAX_PARTS, description="Absent keeps the parts."
+        default=None,
+        max_length=MAX_PARTS,
+        description="Absent keeps the parts; `null` or `[]` clears them.",
     )
 
 
@@ -226,8 +253,16 @@ class InboxResponse(BaseModel):
     )
 
 
+class SearchItem(InboxItem):
+    rank: float = Field(description="How closely the line matches the words.")
+    snippet: str | None = Field(
+        default=None,
+        description="The words around the match, as plain text.",
+    )
+
+
 class SearchResponse(BaseModel):
-    items: list[InboxItem]
+    items: list[SearchItem]
     next_cursor: str | None = None
 
 
@@ -247,11 +282,42 @@ def message_people(message: ChannelMessage) -> list[Principal]:
         people.append(question.awaits)
         if question.answered_by is not None:
             people.append(question.answered_by)
+    for part in message.parts:
+        if isinstance(part, MentionPart) and part.kind == "MEMBER":
+            people.append(Principal.member(part.id))
+        elif isinstance(part, MentionPart) and part.kind == "CONTACT":
+            people.append(Principal.contact(part.id))
     return people
 
 
 def message_agents(message: ChannelMessage) -> list[UUID]:
-    return [message.sender.agent_id] if message.sender.agent_id else []
+    named = [
+        part.id
+        for part in message.parts
+        if isinstance(part, MentionPart) and part.kind == "AGENT"
+    ]
+    return ([message.sender.agent_id] if message.sender.agent_id else []) + named
+
+
+def _parts(message: ChannelMessage, names: Names, agents: AgentNames) -> list[Part]:
+    """The line's parts, each mention called what its person or agent is
+    called now -- a writer that sent only an id still shows a name."""
+    shown: list[Part] = []
+    for part in message.parts:
+        if isinstance(part, MentionPart):
+            current = (
+                agents.get(part.id)
+                if part.kind == "AGENT"
+                else names.get(
+                    Principal.member(part.id)
+                    if part.kind == "MEMBER"
+                    else Principal.contact(part.id)
+                )
+            )
+            if current and current != part.name:
+                part = part.model_copy(update={"name": current[:255]})
+        shown.append(part)
+    return shown
 
 
 def _sender(message: ChannelMessage, names: Names, agents: AgentNames) -> PersonRef:
@@ -261,10 +327,15 @@ def _sender(message: ChannelMessage, names: Names, agents: AgentNames) -> Person
         named = ref(principal, names)
         return named.model_copy(update={"name": named.name or sender.display_name})
     if sender.agent_id is not None:
+        # The pod's own assistant (its id is the pod's) is always called what
+        # the pod is called now -- not whatever name its line was written with.
+        own = sender.agent_id == message.pod_id
         return PersonRef(
             kind=sender.kind,
             id=sender.agent_id,
-            name=sender.display_name or agents.get(sender.agent_id),
+            name=(agents.get(sender.agent_id) or sender.display_name)
+            if own
+            else (sender.display_name or agents.get(sender.agent_id)),
         )
     return PersonRef(kind=sender.kind, id=None, name=sender.display_name)
 
@@ -302,8 +373,10 @@ def message_response(
     reader_id: UUID,
     names: Names | None = None,
     agents: AgentNames | None = None,
+    deliveries: Sequence[Delivery] | None = None,
 ) -> ChannelMessageResponse:
-    """One line as the member ``reader_id`` reads it."""
+    """One line as the member ``reader_id`` reads it. ``deliveries``: the
+    line's, when it was read with them -- shown to its writer only."""
     names = names or {}
     behalf = message.sender.on_behalf_of
     hidden = hidden_from(message, channel, reader_id)
@@ -315,9 +388,9 @@ def message_response(
         on_behalf_of=ref(behalf, names) if behalf else None,
         text=None if hidden or message.is_deleted else message.text,
         withheld=hidden,
-        parts=[] if hidden else list(message.parts),
+        parts=[] if hidden else _parts(message, names, agents or {}),
         client_message_id=message.client_message_id,
-        source_id=message.source_id,
+        source_id=message.place_id,
         members_only=message.members_only,
         conversation_id=message.conversation_id,
         reply_to_id=message.reply_to_id,
@@ -327,7 +400,29 @@ def message_response(
         edited_at=message.edited_at,
         deleted=message.is_deleted,
         question=None if hidden else _question(message, names),
+        delivered=(
+            [
+                LineDelivery(
+                    id=delivery.id,
+                    source_id=delivery.source_id,
+                    platform=delivery.platform,
+                    status=delivery.status,
+                    reason=delivery.reason,
+                )
+                for delivery in deliveries
+                if delivery.source_id is not None
+            ]
+            if deliveries is not None and wrote(message, reader_id)
+            else None
+        ),
         created_at=message.created_at,
+    )
+
+
+def wrote(message: ChannelMessage, reader_id: UUID) -> bool:
+    """Whether ``reader_id`` wrote the line: whose its sends are to see."""
+    return (
+        message.sender.kind is SenderKind.MEMBER and message.sender.user_id == reader_id
     )
 
 

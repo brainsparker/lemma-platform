@@ -27,14 +27,12 @@ from app.modules.channels.contracts import (
     ChannelKind,
     ChannelMessage,
     Question,
+    QuestionAsker,
     QuestionKind,
     channel_by_id,
 )
 from app.modules.channels.contracts import questions as channel_questions
 from app.modules.channels.contracts.lines import line_by_id, viewer_of
-
-#: The asker an agent's own paused ``ask_user`` / ``request_approval`` is.
-TOOL_ASKER = "tool"
 
 #: The longest stretch of somebody else's words put in front of the model.
 _MAX_QUOTED_CHARS = 1000
@@ -47,8 +45,8 @@ def render_form_fields(schema: object) -> list[str]:
 
     Without this the agent is told a form is owed and given only a run id and a
     node id — it has to collect "structured values" whose shape it cannot see.
-    The resolved schema was already stored on the notification when the
-    assignment was created; it just never reached the prompt.
+    The resolved schema is stored on the question when the form is asked; this
+    is what brings it to the prompt.
 
     Names, types, enums and requiredness only — no descriptions or defaults,
     which are usually prose and would crowd out the conversation itself.
@@ -110,7 +108,7 @@ def shown_to_the_agent(question: Question) -> bool:
     agent paused on (its run takes the answer)."""
     return (
         question.kind in (QuestionKind.ASK, QuestionKind.FORM)
-        and question.asker != TOOL_ASKER
+        and question.asker is not QuestionAsker.TOOL
     )
 
 

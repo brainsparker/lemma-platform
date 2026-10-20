@@ -4,7 +4,9 @@ One websocket per pod carries any number of subscriptions. ``LiveSession`` is
 the protocol with no I/O -- the frames to send, and what each frame received
 means -- so the CLI and :func:`watch_changes` share it. :func:`watch_changes`
 adds the socket: it connects, subscribes, reconnects with backoff, and resumes
-each subscription from its own last cursor.
+each subscription from its own last cursor. A subscription the server could
+not start just now (an ``error`` with code ``unavailable``) is sent again after
+its own backoff, on the same socket; any other refusal ends it.
 
     async for event in pod.watch_changes("tickets"):
         if isinstance(event, LiveChange):
@@ -19,6 +21,7 @@ each subscription from its own last cursor.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import random
 import ssl
@@ -122,10 +125,18 @@ class LiveSession:
 
     Keeps each subscription's cursor across reconnects: after every ``ready``,
     send :meth:`subscribe_frames` and each subscription resumes where it was.
+    A subscription refused as ``unavailable`` is kept, and handed back by
+    :meth:`take_retries` to be sent again after its backoff -- at most
+    ``max_retries`` times in a row, when set.
     """
 
     _subscriptions: dict[str, _Subscription] = field(default_factory=dict)
     _next: int = 1
+    max_retries: int | None = None
+    #: Consecutive ``unavailable`` refusals per subscription since it was last
+    #: ``subscribed``.
+    _attempts: dict[str, int] = field(default_factory=dict)
+    _due: list[tuple[str, float]] = field(default_factory=list)
 
     def add(
         self,
@@ -157,23 +168,19 @@ class LiveSession:
         return subscription.cursor if subscription else None
 
     def subscribe_frames(self) -> list[str]:
-        frames: list[str] = []
-        for subscription in self._subscriptions.values():
-            frame: dict[str, object] = {
-                "op": "subscribe",
-                "id": subscription.id,
-                "topic": "records",
-            }
-            if subscription.table:
-                frame["table"] = subscription.table
-            if subscription.ops:
-                frame["ops"] = list(subscription.ops)
-            if subscription.cursor:
-                frame["since"] = subscription.cursor
-            if subscription.when:
-                frame["when"] = dict(subscription.when)
-            frames.append(json.dumps(frame))
-        return frames
+        # A reconnect sends every subscription anyway: retries due on the old
+        # socket are moot.
+        self._due.clear()
+        return [_subscribe_frame(s) for s in self._subscriptions.values()]
+
+    def take_retries(self) -> list[tuple[str, float]]:
+        """Subscribe frames to send again, each with the seconds to wait."""
+        due, self._due = self._due, []
+        return [
+            (_subscribe_frame(self._subscriptions[subscription_id]), delay)
+            for subscription_id, delay in due
+            if subscription_id in self._subscriptions
+        ]
 
     def handle(self, raw: str | bytes) -> tuple[bool, list[LiveEvent]]:
         """Read one server frame: (is it ``ready``, the events it carries)."""
@@ -198,6 +205,7 @@ class LiveSession:
             subscription.cursor = cursor
         current = subscription.cursor or ""
         if kind == "subscribed":
+            self._attempts.pop(subscription.id, None)
             return False, [LiveReady(subscription.id, current)]
         if kind == "changes":
             changes = frame.get("changes")
@@ -223,12 +231,41 @@ class LiveSession:
                 LiveResync(subscription.id, current, str(frame.get("reason")))
             ]
         if kind == "error":
+            if frame.get("code") == "unavailable":
+                attempt = self._attempts.get(subscription.id, 0)
+                if self.max_retries is None or attempt < self.max_retries:
+                    self._attempts[subscription.id] = attempt + 1
+                    self._due.append((subscription.id, reconnect_delay(attempt)))
+                    return False, []
+                self._subscriptions.pop(subscription.id, None)
+                return False, [
+                    LiveEnded(
+                        subscription.id, "max retry attempts reached (unavailable)"
+                    )
+                ]
             self._subscriptions.pop(subscription.id, None)
             return False, [LiveEnded(subscription.id, f"refused: {frame.get('code')}")]
         if kind == "unsubscribed" and frame.get("reason") != "client":
             self._subscriptions.pop(subscription.id, None)
             return False, [LiveEnded(subscription.id, str(frame.get("reason")))]
         return False, []
+
+
+def _subscribe_frame(subscription: _Subscription) -> str:
+    frame: dict[str, object] = {
+        "op": "subscribe",
+        "id": subscription.id,
+        "topic": "records",
+    }
+    if subscription.table:
+        frame["table"] = subscription.table
+    if subscription.ops:
+        frame["ops"] = list(subscription.ops)
+    if subscription.cursor:
+        frame["since"] = subscription.cursor
+    if subscription.when:
+        frame["when"] = dict(subscription.when)
+    return json.dumps(frame)
 
 
 def reconnect_delay(attempt: int) -> float:
@@ -267,7 +304,7 @@ async def watch_changes(
             'Watching changes needs the websockets package: pip install "lemma-sdk[live]"'
         ) from exc
 
-    session = LiveSession()
+    session = LiveSession(max_retries=max_reconnects)
     session.add(table=table, ops=ops, since=since, when=when)
     url = live_ws_url(base_url, pod_id)
     ssl_option: ssl.SSLContext | None = None
@@ -279,18 +316,32 @@ async def watch_changes(
     refreshed = False
     while session.active:
         close_code: int | None = None
+        retries: set[asyncio.Task[None]] = set()
         try:
             async with websockets.connect(
                 url,
                 additional_headers={"Authorization": f"Bearer {token()}"},
                 ssl=ssl_option,
             ) as websocket:
+
+                async def resend(frame: str, delay: float) -> None:
+                    await asyncio.sleep(delay)
+                    with contextlib.suppress(ConnectionClosed):
+                        await websocket.send(frame)
+
                 async for raw in websocket:
                     ready, events = session.handle(raw)
                     if ready:
                         attempt, refreshed = 0, False
+                        for task in list(retries):
+                            task.cancel()
+                        retries.clear()
                         for frame in session.subscribe_frames():
                             await websocket.send(frame)
+                    for frame, delay in session.take_retries():
+                        task = asyncio.create_task(resend(frame, delay))
+                        retries.add(task)
+                        task.add_done_callback(retries.discard)
                     for event in events:
                         yield event
                     if not session.active:
@@ -299,6 +350,9 @@ async def watch_changes(
             close_code = exc.rcvd.code if exc.rcvd is not None else None
         except OSError, WebSocketException:
             close_code = None
+        finally:
+            for task in list(retries):
+                task.cancel()
         if close_code in (CLOSE_FORBIDDEN, CLOSE_NOT_FOUND):
             raise LiveAccessError("No access to this pod's changes, or no such pod.")
         if close_code == CLOSE_UNAUTHENTICATED:

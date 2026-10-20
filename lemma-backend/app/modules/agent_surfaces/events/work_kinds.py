@@ -44,6 +44,11 @@ def channel_delivery_key(delivery_id: UUID) -> str:
     return f"channel-delivery:{delivery_id}"
 
 
+def channel_delivery_target_key(target: str, delivery_id: UUID) -> str:
+    """One target's sends run one at a time (``Delivery.target_key``)."""
+    return f"channel-delivery-target:{target or delivery_id}"
+
+
 def receiver_key(credential_key: str) -> str:
     return f"receiver:{credential_key}"
 
@@ -60,6 +65,7 @@ __all__ = [
     "SURFACE_REPLY_FOR_RUN",
     "ingest_key",
     "channel_delivery_key",
+    "channel_delivery_target_key",
     "receiver_key",
     "run_reply_key",
 ]

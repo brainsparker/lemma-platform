@@ -82,7 +82,38 @@ export function useRenameContact(podId: string) {
 
 export function useFollowUp(podId: string) {
     return useMutation({
-        mutationFn: ({ contactId, message }: { contactId: string; message: string }) => source.followUpContact(podId, contactId, message),
+        mutationFn: ({ contactId, message, handle, clientMessageId }: { contactId: string; message: string; handle: { kind: string; value: string }; clientMessageId: string }) =>
+            source.followUpContact(podId, contactId, message, handle, clientMessageId),
+    });
+}
+
+export const contactSettingsKey = (podId: string) => ["contact-settings", podId] as const;
+
+/** The pod's line said once to a contact who writes while their channel's
+ *  agent is off (`PodConfig.contacts.auto_acknowledge`), or null for none. */
+export function useAutoAcknowledge(podId: string) {
+    const offline = isLandingPreview() || source.label === "sample";
+    return useQuery({
+        queryKey: contactSettingsKey(podId),
+        enabled: !offline,
+        staleTime: 60_000,
+        queryFn: async () => {
+            const pod = await lemma(podId).pods.get(podId);
+            const said = (pod.config as { contacts?: { auto_acknowledge?: unknown } | null } | undefined)?.contacts?.auto_acknowledge;
+            return typeof said === "string" && said.trim() ? said : null;
+        },
+    });
+}
+
+export function useSetAutoAcknowledge(podId: string) {
+    const cache = useQueryClient();
+    return useMutation({
+        /* Only this key goes up: the config is merged field-wise. */
+        mutationFn: async (said: string | null) => {
+            await lemma(podId).pods.update(podId, { config: { contacts: { auto_acknowledge: said } } } as Parameters<ReturnType<typeof lemma>["pods"]["update"]>[1]);
+            return said;
+        },
+        onSuccess: (said) => cache.setQueryData(contactSettingsKey(podId), said),
     });
 }
 

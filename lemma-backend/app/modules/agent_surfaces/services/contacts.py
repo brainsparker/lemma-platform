@@ -238,6 +238,19 @@ class ContactDoor:
         ):
             return False
         if _asks_to_stop(parsed):
+            if not handle.vouched_for:
+                # Anybody can write "STOP" under somebody else's address. An
+                # opt-out keyed by a forged sender would cut the real person off
+                # from the pod's mail, so one nothing vouched for is parked for
+                # the member who looks after contacts, like any unverified mail
+                # (``prepare``). The person is not stuck: every email the pod
+                # sends carries a signed one-click unsubscribe that does not
+                # depend on whose address a reply comes from.
+                logger.info(
+                    "agent_surfaces.contacts.unverified_stop_parked.observed",
+                    surface_id=str(surface.id),
+                )
+                return False
             await self._stop(surface, handle)
             return True
         typed = handle.vouched_for and machine_mail(surface, parsed) is None

@@ -30,6 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.crypto import get_secret_cipher
 from app.modules.agent_surfaces.infrastructure.models import AgentSurface
+from app.modules.agent_surfaces.tests.e2e.background_reads import background_read
 from app.modules.agent_surfaces.tests.e2e.helpers import (
     _conversation_by_external_thread,
     _create_surface,
@@ -579,7 +580,8 @@ async def test_slack_channel_attachment_and_history_are_persisted_via_worker(
     inbound = next(item for item in persisted if item["role"] == "user")
     metadata = inbound.get("metadata") or {}
     assert metadata["ingested_files"]
-    assert [item["text"] for item in metadata["channel_context"]] == [
+    shown = await background_read(metadata)
+    assert [line.text for line in shown.lines] == [
         "Thread root context",
         "Thread follow-up context",
     ]
@@ -1156,9 +1158,8 @@ async def test_teams_channel_mention_ingests_attachment_and_channel_context(
     inbound = next(item for item in persisted if item["role"] == "user")
     metadata = inbound.get("metadata") or {}
     assert metadata["ingested_files"]
-    assert metadata["channel_context"][0]["author"] == (
-        "Earlier Participant (other participant)"
-    )
+    shown = await background_read(metadata)
+    assert shown.lines[0].author == "Earlier Participant (other participant)"
 
 
 # Platform variation, not a distinct journey: same ingress -> conversation

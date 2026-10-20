@@ -69,13 +69,23 @@ def test_a_failed_status_is_read_and_the_others_are_not():
 
 async def test_a_send_meta_reports_undelivered_is_marked_by_its_id(monkeypatch):
     """The status names Meta's message id; the delivery that carried it, which
-    recorded that id when Meta answered 200, is marked DEAD with the reason."""
+    recorded that id when Meta answered 200, is marked DEAD with the reason --
+    that delivery, by its own id."""
     marked: list[dict[str, Any]] = []
+    carried = SimpleNamespace(id=uuid4())
+    looked_up: list[dict[str, Any]] = []
 
-    async def delivery_undelivered(_uow, **kwargs) -> int:
-        marked.append(kwargs)
-        return 1
+    async def delivery_by_external(_uow, **kwargs):
+        looked_up.append(kwargs)
+        return carried
 
+    async def delivery_undelivered(_uow, delivery_id, **kwargs) -> bool:
+        marked.append({"delivery_id": delivery_id, **kwargs})
+        return True
+
+    monkeypatch.setattr(
+        whatsapp_delivery_status, "delivery_by_external", delivery_by_external
+    )
     monkeypatch.setattr(
         whatsapp_delivery_status, "delivery_undelivered", delivery_undelivered
     )
@@ -87,11 +97,13 @@ async def test_a_send_meta_reports_undelivered_is_marked_by_its_id(monkeypatch):
         ),
     )
 
-    [failed] = marked
-    assert (failed["external_message_id"], failed["platform"]) == (
+    [asked] = looked_up
+    assert (asked["external_message_id"], asked["platform"]) == (
         _OUTSIDE_WINDOW["id"],
         "WHATSAPP",
     )
+    [failed] = marked
+    assert failed["delivery_id"] == carried.id
     assert "24 hours" in failed["reason"]
 
 

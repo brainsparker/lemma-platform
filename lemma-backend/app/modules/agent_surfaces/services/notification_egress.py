@@ -1,9 +1,9 @@
 """Everything between "we picked a channel" and "the platform has it".
 
-Split out of ``notification_service`` so that file stays under the size ceiling,
-but the seam is a real one rather than a filing convenience: this half talks to
-surfaces and conversations, the other half owns notification *state* — creation,
-response, expiry — and never needs to know how a message physically leaves.
+The seam is a real one rather than a filing convenience: this half talks to
+surfaces and conversations, while what a push *is* -- the line, its delivery
+row and what became of it -- is the channels module's, which never needs to
+know how a message physically leaves.
 
 The collaborator is held as :class:`SurfaceNotificationEgressPort`, not as an
 untyped kwarg. That is not decoration. Both of the ``AttributeError`` crashes
@@ -24,13 +24,14 @@ from app.core.log.log import get_logger
 from app.modules.agent.contracts import (
     conversations_for_surfaces as agent_conversations,
 )
+from app.modules.agent_surfaces.domain.adapter_port import IDEMPOTENCY_KEY
 from app.modules.agent_surfaces.domain.ports import (
     ColdEmailThread,
     SurfaceNotificationEgressPort,
 )
 from app.modules.agent_surfaces.services.cold_email_thread import cold_thread_seed_id
 from app.modules.agent_surfaces.services.group_names import sender_name_for
-from app.modules.agent_surfaces.domain.external_accounts import account_key_for
+from app.modules.agent_surfaces.domain.external_accounts import account_of
 from app.modules.agent_surfaces.services.channel_places import ChannelSeats
 from app.modules.agent_surfaces.services.notification_delivery import (
     DeliveryChannel,
@@ -91,6 +92,9 @@ class NotificationEgress:
         # bot would lose the name and icon it replies under.
         if agent_name:
             metadata["agent_display_name"] = agent_name
+        if outbound.key:
+            # Every try of one push is one message where the platform dedupes.
+            metadata[IDEMPOTENCY_KEY] = outbound.key
         if channel.source is not None:
             receipt = await self.egress.deliver_message(
                 conversation_id=conversation_id,
@@ -199,8 +203,8 @@ class NotificationEgress:
             place=Place(
                 surface_id=surface.id,
                 platform=surface.surface_type.value,
-                account_key=account_key_for(surface),
-                kind=SourceKind.PRIVATE,
+                account=account_of(surface),
+                kind=SourceKind.PERSON,
                 # Keyed by the person, as their reply is heard: one place per
                 # correspondent on the inbox, the thread kept on each line.
                 external_channel_id=None,

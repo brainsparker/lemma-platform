@@ -13,10 +13,12 @@ export class ContactOutreachService {
      * Write to a contact first, on one of their handles: email any time,
      * WhatsApp within 24 hours of their last message there. The line goes in
      * their channel, at that handle's place -- opened if new -- and is sent from
-     * there.
+     * there. The same `client_message_id`, or `Idempotency-Key`, from the same
+     * member is the same line: a retry sends nothing new.
      * @param podId
      * @param contactId
      * @param requestBody
+     * @param idempotencyKey
      * @returns OutreachResponse Successful Response
      * @throws ApiError
      */
@@ -24,6 +26,7 @@ export class ContactOutreachService {
         podId: string,
         contactId: string,
         requestBody: OutreachRequest,
+        idempotencyKey?: (string | null),
     ): CancelablePromise<OutreachResponse> {
         return __request(OpenAPI, {
             method: 'POST',
@@ -31,6 +34,9 @@ export class ContactOutreachService {
             path: {
                 'pod_id': podId,
                 'contact_id': contactId,
+            },
+            headers: {
+                'Idempotency-Key': idempotencyKey,
             },
             body: requestBody,
             mediaType: 'application/json',

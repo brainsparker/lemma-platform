@@ -7,6 +7,7 @@ import type { ChannelKind } from './ChannelKind.js';
 import type { ContactStatus } from './ContactStatus.js';
 import type { LinePreview } from './LinePreview.js';
 import type { PersonRef } from './PersonRef.js';
+import type { SourceSettingsResponse } from './SourceSettingsResponse.js';
 import type { SourceSummary } from './SourceSummary.js';
 import type { UnreadResponse } from './UnreadResponse.js';
 import type { Visibility } from './Visibility.js';
@@ -21,7 +22,7 @@ export type ChannelResponse = {
      */
     assignee?: (PersonRef | null);
     /**
-     * The channel asks for a person, and why.
+     * A contact's channel: its current case asks for a person, and why. Never set on another kind of channel.
      */
     attention?: (AttentionResponse | null);
     created_at: string;
@@ -30,6 +31,10 @@ export type ChannelResponse = {
      */
     hand_back_after_hours?: (number | null);
     id: string;
+    /**
+     * Whether the reader is in it. A pod admin listing a bot's groups (`source_surface`) is shown its private ones too, not joined and without their last line, until they join.
+     */
+    joined?: boolean;
     kind: ChannelKind;
     last_line?: (LinePreview | null);
     last_line_at: string;
@@ -38,6 +43,10 @@ export type ChannelResponse = {
      * Whose channel it is: the member's for a DIRECT one, the contact's for a CONTACT one; absent for a GROUP.
      */
     person?: (PersonRef | null);
+    /**
+     * Listed by `source_surface`: that bot's settings for its place here -- who answers its people outside the pod, and whether they are.
+     */
+    source_settings?: (SourceSettingsResponse | null);
     /**
      * The outside places feeding it.
      */

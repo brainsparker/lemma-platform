@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent_surfaces.infrastructure.models import AgentSurface
 from app.modules.channels.contracts import (
+    AccountKey,
     GroupHome,
     MembersHome,
     Place,
@@ -60,8 +61,8 @@ async def _heard(
             place=Place(
                 surface_id=surface_id,
                 platform="TELEGRAM",
-                account_key=f"surface:{surface_id}",
-                kind=SourceKind.PRIVATE if private else SourceKind.SHARED,
+                account=AccountKey(workspace=f"surface:{surface_id}"),
+                kind=SourceKind.PERSON if private else SourceKind.CHAT,
                 external_channel_id=None if private else f"-100{uuid4().int % 10**9}",
                 external_user_id=MEMBER if private else None,
             ),

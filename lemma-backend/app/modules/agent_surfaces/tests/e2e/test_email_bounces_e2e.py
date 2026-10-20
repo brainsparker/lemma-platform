@@ -12,9 +12,11 @@ from __future__ import annotations
 import base64
 import json
 from typing import Any
+from uuid import UUID
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings as core_settings
@@ -32,6 +34,9 @@ from app.modules.agent_surfaces.tests.e2e.test_channel_deliveries_e2e import (
 )
 from app.modules.agent_surfaces.tests.e2e.test_email_contacts_e2e import CUSTOMER
 from app.modules.channels.contracts import DeliveryStatus
+from app.modules.contacts.contracts import IdentityKind
+from app.modules.contacts.domain.handles import handle_hash
+from app.modules.contacts.infrastructure.models import ContactSuppressionModel
 
 pytestmark = [pytest.mark.e2e, pytest.mark.drives_work]
 
@@ -152,4 +157,73 @@ async def test_a_temporary_bounce_or_somebody_elses_email_changes_nothing(
     )
 
     assert soft == unknown == {"message": "Ignored: nothing to record"}
+    assert (await _row(sent.id)).status is DeliveryStatus.SENT
+
+
+async def test_a_bounce_suppresses_the_address_it_was_for_not_everyone_copied(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+    fake_resend,
+    monkeypatch,
+):
+    """The email also went to somebody copied on her thread: the bounce is
+    about the delivery's place -- her address -- and nobody else is stopped."""
+    _channel, sent = await _a_sent_line(
+        authenticated_client,
+        db_session,
+        test_pod=test_pod,
+        fixed_test_user=fixed_test_user,
+        fake_resend=fake_resend,
+        monkeypatch=monkeypatch,
+    )
+    copied = "colleague@customer.example.test"
+    event = _event(
+        "email.bounced", sent.external_message_id, bounce={"type": "Permanent"}
+    )
+    event["data"]["to"] = [CUSTOMER, copied]
+
+    await _resend_says(authenticated_client, monkeypatch, event)
+
+    db_session.expire_all()
+    suppressed = set(
+        (
+            await db_session.scalars(
+                select(ContactSuppressionModel.value_hash).where(
+                    ContactSuppressionModel.pod_id == UUID(test_pod["id"])
+                )
+            )
+        ).all()
+    )
+    assert handle_hash(IdentityKind.EMAIL, CUSTOMER) in suppressed
+    assert handle_hash(IdentityKind.EMAIL, copied) not in suppressed
+
+
+async def test_a_bounce_resend_could_not_classify_is_not_permanent(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+    fake_resend,
+    monkeypatch,
+):
+    _channel, sent = await _a_sent_line(
+        authenticated_client,
+        db_session,
+        test_pod=test_pod,
+        fixed_test_user=fixed_test_user,
+        fake_resend=fake_resend,
+        monkeypatch=monkeypatch,
+    )
+
+    said = await _resend_says(
+        authenticated_client,
+        monkeypatch,
+        _event(
+            "email.bounced", sent.external_message_id, bounce={"type": "Undetermined"}
+        ),
+    )
+
+    assert said == {"message": "Ignored: nothing to record"}
     assert (await _row(sent.id)).status is DeliveryStatus.SENT

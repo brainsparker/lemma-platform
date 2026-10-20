@@ -2,13 +2,16 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+/**
+ * Absent is unchanged; neither field can be cleared.
+ */
 export type SourceUpdateRequest = {
     /**
      * Answer people outside the pod here, or stop.
      */
     answers_outsiders?: (boolean | null);
     /**
-     * Answer for its outsiders yourself from now on.
+     * `me`: answer for its outsiders yourself from now on.
      */
-    take_over?: boolean;
+    owner?: (string | null);
 };

@@ -2,8 +2,8 @@ from enum import Enum
 
 
 class SourceKind(str, Enum):
-    PRIVATE = "PRIVATE"
-    SHARED = "SHARED"
+    CHAT = "CHAT"
+    PERSON = "PERSON"
 
     def __str__(self) -> str:
         return str(self.value)

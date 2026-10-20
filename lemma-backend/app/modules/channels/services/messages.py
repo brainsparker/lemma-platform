@@ -21,7 +21,6 @@ from uuid import UUID
 
 from app.core.authorization.delegation import effective_agent_id
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.channels.domain.access import Viewer, may_see
 from app.modules.channels.domain.entities import (
     Channel,
     ChannelKind,
@@ -29,16 +28,18 @@ from app.modules.channels.domain.entities import (
     Principal,
     Sender,
     SenderKind,
+    Source,
 )
+from app.modules.channels.domain.idempotency import keyed_client_id
 from app.modules.channels.domain.parts import MAX_PARTS, MentionPart, Part
 from app.modules.channels.infrastructure.lines import LineRepository, NewLine
 from app.modules.channels.infrastructure.members import MemberRepository
+from app.modules.channels.infrastructure.mentions import drop_mentions, sync_mentions
+from app.modules.channels.infrastructure.repository import ChannelRepository
 from app.modules.channels.infrastructure.source_repository import SourceRepository
 from app.modules.channels.services.posting import Post, Timeline
-from app.modules.pod.contracts.members import pod_member_holds, pod_member_id
-
-#: ``contact.read``: who may see the pod's contacts, and so their channels.
-_CONTACT_READ = "contact.read"
+from app.modules.channels.services.pushes import push_named
+from app.modules.channels.services.viewers import member_sees
 
 
 class LineRefused(Exception):
@@ -80,30 +81,44 @@ class MemberLines:
         if len(post.parts) > MAX_PARTS:
             raise LineRefused(f"At most {MAX_PARTS} parts", status_code=422)
         root = await self._thread_root(channel, post.thread_root_id)
+        # The member's own name for the line, in their own namespace: a client
+        # can never pick a name the pod's own writers use (``run:``, ``wf:``,
+        # ``channel-line:`` ...) nor another member's.
+        client_id = keyed_client_id(post.client_message_id, user_id=user_id)
+        if client_id is not None:
+            earlier = await self.lines.named(channel.id, client_id)
+            if earlier is not None:
+                return _replayed(earlier, post, root=root, user_id=user_id)
         reply_to = await self._in_channel(channel, post.reply_to_id)
         people, agents = await self._named(channel, post.parts)
-        source_id = await self._where_it_goes(channel, post, root)
+        place_id = await self._where_it_goes(channel, post, root)
         message = await Timeline(self.uow).post(
             channel,
             Post(
                 line=NewLine(
                     sender=Sender.member(user_id, display_name=display_name),
                     text=post.text,
-                    source_id=source_id,
+                    # Written here: carried to the place, never heard there.
+                    target_source_id=place_id,
                     members_only=post.members_only,
                     parts=tuple(post.parts),
-                    client_message_id=post.client_message_id,
+                    client_message_id=client_id,
                     thread_root_id=root.id if root else None,
                     reply_to_id=reply_to,
                 ),
                 mentions=people,
                 mentioned_agents=agents,
-                deliver_to=[source_id] if source_id else [],
+                deliver_to=[place_id] if place_id else [],
                 pod_agent_id=effective_agent_id(None, pod_id=channel.pod_id),
             ),
         )
         if message is None:
             raise LineRefused("Say something first", status_code=422)
+        if message.sender.kind is not SenderKind.MEMBER or (
+            message.sender.user_id != user_id
+        ):
+            # Somebody else's line under the same name: never theirs to replay.
+            raise LineRefused("That client_message_id names somebody else's line")
         return message
 
     async def _thread_root(
@@ -149,10 +164,10 @@ class MemberLines:
             if post.source_id is not None:
                 raise LineRefused("A note to members goes nowhere outside")
             return None
-        if root is not None and root.source_id is not None:
-            if post.source_id not in (None, root.source_id):
+        if root is not None and root.place_id is not None:
+            if post.source_id not in (None, root.place_id):
                 raise LineRefused("A reply goes where its thread is", status_code=422)
-            return root.source_id
+            return root.place_id
         sources = await self.sources.of_channel(channel.id)
         if post.source_id is not None:
             if all(source.id != post.source_id for source in sources):
@@ -160,15 +175,7 @@ class MemberLines:
                     "That place does not feed this channel", status_code=404
                 )
             return post.source_id
-        if channel.kind is ChannelKind.DIRECT:
-            # Writing in one's own channel is talking to the pod in Lemma.
-            return None
-        heard = [
-            source
-            for source in sources
-            if not source.is_pending and source.last_inbound_at is not None
-        ]
-        return heard[0].id if heard else None
+        return carried_to(channel, sources)
 
     async def edit(
         self,
@@ -176,17 +183,28 @@ class MemberLines:
         message_id: UUID,
         *,
         user_id: UUID,
-        text: str,
+        text: str | None,
         parts: Sequence[Part] | None = None,
     ) -> ChannelMessage:
+        """``None`` keeps the text, or the parts."""
         line = await self._own(channel, message_id, user_id=user_id)
-        body = text.strip()
+        body = (line.text if text is None else text).strip()
         if not body:
             raise LineRefused("Say something, or delete it", status_code=422)
-        if parts is not None:
+        if parts is None:
+            # The words change; who it names does not.
+            edited = await self.lines.edit(line.id, text=body)
+        else:
             # An edit names people by the same rule a post does.
-            await self._named(channel, parts)
-        edited = await self.lines.edit(line.id, text=body, parts=parts)
+            people, agents = await self._named(channel, parts)
+            edited = await rewrite_line(
+                self.uow,
+                message_id=line.id,
+                text=body,
+                parts=parts,
+                people=people,
+                agents=agents,
+            )
         if edited is None:
             raise LineRefused("That line was deleted")
         return edited
@@ -195,7 +213,7 @@ class MemberLines:
         self, channel: Channel, message_id: UUID, *, user_id: UUID
     ) -> ChannelMessage:
         line = await self._own(channel, message_id, user_id=user_id)
-        deleted = await self.lines.delete(line.id)
+        deleted = await erase_line(self.uow, message_id=line.id)
         if deleted is None:
             raise LineRefused("That line was deleted already")
         return deleted
@@ -209,6 +227,88 @@ class MemberLines:
         if line.sender.kind is not SenderKind.MEMBER or line.sender.user_id != user_id:
             raise LineRefused("Only who wrote a line may change it", status_code=403)
         return line
+
+
+async def rewrite_line(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    message_id: UUID,
+    text: str,
+    parts: Sequence[Part],
+    people: Sequence[Principal],
+    agents: Sequence[UUID],
+) -> ChannelMessage | None:
+    """What a line says now, and who it names: ``people`` and ``agents``, as
+    resolved from ``parts`` by ``Naming``. Somebody newly named is counted and
+    told, as a post tells them; somebody no longer named stops counting.
+    ``None`` when the line is gone or deleted."""
+    edited = await LineRepository(uow.session).edit(message_id, text=text, parts=parts)
+    if edited is None:
+        return None
+    change = await sync_mentions(
+        uow.session, message=edited, people=people, agents=agents
+    )
+    if change.added_users:
+        channel = await ChannelRepository(uow.session).get(edited.channel_id)
+        if channel is not None:
+            await push_named(uow, channel, edited, change.added_users)
+    return edited
+
+
+async def erase_line(
+    uow: SqlAlchemyUnitOfWork, *, message_id: UUID
+) -> ChannelMessage | None:
+    """Forget what a line said, and whom it named; it keeps its place.
+    ``None`` when it was deleted already."""
+    deleted = await LineRepository(uow.session).delete(message_id)
+    if deleted is not None:
+        await drop_mentions(uow.session, [deleted.id])
+    return deleted
+
+
+def _replayed(
+    earlier: ChannelMessage,
+    post: MemberPost,
+    *,
+    root: ChannelMessage | None,
+    user_id: UUID,
+) -> ChannelMessage:
+    """The line a retry of this post already wrote -- or a refusal, when the
+    same name now asks for a different line."""
+    sender = earlier.sender
+    if sender.kind is not SenderKind.MEMBER or sender.user_id != user_id:
+        raise LineRefused("That client_message_id names somebody else's line")
+    same = (
+        earlier.members_only == post.members_only
+        and earlier.thread_root_id == (root.id if root else None)
+        and post.source_id in (None, earlier.place_id)
+        # What it says, unless its writer changed that since.
+        and (
+            earlier.edited_at is not None
+            or earlier.is_deleted
+            or earlier.text == post.text
+        )
+    )
+    if not same:
+        raise LineRefused(
+            "That client_message_id was used for another line; name this one anew",
+            status_code=422,
+        )
+    return earlier
+
+
+def carried_to(channel: Channel, sources: Sequence[Source]) -> UUID | None:
+    """Where a line written in Lemma goes when nobody picks: the place the
+    channel last heard a person at (``sources`` most recently heard first).
+    A member's own channel is the pod in Lemma, and goes nowhere."""
+    if channel.kind is ChannelKind.DIRECT:
+        return None
+    heard = [
+        source
+        for source in sources
+        if not source.is_pending and source.last_inbound_at is not None
+    ]
+    return heard[0].id if heard else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -258,14 +358,4 @@ class Naming:
         )
 
     async def _member_sees(self, channel: Channel, user_id: UUID) -> bool:
-        if await pod_member_id(self.uow, channel.pod_id, user_id) is None:
-            return False
-        viewer = Viewer(
-            user_id=user_id,
-            pod_id=channel.pod_id,
-            sees_contacts=await pod_member_holds(
-                self.uow, channel.pod_id, user_id, _CONTACT_READ
-            ),
-        )
-        is_member = await self.members.of_user(channel.id, user_id) is not None
-        return may_see(channel, viewer, is_member=is_member)
+        return await member_sees(self.uow, channel, user_id)

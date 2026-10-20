@@ -6,6 +6,7 @@ import { contactsSupported, filtersSupported, isOwnBot, routesSupported, surface
 import { answerChoices } from "@/data/contacts";
 import { useBotGroups } from "@/channels/queries";
 import { GroupSheets, type GroupSheet } from "@/channels/source-sheets";
+import { BotGroupRow } from "@/channels/bot-groups";
 import { isGroupPlatform } from "@/channels/sources";
 import { useFeature } from "@/site/analytics/flags";
 import { SetupActions } from "./surface-setup";
@@ -109,7 +110,6 @@ function SurfaceForm({ pod, surface, listed, bot, onSaved, onLeave }: {
 }) {
     const [draft, setDraft] = useState(() => surfaceDraft(surface));
     const [dropping, setDropping] = useState(false);
-    const groupsOn = useFeature("groups");
     const contactsOn = useFeature("contacts");
     const cache = useQueryClient();
     const change = (patch: Partial<SurfaceDraft>) => setDraft(current => ({ ...current, ...patch }));
@@ -181,7 +181,7 @@ function SurfaceForm({ pod, surface, listed, bot, onSaved, onLeave }: {
                     <small>In chats that already exist, for a reminder or a follow-up. Off: it only replies.</small>
                 </span>
             </label>
-            {groupsOn && isGroupPlatform(surface.platform) && (
+            {isGroupPlatform(surface.platform) && (
                 <label className="smanage__check">
                     <input type="checkbox" role="switch" checked={draft.answersOutsiders} onChange={event => change({ answersOutsiders: event.target.checked })} />
                     <span>
@@ -204,7 +204,7 @@ function SurfaceForm({ pod, surface, listed, bot, onSaved, onLeave }: {
                 </label>
             )}
         </fieldset>
-        {groupsOn && isGroupPlatform(listed.platform) && <GroupsHere pod={pod} surface={listed} bot={bot} onLeave={onLeave} />}
+        {isGroupPlatform(listed.platform) && <GroupsHere pod={pod} surface={listed} bot={bot} onLeave={onLeave} />}
         {save.isError && <p role="alert">{save.error.message}</p>}
         {drop.isError && <p role="alert">{drop.error instanceof Error ? drop.error.message : "Couldn’t disconnect it."}</p>}
         <div className="smanage__foot">
@@ -241,12 +241,7 @@ function GroupsHere({ pod, surface, bot, onLeave }: { pod: Pod; surface: Surface
             {groups.isSuccess && here.length === 0 && <p className="smanage__quiet">None yet.</p>}
             {here.length > 0 && (
                 <ul className="smanage__group-list">
-                    {here.map((place) => (
-                        <li key={place.id}>
-                            <PlaceLink href={channelHref(pod.id, place.channelId)} onGo={onLeave}>{place.title ?? "A group in " + pod.name}</PlaceLink>
-                            {place.pending && <small>Being created</small>}
-                        </li>
-                    ))}
+                    {here.map((place) => <BotGroupRow key={place.id} pod={pod} group={place} onLeave={onLeave} />)}
                 </ul>
             )}
             {surface.active && (

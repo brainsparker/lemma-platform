@@ -25,6 +25,7 @@ import {
     takeOn,
     toldWhenChanged,
     whomItAnswers,
+    type SourceChange,
     type SourceSettings,
 } from "./sources";
 
@@ -34,8 +35,8 @@ import {
  *  else is told who can. Where nobody outside is answered, the first reason
  *  is said: the bot's own switch, nobody to answer for them, or the group's
  *  switch, which is on screen already for whoever may flip it. */
-export function SourceSettingsView({ pod, sourceId }: { pod: Pod; sourceId: string }) {
-    const settings = useSourceSettings(pod.id, sourceId);
+export function SourceSettingsView({ pod, channelId, sourceId }: { pod: Pod; channelId: string; sourceId: string }) {
+    const settings = useSourceSettings(pod.id, channelId, sourceId);
     if (settings.isPending) return <p className="gside__text" role="status">Reading its settings…</p>;
     if (!settings.data) {
         return (
@@ -58,7 +59,7 @@ function Settings({ pod, source }: { pod: Pod; source: SourceSettings }) {
     const bot = surface && !surface.mine ? surface.agentName || pod.name : pod.name;
     const [opened, setOpened] = useState(false);
     const change = useMutation({
-        mutationFn: (body: { answers_outsiders?: boolean; take_over?: boolean }) => channelApi(pod.id).updateSource(source.id, body),
+        mutationFn: (body: SourceChange) => channelApi(pod.id).updateSource(source.channelId, source.id, body),
         onSuccess: (saved) => cache.setQueryData(sourceKey(pod.id, source.id), saved),
         /* Refused: it changed hands since it was read. Read it again, so the
            panel stops offering what is no longer the reader's. */
@@ -68,7 +69,7 @@ function Settings({ pod, source }: { pod: Pod; source: SourceSettings }) {
     const on = asked?.answers_outsiders ?? source.answersOutsiders;
     const state = answering(source, me);
     const may = source.canManage;
-    const taking = change.isPending && Boolean(change.variables?.take_over);
+    const taking = change.isPending && change.variables?.owner === "me";
     const told = may ? toldWhenChanged(state) : null;
     const who = may ? null : onlyWho(state, pod.name, bot);
     const remove = howToRemove(source.platform, source.platform === "SLACK" ? surface?.handle || bot : bot);

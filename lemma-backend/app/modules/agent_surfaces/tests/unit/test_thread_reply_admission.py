@@ -60,7 +60,7 @@ def _channel_place(surface: AgentSurfaceEntity) -> Source:
         account_id=uuid4(),
         surface_id=surface.id,
         platform="SLACK",
-        kind=SourceKind.SHARED,
+        kind=SourceKind.CHAT,
         external_channel_id="C1",
     )
 

@@ -114,7 +114,7 @@ class DatastoreFileRepository(
         await self.session.flush()
         self._collect_events(entity)
         await self._enqueue_requested_processing(entity, instance)
-        bump_after_commit(self.session, instance.pod_id)
+        bump_after_commit(self.session, instance.pod_id, files=True)
         return instance.to_entity()
 
     async def get(self, id: UUID) -> Optional[DatastoreFileEntity]:
@@ -168,7 +168,7 @@ class DatastoreFileRepository(
             if hasattr(instance, key):
                 setattr(instance, key, value)
         if reach_changed:
-            bump_after_commit(self.session, instance.pod_id)
+            bump_after_commit(self.session, instance.pod_id, files=True)
 
         await self.session.flush()
         self._collect_events(entity)
@@ -190,7 +190,7 @@ class DatastoreFileRepository(
             return False
         self._collect_events(entity)
         await self.session.delete(instance)
-        bump_after_commit(self.session, instance.pod_id)
+        bump_after_commit(self.session, instance.pod_id, files=True)
         return True
 
     async def delete_entities(self, entities: Sequence[DatastoreFileEntity]) -> int:
@@ -213,7 +213,7 @@ class DatastoreFileRepository(
         result = await self.session.execute(
             delete(DatastoreFile).where(DatastoreFile.id.in_(ids))
         )
-        bump_after_commit(self.session, entities[0].pod_id)
+        bump_after_commit(self.session, entities[0].pod_id, files=True)
         return int(result.rowcount or 0)
 
     async def get_by_datastore(

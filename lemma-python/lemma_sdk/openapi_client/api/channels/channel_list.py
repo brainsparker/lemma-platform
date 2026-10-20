@@ -11,6 +11,7 @@ from ...models.channel_kind import ChannelKind
 from ...models.channel_list_response import ChannelListResponse
 from ...models.contact_status import ContactStatus
 from ...models.error_response import ErrorResponse
+from ...models.visibility import Visibility
 from ...types import UNSET, Response, Unset
 
 
@@ -18,12 +19,16 @@ def _get_kwargs(
     pod_id: UUID,
     *,
     kind: ChannelKind | None | Unset = UNSET,
+    visibility: None | Unset | Visibility = UNSET,
+    q: None | str | Unset = UNSET,
     archived: bool | Unset = False,
     contact_id: None | Unset | UUID = UNSET,
     assignee: None | str | Unset = UNSET,
     unassigned: bool | Unset = False,
     status: ContactStatus | None | Unset = UNSET,
+    needs_person: bool | Unset = False,
     joined: bool | Unset = False,
+    source_surface: None | str | Unset = UNSET,
     cursor: None | str | Unset = UNSET,
     limit: int | Unset = 50,
 ) -> dict[str, Any]:
@@ -38,6 +43,22 @@ def _get_kwargs(
     else:
         json_kind = kind
     params["kind"] = json_kind
+
+    json_visibility: None | str | Unset
+    if isinstance(visibility, Unset):
+        json_visibility = UNSET
+    elif isinstance(visibility, Visibility):
+        json_visibility = visibility.value
+    else:
+        json_visibility = visibility
+    params["visibility"] = json_visibility
+
+    json_q: None | str | Unset
+    if isinstance(q, Unset):
+        json_q = UNSET
+    else:
+        json_q = q
+    params["q"] = json_q
 
     params["archived"] = archived
 
@@ -68,7 +89,16 @@ def _get_kwargs(
         json_status = status
     params["status"] = json_status
 
+    params["needs_person"] = needs_person
+
     params["joined"] = joined
+
+    json_source_surface: None | str | Unset
+    if isinstance(source_surface, Unset):
+        json_source_surface = UNSET
+    else:
+        json_source_surface = source_surface
+    params["source_surface"] = json_source_surface
 
     json_cursor: None | str | Unset
     if isinstance(cursor, Unset):
@@ -127,12 +157,16 @@ def sync_detailed(
     *,
     client: AuthenticatedClient | Client,
     kind: ChannelKind | None | Unset = UNSET,
+    visibility: None | Unset | Visibility = UNSET,
+    q: None | str | Unset = UNSET,
     archived: bool | Unset = False,
     contact_id: None | Unset | UUID = UNSET,
     assignee: None | str | Unset = UNSET,
     unassigned: bool | Unset = False,
     status: ContactStatus | None | Unset = UNSET,
+    needs_person: bool | Unset = False,
     joined: bool | Unset = False,
+    source_surface: None | str | Unset = UNSET,
     cursor: None | str | Unset = UNSET,
     limit: int | Unset = 50,
 ) -> Response[ChannelListResponse | ErrorResponse]:
@@ -144,13 +178,20 @@ def sync_detailed(
     Args:
         pod_id (UUID):
         kind (ChannelKind | None | Unset):
+        visibility (None | Unset | Visibility): Only `PUBLIC` or only `PRIVATE` channels; a
+            member's and a contact's own channel are private.
+        q (None | str | Unset): Only channels whose title holds these words, in any case.
         archived (bool | Unset):  Default: False.
         contact_id (None | Unset | UUID): Only this contact's channel.
         assignee (None | str | Unset): `me`, or a member's user id: contacts' channels assigned to
             them.
         unassigned (bool | Unset):  Default: False.
         status (ContactStatus | None | Unset):
+        needs_person (bool | Unset): Only contacts' channels waiting on a person: open,
+            unassigned, and the agent off or asking for one. Default: False.
         joined (bool | Unset): Only channels the reader is in. Default: False.
+        source_surface (None | str | Unset): A bot's surface name: only the groups it is in, each
+            with its `source_settings`. Takes reading the bot.
         cursor (None | str | Unset):
         limit (int | Unset):  Default: 50.
 
@@ -165,12 +206,16 @@ def sync_detailed(
     kwargs = _get_kwargs(
         pod_id=pod_id,
         kind=kind,
+        visibility=visibility,
+        q=q,
         archived=archived,
         contact_id=contact_id,
         assignee=assignee,
         unassigned=unassigned,
         status=status,
+        needs_person=needs_person,
         joined=joined,
+        source_surface=source_surface,
         cursor=cursor,
         limit=limit,
     )
@@ -187,12 +232,16 @@ def sync(
     *,
     client: AuthenticatedClient | Client,
     kind: ChannelKind | None | Unset = UNSET,
+    visibility: None | Unset | Visibility = UNSET,
+    q: None | str | Unset = UNSET,
     archived: bool | Unset = False,
     contact_id: None | Unset | UUID = UNSET,
     assignee: None | str | Unset = UNSET,
     unassigned: bool | Unset = False,
     status: ContactStatus | None | Unset = UNSET,
+    needs_person: bool | Unset = False,
     joined: bool | Unset = False,
+    source_surface: None | str | Unset = UNSET,
     cursor: None | str | Unset = UNSET,
     limit: int | Unset = 50,
 ) -> ChannelListResponse | ErrorResponse | None:
@@ -204,13 +253,20 @@ def sync(
     Args:
         pod_id (UUID):
         kind (ChannelKind | None | Unset):
+        visibility (None | Unset | Visibility): Only `PUBLIC` or only `PRIVATE` channels; a
+            member's and a contact's own channel are private.
+        q (None | str | Unset): Only channels whose title holds these words, in any case.
         archived (bool | Unset):  Default: False.
         contact_id (None | Unset | UUID): Only this contact's channel.
         assignee (None | str | Unset): `me`, or a member's user id: contacts' channels assigned to
             them.
         unassigned (bool | Unset):  Default: False.
         status (ContactStatus | None | Unset):
+        needs_person (bool | Unset): Only contacts' channels waiting on a person: open,
+            unassigned, and the agent off or asking for one. Default: False.
         joined (bool | Unset): Only channels the reader is in. Default: False.
+        source_surface (None | str | Unset): A bot's surface name: only the groups it is in, each
+            with its `source_settings`. Takes reading the bot.
         cursor (None | str | Unset):
         limit (int | Unset):  Default: 50.
 
@@ -226,12 +282,16 @@ def sync(
         pod_id=pod_id,
         client=client,
         kind=kind,
+        visibility=visibility,
+        q=q,
         archived=archived,
         contact_id=contact_id,
         assignee=assignee,
         unassigned=unassigned,
         status=status,
+        needs_person=needs_person,
         joined=joined,
+        source_surface=source_surface,
         cursor=cursor,
         limit=limit,
     ).parsed
@@ -242,12 +302,16 @@ async def asyncio_detailed(
     *,
     client: AuthenticatedClient | Client,
     kind: ChannelKind | None | Unset = UNSET,
+    visibility: None | Unset | Visibility = UNSET,
+    q: None | str | Unset = UNSET,
     archived: bool | Unset = False,
     contact_id: None | Unset | UUID = UNSET,
     assignee: None | str | Unset = UNSET,
     unassigned: bool | Unset = False,
     status: ContactStatus | None | Unset = UNSET,
+    needs_person: bool | Unset = False,
     joined: bool | Unset = False,
+    source_surface: None | str | Unset = UNSET,
     cursor: None | str | Unset = UNSET,
     limit: int | Unset = 50,
 ) -> Response[ChannelListResponse | ErrorResponse]:
@@ -259,13 +323,20 @@ async def asyncio_detailed(
     Args:
         pod_id (UUID):
         kind (ChannelKind | None | Unset):
+        visibility (None | Unset | Visibility): Only `PUBLIC` or only `PRIVATE` channels; a
+            member's and a contact's own channel are private.
+        q (None | str | Unset): Only channels whose title holds these words, in any case.
         archived (bool | Unset):  Default: False.
         contact_id (None | Unset | UUID): Only this contact's channel.
         assignee (None | str | Unset): `me`, or a member's user id: contacts' channels assigned to
             them.
         unassigned (bool | Unset):  Default: False.
         status (ContactStatus | None | Unset):
+        needs_person (bool | Unset): Only contacts' channels waiting on a person: open,
+            unassigned, and the agent off or asking for one. Default: False.
         joined (bool | Unset): Only channels the reader is in. Default: False.
+        source_surface (None | str | Unset): A bot's surface name: only the groups it is in, each
+            with its `source_settings`. Takes reading the bot.
         cursor (None | str | Unset):
         limit (int | Unset):  Default: 50.
 
@@ -280,12 +351,16 @@ async def asyncio_detailed(
     kwargs = _get_kwargs(
         pod_id=pod_id,
         kind=kind,
+        visibility=visibility,
+        q=q,
         archived=archived,
         contact_id=contact_id,
         assignee=assignee,
         unassigned=unassigned,
         status=status,
+        needs_person=needs_person,
         joined=joined,
+        source_surface=source_surface,
         cursor=cursor,
         limit=limit,
     )
@@ -300,12 +375,16 @@ async def asyncio(
     *,
     client: AuthenticatedClient | Client,
     kind: ChannelKind | None | Unset = UNSET,
+    visibility: None | Unset | Visibility = UNSET,
+    q: None | str | Unset = UNSET,
     archived: bool | Unset = False,
     contact_id: None | Unset | UUID = UNSET,
     assignee: None | str | Unset = UNSET,
     unassigned: bool | Unset = False,
     status: ContactStatus | None | Unset = UNSET,
+    needs_person: bool | Unset = False,
     joined: bool | Unset = False,
+    source_surface: None | str | Unset = UNSET,
     cursor: None | str | Unset = UNSET,
     limit: int | Unset = 50,
 ) -> ChannelListResponse | ErrorResponse | None:
@@ -317,13 +396,20 @@ async def asyncio(
     Args:
         pod_id (UUID):
         kind (ChannelKind | None | Unset):
+        visibility (None | Unset | Visibility): Only `PUBLIC` or only `PRIVATE` channels; a
+            member's and a contact's own channel are private.
+        q (None | str | Unset): Only channels whose title holds these words, in any case.
         archived (bool | Unset):  Default: False.
         contact_id (None | Unset | UUID): Only this contact's channel.
         assignee (None | str | Unset): `me`, or a member's user id: contacts' channels assigned to
             them.
         unassigned (bool | Unset):  Default: False.
         status (ContactStatus | None | Unset):
+        needs_person (bool | Unset): Only contacts' channels waiting on a person: open,
+            unassigned, and the agent off or asking for one. Default: False.
         joined (bool | Unset): Only channels the reader is in. Default: False.
+        source_surface (None | str | Unset): A bot's surface name: only the groups it is in, each
+            with its `source_settings`. Takes reading the bot.
         cursor (None | str | Unset):
         limit (int | Unset):  Default: 50.
 
@@ -340,12 +426,16 @@ async def asyncio(
             pod_id=pod_id,
             client=client,
             kind=kind,
+            visibility=visibility,
+            q=q,
             archived=archived,
             contact_id=contact_id,
             assignee=assignee,
             unassigned=unassigned,
             status=status,
+            needs_person=needs_person,
             joined=joined,
+            source_surface=source_surface,
             cursor=cursor,
             limit=limit,
         )

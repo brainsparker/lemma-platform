@@ -20,17 +20,25 @@ from app.core.infrastructure.work import (
     registry as default_registry,
 )
 from app.modules.agent.contracts.contact_conversations import repoint_merged_contact
+from app.modules.contacts.contracts import contact_by_id
 from app.modules.contacts.contracts.facts import ContactMerged
 
 AGENT_CONTACT_MERGED = "agent.contact_merged"
 
 
 async def repoint_conversations(ctx: FastContext, payload: ContactMerged) -> None:
+    # Whoever the survivor is now: merged into a third contact since, its
+    # conversations went there, and these follow them.
+    survivor = await contact_by_id(
+        ctx.uow, pod_id=payload.pod_id, contact_id=payload.survivor_id
+    )
+    if survivor is None:
+        return
     await repoint_merged_contact(
         ctx.uow,
         pod_id=payload.pod_id,
         merged_id=payload.merged_id,
-        survivor_id=payload.survivor_id,
+        survivor_id=survivor.id,
     )
 
 

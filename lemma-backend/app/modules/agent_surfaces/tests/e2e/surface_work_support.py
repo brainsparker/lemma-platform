@@ -296,9 +296,14 @@ async def send_deliveries() -> int:
 
 
 async def deliveries_of_line(message_id: str | UUID) -> list[Any]:
-    """What became of one line: its delivery to each place and member."""
+    """What became of one line: its delivery to each place and member. Its
+    pushes are worked out after it is committed (``channels.pushes``): that
+    work runs first, and nothing else."""
     from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
     from app.modules.channels.contracts.deliveries import deliveries_of
+    from app.modules.channels.tests.e2e.push_support import run_pushes
+
+    await run_pushes()
 
     async with async_session_maker() as session:
         return await deliveries_of(

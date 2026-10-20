@@ -2,6 +2,15 @@
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.groups import ParsedGroupUpdate
+from app.modules.agent_surfaces.domain.line_changes import ParsedLineChange
+from app.modules.agent_surfaces.platforms.telegram.line_changes import (
+    telegram_line_changes,
+)
+from app.modules.agent_surfaces.platforms.telegram.membership import (
+    group_membership_updates,
+)
+
 from app.modules.agent_surfaces.platforms.telegram.addressing import (
     addressed_to_this_bot,
     mention_is_provisional,
@@ -161,6 +170,14 @@ class TelegramSurfaceAdapter(BaseSurfaceAdapter):
                 "agent_surfaces.telegram.mention_unsettled.degraded", exc_info=True
             )
             return event
+
+    def parse_group_updates(
+        self, payload: dict[str, object]
+    ) -> list[ParsedGroupUpdate]:
+        return group_membership_updates(payload)
+
+    def parse_line_changes(self, payload: dict[str, object]) -> list[ParsedLineChange]:
+        return telegram_line_changes(payload, self._parser)
 
     async def parse_inbound_lifecycle(
         self, payload: dict[str, object], headers: dict[str, str] | None = None

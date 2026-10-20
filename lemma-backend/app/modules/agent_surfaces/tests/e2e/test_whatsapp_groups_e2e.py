@@ -213,7 +213,9 @@ async def test_a_member_opens_a_group_and_its_confirmation_brings_the_link(
     assert listed.status_code == 200, listed.text
     [channel] = listed.json()["items"]
     assert channel["id"] == str(group.channel_id)
-    shown = await authenticated_client.get(f"/pods/{test_pod['id']}/sources/{group.id}")
+    shown = await authenticated_client.get(
+        f"/pods/{test_pod['id']}/channels/{group.channel_id}/sources/{group.id}"
+    )
     assert shown.status_code == 200, shown.text
     assert shown.json()["invite_link"] == group.invite_link
     assert shown.json()["pending"] is False

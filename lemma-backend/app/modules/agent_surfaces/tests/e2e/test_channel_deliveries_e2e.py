@@ -83,6 +83,7 @@ from app.modules.channels.contracts import (
 )
 from app.modules.channels.contracts.deliveries import delivery_by_id
 from app.modules.channels.infrastructure.deliveries import MAX_ATTEMPTS
+from app.modules.channels.tests.e2e.push_support import run_pushes, window_ends_now
 from app.modules.channels.infrastructure.models import (
     ChannelMessageDeliveryModel,
     ChannelModel,
@@ -147,8 +148,8 @@ async def _queued_for(delivery_id: UUID) -> int:
 
 
 async def _tell(client: AsyncClient, pod_id: str, to: str, **overrides) -> dict:
-    payload = {"to": to, "text": "What did you ship yesterday?"} | overrides
-    response = await client.post(f"/pods/{pod_id}/notices", json=payload)
+    payload = {"text": "What did you ship yesterday?"} | overrides
+    response = await client.post(f"/pods/{pod_id}/members/{to}/notices", json=payload)
     assert response.status_code == 201, response.text
     return response.json()
 
@@ -301,7 +302,7 @@ async def test_nobody_outside_the_pod_is_ever_a_recipient(
     no wiring bug becomes "any user id can be messaged"."""
     pod_id = test_pod["id"]
     response = await authenticated_client.post(
-        f"/pods/{pod_id}/notices", json={"to": str(uuid4()), "text": "Nope."}
+        f"/pods/{pod_id}/members/{uuid4()}/notices", json={"text": "Nope."}
     )
     assert response.status_code == 404, response.text
 
@@ -331,6 +332,8 @@ async def test_a_channel_turned_off_or_muted_plans_no_push(
 
     await _hear_of(authenticated_client, pod_id, mine, notify="NONE")
     off = await _tell(authenticated_client, pod_id, fixed_test_user["email"])
+    # Each line's pushes are worked out as it is said, by the settings then.
+    assert await deliveries_of_line(off["message_id"]) == []
     await _hear_of(
         authenticated_client,
         pod_id,
@@ -339,12 +342,11 @@ async def test_a_channel_turned_off_or_muted_plans_no_push(
         muted_until=(datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
     )
     muted = await _tell(authenticated_client, pod_id, fixed_test_user["email"])
+    assert await deliveries_of_line(muted["message_id"]) == []
     await _hear_of(authenticated_client, pod_id, mine, muted_until=None)
     heard = await _tell(authenticated_client, pod_id, fixed_test_user["email"])
 
     assert {off["channel_id"], muted["channel_id"]} == {mine}
-    assert await deliveries_of_line(off["message_id"]) == []
-    assert await deliveries_of_line(muted["message_id"]) == []
     assert len(await deliveries_of_line(heard["message_id"])) == 1
     assert (
         len(
@@ -387,6 +389,9 @@ async def test_the_way_a_member_chose_is_honoured_or_refused_never_swapped(
 
     await _hear_of(authenticated_client, pod_id, mine, notify_via=["EMAIL"])
     honoured = await _tell(authenticated_client, pod_id, fixed_test_user["email"])
+    # Within the window after the last push, it waits for the window's end.
+    await run_pushes()
+    await window_ends_now(mine, fixed_test_user["id"])
     [push] = await deliveries_of_line(honoured["message_id"])
     await _deliver(push.id)
 
@@ -489,7 +494,7 @@ async def test_a_push_cold_opens_an_email_thread_the_reply_can_find(
         )
     ).scalars()
     assert place.external_channel_id is None
-    assert place.kind == "PRIVATE"
+    assert place.kind == "PERSON"
     assert str(place.channel_id) == told["channel_id"]
     channel = await db_session.get(ChannelModel, place.channel_id)
     assert channel is not None and channel.kind == "DIRECT"

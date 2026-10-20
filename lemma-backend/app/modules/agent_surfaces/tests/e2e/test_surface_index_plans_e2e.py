@@ -114,7 +114,7 @@ async def _a_channel(db_session, pod_id) -> UUID:
     """A channel the places can belong to. Which kind does not matter here:
     neither read is keyed on it."""
     channel = ChannelModel(
-        id=uuid7(), pod_id=UUID(str(pod_id)), kind="GROUP", visibility="private"
+        id=uuid7(), pod_id=UUID(str(pod_id)), kind="GROUP", visibility="PRIVATE"
     )
     db_session.add(channel)
     await db_session.commit()
@@ -127,7 +127,7 @@ async def _an_account(db_session, surface: AgentSurface) -> UUID:
         id=uuid7(),
         pod_id=surface.pod_id,
         platform=_PLATFORM,
-        account_key=f"surface:{surface.id}",
+        workspace_key=f"surface:{surface.id}",
         surface_id=surface.id,
     )
     db_session.add(account)
@@ -144,7 +144,7 @@ def _place(
         pod_id=surface.pod_id,
         account_id=account_id,
         platform=_PLATFORM,
-        kind="PRIVATE" if person else "SHARED",
+        kind="PERSON" if person else "CHAT",
         external_channel_id=chat,
         external_user_id=person,
     )
@@ -243,7 +243,7 @@ FROM channel_sources JOIN external_accounts
   ON external_accounts.id = channel_sources.account_id
 WHERE channel_sources.platform = :platform
   AND channel_sources.external_user_id = :person
-  AND channel_sources.kind = 'PRIVATE'
+  AND channel_sources.kind = 'PERSON'
   AND channel_sources.account_id IN (
     SELECT id FROM external_accounts WHERE surface_id IN (:surface)
   )

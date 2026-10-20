@@ -674,15 +674,15 @@ fixed-window:
 
 | Limit | Scope | Default |
 | --- | --- | --- |
-| Notifications | per pod, per recipient, per hour | 20 |
+| Pushes to a member outside the app | per pod, per recipient, per hour | 20 |
 | Outbound emails | per pod, per day | 200 |
 
 The second is the one that matters for a shared domain: an agent messaging five
 hundred different people once each never trips the first. Both fail *open* if
 Redis is unreachable — "nobody can be told anything while Redis is down" is the
-wrong way for a notification system to fail. Over the email budget the
-notification is still created and still in the recipient's Lemma inbox; only the
-mail is declined.
+wrong way for a ceiling on a runaway loop to fail. Either way the line is
+already in the recipient's channel in Lemma; past a limit only the push or the
+mail is declined, and its delivery says why.
 
 ## Storage
 

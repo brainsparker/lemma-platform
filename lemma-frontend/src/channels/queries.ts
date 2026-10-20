@@ -1,36 +1,42 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
-import { useInfiniteQuery, useQuery, useQueryClient, type InfiniteData, type QueryClient } from "@tanstack/react-query";
+import { useMemo } from "react";
+import { useInfiniteQuery, useQuery, type InfiniteData, type QueryClient } from "@tanstack/react-query";
+import { pollWhenDown, useLiveStatus } from "@/live/pod-live";
 import { isForbidden, isMissing } from "@/session/auth-state";
 import { channelApi } from "./api";
-import { joinPages, type Channel, type ChannelDetail, type LinePage, type Page } from "./model";
-import { inboxKey } from "./waiting-panel";
+import { joinPages, joinThread, type Channel, type ChannelDetail, type LinePage, type Page, type ThreadPage } from "./model";
+import type { ListFilter } from "./views";
 
 /** The keys every view of a pod's channels reads under. All of them start
  *  `["channel", podId]`, so an answer given from the bell -- which drops that
  *  prefix -- is read again everywhere it shows. */
-export const channelsKey = (podId: string, archived: boolean) => ["channel", podId, "list", archived] as const;
+export const channelsKey = (podId: string, filter: ListFilter) => ["channel", podId, "list", filter] as const;
 export const channelKey = (podId: string, channelId: string) => ["channel", podId, "detail", channelId] as const;
 export const linesKey = (podId: string, channelId: string) => ["channel", podId, "lines", channelId] as const;
 export const threadKey = (podId: string, channelId: string, rootId: string) => ["channel", podId, "thread", channelId, rootId] as const;
 export const sourceKey = (podId: string, sourceId: string) => ["channel", podId, "source", sourceId] as const;
+/** The react-query key everything about one pod's inbox reads under. */
+export const inboxKey = (podId: string) => ["inbox", podId] as const;
+export const deliveriesKey = (podId: string, channelId: string, lineId: string) => ["channel", podId, "deliveries", channelId, lineId] as const;
 
-/** How often an open channel is read again while it is on screen: people
- *  talk, agents answer, and a question can arrive while you look. */
+/** How often an open channel is read again over REST -- only while the live
+ *  socket is down. While it is up, the socket says what changed. */
 export const READ_EVERY_MS = 10_000;
 
 const settled = (count: number, error: unknown) => !isMissing(error) && !isForbidden(error) && count < 3;
 
-/** The pod's channels, most recently active first, a page at a time. */
-export function useChannelList(podId: string, archived: boolean, poll: number | false = false) {
+/** The pod's channels, most recently active first, a page at a time. `poll`
+ *  overrides the fallback, for a sheet waiting on a group to arrive. */
+export function useChannelList(podId: string, filter: ListFilter, poll: number | false | null = null) {
+    const status = useLiveStatus(podId);
     return useInfiniteQuery({
-        queryKey: channelsKey(podId, archived),
-        queryFn: ({ pageParam }) => channelApi(podId).list({ archived, before: pageParam }),
+        queryKey: channelsKey(podId, filter),
+        queryFn: ({ pageParam }) => channelApi(podId).list({ ...filter, before: pageParam }),
         initialPageParam: undefined as string | undefined,
         getNextPageParam: (last: Page<Channel>) => last.nextBefore ?? undefined,
         staleTime: 15_000,
-        refetchInterval: poll,
+        refetchInterval: poll ?? pollWhenDown(status, READ_EVERY_MS * 3),
         retry: settled,
     });
 }
@@ -42,10 +48,11 @@ export function allChannels(data: InfiniteData<Page<Channel>> | undefined): Chan
 }
 
 export function useChannel(podId: string, channelId: string, visible: boolean) {
+    const status = useLiveStatus(podId);
     return useQuery({
         queryKey: channelKey(podId, channelId),
         queryFn: () => channelApi(podId).get(channelId),
-        refetchInterval: visible ? READ_EVERY_MS * 3 : false,
+        refetchInterval: visible ? pollWhenDown(status, READ_EVERY_MS * 3) : false,
         staleTime: 10_000,
         retry: settled,
     });
@@ -53,36 +60,60 @@ export function useChannel(podId: string, channelId: string, visible: boolean) {
 
 /** A channel's timeline: the newest page first, older pages as asked for. */
 export function useLines(podId: string, channelId: string, visible: boolean) {
+    const status = useLiveStatus(podId);
     const query = useInfiniteQuery({
         queryKey: linesKey(podId, channelId),
         queryFn: ({ pageParam }) => channelApi(podId).lines(channelId, pageParam),
         initialPageParam: undefined as number | undefined,
         getNextPageParam: (last: LinePage) => last.nextBefore ?? undefined,
-        refetchInterval: visible ? READ_EVERY_MS : false,
-        staleTime: 5_000,
+        refetchInterval: visible ? pollWhenDown(status, READ_EVERY_MS) : false,
+        /* The socket keeps it; a remount does not need to read it again. */
+        staleTime: status === "open" ? 60_000 : 5_000,
         retry: settled,
     });
     const lines = useMemo(() => joinPages(query.data?.pages ?? []), [query.data]);
     return { ...query, lines };
 }
 
+/** A thread's replies, a page at a time from the first: a long thread is
+ *  read on as the reader asks for more. */
 export function useThread(podId: string, channelId: string, rootId: string, visible: boolean) {
-    return useQuery({
+    const status = useLiveStatus(podId);
+    const query = useInfiniteQuery({
         queryKey: threadKey(podId, channelId, rootId),
-        queryFn: () => channelApi(podId).thread(channelId, rootId),
-        refetchInterval: visible ? READ_EVERY_MS : false,
+        queryFn: ({ pageParam }) => channelApi(podId).thread(channelId, rootId, pageParam),
+        initialPageParam: undefined as number | undefined,
+        getNextPageParam: (last: ThreadPage) => last.nextAfter ?? undefined,
+        refetchInterval: visible ? pollWhenDown(status, READ_EVERY_MS) : false,
         staleTime: 5_000,
     });
+    const replies = useMemo(() => joinThread(query.data?.pages ?? []), [query.data]);
+    return { ...query, replies };
 }
 
-export function useSourceSettings(podId: string, sourceId: string, enabled = true) {
+export function useSourceSettings(podId: string, channelId: string, sourceId: string, enabled = true) {
     return useQuery({
         queryKey: sourceKey(podId, sourceId),
-        queryFn: () => channelApi(podId).source(sourceId),
+        queryFn: () => channelApi(podId).source(channelId, sourceId),
         enabled,
         staleTime: 30_000,
         retry: settled,
     });
+}
+
+/** Where one line is held: the channel's timeline, or -- a reply -- its
+ *  thread. An edit or a delete reads only those again. */
+export function lineKeys(podId: string, channelId: string, line: { threadRootId: string | null }): (readonly unknown[])[] {
+    return line.threadRootId ? [threadKey(podId, channelId, line.threadRootId), linesKey(podId, channelId)] : [linesKey(podId, channelId)];
+}
+
+/** What an answer to a question moves: the line it is on, wherever that is
+ *  held -- the channel's timeline, or its thread -- and the channel's own
+ *  counts. Nothing in other channels. */
+export function answeredKeys(podId: string, question: { channelId: string; threadRootId: string | null }): (readonly unknown[])[] {
+    const keys: (readonly unknown[])[] = [linesKey(podId, question.channelId), channelKey(podId, question.channelId)];
+    if (question.threadRootId) keys.push(threadKey(podId, question.channelId, question.threadRootId));
+    return keys;
 }
 
 /** After anything about a channel changed: its lists and the inbox say what
@@ -98,26 +129,9 @@ export function keepChannel(cache: QueryClient, podId: string, saved: ChannelDet
     refreshLists(cache, podId);
 }
 
-/** Marks the channel read up to line `upto`, once per new line, while it is
- *  on screen -- and tells the lists and the inbox. Read state only moves
- *  forward, so a line already read is not marked again. */
-export function useMarkRead(podId: string, channelId: string, upto: number | null, readSeq: number, visible: boolean): void {
-    const cache = useQueryClient();
-    const marked = useRef<number>(0);
-    useEffect(() => {
-        if (!visible || !upto || upto <= Math.max(readSeq, marked.current)) return;
-        const was = marked.current;
-        marked.current = upto;
-        channelApi(podId).markRead(channelId, upto)
-            .then(() => refreshLists(cache, podId))
-            .catch(() => { marked.current = was; });
-    }, [podId, channelId, upto, readSeq, visible, cache]);
-}
-
-/** The group channels one bot is in, each with the place it is fed from
- *  there. The API lists sources only by channel, so this reads the group
- *  channels fed from the bot's platform and keeps those whose place is this
- *  bot's -- a few reads, on a settings page, rather than a list of its own. */
+/** The group channels one bot is in, each with the bot's settings for its
+ *  place there (`GET /channels?source_surface=`). An admin is also listed
+ *  the bot's private groups they are not in, to join on request. */
 export function useBotGroups(podId: string, surface: { id: string; name: string }, enabled = true) {
     return useQuery({
         queryKey: ["channel", podId, "bot-groups", surface.id] as const,

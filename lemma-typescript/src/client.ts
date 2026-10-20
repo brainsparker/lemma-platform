@@ -22,7 +22,6 @@ import { PodJoinRequestsNamespace } from "./namespaces/pod-join-requests.js";
 import { PodsNamespace } from "./namespaces/pods.js";
 import { PodRolesNamespace } from "./namespaces/pod-roles.js";
 import { PodSurfacesNamespace } from "./namespaces/pod-surfaces.js";
-import { PodSourcesNamespace } from "./namespaces/pod-sources.js";
 import { PodLinksNamespace } from "./namespaces/pod-links.js";
 import { ChannelsNamespace } from "./namespaces/channels.js";
 import { ContactsNamespace } from "./namespaces/contacts.js";
@@ -90,7 +89,6 @@ export class LemmaClient {
   readonly organizations: OrganizationsNamespace;
   readonly podSurfaces: PodSurfacesNamespace;
   /** The WhatsApp, Telegram and Slack groups a pod's bots are in. */
-  readonly podSources: PodSourcesNamespace;
   /** The other pods a pod can ask, and the pods connected to ask it. */
   readonly podLinks: PodLinksNamespace;
   readonly channels: ChannelsNamespace;
@@ -164,7 +162,6 @@ export class LemmaClient {
     this.podRoles = new PodRolesNamespace(this._generated, podIdFn);
     this.organizations = new OrganizationsNamespace(this._generated, this._http);
     this.podSurfaces = new PodSurfacesNamespace(this._generated);
-    this.podSources = new PodSourcesNamespace(this._generated);
     this.podLinks = new PodLinksNamespace(this._generated);
     this.channels = new ChannelsNamespace(this._generated);
     this.contacts = new ContactsNamespace(this._generated);

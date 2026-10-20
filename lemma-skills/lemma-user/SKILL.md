@@ -365,6 +365,38 @@ polls.
 To answer the person you are *already* talking to, just reply — `ask_user` is for
 a question that must block this turn, and neither is `channel_post`.
 
+## Channels — where the pod talks
+
+A **channel** is one shared timeline: your own channel with the pod (`DIRECT`), a
+contact's (`CONTACT`), or a group (`GROUP`) — made in Lemma, or mirrored from a
+WhatsApp, Telegram, Slack or Teams group or an email thread. Lines are numbered per
+channel (`seq`); pages take the previous page's `next_cursor`, and a channel's lines
+page by `--before-seq`.
+
+```bash
+lemma channels inbox                                     # what is new for you, mentions, questions waiting on you
+lemma channels list --joined                             # --kind DIRECT|CONTACT|GROUP, --assignee me, --status open
+lemma channels mine                                      # your own channel with the pod
+lemma channels messages list <channel-id>                # newest lines; --before-seq to page back
+lemma channels messages post <channel-id> "Shipped."     # --thread <line>, --members-only for a note never sent outside
+lemma channels messages answer <channel-id> <line-id> --choice Yes   # --text, or --decision for an approval
+lemma channels read <channel-id>                         # mark read up to the newest line
+lemma channels search "refund policy"                    # every word must match, in the channels you see
+lemma channels tell priya@acme.com "The Q3 report is in /reports."   # a line in their own channel
+lemma channels notify <channel-id> MENTIONS              # ALL | MENTIONS | NONE; --via slack, --mute-until
+lemma channels join <channel-id>                         # a public group or a contact's channel (`leave` to go)
+lemma channels create "Launch" --private --member <user-id> --agent <agent-id>:EVERY_LINE
+lemma channels update <channel-id> --assignee me         # a contact's channel: --status, --assignee none
+lemma channels deliveries list <channel-id> <line-id>    # where a line went outside, or why it did not
+```
+
+`tell` takes a pod member id, user id or email (`pod.channels.notify(to, text)` in the
+Python SDK); the person hears of it wherever they last talked to the pod. A private group
+is seen only by its members; a pod admin or editor can join one on request, and that is
+recorded. Who sees a contact's channel, and who may write in it, is the pod's
+`contact.read` / `contact.message`. The SDK mirrors the CLI: `pod.channels` in Python,
+`client.channels` in TypeScript.
+
 ## Surfaces — the pod is already reachable
 
 A **surface** is one pod agent exposed where people already are: Slack, Teams,
@@ -524,16 +556,21 @@ a connect request and hand the link to the user:
 
 People outside the pod — **contacts** (known by the channel they wrote from) and
 anonymous web visitors — reach it through its bots, its web chat and tables opened
-to outside rows. There is no `lemma` CLI command for them yet; use the Python SDK:
+to outside rows. Each contact has a `CONTACT` channel: answer them there with
+`lemma channels messages post`, and write first with
+`lemma channels outreach <contact-id> <handle> "text"`. For the rest, use the Python SDK:
 
 ```python
 pod = Lemma().pod()
-pod.contacts.list()                        # who has written; handles say who vouched
-pod.contacts.follow_up(contact_id, "Your order shipped.")   # refused outside WhatsApp's 24h window or after an unsubscribe
-pod.contacts.follow_up(contact_id, "It's back in stock.", channel="email")  # to their verified email, even from a web chat
+pod.contacts.list()                        # who has written; page with the response's next_cursor
+pod.contacts.outreach(contact_id, handle="sam@example.com", text="It's back in stock.")
+                                           # email any time; WhatsApp only within 24h of their last message; never after a STOP
 pod.contacts.export(contact_id)            # their words and the bot's answers
 pod.tables.list_public_rows()              # tables taking rows from outside, and from whom
 ```
+
+A refused handle posts nothing and says why. The line goes out as a delivery, so
+`lemma channels deliveries list` shows whether it was sent.
 
 **Form responses are rows** of the opened table: read them like any records. To set
 up a new form, use `lemma-form`; to change who may answer, `pod.tables.open_public_rows`

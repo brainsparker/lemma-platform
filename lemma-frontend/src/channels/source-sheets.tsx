@@ -26,6 +26,9 @@ import {
     type SourceSettings,
 } from "./sources";
 
+/** The open channels, which a group being brought in arrives among. */
+const LISTED = { archived: false };
+
 /** Bringing the space's bot into a group, from Lemma — one sheet per
  *  platform, because each platform lets a bot in its own way. WhatsApp: the
  *  bot's number makes the group and you share its link. Telegram: one tap in
@@ -146,7 +149,7 @@ function useArrival(podId: string, platform: string, watching: boolean): Channel
         /* Watching again — a new link — is a new wait with its own clock. */
         return () => { window.clearTimeout(timer); setGaveUp(false); };
     }, [watching, found]);
-    const list = useChannelList(podId, false, watching && !found && !gaveUp ? 3_000 : false);
+    const list = useChannelList(podId, LISTED, watching && !found && !gaveUp ? 3_000 : null);
     const channels = list.data ? allChannels(list.data) : null;
     const before = useRef<Set<string> | null>(null);
     if (before.current === null && channels) before.current = new Set(channels.map((channel) => channel.id));
@@ -206,7 +209,7 @@ function StartWhatsApp({ pod, bot, surface, onClose, onOpenGroup }: {
                 setSlow(true);
                 return;
             }
-            channelApi(pod.id).source(group.id).then((next) => {
+            channelApi(pod.id).source(group.channelId, group.id).then((next) => {
                 if (stop || !next.inviteLink) return;
                 stop = true;
                 window.clearInterval(tick);

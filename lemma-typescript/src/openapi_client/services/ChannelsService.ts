@@ -3,11 +3,13 @@
 /* tslint:disable */
 /* eslint-disable */
 import type { ChannelAnswerRequest } from '../models/ChannelAnswerRequest.js';
+import type { ChannelCasesResponse } from '../models/ChannelCasesResponse.js';
 import type { ChannelCreateRequest } from '../models/ChannelCreateRequest.js';
 import type { ChannelDetailResponse } from '../models/ChannelDetailResponse.js';
 import type { ChannelEditRequest } from '../models/ChannelEditRequest.js';
 import type { ChannelKind } from '../models/ChannelKind.js';
 import type { ChannelListResponse } from '../models/ChannelListResponse.js';
+import type { ChannelMemberListResponse } from '../models/ChannelMemberListResponse.js';
 import type { ChannelMessageResponse } from '../models/ChannelMessageResponse.js';
 import type { ChannelMessagesResponse } from '../models/ChannelMessagesResponse.js';
 import type { ChannelPostRequest } from '../models/ChannelPostRequest.js';
@@ -24,6 +26,7 @@ import type { ReadResponse } from '../models/ReadResponse.js';
 import type { SearchResponse } from '../models/SearchResponse.js';
 import type { SenderKind } from '../models/SenderKind.js';
 import type { ThreadResponse } from '../models/ThreadResponse.js';
+import type { Visibility } from '../models/Visibility.js';
 import type { CancelablePromise } from '../core/CancelablePromise.js';
 import { OpenAPI } from '../core/OpenAPI.js';
 import { request as __request } from '../core/request.js';
@@ -34,12 +37,16 @@ export class ChannelsService {
      * what is new in it for them and its last line.
      * @param podId
      * @param kind
+     * @param visibility Only `PUBLIC` or only `PRIVATE` channels; a member's and a contact's own channel are private.
+     * @param q Only channels whose title holds these words, in any case.
      * @param archived
      * @param contactId Only this contact's channel.
      * @param assignee `me`, or a member's user id: contacts' channels assigned to them.
      * @param unassigned
      * @param status
+     * @param needsPerson Only contacts' channels waiting on a person: open, unassigned, and the agent off or asking for one.
      * @param joined Only channels the reader is in.
+     * @param sourceSurface A bot's surface name: only the groups it is in, each with its `source_settings`. Takes reading the bot.
      * @param cursor
      * @param limit
      * @returns ChannelListResponse Successful Response
@@ -48,12 +55,16 @@ export class ChannelsService {
     public static channelList(
         podId: string,
         kind?: (ChannelKind | null),
+        visibility?: (Visibility | null),
+        q?: (string | null),
         archived: boolean = false,
         contactId?: (string | null),
         assignee?: (string | null),
         unassigned: boolean = false,
         status?: (ContactStatus | null),
+        needsPerson: boolean = false,
         joined: boolean = false,
+        sourceSurface?: (string | null),
         cursor?: (string | null),
         limit: number = 50,
     ): CancelablePromise<ChannelListResponse> {
@@ -65,12 +76,16 @@ export class ChannelsService {
             },
             query: {
                 'kind': kind,
+                'visibility': visibility,
+                'q': q,
                 'archived': archived,
                 'contact_id': contactId,
                 'assignee': assignee,
                 'unassigned': unassigned,
                 'status': status,
+                'needs_person': needsPerson,
                 'joined': joined,
+                'source_surface': sourceSurface,
                 'cursor': cursor,
                 'limit': limit,
             },
@@ -237,6 +252,73 @@ export class ChannelsService {
         });
     }
     /**
+     * List Cases
+     * A contact's channel's cases, the most recently opened first, each with
+     * what happened in it: time to first response, reopens and time to close
+     * are read from here. Only a contact's channel has cases.
+     * @param podId
+     * @param channelId
+     * @param cursor
+     * @param limit
+     * @returns ChannelCasesResponse Successful Response
+     * @throws ApiError
+     */
+    public static channelCaseList(
+        podId: string,
+        channelId: string,
+        cursor?: (string | null),
+        limit: number = 20,
+    ): CancelablePromise<ChannelCasesResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/channels/{channel_id}/cases',
+            path: {
+                'pod_id': podId,
+                'channel_id': channelId,
+            },
+            query: {
+                'cursor': cursor,
+                'limit': limit,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * List Members
+     * Who is in a channel -- members, contacts and agents -- in the order
+     * they joined, a page at a time.
+     * @param podId
+     * @param channelId
+     * @param cursor
+     * @param limit
+     * @returns ChannelMemberListResponse Successful Response
+     * @throws ApiError
+     */
+    public static channelMemberList(
+        podId: string,
+        channelId: string,
+        cursor?: (string | null),
+        limit: number = 100,
+    ): CancelablePromise<ChannelMemberListResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/channels/{channel_id}/members',
+            path: {
+                'pod_id': podId,
+                'channel_id': channelId,
+            },
+            query: {
+                'cursor': cursor,
+                'limit': limit,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
      * Add Members
      * Add members of the pod, and the pod's agents, to a group. An agent
      * already in it answers as now asked.
@@ -322,8 +404,9 @@ export class ChannelsService {
     /**
      * Join Channel
      * Join a channel the reader may see: a public group, or -- holding
-     * `contact.read` -- a contact's channel. Joining one already joined is
-     * nothing.
+     * `contact.read` -- a contact's channel. Holding `channel.manage`, a private
+     * group too, on request: how a pod admin finds and takes over a group nobody
+     * let them into; it is logged. Joining one already joined is nothing.
      * @param podId
      * @param channelId
      * @returns ChannelDetailResponse Successful Response
@@ -347,7 +430,7 @@ export class ChannelsService {
     }
     /**
      * Remove Member
-     * Take somebody out of a group -- its owners' or an admin's -- or leave a
+     * Take somebody out of a group -- its owners' or an editor's -- or leave a
      * channel oneself.
      * @param podId
      * @param channelId
@@ -511,7 +594,8 @@ export class ChannelsService {
     }
     /**
      * Edit Message
-     * Change what one's own line says. A copy already sent outside stays as sent.
+     * Change what one's own line says: absent is unchanged, `null` parts
+     * clears them. A copy already sent outside stays as sent.
      * @param podId
      * @param channelId
      * @param messageId
@@ -543,7 +627,9 @@ export class ChannelsService {
     /**
      * Answer Question
      * Answer what this line asks the reader: a question, an approval (which
-     * needs a `decision`), a form. Only the person it waits on may.
+     * needs a `decision`), a form. Only the person it waits on may -- and an
+     * approval, or an agent's paused question, only by their own hand: an agent
+     * calling with a token delegated by them is refused, as its tool is.
      *
      * No session is held across the answer: what asked takes it in its own -- a
      * run resumed, a form submitted -- and may call out to do so.
@@ -628,6 +714,37 @@ export class ChannelsService {
                 'channel_id': channelId,
                 'message_id': messageId,
                 'delivery_id': deliveryId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Line File
+     * A file a line shares, for a reader of the line: read as its writer
+     * reads it. Gone with the line, or once its writer can no longer read it.
+     * @param podId
+     * @param channelId
+     * @param messageId
+     * @param fileId
+     * @returns binary The file's bytes
+     * @throws ApiError
+     */
+    public static channelMessageFile(
+        podId: string,
+        channelId: string,
+        messageId: string,
+        fileId: string,
+    ): CancelablePromise<Blob> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/files/{file_id}',
+            path: {
+                'pod_id': podId,
+                'channel_id': channelId,
+                'message_id': messageId,
+                'file_id': fileId,
             },
             errors: {
                 422: `Validation Error`,
@@ -723,11 +840,17 @@ export class ChannelsService {
     /**
      * Search
      * Lines matching every word, newest first, in the channels the reader
-     * sees -- or in one of them. An answer withheld from the reader is not found
-     * by what it said.
+     * sees -- or in one of them -- each with its rank and the words around the
+     * match. An answer withheld from the reader is not found by what it said.
      * @param podId
      * @param q
      * @param channelId
+     * @param kind Only channels of this kind.
+     * @param senderKind Only lines said by this person: with `sender_id`.
+     * @param senderId A member's user id, a contact's id or an agent's id.
+     * @param since Said at or after.
+     * @param until Said before.
+     * @param archived Search archived channels too.
      * @param cursor
      * @param limit
      * @returns SearchResponse Successful Response
@@ -737,6 +860,12 @@ export class ChannelsService {
         podId: string,
         q: string,
         channelId?: (string | null),
+        kind?: (ChannelKind | null),
+        senderKind?: (SenderKind | null),
+        senderId?: (string | null),
+        since?: (string | null),
+        until?: (string | null),
+        archived: boolean = false,
         cursor?: (string | null),
         limit: number = 30,
     ): CancelablePromise<SearchResponse> {
@@ -749,6 +878,12 @@ export class ChannelsService {
             query: {
                 'q': q,
                 'channel_id': channelId,
+                'kind': kind,
+                'sender_kind': senderKind,
+                'sender_id': senderId,
+                'since': since,
+                'until': until,
+                'archived': archived,
                 'cursor': cursor,
                 'limit': limit,
             },

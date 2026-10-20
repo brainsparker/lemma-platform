@@ -206,8 +206,9 @@ still open the list. Styles in `src/styles/channels.css`; words and readers in
   places. A group's places carry their settings — who answers people outside
   the space, from what is Public, and the invite link. Only the member who
   answers for its outsiders, or an admin of the space, switches it or takes
-  it over; anybody else is told who can. A contact's channel offers Step in
-  and Hand back.
+  it over; anybody else is told who can. A contact's channel offers who it
+  is assigned to, its status, when it is handed back to the agent, and an
+  "Agent answers" switch.
 - The sample answers from `SAMPLE_CHANNELS`, one of each thing a page draws.
 
 ## Contacts

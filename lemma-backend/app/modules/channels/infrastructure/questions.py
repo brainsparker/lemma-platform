@@ -3,9 +3,16 @@
 An answer is taken in two steps so two people -- or a tap and a reply --
 cannot both answer: ``claim`` moves OPEN to ANSWERING for one caller, the
 asker takes the answer, and ``settle`` records the answer that took effect
-(or ``release`` puts it back to OPEN when the asker refused it). A claim
-older than ``CLAIM_TIMEOUT`` was abandoned by a caller that died, and may be
-taken again. Every lookup is by pod: a ref is only unique within one.
+(or ``release`` puts it back to OPEN when the asker refused it, or failed).
+A claim older than ``CLAIM_TIMEOUT`` was abandoned by a caller that died: it
+may be taken again, it still waits on its person, and the sweeper puts it
+back (``release_lapsed``) or expires it (``expire_due``). Every lookup by
+ref is by pod: a ref is only unique within one.
+
+What asked a question is typed (``Asker``): a conversation's, or a workflow
+run's. Withdrawing what one asked is by that id, never by matching refs; and
+one whose conversation or run is deleted has nobody to answer for, so the
+sweeper cancels it (``cancel_orphaned``).
 """
 
 from __future__ import annotations
@@ -15,14 +22,16 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from uuid import UUID
 
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import ColumnElement, and_, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.channels.domain.access import Viewer
 from app.modules.channels.domain.entities import (
+    Asker,
     Principal,
     Question,
+    QuestionAsker,
     QuestionKind,
     QuestionState,
 )
@@ -31,24 +40,78 @@ from app.modules.channels.infrastructure.models import (
     ChannelModel,
     ChannelQuestionModel,
 )
+from app.modules.channels.infrastructure.revisions import touch_lines
 from app.modules.channels.infrastructure.rows import MAX_LINES, now, question_entity
 
 #: How long one caller may hold a question while its asker takes the answer.
 CLAIM_TIMEOUT = timedelta(minutes=1)
+#: Questions cancelled per statement; a member or run with more is worked
+#: through in turn, in the same transaction.
+_CANCEL_BATCH = 500
 
 
 @dataclass(frozen=True, slots=True)
 class NewQuestion:
     kind: QuestionKind
+    #: The asker's idempotency key: a second ask with it is the first.
     ref: str
+    #: What asks it: the conversation or run whose answer it is.
+    asker: Asker
     question: Mapping[str, object]
     awaits: Principal
     batch_id: str | None = None
     expires_at: datetime | None = None
 
 
-def _escape_like(prefix: str) -> str:
-    return prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+def still_waiting() -> ColumnElement[bool]:
+    """Not closed: open, or claimed by an answer that may yet lapse. What a
+    person is shown as waiting on them, and what keeps a batch unsettled."""
+    return ChannelQuestionModel.state.in_(
+        [QuestionState.OPEN.value, QuestionState.ANSWERING.value]
+    )
+
+
+def _lapsed(at: datetime) -> ColumnElement[bool]:
+    q = ChannelQuestionModel
+    return and_(
+        q.state == QuestionState.ANSWERING.value, q.claimed_at < at - CLAIM_TIMEOUT
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class BatchProgress:
+    asked: int
+    waiting: int
+
+    @property
+    def settled(self) -> bool:
+        """Something was asked, and nothing of it waits any more."""
+        return self.asked > 0 and self.waiting == 0
+
+
+def _asked_by(
+    asker: QuestionAsker,
+    *,
+    conversation_id: UUID | None = None,
+    workflow_run_id: UUID | None = None,
+) -> ColumnElement[bool]:
+    """What one conversation, or one run, asked as ``asker``."""
+    q = ChannelQuestionModel
+    if (conversation_id is None) == (workflow_run_id is None):
+        raise ValueError("Name the asking conversation or the asking run")
+    if conversation_id is not None:
+        return and_(q.asker == asker.value, q.asker_conversation_id == conversation_id)
+    return and_(q.asker == asker.value, q.asker_workflow_run_id == workflow_run_id)
+
+
+def _orphaned() -> ColumnElement[bool]:
+    """Waiting, with the conversation or run that asked deleted since."""
+    q = ChannelQuestionModel
+    return and_(
+        still_waiting(),
+        q.asker_conversation_id.is_(None),
+        q.asker_workflow_run_id.is_(None),
+    )
 
 
 class QuestionRepository:
@@ -67,6 +130,10 @@ class QuestionRepository:
                 channel_id=channel_id,
                 pod_id=pod_id,
                 ref=new.ref,
+                asker=new.asker.kind.value,
+                asker_conversation_id=new.asker.conversation_id,
+                asker_workflow_run_id=new.asker.workflow_run_id,
+                asker_key=new.asker.key,
                 batch_id=new.batch_id,
                 kind=new.kind.value,
                 question=dict(new.question),
@@ -103,17 +170,12 @@ class QuestionRepository:
         """Take the question to answer it; ``None`` if somebody else has it or
         it is closed."""
         q = ChannelQuestionModel
+        await touch_lines(self.session, [message_id])
         row = await self.session.scalar(
             update(q)
             .where(
                 q.message_id == message_id,
-                or_(
-                    q.state == QuestionState.OPEN.value,
-                    and_(
-                        q.state == QuestionState.ANSWERING.value,
-                        q.claimed_at < at - CLAIM_TIMEOUT,
-                    ),
-                ),
+                or_(q.state == QuestionState.OPEN.value, _lapsed(at)),
             )
             .values(state=QuestionState.ANSWERING.value, claimed_at=at)
             .returning(q)
@@ -121,8 +183,9 @@ class QuestionRepository:
         return question_entity(row) if row is not None else None
 
     async def release(self, message_id: UUID) -> None:
-        """The asker refused the answer: the question is open again."""
+        """The asker refused the answer, or failed: the question is open again."""
         q = ChannelQuestionModel
+        await touch_lines(self.session, [message_id])
         await self.session.execute(
             update(q)
             .where(q.message_id == message_id, q.state == QuestionState.ANSWERING.value)
@@ -140,12 +203,10 @@ class QuestionRepository:
         """Close a question with what took effect; nothing if already closed.
         Returns it closed now, or ``None``."""
         q = ChannelQuestionModel
+        await touch_lines(self.session, [message_id])
         row = await self.session.scalar(
             update(q)
-            .where(
-                q.message_id == message_id,
-                q.state.in_([QuestionState.OPEN.value, QuestionState.ANSWERING.value]),
-            )
+            .where(q.message_id == message_id, still_waiting())
             .values(
                 state=state.value,
                 answer=dict(answer) if answer is not None else None,
@@ -172,71 +233,169 @@ class QuestionRepository:
             return None
         return await self.settle(found.message_id, state=state, answer=answer, by=by)
 
-    async def cancel_under(self, *, pod_id: UUID, prefix: str) -> list[Question]:
-        """Cancel every open question whose ref starts with ``prefix``."""
+    async def cancel_asked_by(
+        self,
+        asker: QuestionAsker,
+        *,
+        conversation_id: UUID | None = None,
+        workflow_run_id: UUID | None = None,
+    ) -> list[Question]:
+        """Cancel every question still waiting that this conversation, or this
+        run, asked as ``asker``."""
+        return await self._cancel(
+            and_(
+                _asked_by(
+                    asker,
+                    conversation_id=conversation_id,
+                    workflow_run_id=workflow_run_id,
+                ),
+                still_waiting(),
+            )
+        )
+
+    async def cancel_orphaned(self, *, limit: int) -> list[Question]:
+        """Cancel up to ``limit`` questions whose asker is gone, oldest first."""
         q = ChannelQuestionModel
+        orphans = list(
+            await self.session.scalars(
+                select(q.message_id)
+                .where(_orphaned())
+                .order_by(q.created_at)
+                .limit(limit)
+            )
+        )
+        if not orphans:
+            return []
+        return await self._cancel(and_(q.message_id.in_(orphans), _orphaned()))
+
+    async def cancel_awaiting(self, *, pod_id: UUID, user_id: UUID) -> list[Question]:
+        """Cancel every question still waiting on this member."""
+        q = ChannelQuestionModel
+        return await self._cancel(
+            and_(q.pod_id == pod_id, q.awaits_user_id == user_id, still_waiting())
+        )
+
+    async def _cancel(self, which: ColumnElement[bool]) -> list[Question]:
+        q = ChannelQuestionModel
+        cancelled: list[Question] = []
+        while True:
+            # A batch at a time, each re-read: a cancelled row no longer
+            # matches, so the next read finds the rest.
+            batch = list(
+                await self.session.scalars(
+                    select(q.message_id)
+                    .where(which)
+                    .order_by(q.message_id)
+                    .limit(_CANCEL_BATCH)
+                )
+            )
+            if not batch:
+                return cancelled
+            # The channels first, then the questions -- the order an answer
+            # takes them in -- with the condition re-checked in the update.
+            await touch_lines(self.session, batch)
+            rows = await self.session.scalars(
+                update(q)
+                .where(q.message_id.in_(batch), which)
+                .values(
+                    state=QuestionState.CANCELLED.value,
+                    answered_at=now(),
+                    claimed_at=None,
+                )
+                .returning(q)
+            )
+            cancelled.extend(question_entity(row) for row in rows)
+            if len(batch) < _CANCEL_BATCH:
+                return cancelled
+
+    async def expire_due(self, *, at: datetime, limit: int) -> list[Question]:
+        """Close the questions whose time is up, oldest first -- open ones, and
+        ones whose claim lapsed; an answer being taken right now is let finish."""
+        q = ChannelQuestionModel
+        still_due = and_(
+            or_(q.state == QuestionState.OPEN.value, _lapsed(at)), q.expires_at <= at
+        )
+        due = list(
+            await self.session.scalars(
+                select(q.message_id)
+                .where(still_due)
+                .order_by(q.expires_at)
+                .limit(limit)
+            )
+        )
+        if not due:
+            return []
+        # The channels first, then the questions -- the order an answer takes
+        # them in -- and the expiry re-checked in the update, so a question
+        # answered meanwhile stays answered.
+        await touch_lines(self.session, due)
         rows = await self.session.scalars(
             update(q)
-            .where(
-                q.pod_id == pod_id,
-                q.ref.like(_escape_like(prefix) + "%", escape="\\"),
-                q.state.in_([QuestionState.OPEN.value, QuestionState.ANSWERING.value]),
-            )
-            .values(
-                state=QuestionState.CANCELLED.value, answered_at=now(), claimed_at=None
-            )
+            .where(q.message_id.in_(due), still_due)
+            .values(state=QuestionState.EXPIRED.value, answered_at=at, claimed_at=None)
             .returning(q)
         )
         return [question_entity(row) for row in rows]
 
-    async def expire_due(self, *, at: datetime, limit: int) -> list[Question]:
-        """Close the questions whose time is up, oldest first."""
+    async def release_lapsed(self, *, at: datetime, limit: int) -> int:
+        """Open again the questions whose claim lapsed; how many."""
         q = ChannelQuestionModel
-        due = (
-            select(q.message_id)
-            .where(q.state == QuestionState.OPEN.value, q.expires_at <= at)
-            .order_by(q.expires_at)
-            .limit(limit)
-            .with_for_update(skip_locked=True)
-            .scalar_subquery()
+        lapsed = list(
+            await self.session.scalars(
+                select(q.message_id)
+                .where(_lapsed(at))
+                .order_by(q.claimed_at)
+                .limit(limit)
+            )
         )
-        rows = await self.session.scalars(
+        if not lapsed:
+            return 0
+        await touch_lines(self.session, lapsed)
+        released = await self.session.scalars(
             update(q)
-            .where(q.message_id.in_(due))
-            .values(state=QuestionState.EXPIRED.value, answered_at=at)
-            .returning(q)
+            .where(q.message_id.in_(lapsed), _lapsed(at))
+            .values(state=QuestionState.OPEN.value, claimed_at=None)
+            .returning(q.message_id)
         )
-        return [question_entity(row) for row in rows]
+        return len(list(released))
 
     # -- reading --------------------------------------------------------------------
 
-    async def under(
-        self, *, pod_id: UUID, prefix: str, open_only: bool, limit: int = MAX_LINES
+    async def asked_by(
+        self,
+        asker: QuestionAsker,
+        *,
+        conversation_id: UUID | None = None,
+        workflow_run_id: UUID | None = None,
+        open_only: bool,
+        limit: int = MAX_LINES,
     ) -> list[Question]:
-        """Questions whose ref starts with ``prefix``, newest first."""
+        """What this conversation, or this run, asked as ``asker``, newest
+        first."""
         q = ChannelQuestionModel
         statement = select(q).where(
-            q.pod_id == pod_id, q.ref.like(_escape_like(prefix) + "%", escape="\\")
+            _asked_by(
+                asker, conversation_id=conversation_id, workflow_run_id=workflow_run_id
+            )
         )
         if open_only:
-            statement = statement.where(
-                q.state.in_([QuestionState.OPEN.value, QuestionState.ANSWERING.value])
-            )
+            statement = statement.where(still_waiting())
         rows = await self.session.scalars(
             statement.order_by(q.created_at.desc()).limit(max(1, min(limit, MAX_LINES)))
         )
         return [question_entity(row) for row in rows]
 
-    async def open_in_batch(self, *, pod_id: UUID, batch_id: str) -> int:
+    async def batch_progress(self, *, pod_id: UUID, batch_id: str) -> BatchProgress:
+        """How many questions a batch asked, and how many still wait."""
         q = ChannelQuestionModel
-        count = await self.session.scalar(
-            select(func.count()).where(
-                q.pod_id == pod_id,
-                q.batch_id == batch_id,
-                q.state.in_([QuestionState.OPEN.value, QuestionState.ANSWERING.value]),
+        asked, waiting = (
+            await self.session.execute(
+                select(func.count(), func.count().filter(still_waiting())).where(
+                    q.pod_id == pod_id, q.batch_id == batch_id
+                )
             )
-        )
-        return int(count or 0)
+        ).one()
+        return BatchProgress(asked=int(asked or 0), waiting=int(waiting or 0))
 
     async def waiting_on(
         self, viewer: Viewer, *, limit: int = MAX_LINES
@@ -249,7 +408,7 @@ class QuestionRepository:
             .where(
                 q.awaits_user_id == viewer.user_id,
                 q.pod_id == viewer.pod_id,
-                q.state == QuestionState.OPEN.value,
+                still_waiting(),
                 visible_to(viewer),
             )
             .order_by(q.created_at.desc())
@@ -263,7 +422,7 @@ class QuestionRepository:
             select(q)
             .where(
                 q.awaits_contact_id == contact_id,
-                q.state == QuestionState.OPEN.value,
+                still_waiting(),
             )
             .order_by(q.created_at.desc())
             .limit(MAX_LINES)

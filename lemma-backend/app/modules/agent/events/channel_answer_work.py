@@ -7,9 +7,11 @@
   conversation with it in the channel (``services.channel_answers``). A JOB:
   authorizing the member commits before the conversation is opened. A retry
   finds the turn it already started (the line is the turn's client id).
-* ``agent.channel_reply`` -- subscribed to ``AgentRunFinished``: a run that
-  answers a line in Lemma posts its answer in that line's thread. FAST; the
-  run is the line's client id, so a retry posts nothing new.
+* ``agent.channel_reply`` -- subscribed to ``AgentRunFinished`` for a run of
+  a member's own conversation: one that answers a line in Lemma posts its
+  answer in that line's thread (if it ended with one), and tells the line's
+  live readers it is done either way. FAST; the run is the line's client id,
+  so a retry posts nothing new.
 """
 
 from __future__ import annotations
@@ -69,20 +71,22 @@ class ChannelReplyPayload(BaseModel):
 
     run_id: UUID
     conversation_id: UUID
+    status: str
+    conversation_status: str | None = None
 
 
 def sets_agents_answering(fact: ChannelMessagePosted) -> bool:
     return bool(fact.answering_agent_ids)
 
 
-def ends_with_an_answer(fact: AgentRunFinished) -> bool:
-    """A run of a member's conversation that ended with an answer, not a pause."""
-    return (
-        fact.status == "COMPLETED"
-        and fact.conversation_status != "WAITING"
-        and fact.user_id is not None
-        and fact.parent_kind is None
-    )
+def runs_for_a_member(fact: AgentRunFinished) -> bool:
+    """A run of a member's own conversation, however it ended."""
+    return fact.user_id is not None and fact.parent_kind is None
+
+
+def ended_with_an_answer(status: str, conversation_status: str | None) -> bool:
+    """It ended with an answer, not a failure, a stop or a pause."""
+    return status == "COMPLETED" and conversation_status != "WAITING"
 
 
 async def fan_out(ctx: FastContext, payload: ChannelLinePayload) -> None:
@@ -111,7 +115,11 @@ def make_channel_answer(uow_factory: UnitOfWorkFactory | None = None):
 
 async def post_reply(ctx: FastContext, payload: ChannelReplyPayload) -> None:
     await post_run_answer(
-        ctx.uow, run_id=payload.run_id, conversation_id=payload.conversation_id
+        ctx.uow,
+        run_id=payload.run_id,
+        conversation_id=payload.conversation_id,
+        answered=ended_with_an_answer(payload.status, payload.conversation_status),
+        paused=payload.conversation_status == "WAITING",
     )
 
 
@@ -150,16 +158,17 @@ facts.subscribe(
     AgentRunFinished,
     kind=AGENT_CHANNEL_REPLY,
     cls=WorkClass.EVENTS,
-    when=ends_with_an_answer,
+    when=runs_for_a_member,
     dedup=lambda fact: channel_reply_key(fact.run_id),
 )
 
 
 __all__ = [
     "ChannelAnswerWork",
-    "ends_with_an_answer",
+    "ended_with_an_answer",
     "fan_out",
     "make_channel_answer",
     "register_channel_answer_work",
+    "runs_for_a_member",
     "sets_agents_answering",
 ]

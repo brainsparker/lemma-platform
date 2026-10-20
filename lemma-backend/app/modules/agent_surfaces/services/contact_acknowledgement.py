@@ -3,10 +3,10 @@
 A contact whose channel has its agents switched off is answered by a member,
 whenever one gets to it. Until then the pod may say so once -- its own line,
 set in the pod's settings (``config.contacts.auto_acknowledge``), for example
-"Thanks, someone from Acme will reply". Once per *open period*: from the
-contact's first unanswered message until a member writes to them, or their
-channel is closed. Two messages arriving together say it once (a conditional
-claim on the channel, ``channels.contracts.acknowledge``).
+"Thanks, someone from Acme will reply". Once per *wait*: from the contact's
+first unanswered message until a member writes to them, or their case is
+closed. Two messages arriving together say it once (a claim on the contact's
+case under its channel's lock, ``channels.contracts.acknowledge``).
 
 The line is the pod's agent's, on the contact's timeline at the place they
 wrote from, and goes there as a delivery like any other line. A contact who
@@ -28,7 +28,7 @@ from app.modules.agent.contracts import (
 from app.modules.agent.contracts.channel_conversations import (
     channel_of_conversation,
 )
-from app.modules.agent_surfaces.services.channel_lines import WEB
+from app.modules.agent_surfaces.services.channel_lines import WEB, shown_on_web
 from app.modules.agent_surfaces.services.contact_reach import reach_for
 from app.modules.channels.contracts import (
     Channel,
@@ -56,8 +56,8 @@ async def acknowledge_contact(
     now: datetime | None = None,
 ) -> str | None:
     """Say the pod's acknowledgement to this contact, if it is due: their
-    channel's agents are off, the pod set one, it is the first of this open
-    period, and they may be written to. Returns what was said -- for their
+    channel's agents are off, the pod set one, it is the first of this wait,
+    and they may be written to. Returns what was said -- for their
     conversation, which is where a web chat shows it -- or ``None``."""
     text = await pod_auto_acknowledgement(uow.session, pod_id)
     if text is None:
@@ -78,7 +78,7 @@ async def acknowledge_contact(
         return None
     if not await acknowledge(uow, channel.id):
         return None
-    await post(
+    line = await post(
         uow,
         channel_id=channel.id,
         line=NewLine(
@@ -87,12 +87,14 @@ async def acknowledge_contact(
                 on_behalf_of=Principal.contact(channel.contact_id),
             ),
             text=text,
-            source_id=source.id,
+            target_source_id=source.id,
             conversation_id=conversation_id,
         ),
-        # A web chat shows it from their conversation; nothing carries it.
-        deliver_to=[] if source.platform == WEB else [source.id],
+        deliver_to=[source.id],
     )
+    if line is not None and source.platform == WEB:
+        # A web chat shows it from their conversation; nothing carries it.
+        await shown_on_web(uow, line, source)
     logger.info(
         "agent_surfaces.contact_acknowledgement.sent.observed",
         channel_id=str(channel.id),

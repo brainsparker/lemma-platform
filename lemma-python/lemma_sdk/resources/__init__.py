@@ -24,7 +24,7 @@ _NAME_TO_MODULE = {
     "PodApps": "apps",
     "PodFiles": "files",
     "PodFunctions": "functions",
-    "PodSources": "sources",
+    "ChannelSources": "sources",
     "PodChannels": "channels",
     "PodContacts": "contacts",
     "PodWebWidgets": "web_widgets",
@@ -53,7 +53,7 @@ if TYPE_CHECKING:
     from .apps import PodApps
     from .files import PodFiles
     from .functions import PodFunctions
-    from .sources import PodSources
+    from .sources import ChannelSources
     from .channels import PodChannels
     from .contacts import PodContacts
     from .web_widgets import PodWebWidgets
@@ -97,7 +97,7 @@ __all__ = [
     "PodApps",
     "PodFiles",
     "PodFunctions",
-    "PodSources",
+    "ChannelSources",
     "PodChannels",
     "PodContacts",
     "PodWebWidgets",

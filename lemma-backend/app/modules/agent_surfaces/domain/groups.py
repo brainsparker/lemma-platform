@@ -108,14 +108,26 @@ class GroupUpdateKind(StrEnum):
     CREATE_FAILED = "CREATE_FAILED"
     #: The group is gone; nobody can speak in it again.
     DELETED = "DELETED"
+    #: The platform now keeps the place to its members (a Slack channel
+    #: converted to private). Only ever this way round.
+    BECAME_PRIVATE = "BECAME_PRIVATE"
+    #: Shared with another company, or no longer (Slack Connect).
+    SHARED = "SHARED"
+    UNSHARED = "UNSHARED"
+    #: Somebody left, or was taken out of, the place (``external_user_id``).
+    MEMBER_LEFT = "MEMBER_LEFT"
+    #: The bot itself was taken out of the place, or put back in it.
+    BOT_LEFT = "BOT_LEFT"
+    BOT_RETURNED = "BOT_RETURNED"
 
 
 class ParsedGroupUpdate(BaseModel):
     """A platform's word about a group itself, as opposed to a message in it.
 
-    Only WhatsApp sends these today, because only there does the bot create
-    groups: the creation is confirmed later, naming the ``request_id`` it
-    answers, and only then does the group have an id to be spoken in.
+    WhatsApp confirms a group the bot asked it to create, naming the
+    ``request_id`` it answers. Slack, Teams and Telegram say who left a place,
+    when the bot was taken out of one or put back, and (Slack) when a channel
+    turned private or was shared with another company.
     """
 
     platform: str
@@ -126,3 +138,9 @@ class ParsedGroupUpdate(BaseModel):
     invite_link: str | None = None
     #: The business number the group belongs to, to fetch its link through.
     phone_number_id: str | None = None
+    #: The workspace or tenant the place is in, where the platform has one:
+    #: only surfaces installed there are asked about it.
+    tenant_id: str | None = None
+    #: Who left (``MEMBER_LEFT``), as the platform names them -- a Teams
+    #: person by their AAD object id where the event carries it.
+    external_user_id: str | None = None

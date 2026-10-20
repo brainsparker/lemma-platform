@@ -15,6 +15,7 @@ from app.modules.agent.contracts import (
     conversations_for_surfaces as agent_conversations,
 )
 from app.modules.agent_surfaces.domain.entities import ResolvedSurfaceUser
+from app.modules.agent_surfaces.services.channel_lines import reply_ref_of
 from app.modules.agent_surfaces.services.conversation_binder import ConversationBinder
 from app.modules.agent_surfaces.services.surface_route_types import (
     ResolvedSurfaceRoute,
@@ -75,7 +76,7 @@ async def test_a_first_message_opens_the_persons_conversation_in_their_channel()
     [source] = seats.sources.values()
     assert bound.source_id == source.id
     # A private chat is the person's place, not the address it came to.
-    assert source.kind is SourceKind.PRIVATE
+    assert source.kind is SourceKind.PERSON
     assert source.external_user_id == "U123"
     assert source.external_channel_id is None
     # Opened in the channel the place belongs to: the member's own.
@@ -101,7 +102,9 @@ async def test_what_was_heard_is_kept_as_how_to_answer_the_place():
     )
 
     [source] = seats.sources.values()
-    assert source.delivery_ref == event.model_dump(mode="json")
+    # The place's reply target, never what was said there.
+    assert source.delivery_ref == reply_ref_of(event)
+    assert source.delivery_ref["message_text"] == ""
     assert source.last_inbound_at is not None
 
 

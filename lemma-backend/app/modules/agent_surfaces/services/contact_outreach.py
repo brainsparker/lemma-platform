@@ -34,7 +34,7 @@ from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     SurfacePlatform,
 )
-from app.modules.agent_surfaces.domain.external_accounts import account_key_for
+from app.modules.agent_surfaces.domain.external_accounts import account_of
 from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (  # noqa: E501
     SurfaceRepository,
 )
@@ -143,11 +143,21 @@ class ContactOutreach:
             raise OutreachRefused(
                 str(refused), status_code=refused.status_code
             ) from refused
-        [delivery] = [
-            delivery
-            for delivery in await deliveries_of(self.uow, [line.id])
-            if delivery.source_id == source.id
-        ]
+        delivery = next(
+            (
+                delivery
+                for delivery in await deliveries_of(self.uow, [line.id])
+                if delivery.source_id == source.id
+            ),
+            None,
+        )
+        if delivery is None:
+            # The key named a line already written for another of their
+            # handles: a retry must be the same request.
+            raise OutreachRefused(
+                "That key was already used for a line to another of their handles.",
+                status_code=409,
+            )
         return Reached(line=line, delivery=delivery)
 
     async def _place(
@@ -188,8 +198,8 @@ class ContactOutreach:
             place=Place(
                 surface_id=mailbox.id,
                 platform=mailbox.surface_type.value,
-                account_key=account_key_for(mailbox),
-                kind=SourceKind.PRIVATE,
+                account=account_of(mailbox),
+                kind=SourceKind.PERSON,
                 # Keyed as their reply is heard: by their address.
                 external_channel_id=None,
                 external_user_id=handle.value,

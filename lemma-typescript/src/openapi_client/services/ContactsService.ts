@@ -12,17 +12,18 @@ import { request as __request } from '../core/request.js';
 export class ContactsService {
     /**
      * List Contacts
-     * The pod's contacts, newest first.
+     * The pod's contacts, newest first. Follow `next_cursor` until it is
+     * absent.
      * @param podId
      * @param limit
-     * @param before
+     * @param cursor
      * @returns ContactListResponse Successful Response
      * @throws ApiError
      */
     public static contactList(
         podId: string,
         limit: number = 50,
-        before?: (string | null),
+        cursor?: (string | null),
     ): CancelablePromise<ContactListResponse> {
         return __request(OpenAPI, {
             method: 'GET',
@@ -32,7 +33,7 @@ export class ContactsService {
             },
             query: {
                 'limit': limit,
-                'before': before,
+                'cursor': cursor,
             },
             errors: {
                 422: `Validation Error`,

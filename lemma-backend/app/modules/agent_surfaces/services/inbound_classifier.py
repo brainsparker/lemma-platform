@@ -2,8 +2,8 @@
 
 Prod received 71.5k Slack webhooks in a week against 2,277 agent runs from
 every source: most of what a platform sends is not something anybody acts on
--- a bot's own message echoed back, an edit, a reaction, chatter in a channel
-the bot was never asked into, a WhatsApp "delivered"/"read" receipt. Those are
+-- a bot's own message echoed back, a reaction, chatter in a channel the bot
+was never asked into, a WhatsApp "delivered"/"read" receipt. Those are
 answered ``200`` and dropped here, before a row or a work item exists for them.
 
 What is left is one or more of:
@@ -12,7 +12,8 @@ What is left is one or more of:
   (Slack's ``trigger_id`` lives ~3 s), so it is handled in the request;
 * ``platform_update`` -- something about the app or a group rather than a
   message (the bot joined a channel, the app home opened, a WhatsApp group was
-  created, a send failed): a ``surface.platform_update`` item;
+  created, a send failed), or a heard message edited or deleted: a
+  ``surface.platform_update`` item;
 * ``message`` -- a person writing: a ``surface_inbound_messages`` row and a
   ``surface.ingest`` item, ordered per thread by :func:`thread_key`.
 
@@ -33,6 +34,15 @@ from typing import Any
 
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.entities import SurfacePlatform
+from app.modules.agent_surfaces.platforms.slack.group_updates import (
+    SLACK_GROUP_UPDATE_EVENTS,
+)
+from app.modules.agent_surfaces.platforms.slack.line_changes import (
+    SLACK_LINE_CHANGE_SUBTYPES,
+)
+from app.modules.agent_surfaces.platforms.teams.line_changes import (
+    TEAMS_LINE_CHANGE_ACTIVITIES,
+)
 
 logger = get_logger(__name__)
 
@@ -43,8 +53,9 @@ class Verdict:
     interaction: bool = False
     platform_update: bool = False
     message: bool = False
-    #: A Slack channel message nobody addressed: dropped unless the channel is
-    #: one a group adopted (where everything said is logged for context).
+    #: A Slack channel message nobody addressed -- or an edit or deletion of
+    #: one: dropped unless the channel is one a group adopted (where
+    #: everything said is logged, and so changes with what was said).
     unless_adopted: str | None = None
     tags: tuple[str, ...] = field(default_factory=tuple)
 
@@ -98,11 +109,11 @@ _SLACK_INTERACTIONS = frozenset(
     }
 )
 #: Message subtypes that are not a person writing (``SlackMessageParser``).
+#: An edit or a deletion is not either, but changes a line that was heard
+#: (``services/line_changes``).
 _SLACK_IGNORED_SUBTYPES = frozenset(
     {
         "bot_message",
-        "message_changed",
-        "message_deleted",
         "channel_join",
         "channel_leave",
         "message_replied",
@@ -137,7 +148,7 @@ def classify_slack(payload: Mapping[str, Any]) -> Verdict:
         return drop(f"slack_{kind or 'untyped'}")
     event = _dict(envelope.get("event"))
     event_type = event.get("type")
-    if event_type in _SLACK_LIFECYCLE:
+    if event_type in _SLACK_LIFECYCLE or event_type in SLACK_GROUP_UPDATE_EVENTS:
         return Verdict(platform_update=True)
     if event_type not in {"message", "app_mention"}:
         # reaction_added, user_change, channel_created, file_shared, ...
@@ -149,12 +160,26 @@ def _classify_slack_message(event: dict[str, Any]) -> Verdict:
     """A ``message`` or ``app_mention``: a person writing, or not."""
     if event.get("bot_id") or event.get("subtype") == "bot_message":
         return drop("bot_echo")
+    if event.get("subtype") in SLACK_LINE_CHANGE_SUBTYPES:
+        return _classify_slack_line_change(event)
     if event.get("subtype") in _SLACK_IGNORED_SUBTYPES:
         return drop(f"slack_{event.get('subtype')}")
     channel = str(event.get("channel") or "")
     if channel and not _slack_addressed(event, channel):
         return Verdict(message=True, unless_adopted=channel)
     return Verdict(message=True)
+
+
+def _classify_slack_line_change(event: dict[str, Any]) -> Verdict:
+    """An edit or deletion of a message: of a line heard in the channel, if
+    the bot heard it. Not one of an app's own messages."""
+    changed = _dict(event.get("message")) or _dict(event.get("previous_message"))
+    if changed.get("bot_id") or changed.get("subtype") == "bot_message":
+        return drop("bot_echo")
+    channel = str(event.get("channel") or "")
+    if channel and not channel.startswith("D"):
+        return Verdict(platform_update=True, unless_adopted=channel)
+    return Verdict(platform_update=True)
 
 
 def _slack_addressed(event: dict[str, Any], channel: str) -> bool:
@@ -179,12 +204,18 @@ def classify_telegram(payload: Mapping[str, Any]) -> Verdict:
         return Verdict(interaction=True)
     if "my_chat_member" in payload:
         return Verdict(platform_update=True)
-    if "edited_message" in payload or "edited_channel_post" in payload:
-        # An edit is not a new turn (``TelegramMessageParser``).
+    if "edited_message" in payload:
+        # Not a new turn (``TelegramMessageParser``), but a heard line that
+        # now says something else (``services/line_changes``).
+        return Verdict(platform_update=True)
+    if "edited_channel_post" in payload:
         return drop("edit")
     message = _dict(payload.get("message"))
     if not message:
         return drop("telegram_not_a_message")
+    if message.get("left_chat_member"):
+        # A service message: somebody left the group, nothing was said.
+        return Verdict(platform_update=True)
     if _dict(message.get("from")).get("is_bot"):
         return drop("bot_echo")
     return Verdict(message=True)
@@ -247,7 +278,13 @@ def classify_teams(payload: Mapping[str, Any]) -> Verdict:
         return Verdict(interaction=True, message=True)
     if kind in {"conversationUpdate", "installationUpdate"}:
         return Verdict(platform_update=True)
-    if kind in {"typing", "messageReaction", "messageUpdate", "messageDelete", "event"}:
+    if kind in TEAMS_LINE_CHANGE_ACTIVITIES:
+        # Not a new turn, but a heard line that now says something else, or
+        # nothing (``services/line_changes``).
+        if _dict(payload.get("from")).get("role") == "bot":
+            return drop("bot_echo")
+        return Verdict(platform_update=True)
+    if kind in {"typing", "messageReaction", "event"}:
         return drop(f"teams_{kind}")
     if kind == "message":
         if _dict(payload.get("from")).get("role") == "bot":

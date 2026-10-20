@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Header, HTTPException, status
 from pydantic import BaseModel, Field
 
 from app.core.api.dependencies import CurrentUser, UoWDep
@@ -21,7 +21,7 @@ from app.modules.agent_surfaces.services.contact_outreach import (
     Outreach,
     OutreachRefused,
 )
-from app.modules.channels.contracts import DeliveryStatus
+from app.modules.channels.contracts import DeliveryStatus, keyed_client_id
 from app.modules.contacts.contracts import IdentityKind
 
 router = APIRouter(prefix="/pods/{pod_id}/contacts", tags=["Contact Outreach"])
@@ -44,7 +44,7 @@ class OutreachRequest(BaseModel):
     client_message_id: str | None = Field(
         default=None,
         min_length=1,
-        max_length=128,
+        max_length=64,
         description="The same id twice is the same line: a retry sends nothing new.",
     )
 
@@ -79,7 +79,7 @@ class OutreachResponse(BaseModel):
     response_model=OutreachResponse,
     status_code=status.HTTP_201_CREATED,
     dependencies=[
-        require_action(Permissions.CONVERSATION_WRITE),
+        require_action(Permissions.CHANNEL_WRITE),
         require_action(Permissions.CONTACT_MESSAGE),
     ],
     responses={
@@ -98,11 +98,15 @@ async def send_outreach(
     body: OutreachRequest,
     user: CurrentUser,
     uow: UoWDep,
+    idempotency_key: str | None = Header(
+        default=None, alias="Idempotency-Key", min_length=1, max_length=255
+    ),
 ) -> OutreachResponse:
     """Write to a contact first, on one of their handles: email any time,
     WhatsApp within 24 hours of their last message there. The line goes in
     their channel, at that handle's place -- opened if new -- and is sent from
-    there."""
+    there. The same `client_message_id`, or `Idempotency-Key`, from the same
+    member is the same line: a retry sends nothing new."""
     try:
         reached = await ContactOutreach(uow).write(
             Outreach(
@@ -112,7 +116,8 @@ async def send_outreach(
                 handle=body.handle,
                 kind=body.kind,
                 text=body.text,
-                client_message_id=body.client_message_id,
+                client_message_id=body.client_message_id
+                or keyed_client_id(idempotency_key, user_id=user.id),
             )
         )
     except OutreachRefused as refused:
@@ -124,7 +129,7 @@ async def send_outreach(
             id=line.id,
             channel_id=line.channel_id,
             seq=line.seq,
-            source_id=line.source_id,
+            source_id=line.place_id,
             text=line.text,
             created_at=line.created_at,
         ),

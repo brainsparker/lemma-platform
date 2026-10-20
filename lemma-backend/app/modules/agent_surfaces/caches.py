@@ -39,6 +39,10 @@ TEAMS_CONSENT_CHECKS = CacheNamespace("surface:teams-consent", 60)
 PENDING_DISPLAY_PATHS = CacheNamespace("surface:pending-display-paths", 6 * 60 * 60)
 INGESTED_ATTACHMENTS = CacheNamespace("surface:ingested", _DAY)
 WEB_WIDGET_KEYS = CacheNamespace("web-widget:key", 60)
+#: Whether a Slack or Teams place is private, as the platform said when its
+#: mirror was about to be made. Short: a conversion to private inside it is
+#: still caught by the next message, which names the new type.
+PLACE_PRIVACY = CacheNamespace("surface:place-privacy", 5 * 60)
 
 
 class SurfaceCaches:

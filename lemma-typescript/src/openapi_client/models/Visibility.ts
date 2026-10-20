@@ -3,6 +3,6 @@
 /* tslint:disable */
 /* eslint-disable */
 export enum Visibility {
-    PUBLIC = 'public',
-    PRIVATE = 'private',
+    PUBLIC = 'PUBLIC',
+    PRIVATE = 'PRIVATE',
 }

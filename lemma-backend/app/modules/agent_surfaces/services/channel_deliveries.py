@@ -4,11 +4,13 @@ Channels plans a delivery for every send outside Lemma -- a line written in
 Lemma for one of the channel's places, a push to a member who hears of it --
 and announces it (``ChannelDeliveryDue``). This takes one: claims it, sends
 it, and records what became of it on the same row -- with the platform's id
-for the message, which is what the platform's later status report about it
-names (``whatsapp_delivery_status``). A claimed delivery is never sent twice:
-one that failed is due again after a backoff, until it is given up; one whose
-sender died mid-send is settled without sending it again
-(``channels.contracts.deliveries``).
+for the message, noted as soon as the platform answers, which is what the
+platform's later status report about it names (``whatsapp_delivery_status``).
+What a try ends as is ``delivery_outcome``'s rule: retried only when the retry
+cannot be a second copy. One whose sender died mid-send is sent again where
+the platform dedupes on the delivery's key, and otherwise settled without
+sending it again (``channels.contracts.deliveries``). An error before any
+platform call is recorded as a failure to try again, before it propagates.
 
 Each send is bounded (``SEND_TIMEOUT``), below how long a claim is held, so a
 slow platform is a failure tried again rather than a claim that lapses.
@@ -37,11 +39,12 @@ person said it.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
-from dataclasses import dataclass, field
+import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from uuid import UUID
 
+from opentelemetry import metrics
 from redis.asyncio import Redis
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -51,25 +54,27 @@ from app.modules.agent.contracts.contact_conversations import append_follow_up
 from app.modules.agent_surfaces.domain.adapter_port import IDEMPOTENCY_KEY
 from app.modules.agent_surfaces.domain.deliveries import SEND_TIMEOUT
 from app.modules.agent_surfaces.domain.envelope import DeliveryReceipt
-from app.modules.agent_surfaces.platforms.common import platform_transport_errors
 from app.modules.agent_surfaces.platforms.delivery import track_sends
 from app.modules.agent_surfaces.services.channel_lines import WEB
 from app.modules.agent_surfaces.services.contact_reach import reach_for
+from app.modules.agent_surfaces.services.contact_refusals import (
+    ContactRefused,
+    Ready,
+    outreach_kind,
+)
+from app.modules.agent_surfaces.services.cold_open_sends import (
+    cold_open_surface,
+    send_cold_open,
+)
 from app.modules.agent_surfaces.services.delivery_outcome import (
+    RESENDS_SAFELY,
     Outcome,
     Result,
     of_send,
+    raised_before_recording,
+    timed_out,
 )
-from app.modules.agent_surfaces.services.cold_email_thread import (
-    cold_thread_seed_id,
-)
-from app.modules.agent_surfaces.services.group_names import sender_name_for
-from app.modules.agent_surfaces.services.member_pushes import (
-    MemberPushes,
-    Push,
-    title_of,
-)
-from app.modules.agent_surfaces.services.notification_channels import can_cold_open
+from app.modules.agent_surfaces.services.push_sends import PushesFor, push_outcome
 from app.modules.agent_surfaces.services.place_threads import (
     at_place_level,
     in_thread,
@@ -86,34 +91,46 @@ from app.modules.channels.contracts import (
     ChannelKind,
     ChannelMessage,
     Delivery,
-    Principal,
+    DeliveryReasonCode as Code,
     SenderKind,
     Source,
     SourceKind,
     channel_by_id,
-    member_of,
     source_by_id,
 )
 from app.modules.channels.contracts.deliveries import (
+    announce_next_for_target,
     claim_delivery,
     deliveries_of,
     delivery_dead,
     delivery_failed,
+    delivery_folded,
     delivery_interrupted,
+    delivery_noted,
     delivery_sent,
     delivery_skipped,
+    lapsed_delivery,
+    reclaim_delivery,
 )
 from app.modules.channels.contracts.lines import line_by_id
-from app.modules.channels.contracts.places import addressed_at, conversation_at
+from app.modules.channels.contracts.places import conversation_at
 from app.modules.contacts.contracts.outreach import (
     UNSUBSCRIBE_TOKEN_KEY,
-    OutreachKind,
-    Verdict,
     count_against_today,
     may_send,
 )
 
 logger = get_logger(__name__)
+meter = metrics.get_meter(__name__)
+deliveries_done = meter.create_counter(
+    "lemma.channels.deliveries",
+    description="Channel deliveries tried, by platform, target and result.",
+)
+delivery_seconds = meter.create_histogram(
+    "lemma.channels.delivery_seconds",
+    unit="s",
+    description="One channel delivery: policy, the platform's send, its answer.",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,43 +138,6 @@ class _Work:
     delivery: Delivery
     line: ChannelMessage
     channel: Channel
-
-
-@dataclass(frozen=True, slots=True)
-class Ready:
-    """A line a contact's rules let through: its text, and what the send
-    carries besides (an email's unsubscribe token)."""
-
-    text: str
-    metadata: dict[str, object] = field(default_factory=dict)
-
-
-class ContactRefused(Exception):
-    """A line a contact's rules do not let through; the reason is the member's."""
-
-    def __init__(self, reason: str, *, code: str, retryable: bool = False) -> None:
-        super().__init__(reason)
-        self.reason = reason
-        self.code = code
-        self.retryable = retryable
-
-    @classmethod
-    def of(cls, verdict: Verdict) -> ContactRefused:
-        return cls(
-            verdict.reason or "Not sent.",
-            code=str(verdict.code),
-            retryable=verdict.retryable,
-        )
-
-
-def _outreach_kind(line: ChannelMessage) -> OutreachKind:
-    if line.sender.kind is SenderKind.MEMBER:
-        return OutreachKind.MEMBER_LINE
-    return OutreachKind.AGENT_ANSWER
-
-
-#: The pushes over one unit of work.
-type PushesFor = Callable[[SqlAlchemyUnitOfWork], MemberPushes]
 
 
 class ChannelDeliveries:
@@ -183,51 +163,85 @@ class ChannelDeliveries:
         work = await self._claim(delivery_id)
         if work is None:
             return
-        try:
-            async with asyncio.timeout(self.send_timeout):
-                outcome = await self._outcome(work)
-        except TimeoutError:
-            logger.warning(
-                "agent_surfaces.channel_deliveries.send_timed_out.degraded",
-                delivery_id=str(delivery_id),
-                timeout_seconds=self.send_timeout,
-            )
-            outcome = Outcome.failed(
-                f"No answer from the platform within {self.send_timeout:g} s. "
-                "It will be tried again."
-            )
+        started = time.monotonic()
+        with track_sends() as sends:
+            try:
+                async with asyncio.timeout(self.send_timeout):
+                    outcome = await self._outcome(work)
+            except TimeoutError:
+                logger.warning(
+                    "agent_surfaces.channel_deliveries.send_timed_out.degraded",
+                    delivery_id=str(delivery_id),
+                    timeout_seconds=self.send_timeout,
+                )
+                outcome = timed_out(sends, timeout=self.send_timeout)
+            except asyncio.CancelledError:
+                # The worker is stopping: the claim lapses, and is settled
+                # (or sent again where that is safe) once its lease is over.
+                raise
+            except BaseException as exc:
+                # Recorded before it propagates: a claim left behind would be
+                # settled as interrupted -- given up -- when nothing may have
+                # been sent at all.
+                await self._record(work.delivery, raised_before_recording(sends, exc))
+                raise
+        attributes = {
+            "platform": outcome.platform or "NONE",
+            "result": outcome.result.value,
+            "target": "place" if work.delivery.source_id else "member",
+        }
+        deliveries_done.add(1, attributes)
+        delivery_seconds.record(time.monotonic() - started, attributes)
         await self._record(work.delivery, outcome)
 
     async def _outcome(self, work: _Work) -> Outcome:
         if work.line.is_deleted:
-            return Outcome.skipped("The line was deleted before it went.")
+            return Outcome.skipped(
+                "The line was deleted before it went.", code=Code.LINE_GONE
+            )
         if work.delivery.source_id is not None:
             return await self._to_place(work, work.delivery.source_id)
         return await self._to_member(work)
 
     async def _claim(self, delivery_id: UUID) -> _Work | None:
-        at = datetime.now(timezone.utc)
         async with self.uow_factory() as uow:
-            delivery = await claim_delivery(uow, delivery_id, at=at)
+            delivery = await claim_delivery(uow, delivery_id)
             if delivery is None:
-                await self._settle_interrupted(uow, delivery_id, at=at)
+                delivery = await self._after_a_lapse(uow, delivery_id)
+            if delivery is None:
                 await uow.commit()
                 return None
             line = await line_by_id(uow, delivery.message_id)
             channel = await channel_by_id(uow, line.channel_id) if line else None
             if line is None or channel is None:
-                await delivery_skipped(uow, delivery.id, reason="The line is gone.")
+                await delivery_skipped(
+                    uow, delivery.id, code=Code.LINE_GONE, reason="The line is gone."
+                )
                 await uow.commit()
                 return None
             await uow.commit()
         return _Work(delivery=delivery, line=line, channel=channel)
 
-    async def _settle_interrupted(
-        self, uow: SqlAlchemyUnitOfWork, delivery_id: UUID, *, at: datetime
-    ) -> None:
-        """A claim whose sender died before recording what happened: settled,
+    async def _after_a_lapse(
+        self, uow: SqlAlchemyUnitOfWork, delivery_id: UUID
+    ) -> Delivery | None:
+        """A claim whose sender died before recording what happened. Sent
+        again where the place's platform dedupes a resend by the delivery's
+        key -- a deploy mid-send then costs nothing -- and otherwise settled,
         never sent again (see ``channels.infrastructure.deliveries``)."""
-        settled = await delivery_interrupted(uow, delivery_id, at=at)
+        lapsed = await lapsed_delivery(uow, delivery_id)
+        if lapsed is None:
+            return None
+        if await self._resends_safely(uow, lapsed):
+            reclaimed = await reclaim_delivery(uow, delivery_id)
+            if reclaimed is not None:
+                logger.info(
+                    "agent_surfaces.channel_deliveries.send_resumed.observed",
+                    delivery_id=str(delivery_id),
+                    attempts=reclaimed.attempts,
+                )
+                return reclaimed
+        settled = await delivery_interrupted(uow, delivery_id)
         if settled is not None:
             logger.warning(
                 "agent_surfaces.channel_deliveries.send_interrupted.degraded",
@@ -235,6 +249,17 @@ class ChannelDeliveries:
                 status=settled.status.value,
                 platform=settled.platform,
             )
+            await announce_next_for_target(uow, settled)
+        return None
+
+    @staticmethod
+    async def _resends_safely(uow: SqlAlchemyUnitOfWork, delivery: Delivery) -> bool:
+        """Whether this delivery's place is on a platform that dedupes a resend
+        by its key. A push's platform is chosen as it is sent, so it is not."""
+        if delivery.source_id is None or delivery.external_message_id is not None:
+            return False
+        source = await source_by_id(uow, delivery.source_id)
+        return source is not None and source.platform in RESENDS_SAFELY
 
     # -- to a place -------------------------------------------------------------
 
@@ -242,7 +267,10 @@ class ChannelDeliveries:
         """The line, to the outside place it was written for, as the pod's bot."""
         line, channel = work.line, work.channel
         if line.members_only:
-            return Outcome.skipped("A note for the pod's members goes nowhere else.")
+            return Outcome.skipped(
+                "A note for the pod's members goes nowhere else.",
+                code=Code.MEMBERS_ONLY,
+            )
         answer = is_run_answer(line)
         async with self.uow_factory() as uow:
             source = await source_by_id(uow, source_id)
@@ -254,29 +282,27 @@ class ChannelDeliveries:
                 else None
             )
         if source is None or source.channel_id != channel.id:
-            return Outcome.skipped("That place is no longer this channel's.")
+            return Outcome.skipped(
+                "That place is no longer this channel's.", code=Code.PLACE_GONE
+            )
         platform = source.platform
         if platform != WEB and source.surface_id is None:
             # The bot that reached it was removed: trying again reaches nobody.
             return Outcome.skipped(
                 "The bot that reached this place is no longer connected.",
+                code=Code.PLACE_GONE,
                 platform=platform,
             )
         try:
             ready = await self._ready(channel, source, line)
         except ContactRefused as refused:
-            if refused.retryable:
-                # The rules could not be read (Redis): try again, not give up.
-                return Outcome.failed(refused.reason, platform=platform)
-            return Outcome.skipped(refused.reason, platform=platform)
+            return refused.outcome(platform)
         if conversation_id is None:
             # Nobody there has spoken to the bot: only mail can write first.
             return await self._cold_open(work, source, ready)
         if platform == WEB:
             # Nobody to hand it to: it waits in their web chat for the next visit.
-            await self._to_their_conversation(
-                channel, conversation_id, line, ready.text, None
-            )
+            await self._to_their_conversation(channel, conversation_id, line, None)
             return Outcome.delivered(platform)
         if answer:
             return await self.answers.send(
@@ -286,6 +312,10 @@ class ChannelDeliveries:
                 text=ready.text,
                 metadata=ready.metadata,
             )
+        try:
+            await self._count_today(ready)
+        except ContactRefused as refused:
+            return refused.outcome(platform)
         receipt, outcome = await self._send(
             work.delivery,
             conversation_id,
@@ -294,7 +324,7 @@ class ChannelDeliveries:
             metadata=ready.metadata,
         )
         await self._to_their_conversation(
-            channel, conversation_id, line, ready.text, receipt is not None
+            channel, conversation_id, line, receipt is not None
         )
         return outcome
 
@@ -302,8 +332,8 @@ class ChannelDeliveries:
         self, channel: Channel, source: Source, line: ChannelMessage
     ) -> Ready:
         """The text that goes, once a contact's rules allow it to; or a refusal
-        (``ContactRefused``). A line counts against the contact's day once: a
-        retry is the same line."""
+        (``ContactRefused``). The contact's day is counted later, once the
+        line can actually go (``_count_today``)."""
         if channel.kind is not ChannelKind.CONTACT or channel.contact_id is None:
             return Ready(text=line.text)
         reach = reach_for(
@@ -321,73 +351,66 @@ class ChannelDeliveries:
                 pod_id=channel.pod_id,
                 contact_id=channel.contact_id,
                 to=to,
-                kind=_outreach_kind(line),
+                kind=outreach_kind(line),
                 at=datetime.now(timezone.utc),
                 window=window,
             )
         if not verdict.allowed:
             raise ContactRefused.of(verdict)
-        if line.sender.kind is SenderKind.MEMBER:
-            counted = await count_against_today(
-                contact_id=channel.contact_id, line_id=line.id, redis=self.redis
-            )
-            if not counted.allowed:
-                raise ContactRefused.of(counted)
         metadata: dict[str, object] = {}
         if verdict.unsubscribe_token is not None:
             metadata[UNSUBSCRIBE_TOKEN_KEY] = verdict.unsubscribe_token
-        return Ready(text=line.text + verdict.footer, metadata=metadata)
+        return Ready(
+            text=line.text + verdict.footer,
+            metadata=metadata,
+            day_of=(
+                (channel.contact_id, line.id)
+                if line.sender.kind is SenderKind.MEMBER
+                else None
+            ),
+        )
+
+    async def _count_today(self, ready: Ready) -> None:
+        """Count a member's line against the contact's day, just before it is
+        handed to the platform: a line that could not have gone anyway (no
+        thread to send into, a bot that cannot write first) spends nothing. A
+        line counts once: a retry is the same line."""
+        if ready.day_of is None:
+            return
+        contact_id, line_id = ready.day_of
+        counted = await count_against_today(
+            contact_id=contact_id, line_id=line_id, redis=self.redis
+        )
+        if not counted.allowed:
+            raise ContactRefused.of(counted)
 
     async def _cold_open(self, work: _Work, source: Source, ready: Ready) -> Outcome:
         """A line to an email address nobody has written from yet -- a
-        member's first word to a contact: a new thread, seeded so the reply
-        comes back to this place (``cold_email_thread``)."""
+        member's first word to a contact: a thread seeded so the reply comes
+        back to this place (``cold_email_thread``). A later line before they
+        reply goes into the same thread, not a new one each time."""
         platform = source.platform
-        nobody = Outcome.skipped(
-            "The bot has not talked with anybody there yet.", platform=platform
-        )
-        if source.surface_id is None or not source.external_user_id:
-            return nobody
-        async with self.uow_factory() as uow:
-            egress = self.egress_for(uow)
-            surface = await egress.delivery.surface_repository.get(source.surface_id)
-            if surface is None or not can_cold_open(surface):
-                return nobody
-            metadata = {
-                **ready.metadata,
-                IDEMPOTENCY_KEY: delivery_key(work.delivery),
-                "email_sender_name": await sender_name_for(
-                    uow, is_pod_default=True, agent_name=None, pod_id=surface.pod_id
-                ),
-            }
-            try:
-                thread = await egress.open_cold_email_thread(
-                    surface=surface,
-                    recipient_email=source.external_user_id,
-                    subject=work.channel.title or title_of(work.line.text),
-                    message=ready.text,
-                    # By the line: a retry of it seeds the same thread.
-                    thread_seed_id=cold_thread_seed_id(
-                        notification_id=work.line.id, surface=surface
-                    ),
-                    metadata=metadata,
-                )
-            except send_errors() as exc:
-                logger.warning(
-                    "agent_surfaces.channel_deliveries.send_failed.degraded",
-                    platform=platform,
-                    error_type=type(exc).__name__,
-                )
-                thread = None
-            if thread is None:
-                return Outcome.failed(
-                    f"{platform} did not take it. It will be tried again.",
-                    platform=platform,
-                )
-            await addressed_at(uow, source.id, thread.last_event)
-            await uow.commit()
-        return Outcome.delivered(
-            platform, external_message_id=thread.external_message_id
+        surface = await cold_open_surface(self.uow_factory, self.egress_for, source)
+        if surface is None:
+            return Outcome.skipped(
+                "The bot has not talked with anybody there yet.",
+                code=Code.CANNOT_WRITE_FIRST,
+                platform=platform,
+            )
+        try:
+            await self._count_today(ready)
+        except ContactRefused as refused:
+            return refused.outcome(platform)
+        return await send_cold_open(
+            self.uow_factory,
+            self.egress_for,
+            delivery=work.delivery,
+            line=work.line,
+            channel=work.channel,
+            source=source,
+            surface=surface,
+            text=ready.text,
+            metadata=ready.metadata,
         )
 
     async def _aimed(self, line: ChannelMessage, source: Source) -> Source:
@@ -396,7 +419,7 @@ class ChannelDeliveries:
         if ref is None:
             return source
         if line.thread_root_id is None:
-            if source.kind is not SourceKind.SHARED:
+            if source.kind is not SourceKind.CHAT:
                 return source
             aimed = at_place_level(ref, source.platform)
         else:
@@ -430,8 +453,11 @@ class ChannelDeliveries:
         text: str,
         metadata: dict[str, object],
     ) -> tuple[DeliveryReceipt | None, Outcome]:
-        """Hand it to the platform at its place: its receipt, and the outcome."""
+        """Hand it to the platform at its place: its receipt, and the outcome.
+        The platform's id is noted as it answers, so its report about the
+        message (a WhatsApp failure) finds the row however soon it comes."""
         receipt: DeliveryReceipt | None = None
+        raised: BaseException | None = None
         with track_sends() as sends:
             try:
                 async with self.uow_factory() as uow:
@@ -441,6 +467,12 @@ class ChannelDeliveries:
                         metadata={**metadata, IDEMPOTENCY_KEY: delivery_key(delivery)},
                         at=source,
                     )
+                    if receipt is not None and receipt.external_message_id:
+                        await delivery_noted(
+                            uow,
+                            delivery.id,
+                            external_message_id=receipt.external_message_id,
+                        )
                     await uow.commit()
             except send_errors() as exc:
                 logger.warning(
@@ -448,24 +480,34 @@ class ChannelDeliveries:
                     platform=source.platform,
                     error_type=type(exc).__name__,
                 )
-        return receipt, of_send(receipt, sends, platform=source.platform)
+                raised = exc
+        return receipt, of_send(
+            receipt,
+            sends,
+            platform=source.platform,
+            raised=raised,
+            nothing_sent=(
+                "Nothing there to send it into, or nothing left to send once it "
+                "was cleaned up."
+            ),
+        )
 
     async def _to_their_conversation(
         self,
         channel: Channel,
         conversation_id: UUID,
         line: ChannelMessage,
-        text: str,
         delivered: bool | None,
     ) -> None:
-        """A contact's conversation hears what a member wrote them, as theirs."""
+        """A contact's conversation hears what a member wrote them, as theirs:
+        once per line, its ``delivered`` brought up to date by a retry."""
         if channel.kind is not ChannelKind.CONTACT or line.sender.user_id is None:
             return
         async with self.uow_factory() as uow:
             await append_follow_up(
                 uow,
                 conversation_id=conversation_id,
-                message=text,
+                line_id=line.id,
                 sent_by_user_id=line.sender.user_id,
                 delivered=delivered,
             )
@@ -474,38 +516,18 @@ class ChannelDeliveries:
     # -- to a member ------------------------------------------------------------
 
     async def _to_member(self, work: _Work) -> Outcome:
-        recipient = work.delivery.recipient_user_id
-        if recipient is None:  # pragma: no cover - a CHECK holds it to one target
-            return Outcome.skipped("This delivery names nobody.")
-        async with self.uow_factory() as uow:
-            member = await member_of(
-                uow, channel_id=work.channel.id, principal=Principal.member(recipient)
-            )
-            try:
-                delivered = await self.pushes_for(uow).push(
-                    Push(
-                        channel=work.channel,
-                        line=work.line,
-                        recipient_user_id=recipient,
-                        member=member,
-                    )
-                )
-            except platform_transport_errors() as exc:
-                return Outcome.failed(f"The push did not go: {type(exc).__name__}.")
-            await uow.commit()
-        if delivered.sent:
-            return Outcome.delivered(
-                delivered.platform, external_message_id=delivered.external_message_id
-            )
-        if delivered.retryable:
-            # A platform that was down is tried again; nowhere to reach them is not.
-            return Outcome.failed(delivered.reason or "The push did not go.")
-        # Nowhere to reach them is a fact about them, not an outage: the line
-        # waits in Lemma, and trying again changes nothing.
-        return Outcome.skipped(delivered.reason or "Nothing could reach them.")
+        return await push_outcome(
+            self.uow_factory,
+            self.pushes_for,
+            delivery=work.delivery,
+            channel=work.channel,
+            line=work.line,
+        )
 
     async def _record(self, delivery: Delivery, outcome: Outcome) -> None:
         reason = outcome.reason or "Not sent."
+        code = outcome.code or Code.TRANSIENT
+        status = outcome.provider_status
         async with self.uow_factory() as uow:
             match outcome.result:
                 case Result.SENT:
@@ -514,19 +536,42 @@ class ChannelDeliveries:
                         delivery.id,
                         platform=outcome.platform or "LEMMA",
                         external_message_id=outcome.external_message_id,
+                        provider_status=status,
+                    )
+                case Result.SKIPPED if outcome.hold_for is not None:
+                    await delivery_folded(
+                        uow, delivery, reason=reason, hold_for=outcome.hold_for
                     )
                 case Result.SKIPPED:
                     await delivery_skipped(
-                        uow, delivery.id, reason=reason, platform=outcome.platform
+                        uow,
+                        delivery.id,
+                        code=code,
+                        reason=reason,
+                        platform=outcome.platform,
+                        provider_status=status,
                     )
                 case Result.DEAD:
                     await delivery_dead(
-                        uow, delivery.id, reason=reason, platform=outcome.platform
+                        uow,
+                        delivery.id,
+                        code=code,
+                        reason=reason,
+                        platform=outcome.platform,
+                        provider_status=status,
                     )
                 case Result.FAILED:
                     await delivery_failed(
-                        uow, delivery, reason=reason, platform=outcome.platform
+                        uow,
+                        delivery,
+                        code=code,
+                        reason=reason,
+                        platform=outcome.platform,
+                        retry_after=outcome.retry_after,
+                        provider_status=status,
                     )
+            # The next line to this target was waiting on this one.
+            await announce_next_for_target(uow, delivery)
             await uow.commit()
         logger.info(
             "agent_surfaces.channel_deliveries.delivered.observed",

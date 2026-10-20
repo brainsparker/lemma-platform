@@ -30,15 +30,31 @@ from app.modules.contacts.contracts.facts import ContactMerged
 DATASTORE_CONTACT_MERGED = "datastore.contact_merged"
 
 
+async def _survivor_now(payload: ContactMerged):
+    """Whoever the payload's survivor is now: merged again since, it is the
+    contact that one became. ``None`` once nobody is left to own the rows."""
+    from app.core.infrastructure.db.session import async_session_maker
+    from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+    from app.modules.contacts.contracts import contact_by_id
+
+    async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
+        return await contact_by_id(
+            uow, pod_id=payload.pod_id, contact_id=payload.survivor_id
+        )
+
+
 async def reassign_rows(ctx: JobContext, payload: ContactMerged) -> None:
     from app.modules.datastore.contracts.contact_rows import reassign_contact_rows
 
+    survivor = await _survivor_now(payload)
+    if survivor is None:
+        return
     try:
         await reassign_contact_rows(
             ctx.checkpoint,
             pod_id=payload.pod_id,
             merged_id=payload.merged_id,
-            survivor_id=payload.survivor_id,
+            survivor_id=survivor.id,
         )
     except (OSError, OperationalError, InterfaceError) as exc:
         raise Unavailable(

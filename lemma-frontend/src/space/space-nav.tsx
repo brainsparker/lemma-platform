@@ -49,13 +49,11 @@ export function SpaceNav({ pod, activeId, recents, onPick, openChatId, onOpenCha
     const yours = unbound(chats.data).filter(chat => chat.kind.toUpperCase() !== "TASK").slice(0, 8);
     /* What is new for you across the space's channels — the inbox the bell
        reads, under its key: questions waiting on you first, then mentions,
-       then channels with anything new. Channels are behind the flag Groups
-       had. */
-    const channelsOn = useFeature("groups");
+       then channels with anything new. */
     const contactsFlag = useFeature("contacts");
     const maySeeContacts = useMaySeeContacts(pod.id);
     const contactsOn = contactsFlag && maySeeContacts;
-    const inbox = useInbox(pod.id, channelsOn);
+    const inbox = useInbox(pod.id);
     const news = inboxBadge(inbox.data ?? { channels: 0, mentions: 0, waiting: 0 });
 
     return (
@@ -74,13 +72,13 @@ export function SpaceNav({ pod, activeId, recents, onPick, openChatId, onOpenCha
                 ))}
                 <button className="side__item" title="Workflows" aria-current={activeId === "space:workflows" ? "page" : undefined} onClick={onWorkflows}><WorkflowIcon size={18} /><span>Workflows</span></button>
                 {/* On one channel's page this is the section it is in, not the page. */}
-                {channelsOn && <button className="side__item" title="Channels" aria-current={activeId === "space:channels" ? "page" : activeId.startsWith("channel:") ? "true" : undefined} onClick={() => onPick("space:channels")}>
+                <button className="side__item" title="Channels" aria-current={activeId === "space:channels" ? "page" : activeId.startsWith("channel:") ? "true" : undefined} onClick={() => onPick("space:channels")}>
                     <GroupsIcon size={18} /><span>Channels</span>
                     {news && <>
                         <span className="snav__count" data-tone={news.tone} aria-hidden="true">{news.count > 99 ? "99+" : news.count}</span>
                         <span className="sr-only">, {news.said}</span>
                     </>}
-                </button>}
+                </button>
                 {contactsOn && <button className="side__item" title="Contacts" aria-current={activeId === "space:contacts" ? "page" : undefined} onClick={() => onPick("space:contacts")}>
                     <ContactsIcon size={18} /><span>Contacts</span>
                 </button>}

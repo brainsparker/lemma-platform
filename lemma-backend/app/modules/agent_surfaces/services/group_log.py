@@ -68,6 +68,7 @@ from app.modules.agent_surfaces.services.workspace_channels import (
     note_workspace_channel,
 )
 from app.modules.channels.contracts import (
+    ChannelMessage,
     NewLine,
     Principal,
     Reader,
@@ -242,6 +243,9 @@ class GroupBackground:
     #: Empty for a contact's run, which is told no more about the pod than it
     #: can already read.
     participants: tuple[SurfaceGroupParticipant, ...] = ()
+    #: The lines read, as the pod reads them: what the run keeps a reference
+    #: to, and reads again -- for this reader -- whenever its prompt is built.
+    heard: tuple[ChannelMessage, ...] = ()
 
 
 async def group_background(
@@ -326,6 +330,7 @@ async def group_background(
         withheld=withheld,
         outside_authors=tuple(outside_authors),
         participants=participants,
+        heard=tuple(lines),
     )
 
 

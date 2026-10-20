@@ -1,8 +1,8 @@
 """Answering a question a line asks, and closing it however it ends.
 
 A question is asked by another module -- an agent's paused ``ask_user`` or
-``request_approval`` (``tool:``), a workflow's form (``wf:``), a question one
-member's agent put to another (``msg:``). Each registers what taking an
+``request_approval`` (``TOOL``), a workflow's form (``WORKFLOW``), a question
+one member's agent put to another (``MESSAGE``). Each registers what taking an
 answer does (``answers_for``); channels cannot import those modules.
 
 Answering, in order:
@@ -11,13 +11,17 @@ Answering, in order:
    and is answered by a person's own tap -- never by an agent on their behalf.
 2. The question is **claimed** (OPEN → ANSWERING) and that is committed, so a
    second answer -- another tap, a reply on a platform -- finds it taken.
-3. The asker takes the answer and says what took effect. If it refuses, the
-   question is released and the person told why.
+3. The asker takes the answer and says what took effect. If it refuses -- or
+   fails any other way -- the question is released: it waits again, and the
+   person is told why. A caller that dies holding the claim leaves it to lapse
+   (``CLAIM_TIMEOUT``): the next answer may take it, and the sweeper puts it
+   back -- or expires it, if its time ran out meanwhile.
 4. The question closes with the answer that took effect, and is announced.
 
 A question answered somewhere else -- in the conversation, on a platform's
 button -- is closed here by the module that saw it (``close``). One whose time
-ran out is expired by a sweeper.
+ran out is expired by a sweeper; one whose asking conversation or run was
+deleted is cancelled by it.
 """
 
 from __future__ import annotations
@@ -33,6 +37,7 @@ from app.modules.channels.contracts.facts import ChannelQuestionClosed
 from app.modules.channels.domain.entities import (
     Principal,
     Question,
+    QuestionAsker,
     QuestionKind,
     QuestionState,
 )
@@ -69,10 +74,10 @@ class Answering:
 #: one given. Raises ``AnswerRefused`` to refuse it.
 AnswerHandler = Callable[[Answering], Awaitable[Mapping[str, object] | None]]
 
-_HANDLERS: dict[str, AnswerHandler] = {}  # memory: bounded one per asker, set at import
+_HANDLERS: dict[QuestionAsker, AnswerHandler] = {}  # memory: bounded per asker
 
 
-def answers_for(asker: str) -> Callable[[AnswerHandler], AnswerHandler]:
+def answers_for(asker: QuestionAsker) -> Callable[[AnswerHandler], AnswerHandler]:
     """Register what answering ``asker``'s questions does. Once per asker."""
 
     def register(handler: AnswerHandler) -> AnswerHandler:
@@ -85,11 +90,11 @@ def answers_for(asker: str) -> Callable[[AnswerHandler], AnswerHandler]:
     return register
 
 
-def answerer(ref: str) -> AnswerHandler | None:
-    return _HANDLERS.get(ref.partition(":")[0])
+def answerer(question: Question) -> AnswerHandler | None:
+    return _HANDLERS.get(question.asker)
 
 
-def registered_askers() -> frozenset[str]:
+def registered_askers() -> frozenset[QuestionAsker]:
     return frozenset(_HANDLERS)
 
 
@@ -106,6 +111,14 @@ def _checked(
         raise AnswerRefused(
             "This question is somebody else's to answer", status_code=403
         )
+    if through_agent and question.asker is QuestionAsker.TOOL:
+        # A paused ``ask_user`` belongs to the conversation that asked it: an
+        # agent answering it from another conversation would answer for the
+        # person in a run they are not in.
+        raise AnswerRefused(
+            "This is another conversation's question: the person answers it there",
+            status_code=403,
+        )
     if question.kind is QuestionKind.APPROVAL:
         if through_agent:
             raise AnswerRefused(
@@ -117,8 +130,9 @@ def _checked(
                 "An approval needs a decision: APPROVE_ONCE, APPROVE_FOR_SESSION or DENY",
                 status_code=422,
             )
-    if not question.is_open:
+    if not question.is_waiting:
         raise AnswerRefused("This question is not waiting any more")
+    # Still ANSWERING is the claim's to decide: taken now, or lapsed and free.
     return question
 
 
@@ -143,18 +157,24 @@ async def answer(
         await uow.commit()
     if claimed is None:
         raise AnswerRefused("Somebody is answering this already")
-    handler = answerer(claimed.ref)
+    handler = answerer(claimed)
     effective: Mapping[str, object] | None = None
     if handler is not None:
+        taken = False
         try:
             effective = await handler(
                 Answering(pod_id=claimed.pod_id, question=claimed, answer=given, by=by)
             )
-        except AnswerRefused:
-            async with uow_factory() as uow:
-                await QuestionRepository(uow.session).release(claimed.message_id)
-                await uow.commit()
-            raise
+            taken = True
+        finally:
+            if not taken:
+                # Refused, broken or cancelled: either way nothing took effect
+                # that the question records, so it waits again rather than
+                # sitting claimed. (An asker that did take it and failed after
+                # is idempotent: the next answer finds the decision it stored.)
+                async with uow_factory() as uow:
+                    await QuestionRepository(uow.session).release(claimed.message_id)
+                    await uow.commit()
     async with uow_factory() as uow:
         closed = await close(
             uow,
@@ -207,12 +227,38 @@ async def close_ref(
     )
 
 
-async def cancel_under(
-    uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, prefix: str
+async def cancel_asked_by(
+    uow: SqlAlchemyUnitOfWork,
+    asker: QuestionAsker,
+    *,
+    conversation_id: UUID | None = None,
+    workflow_run_id: UUID | None = None,
 ) -> list[Question]:
-    """Cancel every open question whose ref starts with ``prefix``."""
-    cancelled = await QuestionRepository(uow.session).cancel_under(
-        pod_id=pod_id, prefix=prefix
+    """Cancel every question still waiting that this conversation, or this
+    run, asked -- the asker withdrew it."""
+    cancelled = await QuestionRepository(uow.session).cancel_asked_by(
+        asker, conversation_id=conversation_id, workflow_run_id=workflow_run_id
+    )
+    for question in cancelled:
+        await announce_closed(uow, question)
+    return cancelled
+
+
+async def cancel_orphaned(uow: SqlAlchemyUnitOfWork, *, limit: int = 100) -> int:
+    """Cancel the questions whose asking conversation or run was deleted --
+    nothing is left to take an answer -- and announce each; how many."""
+    cancelled = await QuestionRepository(uow.session).cancel_orphaned(limit=limit)
+    for question in cancelled:
+        await announce_closed(uow, question)
+    return len(cancelled)
+
+
+async def cancel_waiting_on(
+    uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, user_id: UUID
+) -> list[Question]:
+    """Cancel every question waiting on this member -- they left the pod."""
+    cancelled = await QuestionRepository(uow.session).cancel_awaiting(
+        pod_id=pod_id, user_id=user_id
     )
     for question in cancelled:
         await announce_closed(uow, question)
@@ -227,7 +273,14 @@ async def expire_overdue(uow: SqlAlchemyUnitOfWork, *, limit: int = 100) -> int:
     return len(expired)
 
 
+async def release_lapsed(uow: SqlAlchemyUnitOfWork, *, limit: int = 100) -> int:
+    """Put back the questions whose claim lapsed -- the caller that took one
+    died answering it -- so they wait again; how many."""
+    return await QuestionRepository(uow.session).release_lapsed(at=now(), limit=limit)
+
+
 async def announce_closed(uow: SqlAlchemyUnitOfWork, question: Question) -> None:
+    asked = question.asked_by
     await facts.emit(
         uow,
         ChannelQuestionClosed(
@@ -238,5 +291,9 @@ async def announce_closed(uow: SqlAlchemyUnitOfWork, question: Question) -> None
             batch_id=question.batch_id,
             state=question.state,
             awaited_user_id=question.awaits.user_id,
+            asker=question.asker,
+            asker_conversation_id=asked.conversation_id if asked else None,
+            asker_workflow_run_id=asked.workflow_run_id if asked else None,
+            asker_key=asked.key if asked else None,
         ),
     )

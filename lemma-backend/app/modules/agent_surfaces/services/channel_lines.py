@@ -24,8 +24,11 @@ from app.modules.agent.contracts.audience import Audience
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 from app.modules.agent_surfaces.services.line_markup import Bot, LineMarkup
+from app.modules.channels.contracts.deliveries import deliveries_of, delivery_sent
 from app.modules.channels.contracts.lines import thread_root_at
 from app.modules.channels.contracts import (
+    AccountKey,
+    ChannelMessage,
     ContactsHome,
     NewLine,
     Place,
@@ -46,11 +49,69 @@ THREADED = frozenset({"SLACK", "TEAMS"})
 WEB = "WEB"
 
 
+#: What of an event's metadata answering it in place can need: how its
+#: platform threads and routes a reply. Everything else there -- a subject,
+#: attachments, names, quoted text, a shared contact -- is what was said, which
+#: the line itself keeps.
+REPLY_METADATA = frozenset(
+    {
+        "platform",
+        # Slack and Teams: where the place is, and whether this is a thread.
+        "event_type",
+        "is_thread_reply",
+        "channel_type",
+        "channel_membership_type",
+        "place_privacy",
+        "is_ext_shared_channel",
+        "assistant_thread_present",
+        "assistant_thread_action_token",
+        "team_id",
+        "team_aad_group_id",
+        "channel_id",
+        "service_url",
+        "conversation_id",
+        "reply_to_id",
+        # Telegram: the chat and its topic.
+        "chat_id",
+        "chat_type",
+        "message_thread_id",
+        "is_topic_message",
+        # WhatsApp: the number it came to, and the group.
+        "waba_id",
+        "phone_number_id",
+        "group_id",
+        # Email: the inbox and the thread.
+        "surface_address",
+        "mailbox_email",
+        "thread_id",
+        "message_id",
+        "in_reply_to",
+        "references",
+    }
+)
+
+
 def reply_ref_of(event: ParsedInboundSurfaceEvent) -> dict[str, object]:
-    """What answers a heard line in place -- its thread, the message replied
-    to -- without the platform's whole payload, which a reply never reads and
-    a timeline should not keep on every line."""
-    return event.model_dump(mode="json", exclude={"raw_payload"})
+    """What answers a heard line in place -- its place, its thread, the message
+    replied to, who to answer -- and nothing of what was said: no words, no
+    sender's address, number or name, none of the payload. Kept on every heard
+    line, so it holds the reply target alone; still an event a reply reads
+    (``ParsedInboundSurfaceEvent``), with its words empty."""
+    target = event.model_copy(
+        update={
+            "message_text": "",
+            "sender_email": None,
+            "sender_phone": None,
+            "sender_display_name": None,
+            "sender_authentication": None,
+            "metadata": {
+                key: value
+                for key, value in event.metadata.items()
+                if key in REPLY_METADATA
+            },
+        }
+    )
+    return target.model_dump(mode="json", exclude={"raw_payload"})
 
 
 def web_place(*, widget_id: UUID, session_id: UUID) -> Place:
@@ -59,8 +120,8 @@ def web_place(*, widget_id: UUID, session_id: UUID) -> Place:
     return Place(
         surface_id=None,
         platform=WEB,
-        account_key=f"widget:{widget_id}",
-        kind=SourceKind.PRIVATE,
+        account=AccountKey(workspace=f"widget:{widget_id}"),
+        kind=SourceKind.PERSON,
         external_channel_id=str(widget_id),
         external_user_id=str(session_id),
     )
@@ -148,7 +209,7 @@ async def _thread_root(
     external_message_id: str | None = None,
 ) -> UUID | None:
     """The line a reply in a shared Slack or Teams place hangs from."""
-    if source.kind is not SourceKind.SHARED or source.platform not in THREADED:
+    if source.kind is not SourceKind.CHAT or source.platform not in THREADED:
         return None
     return await thread_root_at(
         uow,
@@ -205,3 +266,17 @@ def answered_for(audience: Audience, user_id: UUID) -> Principal:
     if audience.contact_id is not None:
         return Principal.contact(audience.contact_id)
     return Principal.member(user_id)
+
+
+async def shown_on_web(
+    uow: SqlAlchemyUnitOfWork, line: ChannelMessage, source: Source
+) -> None:
+    """A line for a web chat, which shows it from the conversation: its
+    delivery there is ``SENT`` at once, and nothing is sent. Every line for a
+    place has its delivery row, so the line says where it went the same way
+    whatever the platform."""
+    for delivery in await deliveries_of(uow, [line.id]):
+        if delivery.source_id == source.id:
+            await delivery_sent(
+                uow, delivery.id, platform=source.platform, external_message_id=None
+            )

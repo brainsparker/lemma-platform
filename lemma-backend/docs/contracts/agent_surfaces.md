@@ -10,12 +10,7 @@ The table below is generated from the committed OpenAPI specification by `script
 
 | Operation | Method | Path | Summary |
 | --- | --- | --- | --- |
-| `agent.notice.send` | POST | `/pods/{pod_id}/notices` | Send Notice |
-| `agent.source.get` | GET | `/pods/{pod_id}/sources/{source_id}` | Get Source |
-| `agent.source.list` | GET | `/pods/{pod_id}/sources` | List Sources |
-| `agent.source.telegram_link.create` | POST | `/pods/{pod_id}/sources/telegram-links` | Telegram Link |
-| `agent.source.update` | PATCH | `/pods/{pod_id}/sources/{source_id}` | Update Source |
-| `agent.source.whatsapp_group.start` | POST | `/pods/{pod_id}/sources/whatsapp-groups` | Start Whatsapp Group |
+| `agent.notice.send` | POST | `/pods/{pod_id}/members/{member}/notices` | Send Notice |
 | `agent.surface.available` | GET | `/pods/{pod_id}/available-surfaces` | List Available Surfaces |
 | `agent.surface.channels` | GET | `/pods/{pod_id}/surfaces/{surface_name}/channels` | List Surface Channels |
 | `agent.surface.create` | POST | `/pods/{pod_id}/surfaces` | Create Surface |
@@ -37,6 +32,10 @@ The table below is generated from the committed OpenAPI specification by `script
 | `agent.web_widget.list` | GET | `/pods/{pod_id}/web-widgets` | List Widgets |
 | `agent.web_widget.reissue` | POST | `/pods/{pod_id}/web-widgets/{widget_id}/secret` | Reissue Widget |
 | `agent.web_widget.update` | PATCH | `/pods/{pod_id}/web-widgets/{widget_id}` | Update Widget |
+| `channel.source.get` | GET | `/pods/{pod_id}/channels/{channel_id}/sources/{source_id}` | Get Source |
+| `channel.source.update` | PATCH | `/pods/{pod_id}/channels/{channel_id}/sources/{source_id}` | Update Source |
+| `channel.telegram_link.create` | POST | `/pods/{pod_id}/channels/telegram-links` | Telegram Link |
+| `channel.whatsapp_group.start` | POST | `/pods/{pod_id}/channels/whatsapp-groups` | Start Whatsapp Group |
 | `contact.outreach.send` | POST | `/pods/{pod_id}/contacts/{contact_id}/outreach` | Send Outreach |
 | `public.web.challenge.read` | GET | `/public/web/{public_key}/challenge` | Web Challenge |
 | `public.web.code.send` | POST | `/public/web/{public_key}/code` | Web Send Code |

@@ -33,6 +33,7 @@ from app.modules.agent_surfaces.tests.e2e.test_email_contacts_e2e import (
     _email_bot,
 )
 from app.modules.channels.contracts import (
+    AccountKey,
     ContactsHome,
     Place,
     SourceKind,
@@ -43,6 +44,7 @@ from app.modules.contacts.contracts import (
     IdentityKind,
     IdentityStrength,
     open_contact,
+    prove_handle,
 )
 from app.modules.contacts.contracts.outreach import SuppressionReason, opt_out
 from app.modules.test_support.e2e_authz import auth_headers
@@ -92,8 +94,8 @@ async def _whatsapp_place(pod_id: str, contact_id: UUID, *, heard_ago: timedelta
             place=Place(
                 surface_id=None,
                 platform="WHATSAPP",
-                account_key="number:+15550001111",
-                kind=SourceKind.PRIVATE,
+                account=AccountKey(workspace="number:+15550001111"),
+                kind=SourceKind.PERSON,
                 external_channel_id=None,
                 # WhatsApp names them by their number without its ``+``.
                 external_user_id=PHONE.lstrip("+"),
@@ -163,6 +165,19 @@ async def test_an_email_contact_is_written_to_where_they_wrote(
     )
     assert again.status_code == retried.status_code == 201, retried.text
     assert again.json()["line"]["id"] == retried.json()["line"]["id"]
+
+    # So is one with the same Idempotency-Key.
+    once = f"outreach-{dana}"
+    keyed = [
+        await authenticated_client.post(
+            f"/pods/{pod_id}/contacts/{dana}/outreach",
+            json={"handle": CUSTOMER, "text": "keyed"},
+            headers={"Idempotency-Key": once},
+        )
+        for _ in range(2)
+    ]
+    assert [r.status_code for r in keyed] == [201, 201], keyed[1].text
+    assert keyed[0].json()["line"]["id"] == keyed[1].json()["line"]["id"]
 
 
 async def test_an_email_address_nobody_wrote_from_opens_a_place(
@@ -302,3 +317,60 @@ async def test_refused_handles_post_nothing(
         headers=auth_headers(viewer),
     )
     assert as_viewer.status_code == 403, as_viewer.text
+
+
+async def test_a_key_used_for_another_of_their_handles_is_a_conflict(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+    fake_resend,
+    monkeypatch,
+):
+    """The same client id, retried at a second handle of theirs, is not the
+    same request: refused as a key reused for another line, and nothing is
+    written -- not a 500."""
+    pod_id = test_pod["id"]
+    await _email_bot(
+        authenticated_client,
+        db_session,
+        pod_id=pod_id,
+        user=fixed_test_user,
+        fake_resend=fake_resend,
+        monkeypatch=monkeypatch,
+        answer="anyone",
+    )
+    work, home = "lee@prospect.example", "lee@home.example"
+    contact_id = await _contact(pod_id, IdentityKind.EMAIL, work, "Lee")
+    async with async_session_maker() as session:
+        uow = SqlAlchemyUnitOfWork(session)
+        await prove_handle(
+            uow,
+            pod_id=UUID(pod_id),
+            claimant_id=contact_id,
+            kind=IdentityKind.EMAIL,
+            value=home,
+            strength=IdentityStrength.CHANNEL,
+        )
+        await uow.commit()
+
+    first = await _reach(
+        authenticated_client,
+        pod_id,
+        str(contact_id),
+        work,
+        "Hi",
+        client_message_id="k-1",
+    )
+    assert first.status_code == 201, first.text
+    elsewhere = await _reach(
+        authenticated_client,
+        pod_id,
+        str(contact_id),
+        home,
+        "Hi",
+        client_message_id="k-1",
+    )
+
+    assert elsewhere.status_code == 422, elsewhere.text
+    assert "used for another line" in elsewhere.json()["message"]

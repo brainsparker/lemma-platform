@@ -13,6 +13,7 @@ from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
     from ..models.file_part import FilePart
+    from ..models.line_delivery import LineDelivery
     from ..models.link_part import LinkPart
     from ..models.mention_part import MentionPart
     from ..models.person_ref import PersonRef
@@ -36,6 +37,8 @@ class ChannelMessageResponse:
         client_message_id (None | str | Unset):
         conversation_id (None | Unset | UUID):
         deleted (bool | Unset):  Default: False.
+        delivered (list[LineDelivery] | None | Unset): Only on the reader's own line: each place outside Lemma it went
+            to, and what became of it. Pushes to members are not listed here (`…/deliveries` has every send).
         edited_at (datetime.datetime | None | Unset):
         last_reply_at (datetime.datetime | None | Unset):
         members_only (bool | Unset):  Default: False.
@@ -60,6 +63,7 @@ class ChannelMessageResponse:
     client_message_id: None | str | Unset = UNSET
     conversation_id: None | Unset | UUID = UNSET
     deleted: bool | Unset = False
+    delivered: list[LineDelivery] | None | Unset = UNSET
     edited_at: datetime.datetime | None | Unset = UNSET
     last_reply_at: datetime.datetime | None | Unset = UNSET
     members_only: bool | Unset = False
@@ -105,6 +109,18 @@ class ChannelMessageResponse:
             conversation_id = self.conversation_id
 
         deleted = self.deleted
+
+        delivered: list[dict[str, Any]] | None | Unset
+        if isinstance(self.delivered, Unset):
+            delivered = UNSET
+        elif isinstance(self.delivered, list):
+            delivered = []
+            for delivered_type_0_item_data in self.delivered:
+                delivered_type_0_item = delivered_type_0_item_data.to_dict()
+                delivered.append(delivered_type_0_item)
+
+        else:
+            delivered = self.delivered
 
         edited_at: None | str | Unset
         if isinstance(self.edited_at, Unset):
@@ -205,6 +221,8 @@ class ChannelMessageResponse:
             field_dict["conversation_id"] = conversation_id
         if deleted is not UNSET:
             field_dict["deleted"] = deleted
+        if delivered is not UNSET:
+            field_dict["delivered"] = delivered
         if edited_at is not UNSET:
             field_dict["edited_at"] = edited_at
         if last_reply_at is not UNSET:
@@ -235,6 +253,7 @@ class ChannelMessageResponse:
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         from ..models.file_part import FilePart
+        from ..models.line_delivery import LineDelivery
         from ..models.link_part import LinkPart
         from ..models.mention_part import MentionPart
         from ..models.person_ref import PersonRef
@@ -278,6 +297,30 @@ class ChannelMessageResponse:
         conversation_id = _parse_conversation_id(d.pop("conversation_id", UNSET))
 
         deleted = d.pop("deleted", UNSET)
+
+        def _parse_delivered(data: object) -> list[LineDelivery] | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, list):
+                    raise TypeError()
+                delivered_type_0 = []
+                _delivered_type_0 = data
+                for delivered_type_0_item_data in _delivered_type_0:
+                    delivered_type_0_item = LineDelivery.from_dict(
+                        delivered_type_0_item_data
+                    )
+
+                    delivered_type_0.append(delivered_type_0_item)
+
+                return delivered_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(list[LineDelivery] | None | Unset, data)
+
+        delivered = _parse_delivered(d.pop("delivered", UNSET))
 
         def _parse_edited_at(data: object) -> datetime.datetime | None | Unset:
             if data is None:
@@ -457,6 +500,7 @@ class ChannelMessageResponse:
             client_message_id=client_message_id,
             conversation_id=conversation_id,
             deleted=deleted,
+            delivered=delivered,
             edited_at=edited_at,
             last_reply_at=last_reply_at,
             members_only=members_only,

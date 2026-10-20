@@ -23,6 +23,22 @@ export interface WaitingQuestion {
     from: string;
     askedAt: string;
     question: Record<string, unknown>;
+    /** The thread it was asked in, when it is a reply: opening it opens that. */
+    threadRootId: string | null;
+}
+
+/** A line naming the reader that they have not read yet. */
+export interface MentionItem {
+    id: string;
+    seq: number;
+    channelId: string;
+    channelTitle: string | null;
+    channelKind: "DIRECT" | "CONTACT" | "GROUP";
+    from: string;
+    text: string;
+    at: string;
+    /** The thread it was said in, when it is a reply. */
+    threadRootId: string | null;
 }
 
 export interface Inbox {
@@ -30,6 +46,7 @@ export interface Inbox {
     mentions: number;
     waiting: number;
     items: WaitingQuestion[];
+    mentioned: MentionItem[];
 }
 
 type Wire = Record<string, unknown>;
@@ -41,6 +58,10 @@ function sender(line: Wire): string {
     const who = record(line.sender);
     if (typeof who.name === "string" && who.name) return who.name;
     return who.kind === "AGENT" ? "An agent" : who.kind === "CONTACT" ? "A contact" : "A member";
+}
+
+function threadOf(line: Wire): string | null {
+    return typeof line.thread_root_id === "string" && line.thread_root_id ? line.thread_root_id : null;
 }
 
 /** The inbox as the API returns it, read into what the app draws. */
@@ -63,6 +84,24 @@ export function readInbox(raw: unknown): Inbox {
             from: sender(line),
             askedAt: String(line.created_at ?? ""),
             question: record(interaction.question),
+            threadRootId: threadOf(line),
+        });
+    }
+    const mentioned: MentionItem[] = [];
+    for (const entry of Array.isArray(body.mentions) ? body.mentions : []) {
+        const channel = record(record(entry).channel);
+        const line = record(record(entry).message);
+        if (typeof line.id !== "string" || typeof channel.id !== "string") continue;
+        mentioned.push({
+            id: line.id,
+            seq: typeof line.seq === "number" ? line.seq : 0,
+            channelId: channel.id,
+            channelTitle: typeof channel.title === "string" ? channel.title : null,
+            channelKind: (channel.kind as MentionItem["channelKind"]) ?? "GROUP",
+            from: sender(line),
+            text: line.withheld === true ? "" : typeof line.text === "string" ? line.text : "",
+            at: String(line.created_at ?? ""),
+            threadRootId: threadOf(line),
         });
     }
     return {
@@ -70,6 +109,7 @@ export function readInbox(raw: unknown): Inbox {
         mentions: Number(totals.mentions ?? 0),
         waiting: Number(totals.waiting ?? items.length),
         items,
+        mentioned,
     };
 }
 
@@ -111,6 +151,19 @@ export function formTarget(question: WaitingQuestion): { runId: string; nodeId: 
 export function badgeCount(waiting: number): string | null {
     if (waiting <= 0) return null;
     return waiting > 99 ? "99+" : String(waiting);
+}
+
+/** What the bell's badge counts: the questions waiting on the reader, the
+ *  lines naming them, and the new lines in their own channel -- each of
+ *  which the inbox lists -- and the sentence that says it. */
+export function bellCount(inbox: Pick<Inbox, "waiting" | "mentions"> | null, directLines: number): { badge: string | null; said: string } {
+    const waiting = inbox?.waiting ?? 0;
+    const mentions = inbox?.mentions ?? 0;
+    const parts: string[] = [];
+    if (waiting) parts.push(waiting === 1 ? "1 question waiting on you" : waiting + " questions waiting on you");
+    if (mentions) parts.push(mentions === 1 ? "1 mention of you" : mentions + " mentions of you");
+    if (directLines) parts.push(directLines === 1 ? "1 new line in your channel" : directLines + " new lines in your channel");
+    return { badge: badgeCount(waiting + mentions + directLines), said: parts.length ? parts.join(", ") : "Nothing new for you" };
 }
 
 /** Where it was asked, said plainly. */

@@ -1,15 +1,18 @@
 """Whether a member, not an agent, answers a contact now.
 
-Two ways, both on the contact's channel (``channels``):
+Two ways, both on the contact's channel (``channels``) and its current case:
 
 * **The channel's agents are off** (``agents_answer``). An operator answering
   leads by hand turns them off; nothing answers the contact but a member
   until somebody turns them back on.
-* **A member stepped in** by writing to the contact: they are its assignee.
+* **A member stepped in** by writing to the contact: they are its case's
+  assignee.
   Their agent stays quiet while the member is in the conversation. An
   assignee who has not written in ``hand_back_after_hours`` -- counted from
   being assigned, until they first write -- has let go: the
-  contact's next message is the agent's again, and the member is told.
+  contact's next message is the agent's again, and the member is told, once.
+  Letting go is one conditional write, so two messages arriving together
+  cannot hand it back twice, and a member who writes just then keeps it.
 
 Turning the agents on is also how a member hands a contact back at once.
 """
@@ -29,8 +32,8 @@ from app.modules.agent_surfaces.services.direct_messages import tell_member
 from app.modules.channels.contracts import (
     Channel,
     ChannelKind,
-    assign,
     channel_by_id,
+    hand_back,
 )
 
 logger = get_logger(__name__)
@@ -63,14 +66,25 @@ async def held_by_a_member(
     # written yet: a member just handed a contact has the whole window.
     last = channel.assignee_last_line_at or channel.assigned_at
     window = timedelta(hours=channel.hand_back_after_hours)
-    if last is not None and (now or datetime.now(timezone.utc)) - last < window:
+    at = now or datetime.now(timezone.utc)
+    if last is not None and at - last < window:
         return MemberHold.STEPPED_IN
-    await _let_go(uow, channel, member)
+    if not await hand_back(
+        uow, channel_id=channel.id, user_id=member, quiet_since=at - window
+    ):
+        # They wrote meanwhile (they hold it still), or another turn let them
+        # go a moment ago and told them.
+        fresh = await channel_by_id(uow, channel.id)
+        if fresh is not None and fresh.assignee_user_id == member:
+            return MemberHold.STEPPED_IN
+        return None
+    await _tell_let_go(uow, channel, member)
     return None
 
 
-async def _let_go(uow: SqlAlchemyUnitOfWork, channel: Channel, member: UUID) -> None:
-    await assign(uow, channel_id=channel.id, user_id=None)
+async def _tell_let_go(
+    uow: SqlAlchemyUnitOfWork, channel: Channel, member: UUID
+) -> None:
     await tell_member(
         uow,
         pod_id=channel.pod_id,

@@ -10,17 +10,21 @@ deliveries (``contracts/deliveries``) are submodules.
 from __future__ import annotations
 
 from collections.abc import Collection, Sequence
+from datetime import datetime
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.channels.domain.access import Viewer, may_see
 from app.modules.channels.domain.entities import (
+    AccountKey,
     AgentAnswers,
+    Asker,
     Channel,
     ChannelKind,
     ChannelMessage,
     ContactStatus,
     Delivery,
+    DeliveryReasonCode,
     DeliveryStatus,
     ExternalAccount,
     Member,
@@ -28,14 +32,17 @@ from app.modules.channels.domain.entities import (
     NotifyLevel,
     Principal,
     Question,
+    QuestionAsker,
     QuestionKind,
     QuestionState,
+    SeatedBy,
     Sender,
     SenderKind,
     Source,
     SourceKind,
     Visibility,
 )
+from app.modules.channels.domain.idempotency import keyed_client_id
 from app.modules.channels.domain.parts import (
     MAX_PARTS,
     FilePart,
@@ -49,6 +56,7 @@ from app.modules.channels.domain.projection import (
     readable,
     withheld_from,
 )
+from app.modules.channels.infrastructure.cases import CaseRepository
 from app.modules.channels.infrastructure.lines import LineRepository, NewLine
 from app.modules.channels.infrastructure.members import MemberRepository
 from app.modules.channels.infrastructure.names import Names
@@ -60,6 +68,14 @@ from app.modules.channels.infrastructure.speakers import (
     Speaker,
     SpeakerReads,
 )
+from app.modules.channels.services.messages import (
+    LineRefused,
+    MemberLines,
+    MemberPost,
+    Naming,
+    erase_line,
+    rewrite_line,
+)
 from app.modules.channels.services.places import (
     ChannelPlaces,
     ContactsHome,
@@ -68,17 +84,13 @@ from app.modules.channels.services.places import (
     MembersHome,
     Place,
 )
-from app.modules.channels.services.messages import (
-    LineRefused,
-    MemberLines,
-    MemberPost,
-    Naming,
-)
 from app.modules.channels.services.posting import ChannelNotFound, Post, Timeline
 
 __all__ = [
     "MAX_PARTS",
+    "AccountKey",
     "AgentAnswers",
+    "Asker",
     "Channel",
     "ChannelKind",
     "ChannelMessage",
@@ -86,6 +98,7 @@ __all__ = [
     "ContactStatus",
     "ContactsHome",
     "Delivery",
+    "DeliveryReasonCode",
     "DeliveryStatus",
     "ExternalAccount",
     "FilePart",
@@ -104,9 +117,11 @@ __all__ = [
     "Place",
     "Principal",
     "Question",
+    "QuestionAsker",
     "QuestionKind",
     "QuestionState",
     "Reader",
+    "SeatedBy",
     "Sender",
     "SenderKind",
     "Source",
@@ -121,7 +136,10 @@ __all__ = [
     "channel_by_id",
     "contact_channel",
     "direct_channel",
+    "erase_line",
+    "hand_back",
     "join",
+    "keyed_client_id",
     "may_read",
     "may_see",
     "member_of",
@@ -131,6 +149,7 @@ __all__ = [
     "names_of",
     "post",
     "readable",
+    "revise_line",
     "source_by_id",
     "source_for",
     "sources_of",
@@ -180,7 +199,9 @@ async def join(
     uow: SqlAlchemyUnitOfWork, *, channel: Channel, principal: Principal
 ) -> None:
     """Somebody is in the channel -- the platform shows they are in its place."""
-    await MemberRepository(uow.session).add_person(channel, principal)
+    await MemberRepository(uow.session).add_person(
+        channel, principal, seated_by=SeatedBy.PLATFORM
+    )
 
 
 async def member_of(
@@ -222,6 +243,28 @@ async def post(
             deliver_to=deliver_to,
             pod_agent_id=effective_agent_id(None, pod_id=channel.pod_id),
         ),
+    )
+
+
+async def revise_line(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    message_id: UUID,
+    text: str,
+    parts: Sequence[Part],
+    mentions: Sequence[Principal] = (),
+    mentioned_agents: Sequence[UUID] = (),
+) -> ChannelMessage | None:
+    """A line said again differently -- a platform's edit of a message heard
+    there: its words and parts, and whom it names now (``named_in`` of the
+    new parts). ``None`` when the line is gone or deleted."""
+    return await rewrite_line(
+        uow,
+        message_id=message_id,
+        text=text,
+        parts=parts,
+        people=mentions,
+        agents=mentioned_agents,
     )
 
 
@@ -294,9 +337,11 @@ async def background(
 
 async def call_for_person(
     uow: SqlAlchemyUnitOfWork, *, channel_id: UUID, reason: str | None
-) -> None:
-    """The channel asks for a person, until somebody is assigned."""
-    await ChannelRepository(uow.session).call_for_person(channel_id, reason=reason)
+) -> bool:
+    """A contact's channel asks for a person, until somebody is assigned;
+    another channel has no case to ask in, and is left as it is. Whether
+    the channel had one."""
+    return await CaseRepository(uow.session).call_for_person(channel_id, reason=reason)
 
 
 async def assign(
@@ -304,14 +349,29 @@ async def assign(
 ) -> None:
     """Somebody answers this contact by hand now -- or, with ``None``, nobody:
     its agent answers them again."""
-    await ChannelRepository(uow.session).assign(channel_id, user_id)
+    await CaseRepository(uow.session).assign(channel_id, user_id)
+
+
+async def hand_back(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    channel_id: UUID,
+    user_id: UUID,
+    quiet_since: datetime,
+) -> bool:
+    """Let go of ``user_id`` as the contact's assignee if they have not
+    written since ``quiet_since``: one conditional write, so it happens once
+    and never to a member who just wrote. Whether this call let them go."""
+    return await CaseRepository(uow.session).hand_back(
+        channel_id, user_id=user_id, quiet_since=quiet_since
+    )
 
 
 async def acknowledge(uow: SqlAlchemyUnitOfWork, channel_id: UUID) -> bool:
-    """Claim the contact's one acknowledgement of this open period -- until a
-    member writes to them or the channel is closed. Whether it is this
-    caller's to send."""
-    return await ChannelRepository(uow.session).acknowledge(channel_id)
+    """Claim the contact's one acknowledgement of this wait -- until a member
+    writes to them or the case is closed. Whether it is this caller's to
+    send."""
+    return await CaseRepository(uow.session).acknowledge(channel_id)
 
 
 async def assignee_of(uow: SqlAlchemyUnitOfWork, channel_id: UUID) -> UUID | None:

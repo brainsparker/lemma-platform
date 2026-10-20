@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, TypeVar, cast
+from typing import (
+    Any,
+    Literal,
+    TypeVar,
+    cast,
+)
 from uuid import UUID
 
 from attrs import define as _attrs_define
@@ -26,7 +31,7 @@ class ChannelUpdateRequest:
         Attributes:
             agents_answer (bool | None | Unset): On also hands the contact back now: nobody is assigned.
             archived (bool | None | Unset):
-            assignee (None | Unset | UUID): A member's user id; `null` unassigns.
+            assignee (Literal['me'] | None | Unset | UUID): `me`, or a member's user id; `null` unassigns.
             hand_back_after_hours (int | None | Unset):
             status (ContactStatus | None | Unset):
             title (None | str | Unset):
@@ -36,7 +41,7 @@ class ChannelUpdateRequest:
 
     agents_answer: bool | None | Unset = UNSET
     archived: bool | None | Unset = UNSET
-    assignee: None | Unset | UUID = UNSET
+    assignee: Literal["me"] | None | Unset | UUID = UNSET
     hand_back_after_hours: int | None | Unset = UNSET
     status: ContactStatus | None | Unset = UNSET
     title: None | str | Unset = UNSET
@@ -57,7 +62,7 @@ class ChannelUpdateRequest:
         else:
             archived = self.archived
 
-        assignee: None | str | Unset
+        assignee: Literal["me"] | None | str | Unset
         if isinstance(self.assignee, Unset):
             assignee = UNSET
         elif isinstance(self.assignee, UUID):
@@ -143,7 +148,7 @@ class ChannelUpdateRequest:
 
         archived = _parse_archived(d.pop("archived", UNSET))
 
-        def _parse_assignee(data: object) -> None | Unset | UUID:
+        def _parse_assignee(data: object) -> Literal["me"] | None | Unset | UUID:
             if data is None:
                 return data
             if isinstance(data, Unset):
@@ -156,7 +161,13 @@ class ChannelUpdateRequest:
                 return assignee_type_0
             except TypeError, ValueError, AttributeError, KeyError:
                 pass
-            return cast(None | Unset | UUID, data)
+            assignee_type_1 = cast(Literal["me"], data)
+            if assignee_type_1 != "me":
+                raise ValueError(
+                    f"assignee_type_1 must match const 'me', got '{assignee_type_1}'"
+                )
+            return assignee_type_1
+            return cast(Literal["me"] | None | Unset | UUID, data)
 
         assignee = _parse_assignee(d.pop("assignee", UNSET))
 

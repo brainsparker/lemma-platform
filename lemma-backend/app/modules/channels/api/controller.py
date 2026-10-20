@@ -1,19 +1,29 @@
 """A pod's channels: listed, made, read, changed, deleted.
 
 Permissions are tabled in ``api.access``. A GET never writes: a member's own
-channel with the pod is made by ``POST /channels/me`` (or by whatever first
-writes to them there), and until then ``GET /channels/me`` is 404 and the list
-does not show it.
+channel with the pod is made when they join it (``events.member_joined_work``,
+on ``PodMemberAdded``); one who joined before that has theirs made by
+``POST /channels/me``, or by whatever first writes to them there. Until then
+``GET /channels/me`` is 404 and the list does not show it.
+
+A bot's groups are listed here too (``?source_surface=``), each with what the
+bot keeps about it; that setting's own routes
+(``/channels/{c}/sources/{s}``, ``/channels/whatsapp-groups``,
+``/channels/telegram-links``) are ``agent_surfaces``', which talks to the
+platforms. They are included first, so the literal segments win over
+``/channels/{channel_id}``.
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from uuid import UUID, uuid5
 
 from fastapi import APIRouter, Header, Query, Response, status
 
 from app.core.api.dependencies import UoWDep
-from app.core.authorization.dependencies import require_action
+from app.core.authorization.context import Context
+from app.core.authorization.dependencies import PodContextDep, require_action
 from app.core.authorization.permissions import Permissions
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.channels.api.access import (
@@ -38,19 +48,28 @@ from app.modules.channels.api.schemas import (
     ChannelUpdateRequest,
 )
 from app.modules.channels.api.views import channel_detail, channel_rows
+from app.modules.channels.contracts.source_settings import (
+    SourceSettingsQuery,
+    SourceSettingsResponse,
+    source_settings_lister,
+)
+from app.modules.channels.domain.access import may_see
 from app.modules.channels.domain.entities import (
     AgentAnswers,
     Channel,
     ChannelKind,
     ContactStatus,
     Principal,
+    SeatedBy,
     Visibility,
 )
+from app.modules.channels.infrastructure.cases import CaseRepository
 from app.modules.channels.infrastructure.members import MemberRepository
 from app.modules.channels.infrastructure.names import Names
 from app.modules.channels.infrastructure.repository import ChannelRepository
 from app.modules.channels.infrastructure.rows import now
 from app.modules.channels.infrastructure.source_repository import SourceRepository
+from app.modules.contacts.contracts import contact_by_id
 from app.modules.pod.contracts.members import pod_member_holds, pod_member_id
 
 router = APIRouter(prefix="/pods/{pod_id}/channels", tags=["Channels"])
@@ -64,17 +83,42 @@ IdempotencyKey = Header(
 )
 
 
+async def _contact_now(
+    uow: UoWDep, pod_id: UUID, contact_id: UUID | None
+) -> UUID | None:
+    """A merged contact's id filters by the person it became, whose channel
+    took theirs."""
+    if contact_id is None:
+        return None
+    contact = await contact_by_id(uow, pod_id=pod_id, contact_id=contact_id)
+    return contact.id if contact is not None else contact_id
+
+
 @router.get(
     "",
     operation_id="channel.list",
     response_model=ChannelListResponse,
-    dependencies=[require_action(Permissions.CONVERSATION_READ)],
+    dependencies=[require_action(Permissions.CHANNEL_READ)],
 )
 async def list_channels(
     pod_id: UUID,
     uow: UoWDep,
     caller: CallerDep,
+    ctx: PodContextDep,
     kind: ChannelKind | None = Query(default=None),
+    visibility: Visibility | None = Query(
+        default=None,
+        description=(
+            "Only `PUBLIC` or only `PRIVATE` channels; a member's and a "
+            "contact's own channel are private."
+        ),
+    ),
+    q: str | None = Query(
+        default=None,
+        min_length=1,
+        max_length=200,
+        description="Only channels whose title holds these words, in any case.",
+    ),
     archived: bool = Query(default=False),
     contact_id: UUID | None = Query(
         default=None, description="Only this contact's channel."
@@ -86,29 +130,101 @@ async def list_channels(
     ),
     unassigned: bool = Query(default=False),
     status_: ContactStatus | None = Query(default=None, alias="status"),
+    needs_person: bool = Query(
+        default=False,
+        description=(
+            "Only contacts' channels waiting on a person: open, unassigned, "
+            "and the agent off or asking for one."
+        ),
+    ),
     joined: bool = Query(default=False, description="Only channels the reader is in."),
+    source_surface: str | None = Query(
+        default=None,
+        min_length=1,
+        max_length=255,
+        description=(
+            "A bot's surface name: only the groups it is in, each with its "
+            "`source_settings`. Takes reading the bot."
+        ),
+    ),
     cursor: str | None = Query(default=None, max_length=200),
     limit: int = Query(default=50, ge=1, le=100),
 ) -> ChannelListResponse:
     """The channels the reader may see, most recently active first, each with
     what is new in it for them and its last line."""
+    settings = (
+        await _source_settings(uow, ctx, caller, source_surface)
+        if source_surface is not None
+        else None
+    )
     channels = await ChannelRepository(uow.session).list_for(
         caller.viewer,
         kind=kind,
+        visibility=visibility,
+        titled=q,
         archived=archived,
-        contact_id=contact_id,
+        contact_id=await _contact_now(uow, pod_id, contact_id),
         assignee_user_id=_assignee(assignee, caller),
         unassigned=unassigned,
         status=status_,
+        needs_person=needs_person,
         joined_only=joined,
+        channel_ids=settings.keys() if settings is not None else None,
+        # A pod admin finds a bot's private groups to join (or take over) from
+        # its settings, before anybody has let them in.
+        every_group=settings is not None and caller.manages_channels,
         limit=limit,
         before=decode_cursor(cursor),
     )
     last = channels[-1] if len(channels) == limit else None
+    items = await channel_rows(
+        uow, caller, channels, unseen=await _unseen(uow, caller, channels)
+    )
+    if settings is not None:
+        items = [
+            item.model_copy(update={"source_settings": settings[item.id]})
+            for item in items
+        ]
     return ChannelListResponse(
-        items=await channel_rows(uow, caller, channels),
+        items=items,
         next_cursor=encode_cursor(last.last_line_at, last.id) if last else None,
     )
+
+
+async def _source_settings(
+    uow: SqlAlchemyUnitOfWork, ctx: Context, caller: Caller, surface_name: str
+) -> dict[UUID, SourceSettingsResponse]:
+    """The named bot's sources' settings, by channel: one each, the newest."""
+    lister = source_settings_lister()
+    if lister is None:
+        raise missing("Surface")
+    listed = await lister(
+        SourceSettingsQuery(
+            uow=uow,
+            ctx=ctx,
+            pod_id=caller.pod_id,
+            viewer_id=caller.user_id,
+            surface_name=surface_name,
+        )
+    )
+    by_channel: dict[UUID, SourceSettingsResponse] = {}
+    for each in listed:
+        by_channel.setdefault(each.channel_id, each)
+    return by_channel
+
+
+async def _unseen(
+    uow: SqlAlchemyUnitOfWork, caller: Caller, channels: Sequence[Channel]
+) -> set[UUID]:
+    """The listed channels the caller is shown but may not read."""
+    joined = await MemberRepository(uow.session).channels_of(
+        caller.user_id, [channel.id for channel in channels]
+    )
+    return {
+        channel.id
+        for channel in channels
+        if not may_see(channel, caller.viewer, is_member=channel.id in joined)
+    }
 
 
 def _assignee(value: str | None, caller: Caller) -> UUID | None:
@@ -127,7 +243,7 @@ def _assignee(value: str | None, caller: Caller) -> UUID | None:
     operation_id="channel.create",
     response_model=ChannelDetailResponse,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[require_action(Permissions.CONVERSATION_WRITE)],
+    dependencies=[require_action(Permissions.CHANNEL_WRITE)],
 )
 async def create_channel(
     pod_id: UUID,
@@ -166,6 +282,10 @@ async def create_channel(
         )
         if channel.pod_id != caller.pod_id:
             raise conflict("That Idempotency-Key was used elsewhere")
+        if not made:
+            # A replay shows the group only to whoever may still see it: made
+            # private since, or they were taken out of it, it is not theirs.
+            channel = await visible(uow, caller, channel.id)
     if made:
         await seat_people(uow, channel, body.members, added_by=caller.user_id)
         await seat_agents(
@@ -191,7 +311,10 @@ async def seat_people(
         if await pod_member_id(uow, channel.pod_id, user_id) is None:
             raise unprocessable("Only members of the pod can be added")
         await members.add_person(
-            channel, Principal.member(user_id), added_by_user_id=added_by
+            channel,
+            Principal.member(user_id),
+            seated_by=SeatedBy.ADDED,
+            added_by_user_id=added_by,
         )
 
 
@@ -238,7 +361,7 @@ async def _direct_of(uow: SqlAlchemyUnitOfWork, caller: Caller) -> Channel | Non
     "/me",
     operation_id="channel.me.get",
     response_model=ChannelDetailResponse,
-    dependencies=[require_action(Permissions.CONVERSATION_READ)],
+    dependencies=[require_action(Permissions.CHANNEL_READ)],
 )
 async def get_my_channel(
     pod_id: UUID, uow: UoWDep, caller: CallerDep
@@ -255,7 +378,7 @@ async def get_my_channel(
     operation_id="channel.me.create",
     response_model=ChannelDetailResponse,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[require_action(Permissions.CONVERSATION_READ)],
+    dependencies=[require_action(Permissions.CHANNEL_READ)],
 )
 async def create_my_channel(
     pod_id: UUID, uow: UoWDep, caller: CallerDep, response: Response
@@ -279,7 +402,7 @@ async def create_my_channel(
     "/{channel_id}",
     operation_id="channel.get",
     response_model=ChannelDetailResponse,
-    dependencies=[require_action(Permissions.CONVERSATION_READ)],
+    dependencies=[require_action(Permissions.CHANNEL_READ)],
 )
 async def get_channel(
     pod_id: UUID, channel_id: UUID, uow: UoWDep, caller: CallerDep
@@ -294,7 +417,7 @@ async def get_channel(
     "/{channel_id}",
     operation_id="channel.update",
     response_model=ChannelDetailResponse,
-    dependencies=[require_action(Permissions.CONVERSATION_WRITE)],
+    dependencies=[require_action(Permissions.CHANNEL_WRITE)],
 )
 async def update_channel(
     pod_id: UUID,
@@ -318,7 +441,7 @@ async def update_channel(
         await _change_group(uow, channel, body, named)
     elif named:
         require_contact_message(caller)
-        await _change_contact(uow, channel, body, named)
+        await _change_contact(uow, caller, channel, body, named)
     await uow.commit()
     changed = await ChannelRepository(uow.session).get(channel.id)
     return await channel_detail(uow, caller, changed or channel)
@@ -368,37 +491,39 @@ async def _change_group(
 
 async def _change_contact(
     uow: SqlAlchemyUnitOfWork,
+    caller: Caller,
     channel: Channel,
     body: ChannelUpdateRequest,
     named: set[str],
 ) -> None:
-    repository = ChannelRepository(uow.session)
+    cases = CaseRepository(uow.session)
     values: dict[str, object] = {}
     for field in ("agents_answer", "hand_back_after_hours"):
         if field in named:
             values[field] = getattr(body, field)
-    if "status" in named:
-        assert body.status is not None
-        values["status"] = body.status.value
     handing_back = "agents_answer" in named and body.agents_answer
     if handing_back and body.assignee is not None:
         raise unprocessable("Switching the agent on hands the contact back to it")
     if "assignee" in named and body.assignee is not None:
+        assignee = caller.user_id if body.assignee == "me" else body.assignee
         if not await pod_member_holds(
-            uow, channel.pod_id, body.assignee, Permissions.CONTACT_READ
+            uow, channel.pod_id, assignee, Permissions.CONTACT_READ
         ):
             raise unprocessable("Only a member who may see contacts can be assigned")
-        await repository.assign(channel.id, body.assignee)
+        await cases.assign(channel.id, assignee, by=caller.user_id)
     elif handing_back or "assignee" in named:
-        await repository.assign(channel.id, None)
-    await repository.change(channel.id, values)
+        await cases.assign(channel.id, None, by=caller.user_id)
+    if "status" in named:
+        assert body.status is not None
+        await cases.set_status(channel.id, body.status, by=caller.user_id)
+    await ChannelRepository(uow.session).change(channel.id, values)
 
 
 @router.delete(
     "/{channel_id}",
     operation_id="channel.delete",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[require_action(Permissions.CONVERSATION_WRITE)],
+    dependencies=[require_action(Permissions.CHANNEL_WRITE)],
 )
 async def delete_channel(
     pod_id: UUID, channel_id: UUID, uow: UoWDep, caller: CallerDep

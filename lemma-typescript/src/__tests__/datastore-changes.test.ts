@@ -431,6 +431,173 @@ describe("watchDatastoreChanges", () => {
         kept.close();
     });
 
+    it("retries an unavailable subscription on the same socket with backoff", async () => {
+        vi.useFakeTimers();
+        vi.spyOn(Math, "random").mockReturnValue(1); // delay = the full ceiling
+        const auth = makeAuth();
+        const onChange = vi.fn();
+        const onError = vi.fn();
+        const onStatus = vi.fn();
+        const handle = watchDatastoreChanges(
+            "https://api.x.test",
+            auth,
+            "POD",
+            { table: "tickets", since: "c.0", onChange, onError, onStatus },
+        );
+        const neighbour = watchDatastoreChanges(
+            "https://api.x.test",
+            auth,
+            "POD",
+            { table: "comments", onChange: vi.fn() },
+        );
+        await vi.advanceTimersByTimeAsync(0);
+        const ws = FakeWebSocket.instances[0];
+        ws.receive({ type: "ready" });
+        ws.receive({ type: "subscribed", id: "s2", cursor: "c.1" });
+        const tickets = () => ws.subscribes().filter((f) => f.id === "s1");
+        expect(tickets()).toHaveLength(1);
+
+        ws.receive({ type: "error", id: "s1", code: "unavailable" });
+        expect(onStatus).toHaveBeenLastCalledWith("reconnecting");
+        await vi.advanceTimersByTimeAsync(499);
+        expect(tickets()).toHaveLength(1);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(tickets()).toHaveLength(2);
+        expect(tickets()[1]).toMatchObject({ table: "tickets", since: "c.0" });
+
+        /* A second refusal doubles the wait. */
+        ws.receive({ type: "error", id: "s1", code: "unavailable" });
+        await vi.advanceTimersByTimeAsync(999);
+        expect(tickets()).toHaveLength(2);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(tickets()).toHaveLength(3);
+
+        ws.receive({ type: "subscribed", id: "s1", cursor: "c.2" });
+        expect(onStatus).toHaveBeenLastCalledWith("open");
+        ws.receive({
+            type: "changes",
+            id: "s1",
+            cursor: "c.3",
+            changes: [
+                { op: "insert", table: "tickets", record_id: "r", row: {} },
+            ],
+        });
+        expect(onChange).toHaveBeenCalledWith(
+            expect.objectContaining({ record_id: "r", cursor: "c.3" }),
+        );
+
+        /* `subscribed` reset the backoff, and the retry resumes from the cursor. */
+        ws.receive({ type: "error", id: "s1", code: "unavailable" });
+        await vi.advanceTimersByTimeAsync(500);
+        expect(tickets()).toHaveLength(4);
+        expect(tickets()[3].since).toBe("c.3");
+
+        expect(onError).not.toHaveBeenCalled();
+        expect(handle.closed).toBe(false);
+        expect(neighbour.closed).toBe(false);
+        expect(ws.closed).toBe(false);
+        expect(FakeWebSocket.instances.length).toBe(1);
+        handle.close();
+        neighbour.close();
+    });
+
+    it("keeps every other subscription error terminal", async () => {
+        vi.useFakeTimers();
+        const onError = vi.fn();
+        const onStatus = vi.fn();
+        const handle = watchDatastoreChanges(
+            "https://api.x.test",
+            makeAuth(),
+            "POD",
+            { table: "secret", onChange: vi.fn(), onError, onStatus },
+        );
+        await vi.advanceTimersByTimeAsync(0);
+        const ws = FakeWebSocket.instances[0];
+        ws.receive({ type: "ready" });
+        ws.receive({ type: "error", id: "s1", code: "forbidden" });
+
+        expect(handle.closed).toBe(true);
+        expect(onStatus).toHaveBeenLastCalledWith("closed");
+        expect(onError.mock.calls[0][0].message).toMatch(/forbidden/);
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(ws.subscribes()).toHaveLength(1);
+    });
+
+    it("gives up an unavailable subscription after its maxRetries", async () => {
+        vi.useFakeTimers();
+        const onError = vi.fn();
+        const handle = watchDatastoreChanges(
+            "https://api.x.test",
+            makeAuth(),
+            "POD",
+            { onChange: vi.fn(), onError, maxRetries: 1 },
+        );
+        await vi.advanceTimersByTimeAsync(0);
+        const ws = FakeWebSocket.instances[0];
+        ws.receive({ type: "ready" });
+        ws.receive({ type: "error", id: "s1", code: "unavailable" });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(ws.subscribes()).toHaveLength(2);
+        ws.receive({ type: "error", id: "s1", code: "unavailable" });
+        expect(handle.closed).toBe(true);
+        expect(onError.mock.calls[0][0].message).toMatch(/max retry attempts/);
+    });
+
+    it("cancels a pending unavailable retry on unsubscribe", async () => {
+        vi.useFakeTimers();
+        const auth = makeAuth();
+        const handle = watchDatastoreChanges(
+            "https://api.x.test",
+            auth,
+            "POD",
+            { table: "tickets", onChange: vi.fn() },
+        );
+        const neighbour = watchDatastoreChanges(
+            "https://api.x.test",
+            auth,
+            "POD",
+            { table: "comments", onChange: vi.fn() },
+        );
+        await vi.advanceTimersByTimeAsync(0);
+        const ws = FakeWebSocket.instances[0];
+        ws.receive({ type: "ready" });
+        vi.spyOn(Math, "random").mockReturnValue(1);
+        ws.receive({ type: "error", id: "s1", code: "unavailable" });
+        handle.close();
+        expect(ws.sent.at(-1)).toEqual({ op: "unsubscribe", id: "s1" });
+
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(ws.subscribes().filter((f) => f.id === "s1")).toHaveLength(1);
+        neighbour.close();
+    });
+
+    it("drops a pending unavailable retry when the socket reconnects", async () => {
+        vi.useFakeTimers();
+        const handle = watchDatastoreChanges(
+            "https://api.x.test",
+            makeAuth(),
+            "POD",
+            { table: "tickets", onChange: vi.fn() },
+        );
+        await vi.advanceTimersByTimeAsync(0);
+        const first = FakeWebSocket.instances[0];
+        first.receive({ type: "ready" });
+        vi.spyOn(Math, "random").mockReturnValue(1);
+        first.receive({ type: "error", id: "s1", code: "unavailable" });
+        vi.spyOn(Math, "random").mockReturnValue(0);
+        first.onclose?.({ code: 1006 });
+        await vi.advanceTimersByTimeAsync(0);
+        const second = last();
+        expect(second).not.toBe(first);
+        second.receive({ type: "ready" });
+        expect(second.subscribes()).toHaveLength(1);
+
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(second.subscribes()).toHaveLength(1);
+        expect(first.subscribes()).toHaveLength(1);
+        handle.close();
+    });
+
     it("refreshes the token once after a 4401 and fails every watch on the second", async () => {
         const auth = makeAuth();
         const errors = [vi.fn(), vi.fn()];

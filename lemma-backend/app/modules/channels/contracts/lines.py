@@ -16,10 +16,9 @@ from app.modules.channels.domain.entities import (
     Channel,
     ChannelKind,
     ChannelMessage,
-    SenderKind,
     Source,
 )
-from app.modules.channels.domain.projection import withheld_from
+from app.modules.channels.infrastructure.line_search import LineSearch, SearchFilter
 from app.modules.channels.infrastructure.lines import LineRepository
 from app.modules.channels.infrastructure.members import MemberRepository
 from app.modules.channels.infrastructure.repository import ChannelRepository
@@ -31,7 +30,6 @@ MAX_CHANNELS = 100
 
 __all__ = [
     "channels_for",
-    "claim_line",
     "last_heard_line",
     "line_by_id",
     "member_background",
@@ -82,13 +80,6 @@ async def last_heard_line(
     return await LineRepository(uow.session).last_heard(conversation_id)
 
 
-async def claim_line(
-    uow: SqlAlchemyUnitOfWork, *, message_id: UUID, conversation_id: UUID
-) -> None:
-    """Link a line to the conversation that answers it."""
-    await LineRepository(uow.session).claim(message_id, conversation_id=conversation_id)
-
-
 async def thread_root_at(
     uow: SqlAlchemyUnitOfWork,
     *,
@@ -103,13 +94,16 @@ async def thread_root_at(
 
 
 async def member_background(
-    uow: SqlAlchemyUnitOfWork, *, line: ChannelMessage, for_user_id: UUID, limit: int
+    uow: SqlAlchemyUnitOfWork, *, line: ChannelMessage, limit: int
 ) -> list[ChannelMessage]:
-    """What a member's run answering ``line`` is shown of the channel around it.
+    """The lines a member's run answering ``line`` is shown of the channel
+    around it: the thread it is in, or the channel's recent lines. Oldest
+    first, without ``line`` itself or a deleted line.
 
-    The thread it is in, or the channel's recent lines -- never what a contact
-    wrote, an answer made with another member's access, or a deleted line.
-    Oldest first, without ``line`` itself.
+    Chosen, not yet read: what of them the member's run may see -- a
+    contact's words marked as said outside the pod, nothing an answer made
+    with another member's access said -- is decided as the run reads them
+    (``contracts.backgrounds``).
     """
     lines = LineRepository(uow.session)
     root_id = line.thread_root_id
@@ -118,14 +112,9 @@ async def member_background(
         around = ([root] if root else []) + await lines.thread(root_id, limit=limit)
     else:
         around = await lines.page(line.channel_id, limit=limit)
-    return [
-        each
-        for each in around
-        if each.id != line.id
-        and not each.is_deleted
-        and each.sender.kind is not SenderKind.CONTACT
-        and not withheld_from(each, user_id=for_user_id)
-    ][-limit:]
+    return [each for each in around if each.id != line.id and not each.is_deleted][
+        -limit:
+    ]
 
 
 async def channels_for(
@@ -168,7 +157,13 @@ async def search_lines(
     channel_id: UUID | None = None,
     before: tuple[datetime, UUID] | None = None,
 ) -> list[ChannelMessage]:
-    """Lines matching every word in channels ``viewer`` sees, newest first."""
-    return await LineRepository(uow.session).search(
-        viewer, query=words, limit=limit, channel_id=channel_id, before=before
+    """Lines matching every word in channels ``viewer`` sees and reads in
+    full, newest first."""
+    hits = await LineSearch(uow.session).search(
+        viewer,
+        query=words,
+        limit=limit,
+        within=SearchFilter(channel_id=channel_id),
+        before=before,
     )
+    return [hit.message for hit in hits]

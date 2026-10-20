@@ -119,6 +119,12 @@ def _routers():
     ]
 
 
+def _live():
+    from app.modules.agent.services.live_conversation import live_contribution
+
+    return live_contribution()
+
+
 def _register_analytics() -> None:
     # Every process: a memory file written anywhere -- including the shell's
     # `lemma files write`, which commits in the API -- drops the cached brief
@@ -142,9 +148,11 @@ def _register_work() -> None:
     # Every process: a member's line in Lemma (API) and a run finishing
     # (worker) write these; a question closing anywhere settles its batch.
     # Importing the second also registers what answering a paused tool's
-    # question on its line does (``answers_for("tool")``).
+    # question on its line does (``answers_for("tool")``). A paused question
+    # expiring (the channels' sweeper, worker) resumes its run.
     import app.modules.agent.events.channel_answer_work  # noqa: F401
     import app.modules.agent.events.channel_question_work  # noqa: F401
+    import app.modules.agent.events.pause_expiry_work  # noqa: F401
 
     # Every process: a decision (API, surfaces) writes `agent.approval.execute`
     # and `wait_for` (worker) writes the wait items; both run on the worker.
@@ -179,6 +187,7 @@ module = LemmaModule(
     name="agent",
     resource_names=_resource_names,
     routers=_routers,
+    live=_live,
     register_analytics=_register_analytics,
     register_work=_register_work,
     register_periodic_work=_register_periodic_work,

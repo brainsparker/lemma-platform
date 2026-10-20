@@ -8,9 +8,10 @@ is pushed to them like any line of theirs (``services.channel_deliveries``).
 
 from __future__ import annotations
 
+from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Header, HTTPException, Path, status
 from pydantic import BaseModel, Field
 
 from app.core.api.dependencies import CurrentUser, UoWDep
@@ -19,16 +20,12 @@ from app.core.authorization.permissions import Permissions
 from app.modules.agent_surfaces.composition import build_direct_messages
 from app.modules.agent_surfaces.domain.errors import AgentSurfaceValidationError
 from app.modules.agent_surfaces.services.direct_messages import DirectMessage
+from app.modules.channels.contracts import keyed_client_id
 
-router = APIRouter(prefix="/pods/{pod_id}/notices", tags=["Agent Surfaces"])
+router = APIRouter(prefix="/pods/{pod_id}/members", tags=["Agent Surfaces"])
 
 
 class NoticeRequest(BaseModel):
-    to: str = Field(
-        min_length=1,
-        max_length=320,
-        description="The member to tell: a pod member id, user id, or email address.",
-    )
     text: str = Field(min_length=1, max_length=4000)
 
 
@@ -38,19 +35,36 @@ class NoticeResponse(BaseModel):
 
 
 @router.post(
-    "",
+    "/{member}/notices",
     operation_id="agent.notice.send",
     response_model=NoticeResponse,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[require_action(Permissions.CONVERSATION_WRITE)],
+    dependencies=[require_action(Permissions.CHANNEL_WRITE)],
 )
 async def send_notice(
-    pod_id: UUID, body: NoticeRequest, user: CurrentUser, uow: UoWDep
+    pod_id: UUID,
+    member: Annotated[
+        str,
+        Path(
+            min_length=1,
+            max_length=320,
+            description=(
+                "The member to tell: a pod member id, user id, or email address."
+            ),
+        ),
+    ],
+    body: NoticeRequest,
+    user: CurrentUser,
+    uow: UoWDep,
+    idempotency_key: str | None = Header(
+        default=None, alias="Idempotency-Key", min_length=1, max_length=255
+    ),
 ) -> NoticeResponse:
-    """Tell another member of the pod something, in their own channel."""
+    """Tell another member of the pod something, in their own channel. The
+    same `Idempotency-Key` from the same member is the same notice."""
     messages = build_direct_messages(uow)
     recipient = await messages.membership.resolve_pod_recipient(
-        pod_id=pod_id, reference=body.to
+        pod_id=pod_id, reference=member
     )
     if recipient is None:
         # 404, not 422: from the caller's side, nobody in this pod and somebody
@@ -65,6 +79,7 @@ async def send_notice(
                 recipient_user_id=recipient,
                 text=body.text,
                 actor_user_id=user.id,
+                key=keyed_client_id(idempotency_key, user_id=user.id),
             )
         )
     except AgentSurfaceValidationError as refused:

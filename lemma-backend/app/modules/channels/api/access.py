@@ -8,22 +8,34 @@ answers exactly as one that does not exist -- 404 -- since whether it exists is
 not theirs to learn. Lists, counts, the inbox and search filter by the same
 rule in SQL.
 
-On top of seeing it:
+On top of seeing it, one table -- the module doc (``docs/modules/channels.md``)
+repeats it. ``channel.manage`` implies ``channel.write``, which implies
+``channel.read``; ``contact.message`` implies ``contact.read``. By role:
+viewers read, members (``POD_USER``) write, editors and admins manage.
 
 =====================================  ========================================
-Reading lines, the channel, members    ``conversation.read``
-Writing, editing, deleting lines       ``conversation.write`` (+ ``contact.message``
-                                       in a CONTACT channel)
-Assignee, status, agent switch,        ``contact.message`` (CONTACT channels)
-hand-back window, retrying a delivery
-to a contact
-Group: rename, topic, visibility,      the channel's owner, or ``pod.update``
-archive, delete, members, roles,       (``may_manage``)
-agents roster
-Joining a public group or a CONTACT    ``conversation.read``
-channel; leaving; one's own notify
-Answering a question                   ``conversation.read``; only the person it
+Reading channels, lines, members,      ``channel.read``
+threads, deliveries, inbox, search
+One's own channel (``/channels/me``);  ``channel.read``
+joining a public group or a CONTACT
+channel; leaving; one's own notify;
+marking read
+Answering a question                   ``channel.read``; only the person it
                                        waits on
+Writing, editing, deleting one's       ``channel.write`` (+ ``contact.message``
+lines; starting a group; retrying      in a CONTACT channel)
+one's own line's delivery
+Group: rename, topic, visibility,      ``channel.write`` and the channel's
+archive, delete, members, roles,       owner -- or ``channel.manage``
+agents roster                          (``may_manage``)
+CONTACT channel: assignee, status,     ``channel.write`` + ``contact.message``
+agent switch, hand-back window
+Seeing a CONTACT channel at all        ``contact.read``
+A group source's settings              seeing the channel (else 404) or
+(``/channels/{c}/sources/{s}``)        ``channel.manage``, and the bot's
+                                       ``agent.read``; changing them
+                                       ``agent.update`` and its owner, or a pod
+                                       admin (``agent_surfaces``)
 =====================================  ========================================
 """
 
@@ -37,7 +49,7 @@ from uuid import UUID
 from fastapi import Depends, HTTPException, status
 
 from app.core.api.dependencies import CurrentUser
-from app.core.authorization.context import ResourceRef
+from app.core.authorization.context import Context, ResourceRef
 from app.core.authorization.dependencies import PodContextDep
 from app.core.authorization.permissions import Permissions
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -52,11 +64,17 @@ class Caller:
     and the pod-wide permissions channel routes ask about."""
 
     def __init__(
-        self, viewer: Viewer, *, messages_contacts: bool, manages_pod: bool
+        self,
+        viewer: Viewer,
+        *,
+        messages_contacts: bool,
+        manages_channels: bool,
+        writes_channels: bool,
     ) -> None:
         self.viewer = viewer
         self.messages_contacts = messages_contacts
-        self.manages_pod = manages_pod
+        self.manages_channels = manages_channels
+        self.writes_channels = writes_channels
 
     @property
     def user_id(self) -> UUID:
@@ -67,17 +85,24 @@ class Caller:
         return self.viewer.pod_id
 
 
-async def get_caller(pod_id: UUID, user: CurrentUser, ctx: PodContextDep) -> Caller:
+async def caller_from(ctx: Context, *, pod_id: UUID, user_id: UUID) -> Caller:
+    """The member ``user_id`` in ``pod_id``, as every channel read asks it --
+    the REST routes and the live socket alike, so the two cannot drift."""
     pod = ResourceRef.pod(pod_id)
     return Caller(
         Viewer(
-            user_id=user.id,
+            user_id=user_id,
             pod_id=pod_id,
             sees_contacts=await ctx.can(Permissions.CONTACT_READ, pod),
         ),
         messages_contacts=await ctx.can(Permissions.CONTACT_MESSAGE, pod),
-        manages_pod=await ctx.can(Permissions.POD_UPDATE, pod),
+        manages_channels=await ctx.can(Permissions.CHANNEL_MANAGE, pod),
+        writes_channels=await ctx.can(Permissions.CHANNEL_WRITE, pod),
     )
+
+
+async def get_caller(pod_id: UUID, user: CurrentUser, ctx: PodContextDep) -> Caller:
+    return await caller_from(ctx, pod_id=pod_id, user_id=user.id)
 
 
 CallerDep = Annotated[Caller, Depends(get_caller)]
@@ -121,9 +146,13 @@ async def may_manage(
     uow: SqlAlchemyUnitOfWork, caller: Caller, channel: Channel
 ) -> bool:
     """Whether the caller may change this channel's settings and roster: its
-    owner, or whoever may change the pod."""
-    if caller.manages_pod:
+    owner while they may write in the pod (``channel.write``) -- an owner made
+    a viewer keeps the seat, not the say -- or whoever manages the pod's
+    channels (``channel.manage``)."""
+    if caller.manages_channels:
         return True
+    if not caller.writes_channels:
+        return False
     seat = await MemberRepository(uow.session).of_user(channel.id, caller.user_id)
     return seat is not None and seat.role is MemberRole.OWNER
 
@@ -132,7 +161,9 @@ async def require_manage(
     uow: SqlAlchemyUnitOfWork, caller: Caller, channel: Channel
 ) -> None:
     if not await may_manage(uow, caller, channel):
-        raise forbidden("Only this channel's owners, or an admin, can change it")
+        raise forbidden(
+            "Only this channel's owners, or an editor of the pod, can change it"
+        )
 
 
 def require_contact_message(caller: Caller) -> None:

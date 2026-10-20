@@ -14,13 +14,25 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.channels.domain.entities import Source
+from app.modules.channels.domain.entities import (
+    Channel,
+    ChannelKind,
+    Principal,
+    Source,
+)
 from app.modules.channels.infrastructure.accounts import AccountRepository
+from app.modules.channels.infrastructure.members import MemberRepository
+from app.modules.channels.infrastructure.repository import ChannelRepository
+from app.modules.channels.infrastructure.rows import now
 from app.modules.channels.infrastructure.source_repository import (
     GROUP_SETTINGS,
     SourceRepository,
 )
-from app.modules.channels.services.places import ChannelPlaces, Place
+from app.modules.channels.services.places import (
+    ChannelPlaces,
+    Place,
+    recompute_visibility,
+)
 
 __all__ = [
     "GROUP_SETTINGS",
@@ -33,11 +45,15 @@ __all__ = [
     "forget_chat",
     "forget_pending_group",
     "heard_at",
+    "left_place",
     "open_pending_group",
     "owned_place",
     "people_places",
     "person_places",
+    "place_became_private",
     "place_by_request",
+    "place_resumed",
+    "place_stopped",
     "places_hearing",
     "places_of",
     "reply_address",
@@ -62,7 +78,7 @@ async def find_place(
     account = await AccountRepository(uow.session).account_for(
         pod_id=pod_id,
         platform=place.platform,
-        account_key=place.account_key,
+        key=place.account,
         surface_id=place.surface_id,
     )
     return await SourceRepository(uow.session).find(
@@ -288,3 +304,61 @@ async def forget_chat(
         surface_ids=surface_ids,
         platform=platform,
     )
+
+
+# -- what the platform says changed about a mirrored place ------------------------
+
+
+async def _mirrored_group(uow: SqlAlchemyUnitOfWork, source_id: UUID) -> Channel | None:
+    """The GROUP channel a shared place feeds."""
+    source = await SourceRepository(uow.session).get(source_id)
+    if source is None:
+        return None
+    channel = await ChannelRepository(uow.session).get(source.channel_id)
+    return (
+        channel if channel is not None and channel.kind is ChannelKind.GROUP else None
+    )
+
+
+async def place_became_private(uow: SqlAlchemyUnitOfWork, source_id: UUID) -> bool:
+    """The platform now keeps this place to its members: so is its channel,
+    to the people in it. True if anything changed. One way only."""
+    sources = SourceRepository(uow.session)
+    if not await sources.became_private(source_id):
+        return False
+    source = await sources.get(source_id)
+    if source is not None:
+        await recompute_visibility(uow.session, source.channel_id)
+    return True
+
+
+async def left_place(
+    uow: SqlAlchemyUnitOfWork, source_id: UUID, principal: Principal
+) -> bool:
+    """Somebody left the place this source is: out of its channel, if the
+    platform is what seated them there (``remove_platform_seat``)."""
+    channel = await _mirrored_group(uow, source_id)
+    if channel is None:
+        return False
+    return await MemberRepository(uow.session).remove_platform_seat(
+        channel.id, principal
+    )
+
+
+async def place_stopped(uow: SqlAlchemyUnitOfWork, source_id: UUID) -> bool:
+    """The bot was taken out of the place: its channel is archived -- read as
+    before by its people, and refusing lines that could no longer go there."""
+    channel = await _mirrored_group(uow, source_id)
+    if channel is None or channel.is_archived:
+        return False
+    await ChannelRepository(uow.session).change(channel.id, {"archived_at": now()})
+    return True
+
+
+async def place_resumed(uow: SqlAlchemyUnitOfWork, source_id: UUID) -> bool:
+    """The bot is back in a place it was taken out of: its channel with it."""
+    channel = await _mirrored_group(uow, source_id)
+    if channel is None or not channel.is_archived:
+        return False
+    await ChannelRepository(uow.session).change(channel.id, {"archived_at": None})
+    return True

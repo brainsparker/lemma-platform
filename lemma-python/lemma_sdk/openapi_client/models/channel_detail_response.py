@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from ..models.line_preview import LinePreview
     from ..models.my_membership_response import MyMembershipResponse
     from ..models.person_ref import PersonRef
+    from ..models.source_settings_response import SourceSettingsResponse
     from ..models.source_summary import SourceSummary
     from ..models.unread_response import UnreadResponse
 
@@ -40,9 +41,12 @@ class ChannelDetailResponse:
         agents_answer (bool | None | Unset): A contact's channel: whether its agents answer the contact.
         archived (bool | Unset):  Default: False.
         assignee (None | PersonRef | Unset): A contact's channel: who answers them by hand.
-        attention (AttentionResponse | None | Unset): The channel asks for a person, and why.
+        attention (AttentionResponse | None | Unset): A contact's channel: its current case asks for a person, and why.
+            Never set on another kind of channel.
         hand_back_after_hours (int | None | Unset): A contact's channel: how long the assignee holds the contact after
             their last line before the agent answers again.
+        joined (bool | Unset): Whether the reader is in it. A pod admin listing a bot's groups (`source_surface`) is
+            shown its private ones too, not joined and without their last line, until they join. Default: False.
         last_line (LinePreview | None | Unset):
         last_seq (int | Unset):  Default: 0.
         me (MyMembershipResponse | Unset):
@@ -50,6 +54,8 @@ class ChannelDetailResponse:
         person (None | PersonRef | Unset): Whose channel it is: the member's for a DIRECT one, the contact's for a
             CONTACT one; absent for a GROUP.
         source_places (list[ChannelSourceResponse] | Unset):
+        source_settings (None | SourceSettingsResponse | Unset): Listed by `source_surface`: that bot's settings for its
+            place here -- who answers its people outside the pod, and whether they are.
         sources (list[SourceSummary] | Unset): The outside places feeding it.
         status (ContactStatus | None | Unset): A contact's channel: where it stands.
         title (None | str | Unset):
@@ -67,12 +73,14 @@ class ChannelDetailResponse:
     assignee: None | PersonRef | Unset = UNSET
     attention: AttentionResponse | None | Unset = UNSET
     hand_back_after_hours: int | None | Unset = UNSET
+    joined: bool | Unset = False
     last_line: LinePreview | None | Unset = UNSET
     last_seq: int | Unset = 0
     me: MyMembershipResponse | Unset = UNSET
     members: list[ChannelMemberResponse] | Unset = UNSET
     person: None | PersonRef | Unset = UNSET
     source_places: list[ChannelSourceResponse] | Unset = UNSET
+    source_settings: None | SourceSettingsResponse | Unset = UNSET
     sources: list[SourceSummary] | Unset = UNSET
     status: ContactStatus | None | Unset = UNSET
     title: None | str | Unset = UNSET
@@ -84,6 +92,7 @@ class ChannelDetailResponse:
         from ..models.attention_response import AttentionResponse
         from ..models.line_preview import LinePreview
         from ..models.person_ref import PersonRef
+        from ..models.source_settings_response import SourceSettingsResponse
 
         created_at = self.created_at.isoformat()
 
@@ -125,6 +134,8 @@ class ChannelDetailResponse:
         else:
             hand_back_after_hours = self.hand_back_after_hours
 
+        joined = self.joined
+
         last_line: dict[str, Any] | None | Unset
         if isinstance(self.last_line, Unset):
             last_line = UNSET
@@ -160,6 +171,14 @@ class ChannelDetailResponse:
             for source_places_item_data in self.source_places:
                 source_places_item = source_places_item_data.to_dict()
                 source_places.append(source_places_item)
+
+        source_settings: dict[str, Any] | None | Unset
+        if isinstance(self.source_settings, Unset):
+            source_settings = UNSET
+        elif isinstance(self.source_settings, SourceSettingsResponse):
+            source_settings = self.source_settings.to_dict()
+        else:
+            source_settings = self.source_settings
 
         sources: list[dict[str, Any]] | Unset = UNSET
         if not isinstance(self.sources, Unset):
@@ -213,6 +232,8 @@ class ChannelDetailResponse:
             field_dict["attention"] = attention
         if hand_back_after_hours is not UNSET:
             field_dict["hand_back_after_hours"] = hand_back_after_hours
+        if joined is not UNSET:
+            field_dict["joined"] = joined
         if last_line is not UNSET:
             field_dict["last_line"] = last_line
         if last_seq is not UNSET:
@@ -225,6 +246,8 @@ class ChannelDetailResponse:
             field_dict["person"] = person
         if source_places is not UNSET:
             field_dict["source_places"] = source_places
+        if source_settings is not UNSET:
+            field_dict["source_settings"] = source_settings
         if sources is not UNSET:
             field_dict["sources"] = sources
         if status is not UNSET:
@@ -246,6 +269,7 @@ class ChannelDetailResponse:
         from ..models.line_preview import LinePreview
         from ..models.my_membership_response import MyMembershipResponse
         from ..models.person_ref import PersonRef
+        from ..models.source_settings_response import SourceSettingsResponse
         from ..models.source_summary import SourceSummary
         from ..models.unread_response import UnreadResponse
 
@@ -316,6 +340,8 @@ class ChannelDetailResponse:
             d.pop("hand_back_after_hours", UNSET)
         )
 
+        joined = d.pop("joined", UNSET)
+
         def _parse_last_line(data: object) -> LinePreview | None | Unset:
             if data is None:
                 return data
@@ -379,6 +405,25 @@ class ChannelDetailResponse:
 
                 source_places.append(source_places_item)
 
+        def _parse_source_settings(
+            data: object,
+        ) -> None | SourceSettingsResponse | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, dict):
+                    raise TypeError()
+                source_settings_type_0 = SourceSettingsResponse.from_dict(data)
+
+                return source_settings_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(None | SourceSettingsResponse | Unset, data)
+
+        source_settings = _parse_source_settings(d.pop("source_settings", UNSET))
+
         _sources = d.pop("sources", UNSET)
         sources: list[SourceSummary] | Unset = UNSET
         if _sources is not UNSET:
@@ -441,12 +486,14 @@ class ChannelDetailResponse:
             assignee=assignee,
             attention=attention,
             hand_back_after_hours=hand_back_after_hours,
+            joined=joined,
             last_line=last_line,
             last_seq=last_seq,
             me=me,
             members=members,
             person=person,
             source_places=source_places,
+            source_settings=source_settings,
             sources=sources,
             status=status,
             title=title,

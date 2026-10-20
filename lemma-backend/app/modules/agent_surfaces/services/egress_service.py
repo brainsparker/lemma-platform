@@ -43,6 +43,7 @@ from app.modules.agent_surfaces.domain.envelope import (
     SurfaceEnvelope,
 )
 from app.modules.agent_surfaces.domain.ports import ColdEmailThread
+from app.modules.agent_surfaces.platforms.delivery import note_tried
 from app.modules.agent_surfaces.platforms.rendering import sanitize_user_visible_text
 from app.modules.agent_surfaces.services.channel_exposure import (
     deliver_withheld,
@@ -135,6 +136,7 @@ class SurfaceEgress:
         # The send is the provider's round trip and asks nothing of the
         # database; the caller writes the thread down afterwards.
         async with connection_released(self.uow.session):
+            note_tried(surface.surface_type.value)
             sent = await adapter.send_cold_email(
                 credentials=credentials,
                 recipient_email=recipient_email,

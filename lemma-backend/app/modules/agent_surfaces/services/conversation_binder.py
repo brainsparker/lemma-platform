@@ -38,6 +38,7 @@ from app.modules.agent_surfaces.services.channel_places import (
     home_of,
     place_of,
 )
+from app.modules.agent_surfaces.services.channel_lines import reply_ref_of
 from app.modules.agent_surfaces.services.contact_keepers import owned_or_moved
 from app.modules.agent_surfaces.services.surface_route_types import (
     ResolvedSurfaceRoute,
@@ -105,7 +106,8 @@ class ConversationBinder:
             place=place,
             home=home_of(place, user_id=user_id, contact_id=contact_id),
         )
-        await self.seats.heard_at(source.id, parsed.model_dump(mode="json"))
+        # How to answer the place: its reply target, never what was said.
+        await self.seats.heard_at(source.id, reply_ref_of(parsed))
         conversation_id, title = await self._persons_conversation(
             source=source,
             surface=surface,

@@ -32,6 +32,7 @@ from app.modules.identity.infrastructure.models.user_models import User
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
 )
+from app.modules.agent_surfaces.tests.e2e.background_reads import background_read
 from app.modules.agent_surfaces.tests.e2e.helpers import (
     _conversation_by_external_thread,
     _create_surface,
@@ -341,11 +342,8 @@ async def test_telegram_group_injects_reply_as_channel_context(
         conversation_id=str(context.conversation_id),
     )
     user_message = next(m for m in messages if m.get("role") == "user")
-    channel_context = (user_message.get("metadata") or {}).get("channel_context")
-    assert channel_context, channel_context
-    assert any("ship on Friday" in (m.get("text") or "") for m in channel_context), (
-        channel_context
-    )
+    shown = await background_read(user_message.get("metadata"))
+    assert any("ship on Friday" in line.text for line in shown.lines), shown
 
 
 async def test_telegram_dm_has_no_channel_context(

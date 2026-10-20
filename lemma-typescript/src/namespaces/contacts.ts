@@ -23,11 +23,11 @@ import { UsageService } from "../openapi_client/services/UsageService.js";
 export class ContactsNamespace {
   constructor(private readonly client: GeneratedClientAdapter) {}
 
-  /** The pod's contacts, newest first. Pass the opaque `next_before` back as
-   *  `before` for the next page. */
-  list(podId: string, options: { limit?: number; before?: string } = {}) {
+  /** The pod's contacts, newest first. Pass the opaque `next_cursor` back as
+   *  `cursor` for the next page. */
+  list(podId: string, options: { limit?: number; cursor?: string } = {}) {
     return this.client.request(() =>
-      ContactsService.contactList(podId, options.limit ?? 50, options.before),
+      ContactsService.contactList(podId, options.limit ?? 50, options.cursor),
     );
   }
 
@@ -47,9 +47,14 @@ export class ContactsNamespace {
    *  WhatsApp within 24 hours of their last message there, never a handle that
    *  asked the pod to stop. Returns the line, in their channel at that handle's
    *  place (opened if new), and its delivery -- `PENDING` until it goes. */
-  outreach(podId: string, contactId: string, payload: OutreachRequest) {
+  outreach(
+    podId: string,
+    contactId: string,
+    payload: OutreachRequest,
+    options: { idempotencyKey?: string } = {},
+  ) {
     return this.client.request(() =>
-      ContactOutreachService.contactOutreachSend(podId, contactId, payload),
+      ContactOutreachService.contactOutreachSend(podId, contactId, payload, options.idempotencyKey),
     );
   }
 

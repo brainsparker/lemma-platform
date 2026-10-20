@@ -103,9 +103,9 @@ class ApprovalExecutor:
                 name=tool_name,
                 arguments=args or {},
                 agent_run_id=deps.agent_run_id,
-                # An approved answer to a question from outside the pod is a
-                # `answer_question` call -- a tool the run carries as a
-                # capability, not in a toolset this would otherwise assemble.
+                # The approved call may be `answer_question` -- carried by a
+                # run with questions waiting on its member as a capability,
+                # not in a toolset this would otherwise assemble.
                 include_question_tools=True,
             )
         except Exception as exc:  # noqa: BLE001 - graceful tool-error boundary

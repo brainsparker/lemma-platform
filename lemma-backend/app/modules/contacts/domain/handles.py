@@ -5,11 +5,12 @@ an opt-out keyed by the handle find them again: ``+1 (415) 555-0100``, typed
 by a member, and ``14155550100``, as WhatsApp names the sender, are one number.
 
 * **Phones** are E.164 (``+14155550100``), read by ``phonenumbers``. A number
-  written without ``+`` is tried in the pod's region first (no pod carries one
-  yet: ``contacts_default_phone_region`` stands in) and then as international,
-  which is how every platform that vouches for a number sends it. One that
-  parses as neither keeps its digits behind a ``+`` -- a platform vouched for
-  it, so it still names somebody.
+  written without ``+`` -- typed by a member -- is tried in the pod's region
+  first (no pod carries one yet: ``contacts_default_phone_region`` stands in)
+  and then as international. A number a platform vouches for is international
+  already, so its caller writes the ``+`` (WhatsApp sends none) and it is never
+  read in the pod's region. One that parses as neither keeps its digits behind
+  a ``+`` -- a platform vouched for it, so it still names somebody.
 * **Email** addresses are trimmed and case-folded.
 * **Host** identities are ``host:{issuer}:{subject}``: a signed-in user of a
   customer's product, as named by the product (``issuer``) that signed for

@@ -169,9 +169,6 @@ const SPACE_TABS: Tab[] = ([["home", "Home"], ["pages", "Pages"], ["apps", "Apps
 
 export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoStep?: number; demoRevision?: number; onPreviewPainted?: () => void } = {}) {
     const preview = isLandingPreview();
-    /* Channels took Groups' place, behind the flag Groups had: whoever saw
-       one sees the other, and nobody new sees either until it is on. */
-    const channelsOn = useFeature("groups");
     const contactsOn = useFeature("contacts");
     const [previewPod, setPreviewPod] = useState<string | null>("kit");
     const pathname = usePathname();
@@ -1951,7 +1948,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                     ) : tab.view === "workflows" ? (
                                         <WorkflowsPage pod={pod} pods={pods.data ?? []} onOpenWorkflow={openWorkflow} onOpenRun={openRun} onAsk={chat.prompt} onLearn={() => setGuideOpen(true)} />
                                     ) : tab.view === "channels" ? (
-                                        channelsOn ? <ChannelsPage pod={pod} onOpenChannel={openChannel} onConnect={() => setReaching(true)} /> : <NotSwitchedOn what="Channels" />
+                                        <ChannelsPage pod={pod} onOpenChannel={openChannel} onConnect={() => setReaching(true)} />
                                     ) : tab.view === "contacts" ? (
                                         contactsOn ? <ContactsPage pod={pod} /> : <NotSwitchedOn what="Contacts" />
                                     ) : <AllView
@@ -2008,7 +2005,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                     </div>
                                 </Pane>
                             ))}
-                            {channelsOn && allTabs.filter((tab): tab is Extract<Tab, {kind: "channel"}> => tab.kind === "channel").map(tab => (
+                            {allTabs.filter((tab): tab is Extract<Tab, {kind: "channel"}> => tab.kind === "channel").map(tab => (
                                 <Pane className="pane channel-pane" key={pod.id + tab.id} {...paneProps(tab.id)}>
                                     <ChannelPage
                                         pod={pod}

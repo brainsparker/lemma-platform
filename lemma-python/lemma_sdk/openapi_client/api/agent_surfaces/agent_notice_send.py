@@ -10,20 +10,25 @@ from ...client import AuthenticatedClient, Client
 from ...models.error_response import ErrorResponse
 from ...models.notice_request import NoticeRequest
 from ...models.notice_response import NoticeResponse
-from ...types import Response
+from ...types import UNSET, Response, Unset
 
 
 def _get_kwargs(
     pod_id: UUID,
+    member: str,
     *,
     body: NoticeRequest,
+    idempotency_key: None | str | Unset = UNSET,
 ) -> dict[str, Any]:
     headers: dict[str, Any] = {}
+    if not isinstance(idempotency_key, Unset):
+        headers["Idempotency-Key"] = idempotency_key
 
     _kwargs: dict[str, Any] = {
         "method": "post",
-        "url": "/pods/{pod_id}/notices".format(
+        "url": "/pods/{pod_id}/members/{member}/notices".format(
             pod_id=quote(str(pod_id), safe=""),
+            member=quote(str(member), safe=""),
         ),
     }
 
@@ -67,16 +72,21 @@ def _build_response(
 
 def sync_detailed(
     pod_id: UUID,
+    member: str,
     *,
     client: AuthenticatedClient | Client,
     body: NoticeRequest,
+    idempotency_key: None | str | Unset = UNSET,
 ) -> Response[ErrorResponse | NoticeResponse]:
     """Send Notice
 
-     Tell another member of the pod something, in their own channel.
+     Tell another member of the pod something, in their own channel. The
+    same `Idempotency-Key` from the same member is the same notice.
 
     Args:
         pod_id (UUID):
+        member (str): The member to tell: a pod member id, user id, or email address.
+        idempotency_key (None | str | Unset):
         body (NoticeRequest):
 
     Raises:
@@ -89,7 +99,9 @@ def sync_detailed(
 
     kwargs = _get_kwargs(
         pod_id=pod_id,
+        member=member,
         body=body,
+        idempotency_key=idempotency_key,
     )
 
     response = client.get_httpx_client().request(
@@ -101,16 +113,21 @@ def sync_detailed(
 
 def sync(
     pod_id: UUID,
+    member: str,
     *,
     client: AuthenticatedClient | Client,
     body: NoticeRequest,
+    idempotency_key: None | str | Unset = UNSET,
 ) -> ErrorResponse | NoticeResponse | None:
     """Send Notice
 
-     Tell another member of the pod something, in their own channel.
+     Tell another member of the pod something, in their own channel. The
+    same `Idempotency-Key` from the same member is the same notice.
 
     Args:
         pod_id (UUID):
+        member (str): The member to tell: a pod member id, user id, or email address.
+        idempotency_key (None | str | Unset):
         body (NoticeRequest):
 
     Raises:
@@ -123,23 +140,30 @@ def sync(
 
     return sync_detailed(
         pod_id=pod_id,
+        member=member,
         client=client,
         body=body,
+        idempotency_key=idempotency_key,
     ).parsed
 
 
 async def asyncio_detailed(
     pod_id: UUID,
+    member: str,
     *,
     client: AuthenticatedClient | Client,
     body: NoticeRequest,
+    idempotency_key: None | str | Unset = UNSET,
 ) -> Response[ErrorResponse | NoticeResponse]:
     """Send Notice
 
-     Tell another member of the pod something, in their own channel.
+     Tell another member of the pod something, in their own channel. The
+    same `Idempotency-Key` from the same member is the same notice.
 
     Args:
         pod_id (UUID):
+        member (str): The member to tell: a pod member id, user id, or email address.
+        idempotency_key (None | str | Unset):
         body (NoticeRequest):
 
     Raises:
@@ -152,7 +176,9 @@ async def asyncio_detailed(
 
     kwargs = _get_kwargs(
         pod_id=pod_id,
+        member=member,
         body=body,
+        idempotency_key=idempotency_key,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -162,16 +188,21 @@ async def asyncio_detailed(
 
 async def asyncio(
     pod_id: UUID,
+    member: str,
     *,
     client: AuthenticatedClient | Client,
     body: NoticeRequest,
+    idempotency_key: None | str | Unset = UNSET,
 ) -> ErrorResponse | NoticeResponse | None:
     """Send Notice
 
-     Tell another member of the pod something, in their own channel.
+     Tell another member of the pod something, in their own channel. The
+    same `Idempotency-Key` from the same member is the same notice.
 
     Args:
         pod_id (UUID):
+        member (str): The member to tell: a pod member id, user id, or email address.
+        idempotency_key (None | str | Unset):
         body (NoticeRequest):
 
     Raises:
@@ -185,7 +216,9 @@ async def asyncio(
     return (
         await asyncio_detailed(
             pod_id=pod_id,
+            member=member,
             client=client,
             body=body,
+            idempotency_key=idempotency_key,
         )
     ).parsed

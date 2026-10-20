@@ -20,6 +20,7 @@ from websockets.exceptions import ConnectionClosed
 
 from app.core.authorization.authz_epoch import pod_authz_epoch, pod_grants_epoch
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.core.live import socket as live_socket_module
 from app.core.live.config import live_settings
 from app.modules.channels.contracts import NewLine, Sender, post
 from app.modules.channels.infrastructure.inbox import InboxReads
@@ -150,6 +151,51 @@ async def test_a_member_taken_out_of_the_pod_stops_hearing_a_public_group(
         await say(pod, channel["id"], "after they left the pod")
         await live.quiet(1.5)
         assert "after they left the pod" not in _texts(live)
+
+
+async def _closed_with(live: LiveClient, *, timeout: float = 20) -> int | None:
+    """The code the server closes the socket with; frames before it are kept."""
+
+    async def _until_closed() -> int | None:
+        try:
+            while True:
+                await live.recv(timeout)
+        except ConnectionClosed as closed:
+            return closed.rcvd.code if closed.rcvd is not None else None
+
+    return await asyncio.wait_for(_until_closed(), timeout)
+
+
+async def test_taken_out_of_the_pod_a_socket_is_closed_on_its_next_presence_call(
+    pod: Pod, backend_server
+) -> None:
+    async with (
+        live_socket(backend_server, pod.id, pod.user["token"]) as live,
+        live_socket(backend_server, pod.id, pod.owner["token"]) as owner,
+    ):
+        assert (await live.call("presence"))["type"] == "result"
+        await _remove(pod, pod.user["id"])
+        await live.send(op="call", id="p", method="presence", params={})
+        assert await _closed_with(live) == 4403
+        assert not [frame for frame in live.frames if frame.get("id") == "p"]
+        # The slot and presence are let go as the socket's handler ends,
+        # just after the close frame is sent.
+        for _ in range(20):
+            online = (await owner.call("presence"))["result"]["online"]
+            if pod.user["id"] not in online:
+                break
+            await owner.quiet(0.25)
+        assert pod.user["id"] not in online
+
+
+async def test_taken_out_of_the_pod_an_idle_socket_is_closed_on_its_refresh(
+    pod: Pod, backend_server, monkeypatch
+) -> None:
+    """Saying nothing keeps nothing: the socket's slot refresh asks again."""
+    monkeypatch.setattr(live_socket_module, "SLOT_REFRESH_SECONDS", 0.5)
+    async with live_socket(backend_server, pod.id, pod.user["token"]) as live:
+        await _remove(pod, pod.user["id"])
+        assert await _closed_with(live) == 4403
 
 
 async def test_losing_contact_read_ends_a_contacts_channel_subscription(

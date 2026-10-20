@@ -891,6 +891,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'live.call.failed': EventSpec('error', frozenset({'error_type', 'method', 'pod_id'})),
     'live.call_limit_unavailable.degraded': EventSpec('warning', frozenset({'error_type', 'method'})),
     'live.limit_overrides_unparseable.degraded': EventSpec('warning', frozenset()),
+    'live.pod_access_check_unavailable.degraded': EventSpec('warning', frozenset({'error_type', 'pod_id'})),
     'live.presence_unavailable.degraded': EventSpec('warning', frozenset({'error_type'})),
     'live.session_check_unavailable.degraded': EventSpec('warning', frozenset({'error_type'})),
     'live.session_end_unannounced.degraded': EventSpec('warning', frozenset({'error_type'})),

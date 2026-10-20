@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.channels.domain.entities import (
     ChannelMessage,
+    QuestionState,
     Sender,
     SenderKind,
 )
@@ -412,31 +413,61 @@ class LineRepository:
         return [message_entity(row[0], question=row[1]) for row in rows]
 
     async def changed_since(
-        self, channel_id: UUID, *, after_rev: int, limit: int
+        self,
+        channel_id: UUID,
+        *,
+        after_rev: int,
+        limit: int,
+        up_to_rev: int | None = None,
+        asked_after_seq: int | None = None,
     ) -> list[ChannelMessage]:
-        """Lines of the channel changed after its change ``after_rev``, in the
-        order they last changed -- thread replies too. What a live subscriber
-        resuming from there is sent."""
+        """Lines of the channel changed after its change ``after_rev`` and up
+        to ``up_to_rev``, in the order they last changed -- thread replies
+        too. What a live subscriber resuming from there is sent.
+
+        ``limit`` is the caller's own, not ``MAX_LINES``: the live topic asks
+        for one more than its batch to learn there are too many, and a cap
+        under that would answer "all of them" with some left out.
+        ``asked_after_seq``: only lines newer than it holding a question still
+        open -- what the inbox looks for new questions in."""
         change = ChannelChangeModel
         last = func.max(change.rev).label("last")
+        window = [
+            change.channel_id == channel_id,
+            change.rev > after_rev,
+            change.message_id.is_not(None),
+        ]
+        if up_to_rev is not None:
+            window.append(change.rev <= up_to_rev)
         moved = (
             select(change.message_id, last)
-            .where(
-                change.channel_id == channel_id,
-                change.rev > after_rev,
-                change.message_id.is_not(None),
-            )
+            .where(*window)
             .group_by(change.message_id)
             .order_by(last)
-            .limit(max(1, min(limit, MAX_LINES)))
-            .subquery()
         )
+        if asked_after_seq is not None:
+            asked = ChannelQuestionModel
+            moved = moved.where(
+                change.message_id.in_(
+                    select(asked.message_id)
+                    .join(
+                        ChannelMessageModel,
+                        ChannelMessageModel.id == asked.message_id,
+                    )
+                    .where(
+                        asked.channel_id == channel_id,
+                        ChannelMessageModel.seq > asked_after_seq,
+                        asked.state == QuestionState.OPEN.value,
+                    )
+                )
+            )
+        page = moved.limit(max(1, limit)).subquery()
         rows = list(
             await self.session.execute(
                 _with_question()
-                .join(moved, moved.c.message_id == ChannelMessageModel.id)
+                .join(page, page.c.message_id == ChannelMessageModel.id)
                 .where(ChannelMessageModel.channel_id == channel_id)
-                .order_by(moved.c.last)
+                .order_by(page.c.last)
             )
         )
         return await self._with_replies(rows)

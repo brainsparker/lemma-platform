@@ -142,12 +142,13 @@ async def test_a_function_time_decision_form_flow_runs_on_work_items(
     assert current["active_wait"]["wait_type"] == "HUMAN"
     assert current["execution_context"]["triage"]["answer"] == "yes"
     assert flows.decisions.asked == 1
-    # HUMAN: the assignee's notice went out as a delivery job.
+    # HUMAN: the form is a line waiting on the assignee, in their own channel.
     assert await _items(flows, "workflow.notify_form") == 0
     assert (
         await flows.scalar(
-            "SELECT count(*) FROM notifications WHERE origin_id = :run",
-            run=UUID(run["id"]),
+            "SELECT count(*) FROM channel_questions WHERE kind = 'FORM'"
+            " AND ref LIKE :ref",
+            ref=f"wf:{run['id']}:%",
         )
         == 1
     )

@@ -21,6 +21,10 @@ def _register_work() -> None:
     # transaction that finished the run (API on a stop, worker otherwise).
     import app.modules.workflow.events.agent_resume_work  # noqa: F401
 
+    # Every process: what answering a form on its line in a channel does
+    # (``answers_for("wf")``) -- the API takes the answer.
+    import app.modules.workflow.infrastructure.form_questions  # noqa: F401
+
 
 def _register_periodic_work() -> None:
     import app.modules.workflow.events.periodic_work  # noqa: F401

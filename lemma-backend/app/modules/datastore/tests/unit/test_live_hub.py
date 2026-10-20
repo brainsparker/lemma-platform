@@ -16,25 +16,32 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from app.modules.datastore.config_live import LiveSettings
-from app.modules.datastore.domain.live import (
-    LiveHubUnavailable,
-    ChangePosition,
+from app.core.live.config import LiveSettings
+from app.core.live.connection import LiveConnection
+from app.core.live.protocol import (
     LiveAccessDenied,
+    LiveErrorCode,
+    LiveUnavailable as LiveHubUnavailable,
+    SubscribeRequest as CoreSubscribeRequest,
+)
+from app.core.live.socket import LiveDispatcher
+from app.core.live.topics import LiveContribution, LiveRegistry
+from app.modules.datastore.domain.live import (
+    ChangePosition,
     LiveChange,
     LiveCursorExpired,
-    LiveErrorCode,
     LiveOp,
     LivePage,
     LiveTable,
     RowPayload,
     SubscribeRequest,
     UnsubscribedReason,
+    records_request,
 )
-from app.modules.datastore.services.live.connection import LiveConnection
 from app.modules.datastore.services.live import hub_start
 from app.modules.datastore.services.live.hub import PodHub
 from app.modules.datastore.services.live.registry import LiveHubRegistry
+from app.modules.datastore.services.live.subscription import LegacyFrames
 
 pytestmark = [pytest.mark.unit, pytest.mark.asyncio]
 
@@ -196,6 +203,21 @@ class Socket:
         ]
 
 
+class RigTopic:
+    """The ``records`` topic over the rig's own hubs, not the process's."""
+
+    name = "records"
+
+    def __init__(self, registry: LiveHubRegistry) -> None:
+        self.registry = registry
+
+    async def subscribe(
+        self, connection: LiveConnection, request: CoreSubscribeRequest
+    ) -> None:
+        hub = await self.registry.hub(connection.pod_id)
+        await hub.subscribe(connection, records_request(request))
+
+
 @dataclass
 class Rig:
     log: MemoryLog
@@ -223,16 +245,15 @@ class Rig:
             send_text=socket.send_text,
             queue_bytes=queue_bytes,
         )
-        (await self.hub()).attach(connection)
         self.senders.append(asyncio.create_task(connection.run_sender()))
         return connection, socket
 
     async def subscribe(self, connection: LiveConnection, **request: object) -> None:
-        hub = await self.hub()
-        await hub.subscribe(
-            connection,
-            SubscribeRequest(op="subscribe", **request),  # type: ignore[arg-type]
-            max_subscriptions=3,
+        """Through the socket's own dispatch, as a client's frame arrives."""
+        topics = LiveRegistry()
+        topics.install(LiveContribution(topics=(RigTopic(self.registry),)))
+        await LiveDispatcher(max_subscriptions=3, registry=topics).handle(
+            connection, json.dumps({"op": "subscribe", "topic": "records", **request})
         )
 
     async def publish(self) -> None:
@@ -342,7 +363,6 @@ async def test_resume_from_since_is_gap_free_and_not_duplicated(rig: Rig) -> Non
 
     # The client drops; three changes land while it is away.
     first.close()
-    (await rig.hub()).detach(first)
     for rid in ("r2", "r3", "r4"):
         rig.log.write(tickets, "insert", rid)
     await rig.publish()
@@ -479,8 +499,7 @@ async def test_ops_filter_and_unsubscribe(rig: Rig) -> None:
     await rig.settle()
     assert [c["op"] for f in socket.of("changes") for c in f["changes"]] == ["delete"]
 
-    hub = await rig.hub()
-    assert hub.unsubscribe(connection, "s")
+    connection.offer_unsubscribed("s", "client")
     rig.log.write(tickets, "delete", "r9")
     await rig.publish()
     await rig.settle()
@@ -490,9 +509,7 @@ async def test_ops_filter_and_unsubscribe(rig: Rig) -> None:
 async def test_idle_hub_is_reaped_and_a_new_one_starts_at_now(rig: Rig) -> None:
     connection, _ = await rig.connect()
     await rig.subscribe(connection, id="s", table="tickets")
-    hub = await rig.hub()
     connection.close()
-    hub.detach(connection)
     rig.log.write(rig.access.tables["tickets"], "insert", "while-nobody-watched")
     await asyncio.sleep(0.3)
     assert rig.pod_id not in rig.registry.hubs()
@@ -514,15 +531,14 @@ async def test_legacy_connection_frames_one_change_per_frame(rig: Rig) -> None:
         user_id=uuid4(),
         send_text=socket.send_text,
         queue_bytes=1 << 20,
-        legacy=True,
+        frames=LegacyFrames(),
     )
     hub = await rig.hub()
-    hub.attach(connection)
     rig.senders.append(asyncio.create_task(connection.run_sender()))
     await hub.subscribe(
         connection,
-        SubscribeRequest(op="subscribe", id="changes", table="tickets", since="1712-0"),
-        max_subscriptions=1,
+        SubscribeRequest(id="changes", table="tickets", since="1712-0"),
+        legacy=True,
     )
     rig.log.write(
         rig.access.tables["tickets"], "insert", "r1", row={"id": "r1", "body": "b"}

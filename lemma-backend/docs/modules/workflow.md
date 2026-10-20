@@ -12,9 +12,9 @@ work, and resumes from function, agent, schedule, or user-form events.
 | Contribution | Behavior |
 | --- | --- |
 | API routers | Workflow CRUD/graph/visualization, run create/list/detail/cancel/form/visualization |
-| Work kinds (FAST) | `workflow.resume` (a function run ended, or a timer is due), `workflow.wait_expire` (a wait outlived its ceiling), `workflow.admit` (room appeared outside a finishing run), `workflow.start` (another module asks for a run) |
+| Work kinds (FAST) | `workflow.resume` (a function run ended, or a timer is due), `workflow.wait_expire` (a wait outlived its ceiling), `workflow.admit` (room appeared outside a finishing run), `workflow.start` (another module asks for a run), `workflow.form_expired` (a form's question expired in its assignee's inbox: the run fails as a form nobody answered) |
 | Work kinds (JOB) | `workflow.decide` (ask a decision node's question), `workflow.notify_form` (tell a form's assignee) |
-| Fact subscription | `FunctionRunFinished` -> `workflow.resume` |
+| Fact subscription | `FunctionRunFinished` -> `workflow.resume`; channels' `ChannelQuestionClosed` (an expired `wf:` question) -> `workflow.form_expired` |
 | Facts emitted | `WorkflowRunFinished` in every terminal transaction; `WorkflowStartRefused` when a start item gives up |
 | Fact subscription | `AgentRunFinished` -> `workflow.resume_for_agent`, for a run started by an AGENT step |
 | Periodic work | `workflow.waits_prune` (hourly) |

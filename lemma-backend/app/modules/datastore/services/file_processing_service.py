@@ -30,7 +30,7 @@ from uuid import UUID
 
 
 from app.core.api.uploads import upload_source_sha256
-from app.core.authorization.authz_epoch import bump_pod_authz_epoch
+from app.core.authorization.authz_epoch import bump_pod_files_epoch
 from app.core.log.log import get_logger
 from app.core.concurrency.offload import run_blocking
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
@@ -223,7 +223,7 @@ class DatastoreFileProcessingService:
                     file_metadata=merged_metadata,
                 )
                 if completed:
-                    uow.after_commit(lambda: bump_pod_authz_epoch(self.pod_id))
+                    uow.after_commit(lambda: bump_pod_files_epoch(self.pod_id))
             if completed:
                 await self._drop_previous_revision(snapshot)
         except _StaleProcessingClaim:

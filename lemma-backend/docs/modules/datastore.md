@@ -42,15 +42,16 @@ Operator configuration for local, GCS, S3, and Azure storage is documented in
 | `/pods/{pod_id}/datastore/query` | Restricted ad-hoc datastore query under the RLS subject role |
 | `/pods/{pod_id}/datastore/files` | Upload, folders, metadata/content update, Markdown attachment, tree, search, preview/download |
 | `/public/datastore/files`, `/public/s/{code}` | Signed file delivery paths (`/s/{code}` is a legacy alias until 2026-10-17) |
-| `/pods/{pod_id}/live` | The pod's live socket: one per client and pod, many record subscriptions on it (see below) |
+| `/pods/{pod_id}/live` | The pod's live socket ([live.md](live.md)); this module provides its `records` topic (see below) |
 | `/pods/{pod_id}/datastore/changes` | The previous one-table change socket, kept for one release as one implicit subscription on the same hub |
 
 ## Live socket
 
-A client opens one websocket per pod and multiplexes subscriptions on it
-(`subscribe` / `unsubscribe` / `ping`; the server answers `ready`, `subscribed`,
-`changes`, `resync`, `error`, `unsubscribed`). The frames are defined in
-`domain/live.py`.
+The pod's live socket is core's ([live.md](live.md): frames, limits, close
+codes). This module provides its `records` topic -- `{"op":"subscribe",
+"topic":"records","table":…,"ops":…,"when":…,"since":…}`, answered with
+`changes` frames -- defined in `domain/live.py` and registered from
+`module.py` (`services/live/topic.py`).
 
 Each API process keeps one hub per watched pod (`services/live/hub.py`). The hub
 holds one Redis Pub/Sub subscription to `pod:<id>:changes` (a wake, published
@@ -61,8 +62,12 @@ A lost wake costs latency only: the hub also reads on an idle poll.
 
 - **Visibility**: table read permission is checked at subscribe. RLS rows reach
   only their owner (the change row carries `owner_user_id`). When the pod's
-  authorization epoch moves, the hub re-checks every subscription and ends the
-  ones that lost their table with `unsubscribed`.
+  grants epoch moves (file writes do not move it), and every
+  `LIVE_AUTHZ_RECHECK_SECONDS` regardless, the hub re-checks every
+  subscription and ends the ones that lost their table with `unsubscribed`. A
+  re-check that fails is made again on the next pass. The previous
+  `/datastore/changes` socket has no `unsubscribed` frame, so there losing the
+  table closes the socket with `4403`.
 - **`when`**: a subscription on one table may carry `when` conditions in the
   trigger grammar (`app/core/domain/record_conditions.py`, the one evaluator
   both use), limited to its value operators (`equals`, `not_equals`, `in`,
@@ -77,10 +82,7 @@ A lost wake costs latency only: the hub also reads on an idle poll.
 - **Back-pressure**: each socket has a bounded send queue
   (`LIVE_SOCKET_QUEUE_BYTES`); overflow replaces its queued change frames with
   one `resync` per subscription. A slow client never slows the hub.
-- **Limits**: subscriptions per socket and sockets per user per pod
-  (`LIVE_MAX_SUBSCRIPTIONS_PER_SOCKET`, `LIVE_MAX_SOCKETS_PER_USER_PER_POD`,
-  per-pod overrides in `LIVE_LIMIT_OVERRIDES_JSON`, or a provider installed with
-  `install_live_limit_port`). A socket past the per-user limit closes with 4429.
+- **Limits** are the socket's, in [live.md](live.md#limits).
 
 ## Record change log
 

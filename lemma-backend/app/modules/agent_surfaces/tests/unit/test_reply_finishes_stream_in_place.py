@@ -2,10 +2,11 @@
 
 The run's observer streams the answer as the model writes it and, when the run
 completed with an answer, leaves that stream open and *sealed* in its
-``live_display`` record. The reply (sent by the destination pump) closes the
-same message with whatever the stream does not show yet. Anything else -- no
-record, a stream that disagrees with the answer and was never sealed, a close
-the platform refused -- takes the stream down and posts the answer.
+``live_display`` record. The answer's channel delivery (``run_answer_sends``)
+closes the same message with whatever the stream does not show yet, and
+records that message's id -- it posts nothing. Anything else -- no record, a
+stream that disagrees with the answer and was never sealed, a close the
+platform refused -- takes the stream down and posts the answer.
 """
 
 from __future__ import annotations
@@ -21,15 +22,15 @@ from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 from app.modules.agent.contracts import run_replies
 from app.modules.agent_surfaces.caches import LIVE_DISPLAYS, surface_caches
+from app.modules.agent_surfaces.domain.envelope import DeliveryReceipt, PartDelivery
 from app.modules.agent_surfaces.domain.models import (
     ProgressHandle,
     ProgressHandleKind,
     StreamAppendResult,
 )
 from app.modules.agent_surfaces.services import live_display
-from app.modules.agent_surfaces.services.delivery_sender import (
-    PlatformDeliverySender,
-)
+from app.modules.agent_surfaces.services import run_answer_sends
+from app.modules.agent_surfaces.services.run_answer_sends import RunAnswerSends
 from app.modules.agent_surfaces.services.live_display import (
     record_live_display,
     remainder_after,
@@ -38,6 +39,7 @@ from app.modules.agent_surfaces.services.live_display import (
 from app.modules.agent_surfaces.services.progress_observer import (
     SurfaceAgentRunProgressObserver,
 )
+from app.modules.channels.contracts import SenderKind
 
 pytestmark = pytest.mark.asyncio
 
@@ -84,9 +86,11 @@ class _Egress:
         self.finish_result = finish_result
         self.progress = _Progress(self)
 
-    async def send_agent_message_for_conversation(self, **kwargs):
+    async def deliver_message(self, **kwargs):
         self.posted.append(kwargs)
-        return True
+        return DeliveryReceipt(
+            parts={"text": PartDelivery.NATIVE}, external_message_id="1700000009.1"
+        )
 
 
 class _Uow:
@@ -94,23 +98,51 @@ class _Uow:
         return self
 
     async def __aenter__(self):
-        return SimpleNamespace(session=None)
+        return SimpleNamespace(session=None, commit=_nothing)
 
     async def __aexit__(self, *exc):
         return None
 
 
-def _sender(egress: _Egress) -> PlatformDeliverySender:
-    return PlatformDeliverySender(uow_factory=_Uow(), egress_factory=lambda _u: egress)
+@pytest.fixture(autouse=True)
+def _a_completed_run(monkeypatch):
+    """The run answered; the delivery's id notes go nowhere (no database)."""
+    noted: list[str] = []
+
+    async def note(_uow, _delivery_id, *, external_message_id):
+        noted.append(external_message_id)
+
+    monkeypatch.setattr(
+        run_answer_sends, "run_reply_material", _material("COMPLETED", "answer")
+    )
+    monkeypatch.setattr(run_answer_sends, "delivery_noted", note)
+
+    async def unnote(_uow, _delivery_id):
+        noted.append(None)
+
+    monkeypatch.setattr(run_answer_sends, "delivery_unnoted", unnote)
+    monkeypatch.setattr(run_answer_sends, "discard_display_paths", _nothing)
+    return noted
 
 
-def _row(run_id, text: str):
-    return SimpleNamespace(
-        id=uuid4(),
+async def _nothing(*_args, **_kwargs) -> None:
+    return None
+
+
+async def _send(egress: _Egress, run_id, text: str):
+    """The answer line's delivery to a Slack place, sent."""
+    conversation_id = uuid4()
+    line = SimpleNamespace(
         agent_run_id=run_id,
-        surface_id=None,
-        target={"kind": "conversation", "conversation_id": str(uuid4())},
-        content={"text": text, "purpose": "answer"},
+        conversation_id=conversation_id,
+        sender=SimpleNamespace(kind=SenderKind.AGENT),
+    )
+    return await RunAnswerSends(_Uow(), egress_for=lambda _u: egress).send(
+        delivery=SimpleNamespace(id=uuid4()),
+        line=line,
+        platform="SLACK",
+        text=text,
+        metadata={},
     )
 
 
@@ -160,7 +192,9 @@ async def test_an_observer_that_never_seals_is_waited_for_only_so_long() -> None
 # --- the sender ----------------------------------------------------------------
 
 
-async def test_the_answer_closes_the_sealed_stream_with_what_is_left() -> None:
+async def test_the_answer_closes_the_sealed_stream_with_what_is_left(
+    _a_completed_run,
+) -> None:
     run_id = uuid4()
     await record_live_display(
         run_id,
@@ -170,29 +204,41 @@ async def test_the_answer_closes_the_sealed_stream_with_what_is_left() -> None:
         sealed=True,
     )
     egress = _Egress()
-    result = await _sender(egress)(_row(run_id, "Here is the answer."))
+    result = await _send(egress, run_id, "Here is the answer.")
 
-    assert result.delivered
+    assert result.sent
     assert [call["message"] for call in egress.finished] == ["answer."]
     assert egress.finished[0]["progress_handle"].message_id == STREAM.message_id
     assert egress.finished[0]["already_streamed"] is True
     assert egress.posted == [] and egress.cleared == []
+    # The answer is the stream's message: its id is the delivery's.
+    assert result.external_message_id == STREAM.message_id
+    # Noted before the close: a sender dying after it leaves it known sent.
+    assert _a_completed_run == [STREAM.message_id]
     # Finished: a later look finds nothing left to close.
     assert await take_live_display(run_id, wait_seconds=0) is None
 
 
-async def test_a_refused_close_takes_the_stream_down_and_posts_the_answer() -> None:
+async def test_a_refused_close_takes_the_stream_down_and_posts_the_answer(
+    _a_completed_run,
+) -> None:
     run_id = uuid4()
     await record_live_display(
         run_id, conversation_id=uuid4(), handle=STREAM, streamed="Here", sealed=True
     )
     egress = _Egress(finish_result=False)
-    result = await _sender(egress)(_row(run_id, "Here is the answer."))
+    result = await _send(egress, run_id, "Here is the answer.")
 
-    assert result.delivered
+    assert result.sent
     assert len(egress.cleared) == 1
     assert [call["message"] for call in egress.posted] == ["Here is the answer."]
+    # The id is the new message's, not the stream's that was taken down.
+    assert result.external_message_id == "1700000009.1"
     assert await take_live_display(run_id, wait_seconds=0) is None
+    # The stream's id, noted before the close, is forgotten once the stream
+    # is gone -- a sender dying now leaves no sign the answer arrived -- and
+    # the new message's is noted as the platform answers.
+    assert _a_completed_run[-2:] == [None, "1700000009.1"]
 
 
 async def test_an_unsealed_stream_that_disagrees_is_not_trusted(monkeypatch) -> None:
@@ -202,9 +248,9 @@ async def test_an_unsealed_stream_that_disagrees_is_not_trusted(monkeypatch) -> 
         run_id, conversation_id=uuid4(), handle=STREAM, streamed="Draft that was"
     )
     egress = _Egress()
-    result = await _sender(egress)(_row(run_id, "Here is the answer."))
+    result = await _send(egress, run_id, "Here is the answer.")
 
-    assert result.delivered
+    assert result.sent
     assert egress.finished == []
     assert len(egress.cleared) == 1
     assert [call["message"] for call in egress.posted] == ["Here is the answer."]
@@ -213,8 +259,8 @@ async def test_an_unsealed_stream_that_disagrees_is_not_trusted(monkeypatch) -> 
 async def test_without_a_stream_the_answer_is_posted(monkeypatch) -> None:
     monkeypatch.setattr(live_display, "SEAL_WAIT_SECONDS", 0.0)
     egress = _Egress()
-    result = await _sender(egress)(_row(uuid4(), "Here is the answer."))
-    assert result.delivered
+    result = await _send(egress, uuid4(), "Here is the answer.")
+    assert result.sent
     assert egress.finished == [] and egress.cleared == []
     assert [call["message"] for call in egress.posted] == ["Here is the answer."]
 
@@ -224,7 +270,9 @@ async def test_without_a_stream_the_answer_is_posted(monkeypatch) -> None:
 
 def _observer(egress: _Egress) -> SurfaceAgentRunProgressObserver:
     return SurfaceAgentRunProgressObserver(
-        uow_factory=_Uow(), egress_factory=lambda _uow: egress
+        contact_gate=_no_contact_refuses,
+        uow_factory=_Uow(),
+        egress_factory=lambda _uow: egress,
     )
 
 
@@ -240,7 +288,9 @@ def _material(status: str, answer: str | None):
 
 async def _streamed_run(egress: _Egress, run_id) -> tuple:
     observer = _observer(egress)
-    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "SLACK"})
+    conversation = SimpleNamespace(
+        id=uuid4(), contact_id=None, metadata={"surface_platform": "SLACK"}
+    )
     ctx = SimpleNamespace(agent_run_id=run_id)
     await observer.on_run_started(conversation, ctx)
     observer._token_buffer = "Here is the answer."  # noqa: SLF001 - unflushed tail
@@ -276,3 +326,8 @@ async def test_a_run_with_no_answer_to_close_it_takes_the_stream_down(
 
     assert len(egress.cleared) == 1
     assert await take_live_display(run_id, wait_seconds=0) is None
+
+
+async def _no_contact_refuses(_conversation_id) -> bool:
+    """No contact here refuses the answer (``contact_stream_gate``)."""
+    return False

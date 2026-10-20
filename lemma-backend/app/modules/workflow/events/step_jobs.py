@@ -19,7 +19,7 @@ notification is keyed on (run, node), so a repeated item sends nothing twice.
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 from app.core.infrastructure.work import (
     DeadContext,
@@ -42,6 +42,7 @@ from app.modules.decisions.contracts import (
 from app.modules.decisions.contracts.decide import decision_maker
 from app.modules.workflow.api.dependencies import build_workflow_engine
 from app.modules.workflow.domain.wait import WorkflowRunWaitStatus, WorkflowRunWaitType
+from app.modules.workflow.execution.wait_ceiling import expires_at
 from app.modules.workflow.execution.wait_work import (
     WORKFLOW_DECIDE,
     WORKFLOW_NOTIFY_FORM,
@@ -146,17 +147,19 @@ async def notify_form(ctx: JobContext, payload: WaitWork) -> None:
         flow = await engine.flow_repo.get(wait.flow_id)
         if run is None:
             return
-        # The notifier records the notification and delivers it on its own
-        # unit of work; a channel that is down is recorded there, not raised.
-        await engine.notification_adapter.notify_form_assignee(
+        # A question in the assignee's inbox, in this transaction; getting it
+        # to them where they are is a delivery channels plans with the line.
+        await engine.form_questions.ask_form(
             pod_id=run.pod_id,
             run_id=run.id,
             flow_id=run.flow_id,
             node_id=wait.node_id,
+            wait_id=wait.id,
             assigned_pod_member_id=wait.assigned_pod_member_id,
             flow_name=getattr(flow, "name", None),
             schema=wait.payload.get("input_schema"),
             actor_user_id=run.user_id,
+            expires_at=expires_at(wait, now=datetime.now(UTC)),
         )
 
 

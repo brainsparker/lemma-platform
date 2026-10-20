@@ -71,6 +71,7 @@ class ConversationQueries:
         search: str | None = None,
         cursor: ConversationListCursor | UUID | None = None,
         limit: int = 20,
+        in_channel: bool | None = None,
     ) -> tuple[list[Conversation], ConversationListCursor | None]:
         """`cursor` may be a bare conversation id: a page token from before
         the list was ordered by activity. It continues after that row."""
@@ -107,6 +108,7 @@ class ConversationQueries:
             search=search,
             cursor=cursor,
             limit=limit,
+            in_channel=in_channel,
         )
         # One query for the page rather than one per row. Not inferable from
         # the status: a WAITING conversation may be waiting on a timer, and an

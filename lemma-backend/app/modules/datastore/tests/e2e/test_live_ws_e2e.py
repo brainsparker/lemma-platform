@@ -22,9 +22,9 @@ import pytest_asyncio
 from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import ConnectionClosed
 
-from app.modules.datastore.config_live import live_settings
+from app.core.live.config import live_settings
+from app.core.live.connection import LiveConnection
 from app.modules.datastore.domain.live import SubscribeRequest
-from app.modules.datastore.services.live.connection import LiveConnection
 from app.modules.datastore.services.live.registry import LiveHubRegistry
 from app.modules.datastore.services.live.access import TableLiveAccess
 from app.modules.datastore.services.live.feed import ChangeLogFeed
@@ -601,14 +601,9 @@ async def test_two_hubs_on_one_pod_both_deliver(
         queue_bytes=1 << 20,
     )
     hub = await other_process.hub(UUID(live_pod.pod_id))
-    hub.attach(connection)
     sender = asyncio.create_task(connection.run_sender())
     try:
-        await hub.subscribe(
-            connection,
-            SubscribeRequest(op="subscribe", id="t", table="tickets"),
-            max_subscriptions=5,
-        )
+        await hub.subscribe(connection, SubscribeRequest(id="t", table="tickets"))
         assert (await asyncio.wait_for(received.get(), 10))["type"] == "subscribed"
         record = await live_pod.create_record("tickets", {"body": "both"})
         theirs = await asyncio.wait_for(received.get(), 15)
@@ -617,7 +612,6 @@ async def test_two_hubs_on_one_pod_both_deliver(
         assert [c["record_id"] for c in ours["changes"]] == [record["id"]]
     finally:
         connection.close()
-        hub.detach(connection)
         sender.cancel()
         await other_process.close()
 
@@ -667,3 +661,52 @@ async def test_table_read_without_record_read_streams_no_rows(
     assert live.record_ids("v") == []
     assert live.record_ids("all") == [visible["id"]]
     assert "restricted secret" not in json.dumps(live.frames)
+
+
+async def test_old_endpoint_closes_4403_when_access_is_revoked(
+    live_pod: DatastoreApi, member_users, authenticated_client, backend_server
+) -> None:
+    """The previous socket has no frame for "unsubscribed": a reader who
+    loses the table must see the socket close, not go quiet and stay open."""
+    editor = member_users["editor"]
+    url = _ws_url(
+        backend_server, f"/pods/{live_pod.pod_id}/datastore/changes?table=tickets"
+    )
+    async with connect(
+        url, additional_headers={"Authorization": f"Bearer {editor['token']}"}
+    ) as ws:
+        ready = json.loads(await asyncio.wait_for(ws.recv(), 10))
+        assert ready["type"] == "ready"
+        members = await authenticated_client.get(f"/pods/{live_pod.pod_id}/members")
+        [member] = [
+            item
+            for item in members.json()["items"]
+            if str(item["user_id"]) == editor["id"]
+        ]
+        removed = await authenticated_client.delete(
+            f"/pods/{live_pod.pod_id}/members/{member['pod_member_id']}"
+        )
+        assert removed.status_code == 204, removed.text
+        with pytest.raises(ConnectionClosed) as closed:
+            while True:
+                await asyncio.wait_for(ws.recv(), 20)
+    assert closed.value.rcvd is not None and closed.value.rcvd.code == 4403
+
+
+async def test_sockets_opening_together_never_hold_more_than_the_limit(
+    live_pod: DatastoreApi, fixed_test_user
+) -> None:
+    """The slot is counted and taken in one step: sockets that open at once
+    cannot each see the same free slot."""
+    from app.core.live.limits import claim_socket_slot, release_socket_slot
+
+    pod_id, user_id = UUID(live_pod.pod_id), UUID(fixed_test_user["id"])
+    ids = [f"race-{index}" for index in range(12)]
+    taken = await asyncio.gather(
+        *(claim_socket_slot(pod_id, user_id, connection, 3) for connection in ids)
+    )
+    try:
+        assert sum(taken) == 3, taken
+    finally:
+        for connection in ids:
+            await release_socket_slot(pod_id, user_id, connection)

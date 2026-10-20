@@ -15,6 +15,9 @@ step instead of losing one.
 * ``workflow.wait_expire`` -- a wait outlived its ceiling (``wait_ceiling.py``):
   the run fails and the work it waited on is cancelled. Replaces the expiry
   branches of the reconciliation sweep.
+* ``workflow.form_expired`` -- a form's question in a member's inbox expired
+  (subscribed to channels' ``ChannelQuestionClosed``): the wait it asked for
+  ends as a form nobody answered, now rather than at the wait's own expiry.
 * ``workflow.admit`` -- admit a workflow's parked runs into room that did not
   come from a run ending (a raised limit, the cutover).
 * ``workflow.start`` -- start a run another module asked for (a schedule's
@@ -28,6 +31,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict
 
 from app.core.authorization.current import reset_current_context, set_current_context
 from app.core.authorization.factory import create_authorization_data_service
@@ -45,6 +50,8 @@ from app.core.infrastructure.work import (
     registry as default_registry,
 )
 from app.core.log.log import get_logger
+from app.modules.channels.contracts import QuestionAsker, QuestionState
+from app.modules.channels.contracts.facts import ChannelQuestionClosed
 from app.modules.function.contracts.run_facts import FunctionRunFinished
 from app.modules.schedule.contracts.dispatch import (
     mark_run_dispatched,
@@ -72,13 +79,16 @@ from app.modules.workflow.execution.wait_ceiling import ceiling_seconds, expiry_
 from app.modules.workflow.services.run_resume_service import RunResumeService
 from app.modules.workflow.services.schedule_start_service import ScheduleStartService
 from app.modules.workflow.execution.run_admission import admit_queued_runs
+from app.modules.workflow.infrastructure.form_questions import form_wait_id
 from app.modules.workflow.execution.wait_work import (
     WORKFLOW_ADMIT,
+    WORKFLOW_FORM_EXPIRED,
     WORKFLOW_RESUME,
     WORKFLOW_WAIT_EXPIRE,
     AdmitWork,
     ResumeWork,
     WaitWork,
+    cancel_wait_expire,
 )
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 
@@ -224,6 +234,39 @@ async def expire_wait(ctx: FastContext, payload: WaitWork) -> None:
         await engine.stop_underlying_work(wait)
 
 
+class FormExpired(BaseModel):
+    """The fields of ``ChannelQuestionClosed`` this needs; the rest are ignored."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    ref: str
+
+
+def expires_a_form(fact: ChannelQuestionClosed) -> bool:
+    return (
+        fact.state is QuestionState.EXPIRED
+        and fact.asker is QuestionAsker.WORKFLOW
+        and form_wait_id(fact.ref) is not None
+    )
+
+
+async def expire_form(ctx: FastContext, payload: FormExpired) -> None:
+    wait_id = form_wait_id(payload.ref)
+    if wait_id is None:
+        return
+    engine = _engine(ctx.uow, ctx.work)
+    wait = await engine.wait_repo.get(wait_id)
+    if (
+        wait is None
+        or wait.status != WorkflowRunWaitStatus.ACTIVE
+        or wait.wait_type is not WorkflowRunWaitType.HUMAN
+    ):
+        return
+    seconds = ceiling_seconds(wait) or 0.0
+    if await engine.fail_for_wait(wait, error=expiry_error(wait, seconds)) is not None:
+        await cancel_wait_expire(ctx.work, pod_id=wait.pod_id, wait_id=wait.id)
+
+
 async def start_workflow_run(ctx: FastContext, payload: WorkflowStartRequest) -> None:
     engine = _engine(ctx.uow, ctx.work)
     try:
@@ -347,6 +390,13 @@ def register_run_work(registry: WorkRegistry) -> None:
         retry=RetryPolicy(max_attempts=5),
     )(expire_wait)
     registry.handler(
+        kind=WORKFLOW_FORM_EXPIRED,
+        cls=WorkClass.EVENTS,
+        mode=WorkMode.FAST,
+        payload=FormExpired,
+        retry=RetryPolicy(max_attempts=5),
+    )(expire_form)
+    registry.handler(
         kind=WORKFLOW_START,
         cls=WorkClass.EVENTS,
         mode=WorkMode.FAST,
@@ -357,6 +407,13 @@ def register_run_work(registry: WorkRegistry) -> None:
 
 
 register_run_work(default_registry)
+facts.subscribe(
+    ChannelQuestionClosed,
+    kind=WORKFLOW_FORM_EXPIRED,
+    cls=WorkClass.EVENTS,
+    when=expires_a_form,
+    dedup=lambda fact: f"workflow-form-expired:{fact.message_id}",
+)
 facts.subscribe(
     FunctionRunFinished,
     kind=WORKFLOW_RESUME,

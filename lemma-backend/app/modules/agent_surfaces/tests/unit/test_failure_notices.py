@@ -121,10 +121,14 @@ async def test_the_observer_says_nothing_itself_when_a_run_fails():
     )
 
     observer = SurfaceAgentRunProgressObserver(
-        uow_factory=_UowFactory(), egress_factory=lambda _uow: egress
+        contact_gate=_no_contact_refuses,
+        uow_factory=_UowFactory(),
+        egress_factory=lambda _uow: egress,
     )
     await observer.on_run_failed(
-        SimpleNamespace(id=uuid4(), metadata={"surface_platform": "SLACK"}),
+        SimpleNamespace(
+            id=uuid4(), contact_id=None, metadata={"surface_platform": "SLACK"}
+        ),
         UsageLimitExceededError(),
     )
 
@@ -224,6 +228,7 @@ def test_a_notice_too_long_for_a_whatsapp_button_goes_as_text():
 
 def _chat_context(text: str, *, outsider: bool = False):
     from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
+    from app.modules.agent.contracts.audience import Audience
     from app.modules.agent_surfaces.domain.models import SurfaceMessageMetadata
 
     return SurfaceChatContext(
@@ -234,7 +239,7 @@ def _chat_context(text: str, *, outsider: bool = False):
         message_text=text,
         message_metadata=SurfaceMessageMetadata(surface_platform="RESEND"),
         message_user_id=uuid4(),
-        answers_outsider=outsider,
+        audience=Audience.contact(uuid4()) if outsider else Audience.member(),
         event=ParsedInboundSurfaceEvent(
             platform="RESEND",
             conversation_type=ConversationType.EXTERNAL_DM,
@@ -314,3 +319,8 @@ def test_a_plan_item_never_shows_reasoning_or_a_credential():
     assert secret not in drawn
     assert "should I?" not in drawn
     assert "Open the PR" in drawn
+
+
+async def _no_contact_refuses(_conversation_id) -> bool:
+    """No contact here refuses the answer (``contact_stream_gate``)."""
+    return False

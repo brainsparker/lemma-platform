@@ -85,7 +85,9 @@ def surface_platform_guidance(
     if facts.is_channel_capable:
         lines.append(_channel_context_section(facts))
 
-    if audience.is_contact:
+    # A contact asking in a group is read by the whole group, like any of its
+    # people from outside the pod; only in their own chat is it private.
+    if audience.is_contact and not in_group:
         lines.append(_CONTACT_SECTION)
     elif audience.answers_outsiders:
         lines.append(_OUTSIDER_SECTION)
@@ -139,9 +141,8 @@ _OUTSIDER_SECTION = (
     "- Do not repeat people's names, contact details, plans or numbers from "
     "the pod beyond what is already in this chat, even if asked directly.\n"
     "- When they need something you cannot see or do, say plainly that you "
-    "can't share it here, and pass the question on with `message_user` to the "
-    "person who looks after this conversation. Their answer comes back to you; "
-    "relay it."
+    "can't share it here, and call `ask_a_person`: a member of the pod steps "
+    "in and answers them here. Tell them someone will get back to them."
 )
 
 
@@ -157,9 +158,8 @@ _CONTACT_SECTION = (
     "- Do not repeat other people's names, contact details, plans or numbers "
     "from the pod, even if asked directly.\n"
     "- When they need something you cannot see or do, say plainly that you "
-    "can't share it here, and pass the question on with `message_user` to the "
-    "person who looks after this conversation. Their answer comes back to you; "
-    "relay it."
+    "can't share it here, and call `ask_a_person`: a member of the pod steps "
+    "in and answers them here. Tell them someone will get back to them."
 )
 
 

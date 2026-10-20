@@ -24,6 +24,7 @@ _NAME_TO_MODULE = {
     'AgentActionResponseInputSchemaType0': 'agent_action_response_input_schema_type_0',
     'AgentActionResponseMetadataType0': 'agent_action_response_metadata_type_0',
     'AgentActionResponseOutputSchemaType0': 'agent_action_response_output_schema_type_0',
+    'AgentAnswers': 'agent_answers',
     'AgentDetailResponse': 'agent_detail_response',
     'AgentDetailResponseInputSchemaType0': 'agent_detail_response_input_schema_type_0',
     'AgentDetailResponseMetadataType0': 'agent_detail_response_metadata_type_0',
@@ -61,6 +62,7 @@ _NAME_TO_MODULE = {
     'AgentRuntimeProfileResponse': 'agent_runtime_profile_response',
     'AgentRuntimeProfileResponseConfig': 'agent_runtime_profile_response_config',
     'AgentRuntimeProfileTestResponse': 'agent_runtime_profile_test_response',
+    'AgentSeat': 'agent_seat',
     'AgentSummaryResponse': 'agent_summary_response',
     'AgentSummaryResponseMetadataType0': 'agent_summary_response_metadata_type_0',
     'AgentSurfaceListResponse': 'agent_surface_list_response',
@@ -89,6 +91,7 @@ _NAME_TO_MODULE = {
     'AskablePodListResponse': 'askable_pod_list_response',
     'AskablePodResponse': 'askable_pod_response',
     'Attach': 'attach',
+    'AttentionResponse': 'attention_response',
     'AuthConfigCreateSchema': 'auth_config_create_schema',
     'AuthConfigCreateSchemaConfigType0': 'auth_config_create_schema_config_type_0',
     'AuthConfigListResponseSchema': 'auth_config_list_response_schema',
@@ -111,6 +114,26 @@ _NAME_TO_MODULE = {
     'BulkUpdateRecordsRequest': 'bulk_update_records_request',
     'BulkUpdateRecordsRequestRecordsItem': 'bulk_update_records_request_records_item',
     'BundleSourceKind': 'bundle_source_kind',
+    'CaseEventResponse': 'case_event_response',
+    'CaseEventResponseValue': 'case_event_response_value',
+    'CaseResponse': 'case_response',
+    'ChannelAnswerRequest': 'channel_answer_request',
+    'ChannelAnswerRequestAnswer': 'channel_answer_request_answer',
+    'ChannelCasesResponse': 'channel_cases_response',
+    'ChannelCreateRequest': 'channel_create_request',
+    'ChannelDetailResponse': 'channel_detail_response',
+    'ChannelEditRequest': 'channel_edit_request',
+    'ChannelKind': 'channel_kind',
+    'ChannelListResponse': 'channel_list_response',
+    'ChannelMemberListResponse': 'channel_member_list_response',
+    'ChannelMemberResponse': 'channel_member_response',
+    'ChannelMessageResponse': 'channel_message_response',
+    'ChannelMessagesResponse': 'channel_messages_response',
+    'ChannelPostRequest': 'channel_post_request',
+    'ChannelRef': 'channel_ref',
+    'ChannelResponse': 'channel_response',
+    'ChannelSourceResponse': 'channel_source_response',
+    'ChannelUpdateRequest': 'channel_update_request',
     'CodeRequest': 'code_request',
     'ColumnSchema': 'column_schema',
     'ColumnSchemaTypeParamsType0': 'column_schema_type_params_type_0',
@@ -140,6 +163,7 @@ _NAME_TO_MODULE = {
     'ContactResponse': 'contact_response',
     'ContactRow': 'contact_row',
     'ContactRowValues': 'contact_row_values',
+    'ContactStatus': 'contact_status',
     'ContactUpdateRequest': 'contact_update_request',
     'ContactsCapResponse': 'contacts_cap_response',
     'ContactsCapUpdate': 'contacts_cap_update',
@@ -201,6 +225,11 @@ _NAME_TO_MODULE = {
     'DecisionResponseAnswers': 'decision_response_answers',
     'DecisionRule': 'decision_rule',
     'DecisionUsageResponse': 'decision_usage_response',
+    'DeliveriesResponse': 'deliveries_response',
+    'DeliveryResponse': 'delivery_response',
+    'DeliveryStatus': 'delivery_status',
+    'DeliveryTarget': 'delivery_target',
+    'DeliveryTargetKind': 'delivery_target_kind',
     'DirectoryTreeNode': 'directory_tree_node',
     'DirectoryTreeResponse': 'directory_tree_response',
     'DisplaySizeRequest': 'display_size_request',
@@ -240,6 +269,7 @@ _NAME_TO_MODULE = {
     'FileDetailResponse': 'file_detail_response',
     'FileDetailResponseMetadataType0': 'file_detail_response_metadata_type_0',
     'FileListResponse': 'file_list_response',
+    'FilePart': 'file_part',
     'FileSearchRequest': 'file_search_request',
     'FileSearchResponse': 'file_search_response',
     'FileSearchResultSchema': 'file_search_result_schema',
@@ -252,9 +282,6 @@ _NAME_TO_MODULE = {
     'FirstWorkspaceRequest': 'first_workspace_request',
     'FirstWorkspaceResponse': 'first_workspace_response',
     'FirstWorkspaceResponseEntry': 'first_workspace_response_entry',
-    'FollowUpChannel': 'follow_up_channel',
-    'FollowUpRequest': 'follow_up_request',
-    'FollowUpResponse': 'follow_up_response',
     'ForeignKeySpec': 'foreign_key_spec',
     'ForgetResponse': 'forget_response',
     'FormNode': 'form_node',
@@ -291,19 +318,7 @@ _NAME_TO_MODULE = {
     'FunctionSummaryResponse': 'function_summary_response',
     'FunctionType': 'function_type',
     'GenerationSettings': 'generation_settings',
-    'GroupDetailResponse': 'group_detail_response',
-    'GroupLineResponse': 'group_line_response',
-    'GroupLinkRequest': 'group_link_request',
-    'GroupLinkResponse': 'group_link_response',
-    'GroupListResponse': 'group_list_response',
-    'GroupOwnerResponse': 'group_owner_response',
-    'GroupPersonResponse': 'group_person_response',
     'GroupPublicResponse': 'group_public_response',
-    'GroupResponse': 'group_response',
-    'GroupStartRequest': 'group_start_request',
-    'GroupTimelineResponse': 'group_timeline_response',
-    'GroupUpdateRequest': 'group_update_request',
-    'GroupWaitingResponse': 'group_waiting_response',
     'HarnessKind': 'harness_kind',
     'HistoryMessage': 'history_message',
     'HistoryResponse': 'history_response',
@@ -318,12 +333,18 @@ _NAME_TO_MODULE = {
     'ImportStartRequest': 'import_start_request',
     'ImportStatus': 'import_status',
     'ImportStatusResponse': 'import_status_response',
+    'InboxItem': 'inbox_item',
+    'InboxResponse': 'inbox_response',
+    'InboxTotals': 'inbox_totals',
     'InstallRequestInitiateSchema': 'install_request_initiate_schema',
     'InstallRequestResponseSchema': 'install_request_response_schema',
     'InstallationBindSchema': 'installation_bind_schema',
     'InstallationChoiceSchema': 'installation_choice_schema',
     'InstalledAppSummary': 'installed_app_summary',
     'JsonObject': 'json_object',
+    'LineDelivery': 'line_delivery',
+    'LinePreview': 'line_preview',
+    'LinkPart': 'link_part',
     'ListeningResponse': 'listening_response',
     'ListeningResponseState': 'listening_response_state',
     'LiteralInputBinding': 'literal_input_binding',
@@ -338,28 +359,27 @@ _NAME_TO_MODULE = {
     'ManualWorkflowStartInput': 'manual_workflow_start_input',
     'ManualWorkflowStartOutput': 'manual_workflow_start_output',
     'McpEndpointResponse': 'mcp_endpoint_response',
+    'MemberRole': 'member_role',
+    'MemberUpdateRequest': 'member_update_request',
+    'MembersAddRequest': 'members_add_request',
+    'MentionPart': 'mention_part',
+    'MentionPartKind': 'mention_part_kind',
     'MessageKind': 'message_kind',
     'MessageListResponse': 'message_list_response',
     'MessageRequest': 'message_request',
     'MessageResponse': 'message_response',
     'MessageResponseMetadataType0': 'message_response_metadata_type_0',
     'MessageResponseSchema': 'message_response_schema',
+    'MyMembershipResponse': 'my_membership_response',
+    'MyMembershipUpdate': 'my_membership_update',
     'MyUsageLimitsResponse': 'my_usage_limits_response',
     'MyUsageLimitsResponsePlanTypeType0': 'my_usage_limits_response_plan_type_type_0',
     'NavigationOrganizationResponse': 'navigation_organization_response',
     'NavigationPodResponse': 'navigation_pod_response',
     'NavigationResponse': 'navigation_response',
-    'NotificationDeliveryStatus': 'notification_delivery_status',
-    'NotificationListResponse': 'notification_list_response',
-    'NotificationOriginKind': 'notification_origin_kind',
-    'NotificationRespondRequest': 'notification_respond_request',
-    'NotificationRespondRequestDataType0': 'notification_respond_request_data_type_0',
-    'NotificationResponse': 'notification_response',
-    'NotificationResponseActionType0': 'notification_response_action_type_0',
-    'NotificationResponseResponseDataType0': 'notification_response_response_data_type_0',
-    'NotificationStatus': 'notification_status',
-    'NotificationUnreadCountResponse': 'notification_unread_count_response',
-    'NotifyMemberRequest': 'notify_member_request',
+    'NoticeRequest': 'notice_request',
+    'NoticeResponse': 'notice_response',
+    'NotifyLevel': 'notify_level',
     'OAuth2DefaultsResponseSchema': 'o_auth_2_defaults_response_schema',
     'OAuth2DefaultsResponseSchemaExtraParams': 'o_auth_2_defaults_response_schema_extra_params',
     'OpenTableRequest': 'open_table_request',
@@ -392,14 +412,20 @@ _NAME_TO_MODULE = {
     'OrganizationRole': 'organization_role',
     'OrganizationSlugAvailabilityResponse': 'organization_slug_availability_response',
     'OrganizationUpdateRequest': 'organization_update_request',
+    'OutreachDelivery': 'outreach_delivery',
+    'OutreachLine': 'outreach_line',
+    'OutreachRequest': 'outreach_request',
+    'OutreachResponse': 'outreach_response',
     'PartialApplyResponse': 'partial_apply_response',
     'PendingInteractionKind': 'pending_interaction_kind',
     'PendingInteractionListResponse': 'pending_interaction_list_response',
     'PendingInteractionResponse': 'pending_interaction_response',
     'PendingSignInResponse': 'pending_sign_in_response',
+    'PersonRef': 'person_ref',
     'PlanStepResponse': 'plan_step_response',
     'PlanStepResponseDetail': 'plan_step_response_detail',
     'PodConfig': 'pod_config',
+    'PodContactSettings': 'pod_contact_settings',
     'PodCreateRequest': 'pod_create_request',
     'PodEffectivePermissionsResponse': 'pod_effective_permissions_response',
     'PodJoinPolicy': 'pod_join_policy',
@@ -441,6 +467,13 @@ _NAME_TO_MODULE = {
     'PublishStartRequest': 'publish_start_request',
     'PublishStatus': 'publish_status',
     'PublishStatusResponse': 'publish_status_response',
+    'QuestionKind': 'question_kind',
+    'QuestionResponse': 'question_response',
+    'QuestionResponseAnswerType0': 'question_response_answer_type_0',
+    'QuestionResponseQuestion': 'question_response_question',
+    'QuestionState': 'question_state',
+    'ReadRequest': 'read_request',
+    'ReadResponse': 'read_response',
     'ReasoningEffort': 'reasoning_effort',
     'RecordAccessMode': 'record_access_mode',
     'RecordCreateResponseRecordCreate': 'record_create_response_record_create',
@@ -488,11 +521,14 @@ _NAME_TO_MODULE = {
     'ScheduledWorkflowStartOutput': 'scheduled_workflow_start_output',
     'Scope': 'scope',
     'SearchFreshness': 'search_freshness',
+    'SearchItem': 'search_item',
     'SearchMethod': 'search_method',
+    'SearchResponse': 'search_response',
     'SearchResult': 'search_result',
     'SearchVertical': 'search_vertical',
     'SendMessageRequest': 'send_message_request',
     'SendMessageRequestMetadataType0': 'send_message_request_metadata_type_0',
+    'SenderKind': 'sender_kind',
     'SessionRequest': 'session_request',
     'SessionResponse': 'session_response',
     'SetDefaultSurfaceRequest': 'set_default_surface_request',
@@ -502,6 +538,11 @@ _NAME_TO_MODULE = {
     'SignedUrlListResponse': 'signed_url_list_response',
     'SignedUrlRevokeResponse': 'signed_url_revoke_response',
     'SignedUrlSummary': 'signed_url_summary',
+    'SourceKind': 'source_kind',
+    'SourceSettingsDetailResponse': 'source_settings_detail_response',
+    'SourceSettingsResponse': 'source_settings_response',
+    'SourceSummary': 'source_summary',
+    'SourceUpdateRequest': 'source_update_request',
     'StepRecordResponse': 'step_record_response',
     'StepStatus': 'step_status',
     'SurfaceAdminConsentInfo': 'surface_admin_consent_info',
@@ -550,11 +591,15 @@ _NAME_TO_MODULE = {
     'TableOpeningResponse': 'table_opening_response',
     'TableResponse': 'table_response',
     'TableSummaryResponse': 'table_summary_response',
+    'TelegramLinkRequest': 'telegram_link_request',
+    'TelegramLinkResponse': 'telegram_link_response',
     'TelegramManagedBotSetupRequest': 'telegram_managed_bot_setup_request',
     'TelegramManagedBotSetupResponse': 'telegram_managed_bot_setup_response',
+    'ThreadResponse': 'thread_response',
     'TriggerSkipListResponse': 'trigger_skip_list_response',
     'TriggerSkipReason': 'trigger_skip_reason',
     'TriggerSkipResponse': 'trigger_skip_response',
+    'UnreadResponse': 'unread_response',
     'Update': 'update',
     'UpdateAgentHostRuntimeProfileRequest': 'update_agent_host_runtime_profile_request',
     'UpdateAgentHostRuntimeProfileRequestConfigSelectionsType0': 'update_agent_host_runtime_profile_request_config_selections_type_0',
@@ -603,6 +648,7 @@ _NAME_TO_MODULE = {
     'VariableSpecResponse': 'variable_spec_response',
     'VerifyRequest': 'verify_request',
     'VerifyTokenResponse': 'verify_token_response',
+    'Visibility': 'visibility',
     'WaitUntilNode': 'wait_until_node',
     'WaitUntilNodeConfig': 'wait_until_node_config',
     'WaitUntilNodePositionType0': 'wait_until_node_position_type_0',
@@ -618,6 +664,7 @@ _NAME_TO_MODULE = {
     'WebWidgetResponse': 'web_widget_response',
     'WebWidgetSecretResponse': 'web_widget_secret_response',
     'WebWidgetUpdateRequest': 'web_widget_update_request',
+    'WhatsAppGroupRequest': 'whats_app_group_request',
     'WidgetAnswer': 'widget_answer',
     'WidgetEmbedUrlResponse': 'widget_embed_url_response',
     'WorkflowCreateRequest': 'workflow_create_request',
@@ -668,6 +715,7 @@ if TYPE_CHECKING:
     from .agent_action_response_input_schema_type_0 import AgentActionResponseInputSchemaType0
     from .agent_action_response_metadata_type_0 import AgentActionResponseMetadataType0
     from .agent_action_response_output_schema_type_0 import AgentActionResponseOutputSchemaType0
+    from .agent_answers import AgentAnswers
     from .agent_detail_response import AgentDetailResponse
     from .agent_detail_response_input_schema_type_0 import AgentDetailResponseInputSchemaType0
     from .agent_detail_response_metadata_type_0 import AgentDetailResponseMetadataType0
@@ -705,6 +753,7 @@ if TYPE_CHECKING:
     from .agent_runtime_profile_response import AgentRuntimeProfileResponse
     from .agent_runtime_profile_response_config import AgentRuntimeProfileResponseConfig
     from .agent_runtime_profile_test_response import AgentRuntimeProfileTestResponse
+    from .agent_seat import AgentSeat
     from .agent_summary_response import AgentSummaryResponse
     from .agent_summary_response_metadata_type_0 import AgentSummaryResponseMetadataType0
     from .agent_surface_list_response import AgentSurfaceListResponse
@@ -733,6 +782,7 @@ if TYPE_CHECKING:
     from .askable_pod_list_response import AskablePodListResponse
     from .askable_pod_response import AskablePodResponse
     from .attach import Attach
+    from .attention_response import AttentionResponse
     from .auth_config_create_schema import AuthConfigCreateSchema
     from .auth_config_create_schema_config_type_0 import AuthConfigCreateSchemaConfigType0
     from .auth_config_list_response_schema import AuthConfigListResponseSchema
@@ -755,6 +805,26 @@ if TYPE_CHECKING:
     from .bulk_update_records_request import BulkUpdateRecordsRequest
     from .bulk_update_records_request_records_item import BulkUpdateRecordsRequestRecordsItem
     from .bundle_source_kind import BundleSourceKind
+    from .case_event_response import CaseEventResponse
+    from .case_event_response_value import CaseEventResponseValue
+    from .case_response import CaseResponse
+    from .channel_answer_request import ChannelAnswerRequest
+    from .channel_answer_request_answer import ChannelAnswerRequestAnswer
+    from .channel_cases_response import ChannelCasesResponse
+    from .channel_create_request import ChannelCreateRequest
+    from .channel_detail_response import ChannelDetailResponse
+    from .channel_edit_request import ChannelEditRequest
+    from .channel_kind import ChannelKind
+    from .channel_list_response import ChannelListResponse
+    from .channel_member_list_response import ChannelMemberListResponse
+    from .channel_member_response import ChannelMemberResponse
+    from .channel_message_response import ChannelMessageResponse
+    from .channel_messages_response import ChannelMessagesResponse
+    from .channel_post_request import ChannelPostRequest
+    from .channel_ref import ChannelRef
+    from .channel_response import ChannelResponse
+    from .channel_source_response import ChannelSourceResponse
+    from .channel_update_request import ChannelUpdateRequest
     from .code_request import CodeRequest
     from .column_schema import ColumnSchema
     from .column_schema_type_params_type_0 import ColumnSchemaTypeParamsType0
@@ -784,6 +854,7 @@ if TYPE_CHECKING:
     from .contact_response import ContactResponse
     from .contact_row import ContactRow
     from .contact_row_values import ContactRowValues
+    from .contact_status import ContactStatus
     from .contact_update_request import ContactUpdateRequest
     from .contacts_cap_response import ContactsCapResponse
     from .contacts_cap_update import ContactsCapUpdate
@@ -845,6 +916,11 @@ if TYPE_CHECKING:
     from .decision_response_answers import DecisionResponseAnswers
     from .decision_rule import DecisionRule
     from .decision_usage_response import DecisionUsageResponse
+    from .deliveries_response import DeliveriesResponse
+    from .delivery_response import DeliveryResponse
+    from .delivery_status import DeliveryStatus
+    from .delivery_target import DeliveryTarget
+    from .delivery_target_kind import DeliveryTargetKind
     from .directory_tree_node import DirectoryTreeNode
     from .directory_tree_response import DirectoryTreeResponse
     from .display_size_request import DisplaySizeRequest
@@ -884,6 +960,7 @@ if TYPE_CHECKING:
     from .file_detail_response import FileDetailResponse
     from .file_detail_response_metadata_type_0 import FileDetailResponseMetadataType0
     from .file_list_response import FileListResponse
+    from .file_part import FilePart
     from .file_search_request import FileSearchRequest
     from .file_search_response import FileSearchResponse
     from .file_search_result_schema import FileSearchResultSchema
@@ -896,9 +973,6 @@ if TYPE_CHECKING:
     from .first_workspace_request import FirstWorkspaceRequest
     from .first_workspace_response import FirstWorkspaceResponse
     from .first_workspace_response_entry import FirstWorkspaceResponseEntry
-    from .follow_up_channel import FollowUpChannel
-    from .follow_up_request import FollowUpRequest
-    from .follow_up_response import FollowUpResponse
     from .foreign_key_spec import ForeignKeySpec
     from .forget_response import ForgetResponse
     from .form_node import FormNode
@@ -935,19 +1009,7 @@ if TYPE_CHECKING:
     from .function_summary_response import FunctionSummaryResponse
     from .function_type import FunctionType
     from .generation_settings import GenerationSettings
-    from .group_detail_response import GroupDetailResponse
-    from .group_line_response import GroupLineResponse
-    from .group_link_request import GroupLinkRequest
-    from .group_link_response import GroupLinkResponse
-    from .group_list_response import GroupListResponse
-    from .group_owner_response import GroupOwnerResponse
-    from .group_person_response import GroupPersonResponse
     from .group_public_response import GroupPublicResponse
-    from .group_response import GroupResponse
-    from .group_start_request import GroupStartRequest
-    from .group_timeline_response import GroupTimelineResponse
-    from .group_update_request import GroupUpdateRequest
-    from .group_waiting_response import GroupWaitingResponse
     from .harness_kind import HarnessKind
     from .history_message import HistoryMessage
     from .history_response import HistoryResponse
@@ -962,12 +1024,18 @@ if TYPE_CHECKING:
     from .import_start_request import ImportStartRequest
     from .import_status import ImportStatus
     from .import_status_response import ImportStatusResponse
+    from .inbox_item import InboxItem
+    from .inbox_response import InboxResponse
+    from .inbox_totals import InboxTotals
     from .install_request_initiate_schema import InstallRequestInitiateSchema
     from .install_request_response_schema import InstallRequestResponseSchema
     from .installation_bind_schema import InstallationBindSchema
     from .installation_choice_schema import InstallationChoiceSchema
     from .installed_app_summary import InstalledAppSummary
     from .json_object import JsonObject
+    from .line_delivery import LineDelivery
+    from .line_preview import LinePreview
+    from .link_part import LinkPart
     from .listening_response import ListeningResponse
     from .listening_response_state import ListeningResponseState
     from .literal_input_binding import LiteralInputBinding
@@ -982,28 +1050,27 @@ if TYPE_CHECKING:
     from .manual_workflow_start_input import ManualWorkflowStartInput
     from .manual_workflow_start_output import ManualWorkflowStartOutput
     from .mcp_endpoint_response import McpEndpointResponse
+    from .member_role import MemberRole
+    from .member_update_request import MemberUpdateRequest
+    from .members_add_request import MembersAddRequest
+    from .mention_part import MentionPart
+    from .mention_part_kind import MentionPartKind
     from .message_kind import MessageKind
     from .message_list_response import MessageListResponse
     from .message_request import MessageRequest
     from .message_response import MessageResponse
     from .message_response_metadata_type_0 import MessageResponseMetadataType0
     from .message_response_schema import MessageResponseSchema
+    from .my_membership_response import MyMembershipResponse
+    from .my_membership_update import MyMembershipUpdate
     from .my_usage_limits_response import MyUsageLimitsResponse
     from .my_usage_limits_response_plan_type_type_0 import MyUsageLimitsResponsePlanTypeType0
     from .navigation_organization_response import NavigationOrganizationResponse
     from .navigation_pod_response import NavigationPodResponse
     from .navigation_response import NavigationResponse
-    from .notification_delivery_status import NotificationDeliveryStatus
-    from .notification_list_response import NotificationListResponse
-    from .notification_origin_kind import NotificationOriginKind
-    from .notification_respond_request import NotificationRespondRequest
-    from .notification_respond_request_data_type_0 import NotificationRespondRequestDataType0
-    from .notification_response import NotificationResponse
-    from .notification_response_action_type_0 import NotificationResponseActionType0
-    from .notification_response_response_data_type_0 import NotificationResponseResponseDataType0
-    from .notification_status import NotificationStatus
-    from .notification_unread_count_response import NotificationUnreadCountResponse
-    from .notify_member_request import NotifyMemberRequest
+    from .notice_request import NoticeRequest
+    from .notice_response import NoticeResponse
+    from .notify_level import NotifyLevel
     from .o_auth_2_defaults_response_schema import OAuth2DefaultsResponseSchema
     from .o_auth_2_defaults_response_schema_extra_params import OAuth2DefaultsResponseSchemaExtraParams
     from .open_table_request import OpenTableRequest
@@ -1036,14 +1103,20 @@ if TYPE_CHECKING:
     from .organization_role import OrganizationRole
     from .organization_slug_availability_response import OrganizationSlugAvailabilityResponse
     from .organization_update_request import OrganizationUpdateRequest
+    from .outreach_delivery import OutreachDelivery
+    from .outreach_line import OutreachLine
+    from .outreach_request import OutreachRequest
+    from .outreach_response import OutreachResponse
     from .partial_apply_response import PartialApplyResponse
     from .pending_interaction_kind import PendingInteractionKind
     from .pending_interaction_list_response import PendingInteractionListResponse
     from .pending_interaction_response import PendingInteractionResponse
     from .pending_sign_in_response import PendingSignInResponse
+    from .person_ref import PersonRef
     from .plan_step_response import PlanStepResponse
     from .plan_step_response_detail import PlanStepResponseDetail
     from .pod_config import PodConfig
+    from .pod_contact_settings import PodContactSettings
     from .pod_create_request import PodCreateRequest
     from .pod_effective_permissions_response import PodEffectivePermissionsResponse
     from .pod_join_policy import PodJoinPolicy
@@ -1085,6 +1158,13 @@ if TYPE_CHECKING:
     from .publish_start_request import PublishStartRequest
     from .publish_status import PublishStatus
     from .publish_status_response import PublishStatusResponse
+    from .question_kind import QuestionKind
+    from .question_response import QuestionResponse
+    from .question_response_answer_type_0 import QuestionResponseAnswerType0
+    from .question_response_question import QuestionResponseQuestion
+    from .question_state import QuestionState
+    from .read_request import ReadRequest
+    from .read_response import ReadResponse
     from .reasoning_effort import ReasoningEffort
     from .record_access_mode import RecordAccessMode
     from .record_create_response_record_create import RecordCreateResponseRecordCreate
@@ -1132,11 +1212,14 @@ if TYPE_CHECKING:
     from .scheduled_workflow_start_output import ScheduledWorkflowStartOutput
     from .scope import Scope
     from .search_freshness import SearchFreshness
+    from .search_item import SearchItem
     from .search_method import SearchMethod
+    from .search_response import SearchResponse
     from .search_result import SearchResult
     from .search_vertical import SearchVertical
     from .send_message_request import SendMessageRequest
     from .send_message_request_metadata_type_0 import SendMessageRequestMetadataType0
+    from .sender_kind import SenderKind
     from .session_request import SessionRequest
     from .session_response import SessionResponse
     from .set_default_surface_request import SetDefaultSurfaceRequest
@@ -1146,6 +1229,11 @@ if TYPE_CHECKING:
     from .signed_url_list_response import SignedUrlListResponse
     from .signed_url_revoke_response import SignedUrlRevokeResponse
     from .signed_url_summary import SignedUrlSummary
+    from .source_kind import SourceKind
+    from .source_settings_detail_response import SourceSettingsDetailResponse
+    from .source_settings_response import SourceSettingsResponse
+    from .source_summary import SourceSummary
+    from .source_update_request import SourceUpdateRequest
     from .step_record_response import StepRecordResponse
     from .step_status import StepStatus
     from .surface_admin_consent_info import SurfaceAdminConsentInfo
@@ -1194,11 +1282,15 @@ if TYPE_CHECKING:
     from .table_opening_response import TableOpeningResponse
     from .table_response import TableResponse
     from .table_summary_response import TableSummaryResponse
+    from .telegram_link_request import TelegramLinkRequest
+    from .telegram_link_response import TelegramLinkResponse
     from .telegram_managed_bot_setup_request import TelegramManagedBotSetupRequest
     from .telegram_managed_bot_setup_response import TelegramManagedBotSetupResponse
+    from .thread_response import ThreadResponse
     from .trigger_skip_list_response import TriggerSkipListResponse
     from .trigger_skip_reason import TriggerSkipReason
     from .trigger_skip_response import TriggerSkipResponse
+    from .unread_response import UnreadResponse
     from .update import Update
     from .update_agent_host_runtime_profile_request import UpdateAgentHostRuntimeProfileRequest
     from .update_agent_host_runtime_profile_request_config_selections_type_0 import UpdateAgentHostRuntimeProfileRequestConfigSelectionsType0
@@ -1247,6 +1339,7 @@ if TYPE_CHECKING:
     from .variable_spec_response import VariableSpecResponse
     from .verify_request import VerifyRequest
     from .verify_token_response import VerifyTokenResponse
+    from .visibility import Visibility
     from .wait_until_node import WaitUntilNode
     from .wait_until_node_config import WaitUntilNodeConfig
     from .wait_until_node_position_type_0 import WaitUntilNodePositionType0
@@ -1262,6 +1355,7 @@ if TYPE_CHECKING:
     from .web_widget_response import WebWidgetResponse
     from .web_widget_secret_response import WebWidgetSecretResponse
     from .web_widget_update_request import WebWidgetUpdateRequest
+    from .whats_app_group_request import WhatsAppGroupRequest
     from .widget_answer import WidgetAnswer
     from .widget_embed_url_response import WidgetEmbedUrlResponse
     from .workflow_create_request import WorkflowCreateRequest
@@ -1325,6 +1419,7 @@ __all__ = [
     'AgentActionResponseInputSchemaType0',
     'AgentActionResponseMetadataType0',
     'AgentActionResponseOutputSchemaType0',
+    'AgentAnswers',
     'AgentDetailResponse',
     'AgentDetailResponseInputSchemaType0',
     'AgentDetailResponseMetadataType0',
@@ -1362,6 +1457,7 @@ __all__ = [
     'AgentRuntimeProfileResponse',
     'AgentRuntimeProfileResponseConfig',
     'AgentRuntimeProfileTestResponse',
+    'AgentSeat',
     'AgentSummaryResponse',
     'AgentSummaryResponseMetadataType0',
     'AgentSurfaceListResponse',
@@ -1390,6 +1486,7 @@ __all__ = [
     'AskablePodListResponse',
     'AskablePodResponse',
     'Attach',
+    'AttentionResponse',
     'AuthConfigCreateSchema',
     'AuthConfigCreateSchemaConfigType0',
     'AuthConfigListResponseSchema',
@@ -1412,6 +1509,26 @@ __all__ = [
     'BulkUpdateRecordsRequest',
     'BulkUpdateRecordsRequestRecordsItem',
     'BundleSourceKind',
+    'CaseEventResponse',
+    'CaseEventResponseValue',
+    'CaseResponse',
+    'ChannelAnswerRequest',
+    'ChannelAnswerRequestAnswer',
+    'ChannelCasesResponse',
+    'ChannelCreateRequest',
+    'ChannelDetailResponse',
+    'ChannelEditRequest',
+    'ChannelKind',
+    'ChannelListResponse',
+    'ChannelMemberListResponse',
+    'ChannelMemberResponse',
+    'ChannelMessageResponse',
+    'ChannelMessagesResponse',
+    'ChannelPostRequest',
+    'ChannelRef',
+    'ChannelResponse',
+    'ChannelSourceResponse',
+    'ChannelUpdateRequest',
     'CodeRequest',
     'ColumnSchema',
     'ColumnSchemaTypeParamsType0',
@@ -1441,6 +1558,7 @@ __all__ = [
     'ContactResponse',
     'ContactRow',
     'ContactRowValues',
+    'ContactStatus',
     'ContactUpdateRequest',
     'ContactsCapResponse',
     'ContactsCapUpdate',
@@ -1502,6 +1620,11 @@ __all__ = [
     'DecisionResponseAnswers',
     'DecisionRule',
     'DecisionUsageResponse',
+    'DeliveriesResponse',
+    'DeliveryResponse',
+    'DeliveryStatus',
+    'DeliveryTarget',
+    'DeliveryTargetKind',
     'DirectoryTreeNode',
     'DirectoryTreeResponse',
     'DisplaySizeRequest',
@@ -1541,6 +1664,7 @@ __all__ = [
     'FileDetailResponse',
     'FileDetailResponseMetadataType0',
     'FileListResponse',
+    'FilePart',
     'FileSearchRequest',
     'FileSearchResponse',
     'FileSearchResultSchema',
@@ -1553,9 +1677,6 @@ __all__ = [
     'FirstWorkspaceRequest',
     'FirstWorkspaceResponse',
     'FirstWorkspaceResponseEntry',
-    'FollowUpChannel',
-    'FollowUpRequest',
-    'FollowUpResponse',
     'ForeignKeySpec',
     'ForgetResponse',
     'FormNode',
@@ -1592,19 +1713,7 @@ __all__ = [
     'FunctionSummaryResponse',
     'FunctionType',
     'GenerationSettings',
-    'GroupDetailResponse',
-    'GroupLineResponse',
-    'GroupLinkRequest',
-    'GroupLinkResponse',
-    'GroupListResponse',
-    'GroupOwnerResponse',
-    'GroupPersonResponse',
     'GroupPublicResponse',
-    'GroupResponse',
-    'GroupStartRequest',
-    'GroupTimelineResponse',
-    'GroupUpdateRequest',
-    'GroupWaitingResponse',
     'HarnessKind',
     'HistoryMessage',
     'HistoryResponse',
@@ -1619,12 +1728,18 @@ __all__ = [
     'ImportStartRequest',
     'ImportStatus',
     'ImportStatusResponse',
+    'InboxItem',
+    'InboxResponse',
+    'InboxTotals',
     'InstallRequestInitiateSchema',
     'InstallRequestResponseSchema',
     'InstallationBindSchema',
     'InstallationChoiceSchema',
     'InstalledAppSummary',
     'JsonObject',
+    'LineDelivery',
+    'LinePreview',
+    'LinkPart',
     'ListeningResponse',
     'ListeningResponseState',
     'LiteralInputBinding',
@@ -1639,28 +1754,27 @@ __all__ = [
     'ManualWorkflowStartInput',
     'ManualWorkflowStartOutput',
     'McpEndpointResponse',
+    'MemberRole',
+    'MemberUpdateRequest',
+    'MembersAddRequest',
+    'MentionPart',
+    'MentionPartKind',
     'MessageKind',
     'MessageListResponse',
     'MessageRequest',
     'MessageResponse',
     'MessageResponseMetadataType0',
     'MessageResponseSchema',
+    'MyMembershipResponse',
+    'MyMembershipUpdate',
     'MyUsageLimitsResponse',
     'MyUsageLimitsResponsePlanTypeType0',
     'NavigationOrganizationResponse',
     'NavigationPodResponse',
     'NavigationResponse',
-    'NotificationDeliveryStatus',
-    'NotificationListResponse',
-    'NotificationOriginKind',
-    'NotificationRespondRequest',
-    'NotificationRespondRequestDataType0',
-    'NotificationResponse',
-    'NotificationResponseActionType0',
-    'NotificationResponseResponseDataType0',
-    'NotificationStatus',
-    'NotificationUnreadCountResponse',
-    'NotifyMemberRequest',
+    'NoticeRequest',
+    'NoticeResponse',
+    'NotifyLevel',
     'OAuth2DefaultsResponseSchema',
     'OAuth2DefaultsResponseSchemaExtraParams',
     'OpenTableRequest',
@@ -1693,14 +1807,20 @@ __all__ = [
     'OrganizationRole',
     'OrganizationSlugAvailabilityResponse',
     'OrganizationUpdateRequest',
+    'OutreachDelivery',
+    'OutreachLine',
+    'OutreachRequest',
+    'OutreachResponse',
     'PartialApplyResponse',
     'PendingInteractionKind',
     'PendingInteractionListResponse',
     'PendingInteractionResponse',
     'PendingSignInResponse',
+    'PersonRef',
     'PlanStepResponse',
     'PlanStepResponseDetail',
     'PodConfig',
+    'PodContactSettings',
     'PodCreateRequest',
     'PodEffectivePermissionsResponse',
     'PodJoinPolicy',
@@ -1742,6 +1862,13 @@ __all__ = [
     'PublishStartRequest',
     'PublishStatus',
     'PublishStatusResponse',
+    'QuestionKind',
+    'QuestionResponse',
+    'QuestionResponseAnswerType0',
+    'QuestionResponseQuestion',
+    'QuestionState',
+    'ReadRequest',
+    'ReadResponse',
     'ReasoningEffort',
     'RecordAccessMode',
     'RecordCreateResponseRecordCreate',
@@ -1789,11 +1916,14 @@ __all__ = [
     'ScheduledWorkflowStartOutput',
     'Scope',
     'SearchFreshness',
+    'SearchItem',
     'SearchMethod',
+    'SearchResponse',
     'SearchResult',
     'SearchVertical',
     'SendMessageRequest',
     'SendMessageRequestMetadataType0',
+    'SenderKind',
     'SessionRequest',
     'SessionResponse',
     'SetDefaultSurfaceRequest',
@@ -1803,6 +1933,11 @@ __all__ = [
     'SignedUrlListResponse',
     'SignedUrlRevokeResponse',
     'SignedUrlSummary',
+    'SourceKind',
+    'SourceSettingsDetailResponse',
+    'SourceSettingsResponse',
+    'SourceSummary',
+    'SourceUpdateRequest',
     'StepRecordResponse',
     'StepStatus',
     'SurfaceAdminConsentInfo',
@@ -1851,11 +1986,15 @@ __all__ = [
     'TableOpeningResponse',
     'TableResponse',
     'TableSummaryResponse',
+    'TelegramLinkRequest',
+    'TelegramLinkResponse',
     'TelegramManagedBotSetupRequest',
     'TelegramManagedBotSetupResponse',
+    'ThreadResponse',
     'TriggerSkipListResponse',
     'TriggerSkipReason',
     'TriggerSkipResponse',
+    'UnreadResponse',
     'Update',
     'UpdateAgentHostRuntimeProfileRequest',
     'UpdateAgentHostRuntimeProfileRequestConfigSelectionsType0',
@@ -1904,6 +2043,7 @@ __all__ = [
     'VariableSpecResponse',
     'VerifyRequest',
     'VerifyTokenResponse',
+    'Visibility',
     'WaitUntilNode',
     'WaitUntilNodeConfig',
     'WaitUntilNodePositionType0',
@@ -1919,6 +2059,7 @@ __all__ = [
     'WebWidgetResponse',
     'WebWidgetSecretResponse',
     'WebWidgetUpdateRequest',
+    'WhatsAppGroupRequest',
     'WidgetAnswer',
     'WidgetEmbedUrlResponse',
     'WorkflowCreateRequest',

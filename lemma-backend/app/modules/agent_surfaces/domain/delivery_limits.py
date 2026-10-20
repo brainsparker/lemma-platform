@@ -17,9 +17,10 @@ and by no layer above:
   send underneath to multiply against.
 
 - **A message the adapter gave up on for a transient reason**, with no part of
-  it delivered, goes back to PENDING in ``surface_deliveries`` and the
-  destination pump (``surface.reply``) tries it again after the wait the
-  platform asked for (``domain/deliveries.RETRY_DELAYS``). That is not a layer
+  it delivered, is tried again later by its durable record: a channel
+  delivery after its backoff (``channels.infrastructure.deliveries``), or a
+  ``surface_deliveries`` row by the destination pump (``surface.reply``) after
+  the wait the platform asked for (``domain/deliveries.RETRY_DELAYS``). That is not a layer
   stacking on the adapter -- nothing is retried at the same time, and each
   later attempt is one adapter send -- it is the same send moved onto the
   platform's own clock.

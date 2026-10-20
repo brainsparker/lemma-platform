@@ -199,9 +199,6 @@ def _routers():
     from app.modules.datastore.api.controllers.changes_controller import (
         router as changes,
     )
-    from app.modules.datastore.api.controllers.live_controller import (
-        router as live,
-    )
     from app.modules.datastore.api.controllers.processing_controller import (
         router as processing,
     )
@@ -220,13 +217,20 @@ def _routers():
         public_file,
         signed_file,
         changes,
-        live,
     ]
+
+
+def _live():
+    from app.core.live.topics import LiveContribution
+    from app.modules.datastore.services.live.topic import RecordsTopic
+
+    return LiveContribution(topics=(RecordsTopic(),))
 
 
 def _register_work() -> None:
     # In every process: the pod-create transaction (API) writes this kind
     # through the `PodCreated` fact this module subscribes it to.
+    import app.modules.datastore.events.contact_merged_work  # noqa: F401
     import app.modules.datastore.events.pod_provision_work  # noqa: F401
 
     # Every process: a schedule or MCP subscription change (API) writes
@@ -333,6 +337,7 @@ module = LemmaModule(
     name="datastore",
     resource_names=_resource_names,
     routers=_routers,
+    live=_live,
     register_work=_register_work,
     register_periodic_work=_register_periodic_work,
     # Nothing here may scale with data: see `test_boot_hooks.py`. The query

@@ -11,8 +11,8 @@ and the "the next message picks it up" comments used to cover.
   wait for it, and results a finishing parent left uncollected.
 * ``pod_ask.deliver`` -- an answer to the pod that asked, or answers this
   conversation was owed while it could not take them.
-* ``agent.replies_arrived`` -- subscribed to surfaces' ``NotificationSettled``:
-  the asking conversation's next turn once every answer is in.
+* ``agent.replies_arrived`` -- written by ``channel_question_work`` once the last
+  question of a batch a conversation asked closes: its next turn.
 
 Each locks only the conversation it starts a turn in, in its own transaction,
 so a child's finalize and its parent's never wait on each other. Each is safe to
@@ -46,20 +46,15 @@ from app.core.infrastructure.work import (
     WorkClass,
     WorkMode,
     WorkRegistry,
-    facts,
     registry as default_registry,
 )
 from app.core.log.log import get_logger
-from app.modules.agent.events.turn_payloads import ConversationWork
+from app.modules.agent.events.turn_payloads import ConversationWork, RepliesArrived
 from app.modules.agent.events.work_kinds import (
     AGENT_FOLLOWUP,
     AGENT_REPLIES_ARRIVED,
     AGENT_SUBAGENT_RESULT,
     POD_ASK_DELIVER,
-    replies_key,
-)
-from app.modules.agent_surfaces.contracts.notification_facts import (
-    NotificationSettled,
 )
 
 logger = get_logger(__name__)
@@ -182,14 +177,16 @@ async def deliver_pod_ask(ctx: JobContext, payload: ConversationWork) -> None:
         raise PermanentFailure(exc.message) from exc
 
 
-async def deliver_replies(ctx: JobContext, payload: NotificationSettled) -> None:
+async def deliver_replies(ctx: JobContext, payload: RepliesArrived) -> None:
     """Bring a conversation back once everyone it asked has answered."""
     from app.modules.agent.services.message_reply_service import MessageReplyService
 
     ctx.raise_if_stopping()
     async with _uow_factory()() as uow:
         await MessageReplyService(uow).deliver(
-            conversation_id=payload.conversation_id, pod_id=payload.pod_id
+            conversation_id=payload.conversation_id,
+            pod_id=payload.pod_id,
+            batch_id=payload.batch_id,
         )
 
 
@@ -219,22 +216,12 @@ def register_run_followup_work(registry: WorkRegistry) -> None:
         kind=AGENT_REPLIES_ARRIVED,
         cls=WorkClass.EVENTS,
         mode=WorkMode.JOB,
-        payload=NotificationSettled,
+        payload=RepliesArrived,
         retry=FOLLOWUP_RETRY,
     )(deliver_replies)
 
 
-def _conversation_of(fact: NotificationSettled) -> str:
-    return replies_key(fact.conversation_id)
-
-
 register_run_followup_work(default_registry)
-facts.subscribe(
-    NotificationSettled,
-    kind=AGENT_REPLIES_ARRIVED,
-    cls=WorkClass.EVENTS,
-    dedup=_conversation_of,
-)
 
 
 __all__ = [

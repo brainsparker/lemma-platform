@@ -64,7 +64,7 @@ def _engine_with_mocks() -> WorkflowEngine:
         uow,
         agent_adapter=Mock(),
         function_adapter=Mock(),
-        notification_adapter=AsyncMock(),
+        form_questions=AsyncMock(),
         work=AsyncMock(),
     )
 

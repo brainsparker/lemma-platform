@@ -64,7 +64,7 @@ class WhatsAppInteractiveRenders:
         event: ParsedInboundSurfaceEvent,
         message: str,
         metadata: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> str | None:
         raise NotImplementedError
 
     async def _render_choices(

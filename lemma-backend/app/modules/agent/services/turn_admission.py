@@ -13,7 +13,7 @@ A pause holds a message in two cases:
   the action can run twice. So the message waits for the resume run, which
   carries both.
 - **The sender is not the person who was asked.** Replies arriving for
-  `message_user` are news, not an answer, and starting a turn would deny a
+  `channel_post` are news, not an answer, and starting a turn would deny a
   question the owner has not decided. A message the person types does supersede
   an open question; that is still `start`'s rule.
 """
@@ -59,9 +59,7 @@ def stamped(
         return message_metadata
     marked = dict(message_metadata or {})
     marked.pop(WRITTEN_IN_LEMMA_KEY, None)
-    written_in = (
-        written_in_lemma_into(conversation.metadata) if typed_in_lemma else None
-    )
+    written_in = written_in_lemma_into(conversation) if typed_in_lemma else None
     if written_in is not None:
         marked[WRITTEN_IN_LEMMA_KEY] = written_in
     return marked or message_metadata
@@ -90,7 +88,7 @@ def user_message_metadata(
     metadata[DURING_ACTIVE_RUN] = joins_a_run
     if client_message_id is not None:
         metadata[CLIENT_MESSAGE_ID] = client_message_id
-    if is_private_note(metadata) and note_in_member_dm(conversation.metadata):
+    if is_private_note(metadata) and note_in_member_dm(conversation):
         metadata[NOTE_IN_DM_KEY] = True
     return metadata
 

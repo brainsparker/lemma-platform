@@ -92,8 +92,9 @@ async def test_a_four_step_workflow_runs_end_to_end_on_a_real_worker(
             await eventually(
                 label="the assignee was told",
                 probe=lambda: flows.scalar(
-                    "SELECT count(*) FROM notifications WHERE origin_id = :run",
-                    run=UUID(run["id"]),
+                    "SELECT count(*) FROM channel_questions WHERE kind = 'FORM'"
+                    " AND ref LIKE :ref",
+                    ref=f"wf:{run['id']}:%",
                 ),
                 done=lambda n: n == 1,
             )

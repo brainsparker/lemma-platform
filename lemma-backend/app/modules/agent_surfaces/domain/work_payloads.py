@@ -55,10 +55,6 @@ class MobileChangedPayload(BaseModel):
     user_id: UUID
 
 
-class NotificationExpirePayload(BaseModel):
-    notification_id: UUID
-
-
 class NoPayload(BaseModel):
     pass
 
@@ -67,7 +63,6 @@ __all__ = [
     "IngestPayload",
     "MobileChangedPayload",
     "NoPayload",
-    "NotificationExpirePayload",
     "PlatformUpdatePayload",
     "ReceiverPayload",
 ]

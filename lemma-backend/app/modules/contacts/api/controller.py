@@ -62,6 +62,12 @@ class ContactIdentityResponse(BaseModel):
 class ContactResponse(BaseModel):
     id: UUID
     display_name: str | None = None
+    label: str = Field(
+        description=(
+            "What to call them: their name, else the handle they are known "
+            "by (an email address, a number), else that they are a web visitor."
+        )
+    )
     created_at: datetime
     identities: list[ContactIdentityResponse] = Field(default_factory=list)
     is_anonymous: bool = Field(
@@ -127,10 +133,25 @@ async def _responses(
     return [_shown(contact, stopped) for contact in contacts]
 
 
+#: The kinds of handle a person would recognise themselves by, best first.
+_LABELLED_BY = (IdentityKind.EMAIL, IdentityKind.PHONE)
+
+
+def _label(contact: Contact) -> str:
+    if contact.display_name:
+        return contact.display_name
+    for kind in _LABELLED_BY:
+        for handle in contact.identities:
+            if handle.kind is kind:
+                return handle.value_raw or handle.value
+    return "Web visitor" if contact.is_anonymous else "A contact"
+
+
 def _shown(contact: Contact, stopped: set[UUID]) -> ContactResponse:
     return ContactResponse(
         id=contact.id,
         display_name=contact.display_name,
+        label=_label(contact),
         created_at=contact.created_at,
         identities=[
             ContactIdentityResponse(
@@ -192,11 +213,20 @@ async def list_contacts(
     uow: UoWDep,
     limit: int = Query(default=50, ge=1, le=MAX_PAGE),
     cursor: str | None = Query(default=None, max_length=200),
+    q: str | None = Query(
+        default=None,
+        min_length=1,
+        max_length=200,
+        description="Only contacts whose name, email address or number holds this.",
+    ),
 ) -> ContactListResponse:
     """The pod's contacts, newest first. Follow `next_cursor` until it is
     absent."""
     contacts = await ContactRepository(uow.session).list(
-        pod_id=pod_id, limit=limit, before=_list_cursor(cursor)
+        pod_id=pod_id,
+        limit=limit,
+        before=_list_cursor(cursor),
+        matching=(q or "").replace("\x00", "").strip() or None,
     )
     last = contacts[-1] if len(contacts) == limit else None
     return ContactListResponse(

@@ -146,6 +146,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/pods/{pod_id}/channels/{channel_id}/messages` | `channel.message.post` | Post Message |
 | POST | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/answer` | `channel.message.answer` | Answer Question |
 | POST | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/deliveries/{delivery_id}/retry` | `channel.delivery.retry` | Retry Delivery |
+| POST | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/share` | `channel.message.share` | Share Message |
 | POST | `/pods/{pod_id}/channels/{channel_id}/read` | `channel.read` | Mark Read |
 
 ## connectors

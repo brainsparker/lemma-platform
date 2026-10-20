@@ -32,6 +32,8 @@ from typing import Protocol
 from uuid import UUID
 
 from app.modules.agent.domain.private_notes import is_private_note, run_is_private
+from app.modules.agent.domain.queued_messages import STOP_REQUESTED_AFTER_SEQUENCE
+from app.modules.agent.domain.value_objects import AgentRunStatus
 from app.modules.agent.domain.entities import (
     AgentRun,
     Message,
@@ -338,10 +340,59 @@ def select_runtime_history(
         if not messages:
             continue
         if run.id in recent_run_ids or run.message_count <= 2:
-            selected.extend(messages)
-            continue
-        selected.extend(_collapsed_run(run, messages))
+            kept = messages
+        else:
+            kept = _collapsed_run(run, messages)
+        if run.status is AgentRunStatus.STOPPED:
+            kept = _closed_by_stop(run, kept)
+        selected.extend(kept)
     return prefix + selected
+
+
+#: What a stopped run's history ends on. A run stopped half way ends on a
+#: request and the tool calls made for it, with nothing saying it is over, and
+#: the next run read that as work still to finish: asked "what is 2+2?" after a
+#: stopped essay, it wrote the essay and said it was done.
+STOPPED_BY_MEMBER = (
+    f"{SYNTHETIC_NOTICE_PREFIX} This request was stopped by the member before it "
+    "finished. It is stopped: do not continue it, finish it or report it as "
+    "done. Answer only what is asked after this; do it again only if asked again."
+)
+
+
+def _closed_by_stop(run: AgentRun, messages: list[Message]) -> list[Message]:
+    """``messages`` with the stop said where it happened.
+
+    After the work the run did, and before anything said after Stop was
+    pressed: those lines ride on the stopped run and are what the next run
+    answers, so they read as coming after the stop, not as part of what
+    was stopped.
+    """
+    stop_after = (run.metadata or {}).get(STOP_REQUESTED_AFTER_SEQUENCE)
+    if isinstance(stop_after, bool) or not isinstance(stop_after, int):
+        stop_after = None
+    cut = len(messages)
+    if stop_after is not None:
+        while (
+            cut
+            and messages[cut - 1].role is MessageRole.USER
+            and messages[cut - 1].sequence > stop_after
+        ):
+            cut -= 1
+    if not cut:
+        return messages
+    marker = Message(
+        conversation_id=run.conversation_id,
+        # Ties the last message it follows; the history is sorted stably, so
+        # it stays after it.
+        sequence=messages[cut - 1].sequence,
+        agent_run_id=run.id,
+        role=MessageRole.USER,
+        kind=MessageKind.NOTIFICATION,
+        text=STOPPED_BY_MEMBER,
+        metadata={"synthetic": True, "summary_kind": "agent_run_stopped"},
+    )
+    return [*messages[:cut], marker, *messages[cut:]]
 
 
 def _collapsed_run(run: AgentRun, messages: list[Message]) -> list[Message]:

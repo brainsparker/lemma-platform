@@ -15,6 +15,8 @@ real.
   not counted as answered.
 * What the model reads of a member's line is what it says now.
 * A note naming an agent is answered as a note.
+* A line after a stopped request is answered for itself: the model reads the
+  stopped request as stopped, not as work to finish.
 """
 
 from __future__ import annotations
@@ -38,6 +40,7 @@ from app.modules.agent.domain.asked_questions import batch_of, message_ref
 from app.modules.agent.domain.value_objects import (
     AgentRunStatus,
     ConversationStatus,
+    MessageDraft,
     MessageRole,
 )
 from app.modules.agent.events.channel_answer_work import register_channel_answer_work
@@ -48,6 +51,9 @@ from app.modules.agent.events.run_followup_work import register_run_followup_wor
 from app.modules.agent.infrastructure.models.conversation import (
     AgentRunModel,
     ConversationModel,
+)
+from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
+    history_and_prompt,
 )
 from app.modules.agent.infrastructure.repositories import ConversationRepository
 from app.modules.agent.services.agent_runner_service import MAX_HISTORY_AGENT_RUNS
@@ -63,9 +69,15 @@ from app.modules.agent.services.contact_run_failures import RUN_FAILED_REASON
 from app.modules.agent.services.conversation_service import ConversationService
 from app.modules.agent.services.message_reply_service import REPLY_SOURCE
 from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
-from app.modules.agent.services.runtime_history import assemble_runtime_history
+from app.modules.agent.services.runtime_history import (
+    STOPPED_BY_MEMBER,
+    assemble_runtime_history,
+)
 from app.modules.agent.tests.e2e.lifecycle_helpers import (
+    Seeded,
+    conversation_service,
     messages,
+    owner_uow,
     running_run,
     runs,
     seeded_conversation,
@@ -527,3 +539,101 @@ async def test_a_note_naming_the_agent_is_answered_as_a_note(pod: Pod):
     assert answer.body == "Within 30 days."
     assert answer.members_only is True
     assert answer.thread_root_id == note.id
+
+
+# ------------------------------------------------- a line after a stopped one
+
+
+async def _model_reads(conversation_id: UUID, run_id: UUID):
+    """The history and prompt ``run_id``'s model is sent, built as the runner
+    builds them."""
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        repo = ConversationRepository(uow)
+        read = await assemble_runtime_history(
+            repo,
+            await repo.load_runtime_history_digests_by_run_id(
+                run_id, limit=MAX_HISTORY_AGENT_RUNS
+            ),
+            conversation_id=conversation_id,
+            run_id=run_id,
+            read_channel=partial(with_channel_background, uow),
+        )
+    return history_and_prompt(read, current_run_id=run_id)
+
+
+async def test_a_line_after_a_stopped_request_is_answered_for_itself(pod: Pod):
+    """Asked for an essay, stopped half way, then asked "what is 2+2?" in a
+    note: the run answering the note reads the essay as stopped -- closed,
+    after the work it got through -- and the note as what it is asked. It
+    used to read an essay half written, finish it, and post "Done" under
+    the note."""
+    pod_id, owner = UUID(pod.id), UUID(pod.owner["id"])
+    channel_id = UUID((await group(pod, title="essays"))["id"])
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        essay = await post(
+            uow,
+            channel_id=channel_id,
+            line=NewLine(
+                sender=Sender.member(owner),
+                text="@agent write a 3000-word essay on bridges to a file",
+            ),
+            mentioned_agents=[pod_id],
+        )
+        await uow.commit()
+    assert essay is not None
+    await _drain(WorkClass.INTERACTIVE)
+    conversation_id, essay_run = await _run_answering(essay.id)
+
+    # Half way: the file write is in flight when the member presses Stop.
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        await ConversationRepository(uow).append_message(
+            conversation_id=conversation_id,
+            agent_run_id=essay_run,
+            draft=MessageDraft.of_tool_call(
+                tool_name="write_file",
+                tool_call_id="call-essay",
+                tool_args={"path": "/essays/bridges.md", "content": "Bridges..."},
+            ),
+        )
+        agent_id = await uow.session.scalar(
+            select(ConversationModel.agent_id).where(
+                ConversationModel.id == conversation_id
+            )
+        )
+        await uow.commit()
+    assert agent_id is not None
+    stopper = Seeded(
+        pod_id=pod_id,
+        user_id=owner,
+        agent_id=agent_id,
+        agent_name="",
+        conversation_id=conversation_id,
+    )
+    async with owner_uow(stopper) as uow:
+        await conversation_service(uow).stop_conversation(
+            conversation_id=conversation_id, user_id=owner, pod_id=pod_id
+        )
+    await _drain(WorkClass.EVENTS)
+    [stopped] = [run for run in await runs(conversation_id) if run.id == essay_run]
+    assert stopped.status == AgentRunStatus.STOPPED.value
+
+    note = await _says(channel_id, owner, "@agent what is 2+2?", members_only=True)
+    await _drain(WorkClass.INTERACTIVE)
+    note_conversation, note_run = await _run_answering(note.id)
+    assert (note_conversation, note_run != essay_run) == (conversation_id, True)
+
+    history, prompt = await _model_reads(conversation_id, note_run)
+    assert prompt is not None and "what is 2+2?" in prompt
+    said = [
+        str(getattr(part, "content", ""))
+        for message in history
+        for part in message.parts
+        if getattr(part, "part_kind", "") == "user-prompt"
+    ]
+    asked_essay = next(i for i, text in enumerate(said) if "essay on bridges" in text)
+    closed = next(i for i, text in enumerate(said) if STOPPED_BY_MEMBER in text)
+    assert asked_essay < closed == len(said) - 1, said
+
+    await _end(note_run, pod_id=pod_id, user_id=owner, answer="4")
+    [answer] = await _said_by_run(note_run)
+    assert (answer.body, answer.thread_root_id) == ("4", note.id)

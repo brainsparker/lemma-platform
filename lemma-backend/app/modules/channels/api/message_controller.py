@@ -334,7 +334,6 @@ async def delete_message(
     if deleted.removed_by is not None:
         logger.info(
             "channels.line.removed_by_manager.observed",
-            pod_id=str(channel.pod_id),
             channel_id=str(channel.id),
             message_id=str(deleted.id),
             user_id=str(caller.user_id),

@@ -489,8 +489,12 @@ async def test_a_bot_telegram_refuses_is_not_kept_and_can_be_tried_again(
     )
 
     assert refused.status_code == 400, refused.text
-    assert "Telegram" in refused.text
-    gone = await authenticated_client.get(f"/pods/{pod_id}/surfaces/telegram")
+    said = refused.json()["message"]
+    assert "Telegram refused to set up this bot: Forbidden" in said, said
+    assert "token" in said
+    # The surface is gone, so is its address: never told to set it by hand.
+    assert "/surfaces/" not in said and "manually" not in said
+    gone =await authenticated_client.get(f"/pods/{pod_id}/surfaces/telegram")
     assert gone.status_code == 404, gone.text
     again = await authenticated_client.post(
         f"/pods/{pod_id}/surfaces",

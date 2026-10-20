@@ -263,17 +263,19 @@ class SurfaceTelegramWebhookMixin:
                     "drop_pending_updates": drop_pending_updates,
                 },
             )
+        # No webhook URL to "set manually": a new surface Telegram refuses is
+        # deleted (the next try gets a new address), and a webhook set by hand
+        # lacks the secret Lemma checks deliveries against.
         except TelegramApiError as exc:
             raise AgentSurfacePlatformError(
                 "telegram",
-                "Could not configure Telegram webhook automatically. Set it "
-                f"manually to {webhook_url}. Telegram response: {exc.description}",
+                f"Telegram refused to set up this bot: {exc.description}. Check "
+                "the bot token (from @BotFather) and try again.",
             ) from exc
         except platform_transport_errors() as exc:
             raise AgentSurfacePlatformError(
                 "telegram",
-                "Could not configure Telegram webhook automatically. Set it "
-                f"manually to {webhook_url}.",
+                "Could not reach Telegram to set up this bot. Try again in a moment.",
             ) from exc
         await self._confirm_telegram_webhook(client, webhook_url)
 

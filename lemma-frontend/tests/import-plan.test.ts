@@ -6,6 +6,8 @@ import {
     contentsLine,
     groupSteps,
     humanize,
+    installedApp,
+    landingPath,
     needsAnswer,
     suggestedValue,
     teammateName,
@@ -67,6 +69,22 @@ test("the installer is never asked about a variable that fills itself in", () =>
         askedVariables(variables).map((v) => v.name),
         ["slack_account", "slug"],
     );
+});
+
+test("an install lands on the app it brought, not behind it", () => {
+    // The teammate's own page is where a teammate without an app belongs.
+    assert.equal(landingPath("p-1", [step("AGENT", "triager"), step("TABLE", "t")]), "/t/p-1");
+    assert.equal(installedApp([step("AGENT", "triager")]), null);
+
+    // An APP step is named by the app's own directory, which is the segment a
+    // workspace URL names it by.
+    const steps = [step("AGENT", "triager"), step("APP", "queue"), step("APP", "board")];
+    assert.equal(installedApp(steps), "queue");
+    assert.equal(landingPath("p-1", steps), "/t/p-1/app/queue");
+});
+
+test("an id or an app name that needs escaping is escaped", () => {
+    assert.equal(landingPath("p 1", [step("APP", "my app")]), "/t/p%201/app/my%20app");
 });
 
 test("names read as words", () => {

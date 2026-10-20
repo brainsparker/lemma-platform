@@ -47,6 +47,7 @@ from app.modules.channels.infrastructure.models import (
 from app.modules.channels.infrastructure.repository import ChannelRepository
 from app.modules.channels.infrastructure.fold_lines import (
     carry_read_state,
+    recount_read_replies,
     defer_place_checks,
     merge_lines,
     renumber_deliveries,
@@ -122,7 +123,9 @@ class ContactChannels:
         await CaseRepository(self.session).fold(merged, head)
         _settle(head, merged, survivor_had_lines=base > 0)
         head.last_seq = base + moved
+        head.replies = head.replies + merged.replies
         await self.session.flush()
+        await recount_read_replies(self.session, channel_id=head.id)
         return Fold(merged_channel_id=merged.id, survivor_channel_id=head.id)
 
     async def drop(self, fold: Fold) -> None:

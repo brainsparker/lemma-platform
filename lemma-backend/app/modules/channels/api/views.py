@@ -82,6 +82,7 @@ def _preview(
         sender=shown.sender,
         text=(shown.text or "")[:PREVIEW_CHARS],
         withheld=hidden,
+        deleted=line.is_deleted,
         created_at=line.created_at,
     )
 

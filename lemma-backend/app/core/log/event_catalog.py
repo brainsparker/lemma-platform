@@ -428,6 +428,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent_surfaces.native_receiver.cursor_converted.observed': EventSpec('info', frozenset({'credential_label', 'platform'})),
     'agent_surfaces.native_receiver.poll_failed.degraded': EventSpec('warning', frozenset({'credential_label', 'failure_count', 'platform'})),
     'agent_surfaces.native_receiver.poll_recovered.observed': EventSpec('info', frozenset({'credential_label', 'failure_count', 'platform'})),
+    'agent_surfaces.notice.rate_count_unavailable.degraded': EventSpec('warning', frozenset({'pod_id'})),
     'agent_surfaces.notification_channels.provision_failed.degraded': EventSpec('warning', frozenset({'failure_type', 'pod_id'})),
     'agent_surfaces.notification_egress.cold_open_unsupported.observed': EventSpec('info', frozenset({'notification_id', 'platform'})),
     'agent_surfaces.notification_rate_limiter.email_exceeded.degraded': EventSpec('warning', frozenset({'limit', 'pod_id'})),

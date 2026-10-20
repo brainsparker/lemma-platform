@@ -246,6 +246,8 @@ class Channel(BaseModel):
     acknowledged_at: datetime | None = None
     # -- the timeline's head ---------------------------------------------------
     last_seq: int = 0
+    #: How many of its lines are replies in a thread.
+    replies: int = 0
     last_line_id: UUID | None = None
     last_line_at: datetime
 

@@ -81,6 +81,7 @@ def channel_entity(row: ChannelModel) -> Channel:
         agents_answer=row.agents_answer,
         hand_back_after_hours=row.hand_back_after_hours,
         last_seq=row.last_seq,
+        replies=row.replies,
         last_line_id=row.last_line_id,
         last_line_at=row.last_line_at,
         **(_case_fields(case) if case is not None else {}),

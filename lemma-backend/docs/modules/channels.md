@@ -31,17 +31,17 @@ channel: they are private workspaces, not shared places.
 | Table | Meaning |
 | --- | --- |
 | `external_accounts` | An account a pod's bot speaks through -- a Slack team's or Teams tenant's bot, a Telegram bot, an inbox, a WhatsApp number, a web widget -- keyed per pod by platform, `workspace_key` and `bot_key` (`agent_surfaces`' `account_of`: a Slack or Teams account names the workspace *and* the bot, so two agents' apps in one workspace are two accounts; a WhatsApp number is keyed by its phone-number id, a Telegram bot by its id). `bot_key` is NULL until the bot's id is known; when the surface that reached the account learns it, that account is given it in place, so its places, channels and history stay one. A place belongs to an account rather than a surface, so a reinstalled bot -- the same app, so the same bot id, or the same WhatsApp number -- keeps its places; `surface_id` is the installation that reaches it now |
-| `channels` | One place per pod: `kind`, `visibility` (`PUBLIC` or `PRIVATE`; only a group may be public), a `title` and `topic`, whose it is (`member_user_id` for `DIRECT`, `contact_id` for `CONTACT`, each unique per pod), when it was archived. A contact's channel says whether its agents answer (`agents_answer`) and how long a member who stepped in holds the contact (`hand_back_after_hours`), and names its current case (`current_case_id`). The timeline's head: `last_seq`, `last_line_id`, `last_line_at` |
+| `channels` | One place per pod: `kind`, `visibility` (`PUBLIC` or `PRIVATE`; only a group may be public), a `title` and `topic`, whose it is (`member_user_id` for `DIRECT`, `contact_id` for `CONTACT`, each unique per pod), when it was archived. A contact's channel says whether its agents answer (`agents_answer`) and how long a member who stepped in holds the contact (`hand_back_after_hours`), and names its current case (`current_case_id`). The timeline's head: `last_seq`, `last_line_id`, `last_line_at`, and how many of its lines are thread replies (`replies`) |
 | `channel_cases` | A contact's channel's episodes of being answered, one open at a time (`uq_channel_cases_open`) and the open one always the channel's current case; only a contact's channel has any (the key to the channel carries its `kind`). When it opened (`opened_at`, and `opened_seq`, the line before it), where it stands (`status`: `open`, `waiting_on_contact`, `closed`, with `closed_at` and who closed it), who answers by hand (`assignee_user_id`, `assigned_at`, `assignee_last_line_at`), a call for a person (`attention_at`, `attention_reason`), the acknowledgement of this wait (`acknowledged_at`) and the first member line to the contact (`first_response_at`, `first_response_by_user_id`) |
 | `channel_case_events` | Every change to a case, in order: `opened`, `assigned`, `handed_back`, `attention`, `acknowledged`, `first_response`, `status`, `closed`, `reopened`, `merged` -- who made it and what it changed to. Time to first response, reopens and time to close are read from here |
 | `channel_members` | Who is in a channel -- a member, a contact or an agent -- with their `role`, how a person hears of it outside the app (`notify`, `notify_via`, `muted_until`) and, for an agent, when it answers (`answers`). A person's seat keeps when they last spoke there and the name they spoke under (`last_spoke_at`, `last_name`): who has spoken in a group is read from the seats, never the lines. Every seat says why it was taken (`seated_by`, below) |
-| `channel_read_state` | How far each member has read each channel, in the channel's pod: `last_read_seq`, so unread is exact. Apart from the seat: a member reads a public group they never joined, and somebody named where they have no seat is given one here (read up to nothing) |
+| `channel_read_state` | How far each member has read each channel's timeline, in the channel's pod: `last_read_seq`, and how many of the lines up to it are thread replies (`read_replies`), so unread is exact and counted by number (below). Apart from the seat: a member reads a public group they never joined, and somebody named where they have no seat is given one here (read up to nothing) |
 | `channel_sources` | The outside places a channel is fed by, in an account, keyed by chat and -- for one person's chat (`kind` `PERSON`, else `CHAT`) -- the person's platform id. Whether the platform keeps it to its members (`is_private`), how to answer it (`delivery_ref`: the reply target of what was last heard there, never what was said) and, for a chat only (a CHECK), who answers for its outsiders, its invite link and the platform's request for it |
-| `channel_messages` | The timeline, numbered per channel (`seq`, gapless). `sender_kind` (`MEMBER`, `CONTACT`, `AGENT`) with the sender's id; for an agent, `on_behalf_user_id` or `on_behalf_contact_id` -- whom it answered, and so whose access the answer was made with. `source_id` is where it was heard -- the place a person said it on a platform -- and `target_source_id` where a line written in Lemma (a member's, or an agent's) was carried; never both. Only a heard line says the place is alive (`channel_sources.last_inbound_at`, so a member writing to a contact opens no WhatsApp window). `members_only` marks a note never delivered or shown outside; typed `parts` (mentions, files, links). A heard line keeps its `reply_ref` -- the place, thread, message replied to and id to answer, never the words or the sender's address, number or name. `conversation_id` is the conversation a line was written by (an agent's answer) or heard into (a platform message a surface took up) -- never who answers a line in Lemma, which is `channel_line_answers`. One line per `client_message_id`, and per platform message |
+| `channel_messages` | The timeline, numbered per channel (`seq`, gapless). `sender_kind` (`MEMBER`, `CONTACT`, `AGENT`) with the sender's id; for an agent, `on_behalf_user_id` or `on_behalf_contact_id` -- whom it answered, and so whose access the answer was made with. `source_id` is where it was heard -- the place a person said it on a platform -- and `target_source_id` where a line written in Lemma (a member's, or an agent's) was carried; never both. Only a heard line says the place is alive (`channel_sources.last_inbound_at`, so a member writing to a contact opens no WhatsApp window). `members_only` marks a note never delivered or shown outside; typed `parts` (mentions, files, links). A heard line keeps its `reply_ref` -- the place, thread, message replied to and id to answer, never the words or the sender's address, number or name. `conversation_id` is the conversation a line was written by (an agent's answer) or heard into (a platform message a surface took up) -- never who answers a line in Lemma, which is `channel_line_answers`. One line per `client_message_id`, and per platform message; a member's is kept in their own namespace (`member:{user_id}:{name}`, `domain.idempotency`) and shown back to them as they sent it |
 | `channel_line_answers` | Which agents answer a line: one row per line and agent (`(message_id, agent_id)`; the pod's own agent is the pod's id), so several agents may answer one line, each once. The conversation it answers in, the run (`agent_run_id`, the one its turn started or joined), where it stands (`state`: `ANSWERING`, `ANSWERED`, `ENDED`) and the agent's answer line (`answer_message_id`). Hung from its line by `(message_id, channel_id)` → `channel_messages`, cascading on delete and on update, so it follows a fold |
 | `channel_threads` | A line with replies: how many (`reply_count`) and the newest one's time (`last_reply_at`), kept as each reply is written -- the root itself is never rewritten for it. Keyed to the root and its channel (`(root_id, channel_id)` → `channel_messages`), so it follows a fold |
 | `channel_changes` | The channel's change log for its live subscribers: one row per change number (`(channel_id, rev)`), naming the line it moved or none for the channel's own fields and members, stamped by the database's clock (`at`). Kept for `revisions.CHANGE_RETENTION` (14 days, `channels.changes_prune` hourly) |
-| `channel_mentions` | Who a line names -- a member, a contact or an agent: exactly what its mention parts name now (below). It carries its line's channel and `seq` -- an unread mention is one past the reader's `last_read_seq`, counted from the mention's own index without visiting the line -- held to the line's by a cascading foreign key, `(message_id, channel_id, seq)` → `channel_messages`, so they are the line's, never a copy anybody keeps |
+| `channel_mentions` | Who a line names -- a member, a contact or an agent: exactly what its mention parts name now (below). It carries its line's channel and `seq` and, for a member named, when they read it (`read_at`; unread while NULL, and `ix_channel_mentions_user` holds only the unread) -- held to the line's by a cascading foreign key, `(message_id, channel_id, seq)` → `channel_messages`, so they are the line's, never a copy anybody keeps |
 | `channel_questions` | A question a line puts to one person, held to its line and channel by `(message_id, channel_id)` → `channel_messages`. What asked it is typed: `asker` (`TOOL` an agent's paused `ask_user` or approval, `WORKFLOW` a workflow's form, `MESSAGE` a question one member's agent put to another), with the asking conversation (`asker_conversation_id`) or workflow run (`asker_workflow_run_id`) and what in it (`asker_key`); `ref` is the asker's idempotency key, unique per pod, never parsed. `awaits_policy` is who may answer (`ONE`: the one person). `kind` is `ASK`, `APPROVAL` or `FORM`, and `state` runs `OPEN` → `ANSWERING` → `ANSWERED`, or `CANCELLED` / `EXPIRED`, with the answer that took effect |
 | `channel_message_deliveries` | Every send of a line outside Lemma -- to a place, or a push to a member -- unique per line and target, hung from its line by `(message_id, channel_id)` and carrying the line's `seq`: `PENDING`, `SENT`, `FAILED` (due again after a backoff, no sooner than the platform's `Retry-After`), `SKIPPED` or `DEAD`. Why it is not `SENT` is `reason_code` (`DeliveryReasonCode`), which code matches on, beside `reason`, the sentence a member reads. Claimed by the database's clock, and never while an earlier line of the same channel to the same target has yet to go -- one probe of the target's due rows (`ix_cmd_due_source`, `ix_cmd_due_recipient`); a platform's status report settles it by the id noted the moment the platform answered (indexed as `md5(id)::uuid`). A push stands for the lines `from_seq` .. `seq` of its channel the member heard (`lines` of them; `urgent` when one names or asks them) |
 | `channel_delivery_attempts` | Each try of a delivery: when it began and ended, what it ended as (`outcome`, `error_code`) and the platform's status when it gave one -- so a 429 and then a send are two rows |
@@ -293,7 +293,8 @@ Under `/pods/{pod_id}` -- everybody named one way, a `PersonRef`
 (`MEMBER`, `CONTACT` or `AGENT`, an id, a name). PATCH: absent is unchanged,
 `null` clears. Creates take an `Idempotency-Key`; GETs never write.
 
-- `/channels` `GET` (kind, `visibility`, `q` -- words in the title --,
+- `/channels` `GET` (kind, `visibility`, `q` -- every word, any order, in
+  the title or the name of whose own channel it is --,
   archived, contact, assignee -- `me` or a user
   id --, unassigned, status -- all three a contact's current case's --,
   `needs_person` -- contacts waiting on a person: open, unassigned, the agent
@@ -311,9 +312,12 @@ Under `/pods/{pod_id}` -- everybody named one way, a `PersonRef`
   `/members/me` `POST` (join -- a private
   group too, for `channel.manage`) · `PATCH` (notify, notify_via,
   muted_until) · `DELETE` (leave);
-  `/members/{kind}:{id}` `PATCH` · `DELETE`; `/channels/{c}/read` `POST {seq}`.
+  `/members/{kind}:{id}` `PATCH` · `DELETE`; `/channels/{c}/read`
+  `POST {seq, thread_root_id?}` (below).
 - `/channels/{c}/messages` `GET` (`before_seq` / `after_seq`) · `POST`;
-  `/messages/{m}` `PATCH` · `DELETE`; `/thread`; `/answer`;
+  `/messages/{m}` `PATCH` · `DELETE`; `/thread` (from its start,
+  `after_seq`, or backwards: `newest`, `before_seq`; its root carries its
+  live replies' count -- a deleted reply leaves it); `/answer`;
   `/deliveries` `GET` and `/deliveries/{d}/retry`;
   `/files/{file_id}` `GET` (below). A reader's own lines carry `delivered`:
   each place outside Lemma the line went to, with its status and why --
@@ -332,9 +336,10 @@ Under `/pods/{pod_id}` -- everybody named one way, a `PersonRef`
   `test_channel_search_scale_e2e.py` holds it to its plan at a hundred
   thousand lines.
 - The inbox counts a member's unread mentions from their places in the pod
-  -- seats and read numbers -- each one short range of the mention index
-  past their read number: never every mention they were ever given, and no
-  line read to count them.
+  -- seats and read numbers -- each one short range of the mention index,
+  which holds only the unread: never every mention they were ever given, and
+  no line read to count them. A channel muted for now (`muted_until`) is not
+  among the channels with something new.
 - `/pods/{pod_id}/members/{member}/notices` `POST {text}` (`agent_surfaces`'
   route): tell another member something -- a line from the pod's agent on the
   caller's behalf in the member's own channel, pushed like any of theirs.
@@ -356,13 +361,60 @@ and nothing unread -- so a pod admin can find a group and join it to take it
 over. Every channel row says whether the reader is in it (`joined`).
 
 Creates replay by `Idempotency-Key` -- channels, lines (`client_message_id`
-or the key), notices, outreach, a WhatsApp group start -- and a key is the
-caller's own: two members who pick one key never name one line, and no client
-can take a name the pod's own writers use (`run:`, `wf:` ...). A replay shows
-what it made only to whoever may still see it, and a line's name sent again
-for a different line (other words, thread, place) is refused, 422. A line
-hangs only from threads, lines and places of its own channel
-(`posting.LineMisplaced`).
+or the key; both sent, they must agree), notices, outreach, a WhatsApp group
+start -- and a key is the caller's own: two members who pick one key never
+name one line, and no client can take a name the pod's own writers use
+(`run:`, `wf:` ...). A line's `client_message_id` comes back to its writer as
+they sent it -- the key, when the key named it -- and to nobody else. A replay
+shows what it made only to whoever may still see it, and a name or key sent
+again for something else (a line's other words, thread or place; a group's
+other title, topic or visibility; a notice's other text) is refused, 422,
+saying which it was. A line hangs only from threads, lines and places of its
+own channel (`posting.LineMisplaced`). An edit naming nothing changes nothing.
+
+Text a person sends -- a line and its parts, a title, a topic, a list's or a
+search's words, a notice -- may not hold a NUL character (Postgres text
+cannot): 422. Line numbers are bounded by `bigint`. Naming an agent that is
+not one of the pod's is refused, 422, as naming somebody who cannot see the
+channel is. A member sends at most `NOTICES_PER_MINUTE` (20) notices a minute
+in a pod (429, `Retry-After`).
+
+Every refusal is the one error envelope (`ErrorResponse`) with a code to match
+on: `CHANNEL_NOT_FOUND`, `LINE_NOT_FOUND`, `MEMBER_NOT_FOUND` (404);
+`INSUFFICIENT_PERMISSION` (403); `WRONG_CHANNEL_KIND`, `CHANNEL_ARCHIVED`,
+`LAST_OWNER`, `LAST_MEMBER`, `NOT_JOINED`, `CHANNEL_HAS_SOURCES`,
+`CHANNEL_CONFLICT` (409); `INVALID_CURSOR` (400); `VALIDATION_ERROR` (422,
+the schema's refusals and the module's own alike). The routers document them
+(`api.access.ERRORS`).
+
+A group keeps an owner, and a private one somebody in it. Its last owner
+leaving hands it to whoever has been in it longest; stepping the last owner
+down, or taking them out, is refused (`LAST_OWNER`) until somebody else is
+one. The last person in a private group cannot leave it or be taken out
+(`LAST_MEMBER`) -- nobody could find it again; it is deleted instead.
+
+### Read state
+
+One read number per member and channel (`last_read_seq`), the timeline's;
+threads are read where they are.
+
+- **Unread lines** are the timeline's: lines past `last_read_seq`, less the
+  thread replies among them, which count on their thread -- by number, never
+  by reading lines (`channels.replies` against `read_replies`). A list's
+  last line, and the "channels with something new" badge, follow the same
+  rule.
+- **A mention is read where it was said.** `POST /read {seq}` reads the
+  timeline to `seq`: mentions in its top-level lines up to there are read,
+  mentions in thread replies are not. `POST /read {seq, thread_root_id}`
+  reads that thread -- its root and replies -- to `seq`, and leaves the
+  timeline's number where it was. The app sends both: the timeline's when its
+  end is on screen, the thread's while a thread is open.
+- **Writing reads where one wrote**: a top-level line reads the timeline to
+  it; a reply reads its thread to it, never the timeline -- replying is no
+  sign of what else one saw.
+- **Joining starts at the newest line**: a member seated in a channel for
+  the first time (joining, added, a platform seat) reads from its
+  `last_seq`. A line that named them before stays unread.
 
 ## Files on a line
 

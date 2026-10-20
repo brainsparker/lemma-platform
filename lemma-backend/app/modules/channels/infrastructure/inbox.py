@@ -1,17 +1,21 @@
 """What is new for one member: unread lines, unread mentions, open questions.
 
-Counted by number, not time: a channel's unread is ``last_seq`` past the
-member's ``last_read_seq``. Only channels the member is in count lines --
-a public group they never joined does not -- and every count is filtered by
-what they may see, so a channel they cannot open never shows a badge.
-Counts stop at ``UNREAD_CAP``; the app shows "99+" past it.
+Lines are counted by number, not read: a channel's unread lines are those
+past the member's ``last_read_seq``, less the replies in its threads among
+them -- counted on their thread, not in the timeline (``replies`` against
+``read_replies``). Only channels the member is in count
+lines -- a public group they never joined does not -- and every count is
+filtered by what they may see, so a channel they cannot open never shows a
+badge. Counts stop at ``UNREAD_CAP``; the app shows "99+" past it.
 
+A mention is unread until the member reads it where it was said: in the
+timeline, or in its thread (``members.mark_read``, ``mark_thread_read``).
 Unread mentions are counted from the member's own places in the pod -- the
 channels they sit in, and those they have a read number in (somebody named
 where they are not seated is given one: ``mentions.sync_mentions``) -- each
-read as one short range of ``ix_channel_mentions_user`` past their read
-number. What they have read is never visited, and a deleted line's mentions
-went with it, so no line is read to count them.
+read as one short range of ``ix_channel_mentions_user``, which holds only
+unread mentions. What they have read is never visited, and a deleted line's
+mentions went with it, so no line is read to count them.
 """
 
 from __future__ import annotations
@@ -21,20 +25,18 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from sqlalchemy import (
-    BigInteger,
     Subquery,
     Uuid,
     and_,
     column,
     func,
-    literal,
+    or_,
     select,
     true,
     union,
     values,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import aliased
 
 from app.modules.channels.domain.access import Viewer
 from app.modules.channels.domain.entities import Channel, NotifyLevel
@@ -99,24 +101,23 @@ class InboxReads:
             select(
                 ChannelReadStateModel.channel_id,
                 ChannelReadStateModel.last_read_seq,
+                ChannelReadStateModel.read_replies,
             ).where(
                 ChannelReadStateModel.user_id == viewer.user_id,
                 ChannelReadStateModel.channel_id.in_(ids),
             )
         )
-        read: dict[UUID, int] = dict(rows.tuples().all())
-        mentions = await self._mentions_by_channel(viewer, ids, read)
+        read = {row[0]: (int(row[1]), int(row[2])) for row in rows}
+        mentions = await self._mentions_by_channel(viewer, ids)
         waiting = await self._waiting_by_channel(viewer, ids)
         found: dict[UUID, Unread] = {}
         for channel in channels:
-            upto = read.get(channel.id, 0)
-            lines = (
-                min(UNREAD_CAP, max(0, channel.last_seq - upto))
-                if channel.id in joined
-                else 0
-            )
+            upto, replies_read = read.get(channel.id, (0, 0))
+            new_lines = (channel.last_seq - upto) - (channel.replies - replies_read)
             found[channel.id] = Unread(
-                lines=lines,
+                lines=(
+                    min(UNREAD_CAP, max(0, new_lines)) if channel.id in joined else 0
+                ),
                 mentions=mentions.get(channel.id, 0),
                 waiting=waiting.get(channel.id, 0),
                 read_seq=upto,
@@ -125,24 +126,22 @@ class InboxReads:
         return found
 
     async def _mentions_by_channel(
-        self, viewer: Viewer, ids: list[UUID], read: dict[UUID, int]
+        self, viewer: Viewer, ids: list[UUID]
     ) -> dict[UUID, int]:
-        """Each channel's mentions past what the member has read, stopping at
-        ``UNREAD_CAP``: one range of ``ix_channel_mentions_user`` per channel,
-        so what is read is what is unread -- never every time they were named
-        there. (A cap across the page instead, by ``seq``, both read the
-        history and lost the counts of channels numbered lower.)"""
+        """Each channel's unread mentions, stopping at ``UNREAD_CAP``: one
+        range of ``ix_channel_mentions_user`` per channel, which holds only
+        what is unread -- never every time they were named there."""
         mention = ChannelMentionModel
-        page = values(
-            column("channel_id", Uuid), column("read_seq", BigInteger), name="page"
-        ).data([(channel_id, read.get(channel_id, 0)) for channel_id in ids])
+        page = values(column("channel_id", Uuid), name="page").data(
+            [(channel_id,) for channel_id in ids]
+        )
         unread = (
             select(mention.id)
             .where(
                 mention.user_id == viewer.user_id,
                 mention.pod_id == viewer.pod_id,
                 mention.channel_id == page.c.channel_id,
-                mention.seq > page.c.read_seq,
+                mention.read_at.is_(None),
             )
             .limit(UNREAD_CAP)
             .lateral("unread")
@@ -172,8 +171,9 @@ class InboxReads:
         return {row[0]: min(UNREAD_CAP, int(row[1])) for row in rows}
 
     async def totals(self, viewer: Viewer) -> Totals:
-        """Badges across the pod: channels with something new (that the
-        member hears of), unread mentions, questions waiting on them."""
+        """Badges across the pod: channels with something new in their
+        timeline (that the member hears of, and has not muted for now),
+        unread mentions, questions waiting on them."""
         channel = ChannelModel
         member = ChannelMemberModel
         state = ChannelReadStateModel
@@ -192,7 +192,10 @@ class InboxReads:
                 visible_to(viewer),
                 channel.archived_at.is_(None),
                 member.notify != NotifyLevel.NONE.value,
-                channel.last_seq > func.coalesce(state.last_read_seq, 0),
+                or_(member.muted_until.is_(None), member.muted_until <= func.now()),
+                # Something new in the timeline, not only in its threads.
+                channel.last_seq - func.coalesce(state.last_read_seq, 0)
+                > channel.replies - func.coalesce(state.read_replies, 0),
             )
         )
         unread_mentions = await self.session.scalar(
@@ -239,14 +242,13 @@ class InboxReads:
         range of the mention index past their read number."""
         mention = ChannelMentionModel
         places = _places_of(viewer)
-        read = aliased(ChannelReadStateModel, name="read")
         unread = select(
             mention.channel_id, mention.message_id, mention.created_at
         ).where(
             mention.user_id == viewer.user_id,
             mention.pod_id == viewer.pod_id,
             mention.channel_id == places.c.id,
-            mention.seq > func.coalesce(read.last_read_seq, literal(0)),
+            mention.read_at.is_(None),
         )
         if newest_first:
             unread = unread.order_by(mention.seq.desc())
@@ -255,10 +257,6 @@ class InboxReads:
             select(lateral.c.channel_id, lateral.c.message_id, lateral.c.created_at)
             .select_from(places)
             .join(ChannelModel, ChannelModel.id == places.c.id)
-            .outerjoin(
-                read,
-                and_(read.user_id == viewer.user_id, read.channel_id == places.c.id),
-            )
             .join(lateral, true())
             .where(visible_to(viewer), ChannelModel.archived_at.is_(None))
             .limit(limit)

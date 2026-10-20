@@ -13,13 +13,15 @@ from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.modules.channels.api.schemas import (
     AgentNames,
     Names,
     PersonRef,
+    UserText,
     agent_ref,
+    no_nul,
     ref,
 )
 from app.modules.channels.domain.entities import (
@@ -33,6 +35,7 @@ from app.modules.channels.domain.entities import (
     QuestionState,
     SenderKind,
 )
+from app.modules.channels.domain.idempotency import client_name_of
 from app.modules.channels.domain.parts import MAX_PARTS, MentionPart, Part
 from app.modules.channels.domain.projection import withheld_from
 
@@ -94,7 +97,13 @@ class ChannelMessageResponse(BaseModel):
         ),
     )
     parts: list[Part] = Field(default_factory=list)
-    client_message_id: str | None = None
+    client_message_id: str | None = Field(
+        default=None,
+        description=(
+            "On the reader's own line: the name their client gave it, as sent "
+            "(`client_message_id`, or `Idempotency-Key`)."
+        ),
+    )
     source_id: UUID | None = Field(
         default=None,
         description="Where it was said or sent; absent for a line only in Lemma.",
@@ -140,12 +149,32 @@ class ChannelMessagesResponse(BaseModel):
 class ThreadResponse(BaseModel):
     root: ChannelMessageResponse
     items: list[ChannelMessageResponse] = Field(description="Replies, oldest first.")
-    has_more: bool
-    next_after_seq: int | None = None
+    has_more: bool = Field(
+        description=(
+            "Whether there are more replies in the direction read: newer ones, "
+            "or with `before_seq` or `newest`, older ones."
+        )
+    )
+    next_after_seq: int | None = Field(
+        default=None, description="Pass as `after_seq` for the newer page."
+    )
+    next_before_seq: int | None = Field(
+        default=None,
+        description="Reading backwards: pass as `before_seq` for the older page.",
+    )
+
+
+def _parts_without_nul(parts: list[Part] | None) -> list[Part] | None:
+    """Every word of a part is stored, so none may hold a NUL either."""
+    for part in parts or ():
+        for value in part.model_dump().values():
+            if isinstance(value, str):
+                no_nul(value)
+    return parts
 
 
 class ChannelPostRequest(BaseModel):
-    text: str = Field(default="", max_length=20_000)
+    text: UserText = Field(default="", max_length=20_000)
     members_only: bool = Field(
         default=False, description="A note to the pod's members: never sent outside."
     )
@@ -165,24 +194,31 @@ class ChannelPostRequest(BaseModel):
         max_length=MAX_PARTS,
         description="Mentions, files and links. Who a line names is read from here.",
     )
-    client_message_id: str | None = Field(
+    client_message_id: UserText | None = Field(
         default=None,
         min_length=1,
         max_length=64,
-        description="The client's name for this line: sending it again is the same line.",
+        description=(
+            "The client's name for this line: sending it again is the same "
+            "line. Shown back on the line to its writer, as sent."
+        ),
     )
+
+    check_parts = field_validator("parts")(_parts_without_nul)
 
 
 class ChannelEditRequest(BaseModel):
     """Absent is unchanged; ``null`` clears the parts. The text cannot be
     cleared: delete the line instead."""
 
-    text: str | None = Field(default=None, min_length=1, max_length=20_000)
+    text: UserText | None = Field(default=None, min_length=1, max_length=20_000)
     parts: list[Part] | None = Field(
         default=None,
         max_length=MAX_PARTS,
         description="Absent keeps the parts; `null` or `[]` clears them.",
     )
+
+    check_parts = field_validator("parts")(_parts_without_nul)
 
 
 class ChannelAnswerRequest(BaseModel):
@@ -389,7 +425,7 @@ def message_response(
         text=None if hidden or message.is_deleted else message.text,
         withheld=hidden,
         parts=[] if hidden else _parts(message, names, agents or {}),
-        client_message_id=message.client_message_id,
+        client_message_id=client_name_of(message.client_message_id, user_id=reader_id),
         source_id=message.place_id,
         members_only=message.members_only,
         conversation_id=message.conversation_id,

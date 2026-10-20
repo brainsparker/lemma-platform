@@ -5,7 +5,8 @@ full, newest first, each hit with its rank and the words around the match;
 it narrows by channel, kind, who said it and when, and reaches archived
 channels when asked. A line withheld from the reader is left out by the query
 itself, so it never leaves a page short. The channel list narrows by
-visibility and title; a channel's members are read a page at a time.
+visibility, and by every word of its name -- its title, or whose own channel
+it is; a channel's members are read a page at a time.
 
 Against Postgres, through the API the four members of ``channel_pod`` use.
 """
@@ -20,7 +21,12 @@ import pytest
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
 from app.modules.channels.contracts import NewLine, Principal, Sender, post
-from app.modules.channels.tests.e2e.channel_pod import Pod, group, say
+from app.modules.channels.tests.e2e.channel_pod import (
+    Pod,
+    contact_place,
+    group,
+    say,
+)
 
 pytestmark = pytest.mark.e2e
 
@@ -159,3 +165,37 @@ async def test_a_channels_members_are_read_a_page_at_a_time(pod: Pod):
 
     missing = await pod.client(pod.viewer).get(path)
     assert missing.status_code == 404, missing.text
+
+
+async def test_a_snippet_keeps_the_words_as_written(pod: Pod):
+    crew = await group(pod)
+    await say(pod, crew["id"], "[live] the deploy is green")
+
+    found = await pod.client().get(f"/pods/{pod.id}/search", params={"q": "live"})
+
+    [hit] = found.json()["items"]
+    assert hit["snippet"] == "[live] the deploy is green"
+
+
+async def test_the_list_finds_a_channel_by_every_word_and_by_whose_it_is(
+    pod: Pod, db_session
+):
+    await group(pod, title="Spring launch plan")
+    await group(pod, title="Hiring")
+    await contact_place(db_session, pod)
+    await pod.client().post(f"{pod.base}/me")
+    owner = pod.client()
+
+    async def named(q: str, **params: str) -> list[str | None]:
+        found = await owner.get(pod.base, params={"q": q, **params})
+        assert found.status_code == 200, found.text
+        return [
+            item["title"] or item["person"]["name"] for item in found.json()["items"]
+        ]
+
+    assert await named("plan LAUNCH") == ["Spring launch plan"]
+    assert await named("launch hiring") == []
+    assert await named("dana") == ["Dana"]
+    own = pod.owner["email"].split("@")[0]
+    mine = await owner.get(pod.base, params={"q": own, "kind": "DIRECT"})
+    assert [item["kind"] for item in mine.json()["items"]] == ["DIRECT"]

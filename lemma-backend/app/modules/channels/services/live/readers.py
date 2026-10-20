@@ -18,7 +18,12 @@ from app.core.authorization.service import AuthorizationDataService
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.live.protocol import LiveAccessDenied, LiveErrorCode
-from app.modules.channels.api.access import Caller, caller_from, visible
+from app.modules.channels.api.access import (
+    Caller,
+    caller_from,
+    refusal_message,
+    visible,
+)
 from app.modules.channels.domain.entities import Channel
 
 
@@ -65,7 +70,7 @@ async def visible_channel(
         return await visible(uow, caller, channel_id)
     except HTTPException as missing:
         raise LiveAccessDenied(
-            LiveErrorCode.NOT_FOUND, str(missing.detail)
+            LiveErrorCode.NOT_FOUND, refusal_message(missing)
         ) from missing
 
 

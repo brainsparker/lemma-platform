@@ -74,6 +74,7 @@ CREATE TABLE channels (
 	hand_back_after_hours INTEGER DEFAULT 12 NOT NULL,
 	current_case_id UUID,
 	last_seq BIGINT DEFAULT 0 NOT NULL,
+	replies BIGINT DEFAULT 0 NOT NULL,
 	last_line_id UUID,
 	last_line_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
 	last_rev BIGINT DEFAULT 0 NOT NULL,
@@ -191,6 +192,7 @@ CREATE TABLE channel_read_state (
 	channel_id UUID NOT NULL,
 	pod_id UUID NOT NULL,
 	last_read_seq BIGINT DEFAULT 0 NOT NULL,
+	read_replies BIGINT DEFAULT 0 NOT NULL,
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
 	updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
 	PRIMARY KEY (user_id, channel_id),
@@ -238,7 +240,7 @@ CREATE TABLE channel_messages (
 	channel_id UUID NOT NULL,
 	pod_id UUID NOT NULL,
 	seq BIGINT NOT NULL,
-	client_message_id VARCHAR(64),
+	client_message_id VARCHAR(128),
 	source_id UUID,
 	target_source_id UUID,
 	sender_kind VARCHAR(10) NOT NULL,
@@ -308,6 +310,7 @@ CREATE TABLE channel_mentions (
 	user_id UUID,
 	contact_id UUID,
 	agent_id UUID,
+	read_at TIMESTAMP WITH TIME ZONE,
 	id UUID NOT NULL,
 	created_at TIMESTAMP WITH TIME ZONE NOT NULL,
 	updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
@@ -320,7 +323,7 @@ CREATE TABLE channel_mentions (
 );
 CREATE INDEX ix_channel_mentions_agent ON channel_mentions (agent_id) WHERE agent_id IS NOT NULL;
 CREATE INDEX ix_channel_mentions_contact ON channel_mentions (contact_id) WHERE contact_id IS NOT NULL;
-CREATE INDEX ix_channel_mentions_user ON channel_mentions (user_id, pod_id, channel_id, seq) WHERE user_id IS NOT NULL;
+CREATE INDEX ix_channel_mentions_user ON channel_mentions (user_id, pod_id, channel_id, seq) WHERE user_id IS NOT NULL AND read_at IS NULL;
 CREATE UNIQUE INDEX uq_channel_mentions_named ON channel_mentions (message_id, coalesce(user_id, contact_id, agent_id));
 CREATE TABLE channel_questions (
 	message_id UUID NOT NULL,

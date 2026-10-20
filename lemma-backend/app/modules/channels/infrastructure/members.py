@@ -20,6 +20,7 @@ from sqlalchemy import (
     func,
     literal,
     literal_column,
+    or_,
     select,
     tuple_,
     update,
@@ -40,6 +41,8 @@ from app.modules.channels.domain.entities import (
 )
 from app.modules.channels.infrastructure.models import (
     ChannelMemberModel,
+    ChannelMentionModel,
+    ChannelMessageModel,
     ChannelModel,
     ChannelReadStateModel,
 )
@@ -135,7 +138,41 @@ class MemberRepository:
         made = bool(seated.scalar_one())
         if made:
             await touch_channel(self.session, channel.id)
+            if principal.user_id is not None:
+                await self._read_from_now(channel, principal.user_id)
         return made
+
+    async def _read_from_now(self, channel: Channel, user_id: UUID) -> None:
+        """A member new to a channel starts reading at its newest line: what
+        was said before they came is history, not news. A line that named
+        them before stays unread -- it is theirs to read."""
+        state = ChannelReadStateModel
+        head = (
+            select(ChannelModel.last_seq, ChannelModel.replies)
+            .where(ChannelModel.id == channel.id)
+            .subquery()
+        )
+        statement = insert(state).from_select(
+            ["channel_id", "pod_id", "user_id", "last_read_seq", "read_replies"],
+            select(
+                literal(channel.id),
+                literal(channel.pod_id),
+                literal(user_id),
+                head.c.last_seq,
+                head.c.replies,
+            ),
+        )
+        await self.session.execute(
+            statement.on_conflict_do_update(
+                index_elements=["user_id", "channel_id"],
+                set_={
+                    "last_read_seq": statement.excluded.last_read_seq,
+                    "read_replies": statement.excluded.read_replies,
+                    "updated_at": func.now(),
+                },
+                where=state.last_read_seq < statement.excluded.last_read_seq,
+            )
+        )
 
     async def add_agent(
         self,
@@ -285,6 +322,30 @@ class MemberRepository:
         )
         return member_entity(row) if row else None
 
+    async def someone_else(
+        self, channel_id: UUID, user_id: UUID, *, role: MemberRole | None = None
+    ) -> UUID | None:
+        """The member other than ``user_id`` longest in the channel -- in
+        ``role``, when named -- or ``None``. The channel's row is locked
+        first, so two members leaving it at once cannot each count on the
+        other."""
+        await self.session.execute(
+            select(ChannelModel.id)
+            .where(ChannelModel.id == channel_id)
+            .with_for_update()
+        )
+        seat = ChannelMemberModel
+        statement = select(seat.user_id).where(
+            seat.channel_id == channel_id,
+            seat.user_id.is_not(None),
+            seat.user_id != user_id,
+        )
+        if role is not None:
+            statement = statement.where(seat.role == role.value)
+        return await self.session.scalar(
+            statement.order_by(seat.created_at, seat.id).limit(1)
+        )
+
     async def users_in(self, channel_id: UUID, user_ids: Collection[UUID]) -> set[UUID]:
         if not user_ids:
             return set()
@@ -366,36 +427,116 @@ class MemberRepository:
     # -- read state ---------------------------------------------------------------
 
     async def mark_read(self, *, channel_id: UUID, user_id: UUID, seq: int) -> int:
-        """They have read up to ``seq``; it never goes back. Returns where they
-        are now."""
-        state = ChannelReadStateModel
-        top = select(ChannelModel.last_seq).where(ChannelModel.id == channel_id)
-        upto = func.least(seq, top.scalar_subquery())
-        pod = select(ChannelModel.pod_id).where(ChannelModel.id == channel_id)
-        statement = (
-            insert(state)
-            .values(
-                channel_id=channel_id,
-                pod_id=pod.scalar_subquery(),
-                user_id=user_id,
-                last_read_seq=upto,
-            )
-            .on_conflict_do_update(
-                index_elements=["user_id", "channel_id"],
-                set_={
-                    "last_read_seq": func.greatest(state.last_read_seq, upto),
-                    "updated_at": func.now(),
-                },
-            )
-            .returning(state.last_read_seq)
-        )
-        read_seq = int(await self.session.scalar(statement) or 0)
+        """They have read the timeline up to ``seq``; it never goes back. What
+        named them in a line of the timeline up to there is read; what named
+        them in a thread is not -- that is read in the thread
+        (``mark_thread_read``). Returns where they are now."""
+        state, line = ChannelReadStateModel, ChannelMessageModel
         pod_id = await self.session.scalar(
             select(ChannelModel.pod_id).where(ChannelModel.id == channel_id)
         )
-        if pod_id is not None:
-            signal_after_commit(self.session, pod_id, read_signal(channel_id, user_id))
+        if pod_id is None:
+            return 0
+        await self.session.execute(
+            insert(state)
+            .values(channel_id=channel_id, pod_id=pod_id, user_id=user_id)
+            .on_conflict_do_nothing(index_elements=["user_id", "channel_id"])
+        )
+        top = select(ChannelModel.last_seq).where(ChannelModel.id == channel_id)
+        upto = func.least(seq, top.scalar_subquery())
+        # The replies among the lines newly read, from the row as it is when
+        # the update takes it: a read racing this one is counted once.
+        replies = (
+            select(func.count())
+            .where(
+                line.channel_id == channel_id,
+                line.seq > state.last_read_seq,
+                line.seq <= upto,
+                line.thread_root_id.is_not(None),
+            )
+            .scalar_subquery()
+        )
+        moved = await self.session.scalar(
+            update(state)
+            .where(
+                state.user_id == user_id,
+                state.channel_id == channel_id,
+                state.last_read_seq < upto,
+            )
+            .values(
+                last_read_seq=upto,
+                read_replies=state.read_replies + replies,
+                updated_at=func.now(),
+            )
+            .returning(state.last_read_seq)
+        )
+        read_seq = (
+            int(moved)
+            if moved is not None
+            else await self.read_seq(channel_id=channel_id, user_id=user_id)
+        )
+        await self._read_mentions(
+            pod_id=pod_id,
+            channel_id=channel_id,
+            user_id=user_id,
+            upto=read_seq,
+            where=line.thread_root_id.is_(None),
+        )
+        signal_after_commit(self.session, pod_id, read_signal(channel_id, user_id))
         return read_seq
+
+    async def mark_thread_read(
+        self, *, channel_id: UUID, user_id: UUID, root_id: UUID, seq: int
+    ) -> None:
+        """They have read a thread -- its first line and its replies -- up to
+        ``seq``: what named them there is read. The timeline's read number
+        does not move."""
+        pod_id = await self.session.scalar(
+            select(ChannelModel.pod_id).where(ChannelModel.id == channel_id)
+        )
+        if pod_id is None:
+            return
+        read = await self._read_mentions(
+            pod_id=pod_id,
+            channel_id=channel_id,
+            user_id=user_id,
+            upto=seq,
+            where=or_(
+                ChannelMessageModel.thread_root_id == root_id,
+                ChannelMessageModel.id == root_id,
+            ),
+        )
+        if read:
+            signal_after_commit(self.session, pod_id, read_signal(channel_id, user_id))
+
+    async def _read_mentions(
+        self,
+        *,
+        pod_id: UUID,
+        channel_id: UUID,
+        user_id: UUID,
+        upto: int,
+        where: ColumnElement[bool],
+    ) -> int:
+        """Mark read the member's unread mentions in the channel up to
+        ``upto``, in the lines ``where`` picks: along the unread range of
+        ``ix_channel_mentions_user``. How many were."""
+        mention, line = ChannelMentionModel, ChannelMessageModel
+        result = await self.session.execute(
+            update(mention)
+            .where(
+                mention.user_id == user_id,
+                mention.pod_id == pod_id,
+                mention.channel_id == channel_id,
+                mention.seq <= upto,
+                mention.read_at.is_(None),
+                line.id == mention.message_id,
+                where,
+            )
+            .values(read_at=func.now())
+            .execution_options(synchronize_session=False)
+        )
+        return int(getattr(result, "rowcount", 0) or 0)
 
     async def read_seq(self, *, channel_id: UUID, user_id: UUID) -> int:
         found = await self.session.scalar(

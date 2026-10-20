@@ -208,9 +208,10 @@ async def test_a_members_channel_list_reads_a_page_not_every_channel(
     page = await first()
     assert len(page["items"]) == PAGE
     unread = {UUID(item["id"]): item["unread"] for item in page["items"]}
-    # Read to its last hundred lines, named in every tenth.
+    # Read to its last hundred lines, named in every tenth; fifteen of them
+    # are replies, counted on their threads rather than in the timeline.
     assert unread[scale.long_channel_id] == {
-        "lines": UNREAD_CAP,
+        "lines": 100 - 15,
         "mentions": 10,
         "waiting": 1,
         "read_seq": LONG_CHANNEL_LINES - 100,

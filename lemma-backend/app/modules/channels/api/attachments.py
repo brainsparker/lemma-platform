@@ -26,7 +26,13 @@ from app.core.authorization.factory import create_authorization_data_service
 from app.core.authorization.permissions import Permissions
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.channels.api.access import CallerDep, missing, unprocessable, visible
+from app.modules.channels.api.access import (
+    ERRORS,
+    CallerDep,
+    missing,
+    unprocessable,
+    visible,
+)
 from app.modules.channels.api.message_schemas import hidden_from
 from app.modules.channels.domain.entities import SenderKind
 from app.modules.channels.domain.parts import FilePart, Part
@@ -36,7 +42,9 @@ from app.modules.datastore.contracts.pod_files import (
     readable_pod_file,
 )
 
-router = APIRouter(prefix="/pods/{pod_id}/channels", tags=["Channels"])
+router = APIRouter(
+    prefix="/pods/{pod_id}/channels", tags=["Channels"], responses=ERRORS
+)
 
 #: Shown in place: raster images. Anything else -- SVG and HTML included,
 #: which can carry script -- is a download.

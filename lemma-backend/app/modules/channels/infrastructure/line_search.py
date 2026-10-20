@@ -35,9 +35,12 @@ from app.modules.channels.infrastructure.models import (
 )
 from app.modules.channels.infrastructure.rows import MAX_LINES, message_entity
 
-#: A snippet is the text around the match, unmarked: a reader highlights the
-#: words itself, so nobody's line is ever rendered as markup.
-SNIPPET_OPTIONS = "StartSel='',StopSel='',MaxWords=24,MinWords=8,MaxFragments=1"
+#: A snippet is the words around the match, unmarked: a reader highlights
+#: the words itself, so nobody's line is ever rendered as markup. Whole words,
+#: as written -- punctuation and all -- this many of them.
+SNIPPET_WORDS = 24
+#: How many of them come before the first match.
+SNIPPET_BEFORE = 8
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,7 +98,7 @@ class LineSearch:
             SearchHit(
                 message=message_entity(row[0], question=row[1]),
                 rank=float(row[2] or 0.0),
-                snippet=str(row[3]) if row[3] is not None else None,
+                snippet=snippet(row[0].body, query),
             )
             for row in rows
         ]
@@ -108,7 +111,7 @@ class LineSearch:
         before: tuple[datetime, UUID] | None,
         *,
         limit: int,
-    ) -> Select[tuple[ChannelMessageModel, ChannelQuestionModel, float, str]]:
+    ) -> Select[tuple[ChannelMessageModel, ChannelQuestionModel, float]]:
         message = ChannelMessageModel
         words = func.plainto_tsquery("simple", query)
         statement = (
@@ -116,9 +119,6 @@ class LineSearch:
                 message,
                 ChannelQuestionModel,
                 func.ts_rank(message.search, words).label("rank"),
-                # Costly, so Postgres makes it after the page is cut: only for
-                # the lines shown, from the row already read.
-                func.ts_headline("simple", message.body, words, SNIPPET_OPTIONS),
             )
             .outerjoin(
                 ChannelQuestionModel, ChannelQuestionModel.message_id == message.id
@@ -145,6 +145,29 @@ class LineSearch:
         return statement.order_by(message.created_at.desc(), message.id.desc()).limit(
             limit
         )
+
+
+def _bare(word: str) -> str:
+    """A word as the ``simple`` dictionary keys it: lower case, without the
+    punctuation around it."""
+    return word.strip(_PUNCTUATION).lower()
+
+
+_PUNCTUATION = "".join(chr(c) for c in range(128) if not chr(c).isalnum())
+
+
+def snippet(body: str, query: str) -> str | None:
+    """The words of ``body`` around the first of the query's words, whole and
+    as written -- a leading ``[`` or ``#`` kept -- with "…" where it was cut."""
+    words = body.split()
+    if not words:
+        return None
+    wanted = {_bare(word) for word in query.split()} - {""}
+    at = next((index for index, word in enumerate(words) if _bare(word) in wanted), 0)
+    start = max(0, min(at - SNIPPET_BEFORE, len(words) - SNIPPET_WORDS))
+    end = min(len(words), start + SNIPPET_WORDS)
+    shown = " ".join(words[start:end])
+    return f"{'… ' if start > 0 else ''}{shown}{' …' if end < len(words) else ''}"
 
 
 def _narrowed(within: SearchFilter) -> list[ColumnElement[bool]]:
@@ -176,9 +199,10 @@ def _said_by(sender: SpeakerRef) -> list[ColumnElement[bool]]:
 
 
 __all__ = [
-    "SNIPPET_OPTIONS",
+    "SNIPPET_WORDS",
     "LineSearch",
     "SearchFilter",
     "SearchHit",
     "SpeakerRef",
+    "snippet",
 ]

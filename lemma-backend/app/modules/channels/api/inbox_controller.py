@@ -7,6 +7,7 @@ a channel they cannot open is never counted, listed or found.
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Query
@@ -15,6 +16,7 @@ from app.core.api.dependencies import UoWDep
 from app.core.authorization.dependencies import require_action
 from app.core.authorization.permissions import Permissions
 from app.modules.channels.api.access import (
+    ERRORS,
     CallerDep,
     decode_cursor,
     encode_cursor,
@@ -28,6 +30,7 @@ from app.modules.channels.api.message_schemas import (
     SearchItem,
     SearchResponse,
 )
+from app.modules.channels.api.schemas import UserText
 from app.modules.channels.api.views import lines_across
 from app.modules.channels.domain.entities import ChannelKind, SenderKind
 from app.modules.channels.infrastructure.inbox import UNREAD_CAP, InboxReads
@@ -41,7 +44,7 @@ from app.modules.channels.infrastructure.questions import QuestionRepository
 from app.modules.channels.infrastructure.repository import ChannelRepository
 
 #: Routes with a fixed segment under the pod; included before the channels'.
-router = APIRouter(prefix="/pods/{pod_id}", tags=["Channels"])
+router = APIRouter(prefix="/pods/{pod_id}", tags=["Channels"], responses=ERRORS)
 
 #: The most items each of the inbox's lists shows.
 INBOX_ITEMS = 50
@@ -100,7 +103,7 @@ async def search(
     pod_id: UUID,
     uow: UoWDep,
     caller: CallerDep,
-    q: str = Query(min_length=1, max_length=200),
+    q: Annotated[UserText, Query(min_length=1, max_length=200)],
     channel_id: UUID | None = Query(default=None),
     kind: ChannelKind | None = Query(
         default=None, description="Only channels of this kind."

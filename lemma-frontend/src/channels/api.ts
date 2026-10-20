@@ -229,7 +229,7 @@ function liveApi(podId: string): ChannelApi {
             return { type: "file", path: written.path, name: written.name ?? line.name, mimeType: file.type || null, size: file.size, fileId: null };
         },
         async file(channelId, lineId, fileId) {
-            return (await client().channels.file(podId, channelId, lineId, fileId)) as Blob;
+            return client().channels.file(podId, channelId, lineId, fileId);
         },
         async inbox() {
             return readInbox(await client().channels.inbox(podId));

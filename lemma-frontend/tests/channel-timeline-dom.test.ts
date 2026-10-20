@@ -215,6 +215,48 @@ test("an image drawn again shows a URL of its own, never the one revoked when it
     }
 });
 
+test("an image that comes back as something other than bytes is a chip that says so; the timeline stays", async () => {
+    const { Timeline } = await import("../src/channels/timeline.tsx");
+    const view = await page();
+    /* What the SDK once handed back for every download: the bytes read as
+       text. A browser's createObjectURL throws on it. */
+    api.file = (async () => "\u0089PNG\r\n\u001a\n...") as never;
+    URL.createObjectURL = (value: unknown) => {
+        if (!(value instanceof Blob)) throw new TypeError("Failed to execute 'createObjectURL' on 'URL': Overload resolution failed.");
+        return "blob:x";
+    };
+    const image = { type: "file", path: "/me/red.png", name: "red.png", mimeType: "image/png", size: 3, fileId: "f1" };
+    try {
+        await view.draw(createElement(Timeline, timelineProps([line(1, { parts: [image] }), line(2)]) as never));
+        await view.flush();
+        assert.match(view.body(), /Couldn’t show this image/);
+        assert.match(view.body(), /red\.png/, "still offered to save");
+        assert.match(view.body(), /line 2/, "the rest of the timeline is drawn");
+        assert.equal(view.dom.window.document.querySelector("img"), null);
+    } finally {
+        delete api.file;
+        await view.close();
+    }
+});
+
+test("a part that cannot be drawn is said under its line, not a timeline that cannot load", async () => {
+    const { Timeline } = await import("../src/channels/timeline.tsx");
+    const view = await page();
+    const quiet = console.error;
+    console.error = () => {};
+    /* A name that is not text: React refuses to draw it. */
+    const broken = { type: "file", path: "/me/x", name: { not: "text" }, mimeType: "text/plain", size: 1, fileId: "f2" };
+    try {
+        await view.draw(createElement(Timeline, timelineProps([line(1, { parts: [broken] }), line(2)]) as never));
+        assert.match(view.body(), /Couldn’t show what this line shares/);
+        assert.match(view.body(), /line 1/);
+        assert.match(view.body(), /line 2/);
+    } finally {
+        console.error = quiet;
+        await view.close();
+    }
+});
+
 async function typeInto(view: Awaited<ReturnType<typeof page>>, text: string, caret = text.length) {
     const box = view.dom.window.document.querySelector("textarea")!;
     await act(async () => {

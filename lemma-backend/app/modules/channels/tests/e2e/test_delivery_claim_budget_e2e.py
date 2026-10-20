@@ -187,10 +187,13 @@ async def test_a_claim_probes_the_targets_due_rows_not_the_channels_history(
     claimable = await _plans(engine, lambda deliveries: deliveries.claim(oldest))
     behind = await _plans(engine, lambda deliveries: deliveries.claim(newest))
     sweep = await _plans(engine, lambda deliveries: deliveries.due(limit=100))
-    # Each row the sweep passes is read once, and again by each candidate's
-    # "anything older to this target?" probe; the sent history is never in
-    # the index it walks, which the checks below hold exactly.
+    # The deployment's due index is shared: while it holds a handful of rows,
+    # as in a test database, the planner may walk it for any of these rather
+    # than probe the target's own. Each row it passes is read once, and again
+    # by each candidate's "anything older to this target?" probe. The sent
+    # history is in no due index, and the checks below hold that exactly.
     others = await _others_still_due(channel_id)
+    ceiling = ROWS_CEILING + others * (len(due) + 1)
 
     async with async_session_maker() as session:
         repository = DeliveryRepository(session)
@@ -208,8 +211,8 @@ async def test_a_claim_probes_the_targets_due_rows_not_the_channels_history(
     for name, plans in (
         ("claim", claimable),
         ("claim behind an older one", behind),
+        ("due", sweep),
         ("next for a place", following),
         ("next for a member", pushes),
     ):
-        _assert_probes(name, plans)
-    _assert_probes("due", sweep, ceiling=ROWS_CEILING + others * (len(due) + 1))
+        _assert_probes(name, plans, ceiling=ceiling)

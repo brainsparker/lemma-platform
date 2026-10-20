@@ -159,7 +159,7 @@ def _to_pydantic_ai_messages(
                     ModelResponse(
                         parts=[
                             *pending.take(),
-                            TextPart(content=_message_text(msg)),
+                            TextPart(content=_said_text(msg)),
                         ],
                         timestamp=getattr(msg, "created_at", None),
                     )
@@ -410,6 +410,22 @@ def _normalize_role(role: object) -> MessageRole | None:
 
 def _message_text(msg: object) -> str:
     return getattr(msg, "text", None) or ""
+
+
+#: How a member's own words, written into a conversation the agent answers,
+#: reach the agent: on its side of the conversation, where whoever it answers
+#: cannot write, and marked as a person's -- otherwise they read as something
+#: the agent said itself, and an answer the pod gave is doubted as its own guess.
+MEMBER_WROTE = "[A member of the pod wrote this to them directly, not you:]\n"
+
+
+def _said_text(msg: object) -> str:
+    """An assistant-side line's text, marked when a member wrote it."""
+    text = _message_text(msg)
+    metadata = getattr(msg, "metadata", None) or {}
+    if isinstance(metadata, dict) and metadata.get("follow_up"):
+        return MEMBER_WROTE + text
+    return text
 
 
 def parse_tool_call_args(args: object) -> dict[str, object] | None:

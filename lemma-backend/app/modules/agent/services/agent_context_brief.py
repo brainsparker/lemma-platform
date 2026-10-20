@@ -178,7 +178,7 @@ async def _set_cached_brief(key: _BriefKey, brief: str) -> None:
 
 
 def _member_line(member) -> str:
-    """One person, with the id `message_user` actually takes."""
+    """One person, with the id `channel_post` actually takes."""
     who = member.name or member.email or "(unnamed)"
     email = f" <{member.email}>" if member.name and member.email else ""
     role = f" — {member.role}" if member.role else ""
@@ -425,7 +425,7 @@ class AgentContextBriefBuilder:
 
         Absent from the brief entirely until now, which is why the messaging
         fragment has to open by telling the agent to go and find out who it is
-        talking about: `message_user` takes an id, and an agent told "ask Priya"
+        talking about: `channel_post` takes an id, and an agent told "ask Priya"
         had no way to turn that into one without a tool call.
 
         The contract runs under this user's own authority, so an agent can never
@@ -447,7 +447,7 @@ class AgentContextBriefBuilder:
         lines = [
             "\n## People here",
             (
-                "- Pass the `to` value verbatim to `message_user`; a name will "
+                "- Pass the `to` value verbatim to `channel_post`; a name will "
                 "not resolve."
             ),
             *(_member_line(member) for member in directory.members),

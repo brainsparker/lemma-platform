@@ -2,11 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAssistantSession } from "lemma-sdk/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { lemma } from "@/session/client";
+import { withSocketConversations } from "@/live/socket-conversations";
 import { NEW_CONVERSATION, saidAboutSending, source } from "@/data";
 import { initialsOf } from "@/data/agent-names";
 import type { ApprovalDecision } from "./approval";
 import type { Pod } from "@/data";
-import { buildTurns, openInteraction, openSignIn, type RawMessage, type Turn } from "./turns";
+import { buildTurns, openInteraction, openSignIn, withRuntimeNotes, type RawMessage, type RuntimeNote, type Turn } from "./turns";
 import { messageIds, runTouched } from "./run-touched";
 import { InteractionDock } from "./interaction-dock";
 import type { AnswerWith } from "./interaction-card";
@@ -109,7 +110,9 @@ export function LiveConversation({
     callError?: string | null;
     callRefresh?: string;
 }) {
-    const client = useMemo(() => lemma(pod.id), [pod.id]);
+    /* The run streams over the pod's live socket, shared with every other
+       live view of the pod, and over SSE when the socket cannot carry it. */
+    const client = useMemo(() => withSocketConversations(lemma(pod.id), pod.id), [pod.id]);
     /* Who is answering. A conversation names its bot by `agent_id`, and a new
        one about to be made names it in `createWith`; either way the reply is
        that bot's, not the space's own. */
@@ -148,6 +151,14 @@ export function LiveConversation({
        otherwise shows as "Working" with nothing under it for minutes. */
     const [slotWait, setSlotWait] = useState<string | null>(null);
 
+    /* What the agent's runtime said while a run went — a model it no longer
+       offers, a session it lost. These arrive on the stream and nowhere else,
+       so they are held here, each with the conversation and the turn it came
+       during, and laid onto the turns below. `lastTurnId` is read from the
+       callback, which the session owns and cannot see this render's turns. */
+    const [runtimeNotes, setRuntimeNotes] = useState<(RuntimeNote & { conversationId: string | null })[]>([]);
+    const lastTurnId = useRef("");
+
     const historyRequestFailed = useRef(false);
     /* Set below, once the session it reloads exists; read here from the
        session's own error callback. */
@@ -174,8 +185,13 @@ export function LiveConversation({
             if (!target) return;
             patchConversationLists(queryClient, pod.id, (list) => applyTitle(list, target, title));
         },
-        onNotice: (notice, kind) => {
-            if (kind === WAITING_FOR_SLOT) setSlotWait(notice);
+        onNotice: (text, kind) => {
+            if (kind === WAITING_FOR_SLOT) {
+                setSlotWait(text);
+                return;
+            }
+            const note = { text, turnId: lastTurnId.current, conversationId: streamingIn.current };
+            setRuntimeNotes((was) => [...was, note]);
         },
         // Omit agentName: creation uses the pod default when no named agent is supplied.
         conversationId: conversationId === NEW_CONVERSATION ? null : conversationId,
@@ -414,11 +430,25 @@ export function LiveConversation({
     /* Every turn that did not change keeps the object already on screen, so
        its row can skip drawing again when a message lands elsewhere. */
     const shownTurns = useRef<Turn[]>([]);
+    const liveConversationId = session.conversationId ?? null;
+    const notesHere = useMemo(
+        () => runtimeNotes.filter((note) => note.conversationId === liveConversationId),
+        [runtimeNotes, liveConversationId],
+    );
+    /* Notes are about one conversation's turns; another conversation's are
+       dropped on the way in rather than kept, filtered out, for as long as
+       this view stays mounted. */
+    useEffect(() => {
+        setRuntimeNotes((was) => was.some((note) => note.conversationId !== liveConversationId)
+            ? was.filter((note) => note.conversationId === liveConversationId)
+            : was);
+    }, [liveConversationId]);
     const turns = useMemo(() => {
-        const next = keepUnchanged(shownTurns.current, buildTurns(transcript));
+        const next = keepUnchanged(shownTurns.current, withRuntimeNotes(buildTurns(transcript), notesHere));
         shownTurns.current = next;
         return next;
-    }, [transcript]);
+    }, [transcript, notesHere]);
+    useEffect(() => { lastTurnId.current = turns.at(-1)?.id ?? ""; }, [turns]);
 
     /* What the run is blocked on, read straight out of the transcript.
        An approval IS a tool call: `request_approval` streams in like any
@@ -650,7 +680,14 @@ export function LiveConversation({
                        anything, goes through. Handing the session the id here,
                        in the same tick as the create, leaves the pod's later
                        prop with nothing to switch away from. */
-                    adopt: made => session.setConversationId(made.id),
+                    /* Before the session hears it: the effect that copies
+                       the id across runs a render later, and a notice the
+                       first turn sends in between would be filed under no
+                       conversation and never drawn. */
+                    adopt: made => {
+                        streamingIn.current = made.id;
+                        session.setConversationId(made.id);
+                    },
                     onCreated: made => {
                         createdHere.current = made.id;
                         onCreated?.(made.id);

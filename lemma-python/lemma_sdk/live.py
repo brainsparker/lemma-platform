@@ -1,5 +1,9 @@
 """Watch record changes on a pod's live socket (``/pods/{pod_id}/live``).
 
+Any other topic the socket carries -- ``channel`` (one channel's timeline),
+``inbox`` (the reader's counts) -- is watched with :func:`watch_topic`; its
+events arrive as :class:`LiveTopicEvent`, each the server's event as sent.
+
 One websocket per pod carries any number of subscriptions. ``LiveSession`` is
 the protocol with no I/O -- the frames to send, and what each frame received
 means -- so the CLI and :func:`watch_changes` share it. :func:`watch_changes`
@@ -87,7 +91,20 @@ class LiveEnded:
     reason: str
 
 
-LiveEvent = LiveReady | LiveChange | LiveResync | LiveEnded
+@dataclass(frozen=True, slots=True)
+class LiveTopicEvent:
+    """One event of a topic other than ``records`` -- ``line.created``,
+    ``inbox.updated``, ``typing``, ... -- as the server sent it."""
+
+    subscription: str
+    type: str
+    data: dict[str, object]
+    #: Pass back as ``since`` to resume after this event; ``""`` for a topic
+    #: with no history (``inbox``).
+    cursor: str
+
+
+LiveEvent = LiveReady | LiveChange | LiveResync | LiveEnded | LiveTopicEvent
 
 
 class LiveAuthError(Exception):
@@ -117,6 +134,8 @@ class _Subscription:
     ops: tuple[LiveOp, ...] | None
     cursor: str | None
     when: Mapping[str, object] | None = None
+    topic: str = "records"
+    params: Mapping[str, object] | None = None
 
 
 @dataclass(slots=True)
@@ -145,17 +164,26 @@ class LiveSession:
         ops: Sequence[LiveOp] | None = None,
         since: str | None = None,
         when: Mapping[str, object] | None = None,
+        topic: str = "records",
+        params: Mapping[str, object] | None = None,
     ) -> str:
         """Add a subscription; ``when`` filters by the row's current values.
 
         ``when`` uses the trigger grammar's value operators (``equals``,
         ``not_equals``, ``in``, ``not_in``, or a bare value for equality) and
-        needs ``table``. Deletes are always delivered.
+        needs ``table``. Deletes are always delivered. Another ``topic`` takes
+        its own ``params`` (``{"channel_id": ...}`` for ``channel``).
         """
         subscription_id = f"s{self._next}"
         self._next += 1
         self._subscriptions[subscription_id] = _Subscription(
-            subscription_id, table, tuple(ops) if ops else None, since, when
+            subscription_id,
+            table,
+            tuple(ops) if ops else None,
+            since,
+            when,
+            topic,
+            dict(params) if params else None,
         )
         return subscription_id
 
@@ -200,7 +228,7 @@ class LiveSession:
         if (
             isinstance(cursor, str)
             and cursor
-            and kind in ("subscribed", "changes", "resync")
+            and kind in ("subscribed", "changes", "events", "resync")
         ):
             subscription.cursor = cursor
         current = subscription.cursor or ""
@@ -226,6 +254,18 @@ class LiveSession:
                     )
                 )
             return False, events
+        if kind == "events":
+            found = frame.get("events")
+            return False, [
+                LiveTopicEvent(
+                    subscription=subscription.id,
+                    type=str(event.get("type")),
+                    data=event,
+                    cursor=current,
+                )
+                for event in (found if isinstance(found, list) else [])
+                if isinstance(event, dict)
+            ]
         if kind == "resync":
             return False, [
                 LiveResync(subscription.id, current, str(frame.get("reason")))
@@ -253,9 +293,10 @@ class LiveSession:
 
 def _subscribe_frame(subscription: _Subscription) -> str:
     frame: dict[str, object] = {
+        **(subscription.params or {}),
         "op": "subscribe",
         "id": subscription.id,
-        "topic": "records",
+        "topic": subscription.topic,
     }
     if subscription.table:
         frame["table"] = subscription.table
@@ -296,6 +337,60 @@ async def watch_changes(
     ``refresh`` (when given) gets one chance to replace it. Raises
     ``LiveAuthError`` / ``LiveAccessError`` for closes no reconnect can fix.
     """
+    session = LiveSession(max_retries=max_reconnects)
+    session.add(table=table, ops=ops, since=since, when=when)
+    async for event in _watch(
+        session,
+        base_url=base_url,
+        pod_id=pod_id,
+        token=token,
+        refresh=refresh,
+        verify_ssl=verify_ssl,
+        max_reconnects=max_reconnects,
+    ):
+        yield event
+
+
+async def watch_topic(
+    topic: str,
+    *,
+    base_url: str,
+    pod_id: str,
+    token: Callable[[], str],
+    refresh: Callable[[], bool] | None = None,
+    params: Mapping[str, object] | None = None,
+    since: str | None = None,
+    verify_ssl: bool = True,
+    max_reconnects: int | None = None,
+) -> AsyncIterator[LiveEvent]:
+    """Yield one subscription to ``topic`` -- ``channel`` with
+    ``params={"channel_id": ...}``, or ``inbox`` -- its events as
+    ``LiveTopicEvent``, resuming from its own cursor across reconnects as
+    :func:`watch_changes` does. A ``LiveResync``: refetch over REST."""
+    session = LiveSession(max_retries=max_reconnects)
+    session.add(topic=topic, params=params, since=since)
+    async for event in _watch(
+        session,
+        base_url=base_url,
+        pod_id=pod_id,
+        token=token,
+        refresh=refresh,
+        verify_ssl=verify_ssl,
+        max_reconnects=max_reconnects,
+    ):
+        yield event
+
+
+async def _watch(
+    session: LiveSession,
+    *,
+    base_url: str,
+    pod_id: str,
+    token: Callable[[], str],
+    refresh: Callable[[], bool] | None,
+    verify_ssl: bool,
+    max_reconnects: int | None,
+) -> AsyncIterator[LiveEvent]:
     try:
         import websockets
         from websockets.exceptions import ConnectionClosed, WebSocketException
@@ -304,8 +399,6 @@ async def watch_changes(
             'Watching changes needs the websockets package: pip install "lemma-sdk[live]"'
         ) from exc
 
-    session = LiveSession(max_retries=max_reconnects)
-    session.add(table=table, ops=ops, since=since, when=when)
     url = live_ws_url(base_url, pod_id)
     ssl_option: ssl.SSLContext | None = None
     if url.startswith("wss://") and not verify_ssl:
@@ -375,7 +468,9 @@ __all__ = [
     "LiveReady",
     "LiveResync",
     "LiveSession",
+    "LiveTopicEvent",
     "live_ws_url",
     "reconnect_delay",
     "watch_changes",
+    "watch_topic",
 ]

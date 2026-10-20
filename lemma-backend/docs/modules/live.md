@@ -34,7 +34,7 @@ is a close frame the client can read, never a failed upgrade:
 | Close code | Meaning | Client should |
 | --- | --- | --- |
 | `4401` | No session, or it expired; or, on an open socket, the session it was opened with ended (signed out, revoked, expired) | Refresh the session, then reconnect |
-| `4403` | The caller may not read the pod (`pod.read`) | Stop |
+| `4403` | The caller may not read the pod (`pod.read`); or, on an open socket, no longer may -- checked as the socket refreshes its slot (every 30 s) and on `presence` | Stop |
 | `4404` | No such pod | Stop |
 | `4429` | The user already holds `LIVE_MAX_SOCKETS_PER_USER_PER_POD` sockets on this pod | Close another, or wait |
 | `1011` | Server error | Reconnect with backoff |
@@ -58,7 +58,7 @@ subscription after each `ready`, each with its own last cursor.
 
 The client names each subscription and each call with its own `id` (1-64
 characters, unique among the socket's open subscriptions); the server answers
-on that id. Client frames are JSON text, at most 16 KiB.
+on that id. Client frames are JSON text, at most 16 KiB of UTF-8.
 
 ### Client to server
 

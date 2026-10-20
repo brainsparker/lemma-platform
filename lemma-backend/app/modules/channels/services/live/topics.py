@@ -65,8 +65,14 @@ class _ChannelParams(BaseModel):
     channel_id: UUID
 
 
+#: The largest line number a channel stores (``BIGINT``).
+_MAX_SEQ = 2**63 - 1
+
+
 class _ReadParams(_ChannelParams):
-    seq: int = Field(ge=0)
+    #: Bounded as stored: a number past it is the caller's mistake, answered
+    #: ``invalid``, not a failed write answered ``unavailable`` and retried.
+    seq: int = Field(ge=0, le=_MAX_SEQ)
 
 
 class _TypingParams(_ChannelParams):

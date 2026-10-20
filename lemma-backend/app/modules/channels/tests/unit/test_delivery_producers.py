@@ -89,7 +89,7 @@ PRODUCERS: dict[str, Producer] = {
         f"{_CHANNELS}/test_heard_and_carried_e2e.py"
         "::test_a_member_line_carried_to_a_mirrored_group_plans_its_place_row",
     ),
-    "agent/services/channel_answers.py:_post_answer": Producer(
+    "agent/services/channel_answer_lines.py:_post_line": Producer(
         Sends.PLACE,
         f"{_CHANNELS}/test_heard_and_carried_e2e.py"
         "::test_an_agent_answer_to_a_carried_group_line_follows_it_to_the_place",

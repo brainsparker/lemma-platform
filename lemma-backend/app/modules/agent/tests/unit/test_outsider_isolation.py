@@ -207,7 +207,28 @@ def test_a_members_run_is_told_who_outside_the_pod_reads_its_answer():
 
     assert "WHO READS YOUR ANSWER" in text
     assert "Acme deal" in text and "Dana" in text
-    assert "2 message(s) in this chat from people outside the pod" in text
+    assert (
+        "2 message(s) in this chat are not shown to you: from people outside the pod"
+        in text
+    )
+
+
+def test_lines_withheld_in_lemma_are_not_said_to_be_from_outside_the_pod():
+    """A member's run in Lemma is not shown other members' answers; those
+    are the pod's own, and the note says so rather than blaming strangers."""
+    text = user_prompt_text(
+        SimpleNamespace(
+            text="What did Bolt tell Ana?",
+            metadata={
+                "channel_context_withheld": 1,
+                "channel_context_view": "MEMBER_IN_LEMMA",
+            },
+        )
+    )
+
+    assert "1 message(s) in this chat are not shown to you" in text
+    assert "answers an agent gave other members" in text
+    assert "outside the pod" not in text
 
 
 def test_an_email_audience_lists_everyone_the_reply_reaches():

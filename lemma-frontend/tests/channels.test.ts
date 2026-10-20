@@ -190,10 +190,18 @@ test("an agent's line says whom it acted for", () => {
     assert.equal(personName(null, ME), "Someone");
 });
 
-test("a withheld answer says whom it answered, never what", () => {
-    assert.equal(withheldNote(line({ sender: lem, on_behalf_of: priya, withheld: true }), ME), "Answered Priya — only they can read it");
-    assert.equal(withheldNote(line({ sender: lem, withheld: true }), ME), "Answered someone with their own access — only they can read it");
+test("a withheld answer says which agent answered whom, privately, never what", () => {
+    assert.equal(withheldNote(line({ sender: lem, on_behalf_of: priya, withheld: true }), ME), "Lem answered Priya privately");
+    assert.equal(withheldNote(line({ sender: lem, withheld: true }), ME), "Lem answered someone privately");
     assert.equal(withheldNote(line({ sender: lem, text: "hi" }), ME), null);
+});
+
+test("an answer only its asker reads says so, and may be shared only by them", () => {
+    const mine = line({ sender: lem, on_behalf_of: dana, text: "41%", visibility: "asker_only", can_share: true });
+    assert.equal(mine.visibility, "asker_only");
+    assert.equal(mine.canShare, true);
+    assert.equal(line({ sender: lem, text: "hi" }).visibility, "channel");
+    assert.equal(line({ sender: lem, can_share: true, deleted: true }).canShare, false);
 });
 
 test("only the reader's own lines, still there, are theirs to change", () => {

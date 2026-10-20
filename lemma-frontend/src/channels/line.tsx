@@ -7,6 +7,7 @@ import { Prose } from "@/thread/markdown";
 import { AgentIcon } from "@/ui/icons";
 import { channelApi } from "./api";
 import {
+    ASKER_ONLY_NOTE,
     answerSummary,
     asWaitingQuestion,
     initials,
@@ -136,6 +137,11 @@ export function LineView({ podId, channel, line, onThread, mayWrite = true, answ
         mutationFn: () => channelApi(podId).remove(channel.id, line.id),
         onSuccess: () => { setConfirming(false); reread(); },
     });
+    const [sharing, setSharing] = useState(false);
+    const share = useMutation({
+        mutationFn: () => channelApi(podId).share(channel.id, line.id),
+        onSuccess: () => { setSharing(false); reread(); },
+    });
     const mine = isMine(line, me) && mayWrite;
     const agent = line.sender.kind === "AGENT";
     const withheld = withheldNote(line, me);
@@ -182,6 +188,21 @@ export function LineView({ podId, channel, line, onThread, mayWrite = true, answ
                         : <LineText text={line.text} parts={line.parts} me={me} />
                 ) : null}
                 {!line.deleted && !withheld && !editing && <LineParts podId={podId} channelId={channel.id} line={line} />}
+                {line.canShare && (
+                    <div className="cline__private">
+                        <span>{ASKER_ONLY_NOTE}</span>
+                        {sharing ? (
+                            <>
+                                <span className="cline__ask-delete">Everyone in this channel will read it.</span>
+                                <button type="button" className="cline__act" disabled={share.isPending} onClick={() => share.mutate()}>{share.isPending ? "Sharing…" : "Share"}</button>
+                                <button type="button" className="cline__act" onClick={() => setSharing(false)}>Keep private</button>
+                            </>
+                        ) : (
+                            <button type="button" className="cline__act" onClick={() => { share.reset(); setSharing(true); }}>Share with channel</button>
+                        )}
+                    </div>
+                )}
+                {share.isError && <p className="cline__problem" role="alert">{problemOf(share.error, "Couldn’t share it.")}</p>}
                 {line.delivered && isMine(line, me) && <DeliveryStatus podId={podId} channel={channel} line={line} canRetry={mayWrite} />}
 
                 {line.interaction && <Question podId={podId} channel={channel} line={line} me={me} />}

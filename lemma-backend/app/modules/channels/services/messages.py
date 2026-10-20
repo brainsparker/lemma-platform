@@ -32,6 +32,7 @@ from app.modules.channels.domain.entities import (
 )
 from app.modules.channels.domain.idempotency import keyed_client_id
 from app.modules.channels.domain.parts import MAX_PARTS, MentionPart, Part
+from app.modules.channels.domain.projection import shareable_by
 from app.modules.channels.infrastructure.lines import LineRepository, NewLine
 from app.modules.channels.infrastructure.members import MemberRepository
 from app.modules.channels.infrastructure.mentions import drop_mentions, sync_mentions
@@ -217,6 +218,35 @@ class MemberLines:
         if deleted is None:
             raise LineRefused("That line was deleted already")
         return deleted
+
+    async def share(
+        self, channel: Channel, message_id: UUID, *, user_id: UUID
+    ) -> ChannelMessage:
+        """Share an agent's answer made with ``user_id``'s own access with
+        everybody in the channel. Only theirs to share; sharing one already
+        shared changes nothing."""
+        line = await self.lines.get(message_id)
+        if line is None or line.channel_id != channel.id:
+            raise LineRefused("That line is not in this channel", status_code=404)
+        if line.shared_at is not None:
+            return line
+        in_a_direct = channel.kind is ChannelKind.DIRECT
+        if not shareable_by(line, user_id=user_id, in_a_direct=in_a_direct):
+            behalf = line.sender.on_behalf_of
+            if behalf is None or behalf.user_id != user_id:
+                raise LineRefused(
+                    "Only the member an answer was made for may share it",
+                    status_code=403,
+                )
+            raise LineRefused("Everybody here can read that line already")
+        shared = await self.lines.share(line.id)
+        if shared is None:
+            # Shared, or deleted, meanwhile: as it is now.
+            now = await self.lines.get(line.id)
+            if now is None or now.is_deleted:
+                raise LineRefused("That line was deleted")
+            return now
+        return shared
 
     async def _own(
         self, channel: Channel, message_id: UUID, *, user_id: UUID

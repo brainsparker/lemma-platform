@@ -261,6 +261,7 @@ CREATE TABLE channel_messages (
 	thread_root_id UUID,
 	edited_at TIMESTAMP WITH TIME ZONE,
 	deleted_at TIMESTAMP WITH TIME ZONE,
+	shared_at TIMESTAMP WITH TIME ZONE,
 	id UUID NOT NULL,
 	created_at TIMESTAMP WITH TIME ZONE NOT NULL,
 	updated_at TIMESTAMP WITH TIME ZONE NOT NULL,

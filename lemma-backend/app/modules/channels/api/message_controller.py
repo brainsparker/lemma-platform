@@ -285,6 +285,27 @@ async def delete_message(
 
 
 @router.post(
+    "/{channel_id}/messages/{message_id}/share",
+    operation_id="channel.message.share",
+    response_model=ChannelMessageResponse,
+    dependencies=[require_action(Permissions.CHANNEL_WRITE)],
+)
+async def share_message(
+    pod_id: UUID, channel_id: UUID, message_id: UUID, uow: UoWDep, caller: CallerDep
+) -> ChannelMessageResponse:
+    """Share an agent's answer made with your own access with everybody in the
+    channel. Until then only you read it; the others are shown that it was
+    given. Yours alone to share; sharing it again changes nothing."""
+    channel = await _writable(uow, caller, channel_id)
+    try:
+        line = await MemberLines(uow).share(channel, message_id, user_id=caller.user_id)
+    except LineRefused as refused:
+        raise _refused(refused) from refused
+    await uow.commit()
+    return await _one(uow, caller, channel, line)
+
+
+@router.post(
     "/{channel_id}/messages/{message_id}/answer",
     operation_id="channel.message.answer",
     response_model=ChannelMessageResponse,

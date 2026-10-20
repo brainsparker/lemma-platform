@@ -255,3 +255,41 @@ def test_a_malformed_id_is_refused_by_name_before_any_request() -> None:
     assert "badly formed" not in str(raised.value)
     assert isinstance(raised.value, ValueError)
     assert seen == []
+
+
+def test_sharing_an_answer_posts_to_its_share_route() -> None:
+    message = uuid4()
+    stamp = "2026-10-20T10:00:00Z"
+    line = {
+        "id": str(message),
+        "channel_id": str(CHANNEL),
+        "seq": 3,
+        "sender": {"kind": "AGENT", "id": str(POD), "name": "Bolt"},
+        "text": "Within 30 days.",
+        "visibility": "channel",
+        "shared_at": stamp,
+        "created_at": stamp,
+    }
+    channels, seen = _wired_channels(lambda _: httpx.Response(200, json=line))
+
+    shared = channels.share(CHANNEL, message)
+
+    [request] = seen
+    assert request.method == "POST"
+    assert request.url.path == (
+        f"/pods/{POD}/channels/{CHANNEL}/messages/{message}/share"
+    )
+    assert shared.text == "Within 30 days."
+
+
+def test_sharing_someone_elses_answer_raises() -> None:
+    channels, _ = _wired_channels(
+        lambda _: httpx.Response(
+            403, json={"detail": "Only the member an answer was made for may share it"}
+        )
+    )
+
+    with pytest.raises(Exception) as raised:
+        channels.share(CHANNEL, uuid4())
+
+    assert "may share it" in str(raised.value)

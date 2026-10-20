@@ -151,6 +151,15 @@ export function sampleChannelApi(_podId: string): ChannelApi {
             await wait(200);
             lines.set(channelId, (lines.get(channelId) ?? []).map((line) => (line.id === lineId ? { ...line, text: null, deleted: true } : line)));
         },
+        async share(channelId, lineId) {
+            await wait(200);
+            const list = lines.get(channelId) ?? [];
+            const was = list.find((line) => line.id === lineId);
+            if (!was) throw missing("line");
+            const shared = { ...was, visibility: "channel", can_share: false, shared_at: now() };
+            lines.set(channelId, list.map((line) => (line.id === lineId ? shared : line)));
+            return readLine(withReplies(shared)) as Line;
+        },
         async markRead(channelId, seq) {
             const channel = channels.find((one) => one.id === channelId);
             if (!channel) return;

@@ -235,6 +235,7 @@ def message_entity(
         thread_root_id=row.thread_root_id,
         edited_at=row.edited_at,
         deleted_at=row.deleted_at,
+        shared_at=row.shared_at,
         question=question_entity(question) if question is not None else None,
         reply_count=reply_count,
         last_reply_at=last_reply_at,

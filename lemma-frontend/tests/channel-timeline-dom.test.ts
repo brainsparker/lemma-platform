@@ -88,8 +88,8 @@ const channel = {
 const priya = { kind: "MEMBER", id: "user-priya", name: "Priya" };
 const line = (seq: number, extra: Record<string, unknown> = {}) => ({
     id: "l" + seq, seq, sender: priya, onBehalfOf: null, text: "line " + seq, createdAt: "2026-10-19T10:00:00Z", editedAt: null,
-    deleted: false, withheld: false, membersOnly: false, sourceId: null, threadRootId: null, replyCount: 0, interaction: null,
-    parts: [], clientMessageId: null, delivered: null, ...extra,
+    deleted: false, withheld: false, visibility: "channel", canShare: false, membersOnly: false, sourceId: null, threadRootId: null,
+    replyCount: 0, interaction: null, parts: [], clientMessageId: null, delivered: null, ...extra,
 });
 
 function timelineProps(lines: unknown[], extra: Record<string, unknown> = {}) {
@@ -455,5 +455,52 @@ test("on a touch screen Enter breaks the line and the button sends; elsewhere En
             delete api.post;
             await view.close();
         }
+    }
+});
+
+const bolt = { kind: "AGENT", id: "agent-bolt", name: "Bolt" };
+
+test("an answer only its asker can see says so, and is shared with the channel after a confirm", async () => {
+    const { LineView } = await import("../src/channels/line.tsx");
+    const view = await page();
+    const shared: unknown[][] = [];
+    api.share = (async (...args: unknown[]) => { shared.push(args); return line(7, { sender: bolt, visibility: "channel" }); }) as never;
+    const answer = line(7, {
+        sender: bolt, onBehalfOf: { kind: "MEMBER", id: "me", name: "Me" }, text: "The margin is 41%",
+        visibility: "asker_only", canShare: true,
+    });
+    const buttons = () => [...view.dom.window.document.querySelectorAll("button")];
+    try {
+        await view.draw(createElement("ol", null, createElement(LineView, { podId: "pod", channel: channel as never, line: answer as never })));
+        assert.match(view.body(), /Only you can see this — it used your access/);
+        await act(async () => { buttons().find((button) => button.textContent === "Share with channel")!.click(); });
+        assert.equal(shared.length, 0, "shared before it was confirmed");
+        assert.match(view.body(), /Everyone in this channel will read it/);
+        await act(async () => { buttons().find((button) => button.textContent === "Keep private")!.click(); });
+        assert.equal(buttons().some((button) => button.textContent === "Share"), false);
+
+        await act(async () => { buttons().find((button) => button.textContent === "Share with channel")!.click(); });
+        await act(async () => { buttons().find((button) => button.textContent === "Share")!.click(); });
+        await view.flush();
+        assert.deepEqual(shared[0], ["c1", "l7"]);
+    } finally {
+        delete api.share;
+        await view.close();
+    }
+});
+
+test("somebody else reads that the agent answered the asker privately, with no way to share it", async () => {
+    const { LineView } = await import("../src/channels/line.tsx");
+    const view = await page();
+    const theirs = line(8, {
+        sender: bolt, onBehalfOf: priya, text: null, withheld: true, visibility: "asker_only", canShare: false,
+    });
+    try {
+        await view.draw(createElement("ol", null, createElement(LineView, { podId: "pod", channel: channel as never, line: theirs as never })));
+        assert.match(view.body(), /Bolt answered Priya privately/);
+        assert.doesNotMatch(view.body(), /Only you can see this/);
+        assert.equal([...view.dom.window.document.querySelectorAll("button")].some((button) => button.textContent === "Share with channel"), false);
+    } finally {
+        await view.close();
     }
 });

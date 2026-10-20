@@ -34,7 +34,11 @@ from app.modules.channels.domain.entities import (
     SenderKind,
 )
 from app.modules.channels.domain.parts import MAX_PARTS, MentionPart, Part
-from app.modules.channels.domain.projection import withheld_from
+from app.modules.channels.domain.projection import (
+    asker_only,
+    shareable_by,
+    withheld_from,
+)
 
 #: How much of a line a preview shows.
 PREVIEW_CHARS = 140
@@ -92,6 +96,25 @@ class ChannelMessageResponse(BaseModel):
             "An answer an agent made with another member's own access: the "
             "reader sees that it was given, and for whom, not what it said."
         ),
+    )
+    visibility: Literal["asker_only", "channel"] = Field(
+        default="channel",
+        description=(
+            "`asker_only`: an agent's answer made with one member's own access, "
+            "read in full by that member alone; everybody else here is shown "
+            "it `withheld`. `channel`: everybody here reads it."
+        ),
+    )
+    can_share: bool = Field(
+        default=False,
+        description=(
+            "The reader is the member an `asker_only` answer was made for, and "
+            "may share it with the channel (`…/messages/{id}/share`)."
+        ),
+    )
+    shared_at: datetime | None = Field(
+        default=None,
+        description="When the member it was made for shared it with the channel.",
     )
     parts: list[Part] = Field(default_factory=list)
     client_message_id: str | None = None
@@ -380,6 +403,7 @@ def message_response(
     names = names or {}
     behalf = message.sender.on_behalf_of
     hidden = hidden_from(message, channel, reader_id)
+    in_a_direct = channel.kind is ChannelKind.DIRECT
     return ChannelMessageResponse(
         id=message.id,
         channel_id=message.channel_id,
@@ -388,6 +412,11 @@ def message_response(
         on_behalf_of=ref(behalf, names) if behalf else None,
         text=None if hidden or message.is_deleted else message.text,
         withheld=hidden,
+        visibility=(
+            "asker_only" if asker_only(message, in_a_direct=in_a_direct) else "channel"
+        ),
+        can_share=shareable_by(message, user_id=reader_id, in_a_direct=in_a_direct),
+        shared_at=message.shared_at,
         parts=[] if hidden else _parts(message, names, agents or {}),
         client_message_id=message.client_message_id,
         source_id=message.place_id,

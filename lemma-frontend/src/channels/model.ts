@@ -135,6 +135,11 @@ export interface Line {
     editedAt: string | null;
     deleted: boolean;
     withheld: boolean;
+    /** `asker_only`: an agent's answer made with one member's own access,
+     *  which only that member reads in full. */
+    visibility: "asker_only" | "channel";
+    /** The reader is that member, and may share it with the channel. */
+    canShare: boolean;
     membersOnly: boolean;
     /** Where it was said; null for a line written in Lemma. */
     sourceId: string | null;
@@ -348,6 +353,8 @@ export function readLine(raw: unknown): Line | null {
         editedAt: words(row.edited_at),
         deleted,
         withheld,
+        visibility: row.visibility === "asker_only" ? "asker_only" : "channel",
+        canShare: row.can_share === true && !deleted,
         membersOnly: row.members_only === true,
         sourceId: words(row.source_id),
         threadRootId: words(row.thread_root_id),
@@ -596,15 +603,19 @@ export function clockTime(iso: string): string {
     return Number.isNaN(at.getTime()) ? "" : at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-/** What stands where a withheld line's text would be: whom the agent
- *  answered with their own access, and so that only they can read it. */
-export function withheldNote(line: Pick<Line, "withheld" | "onBehalfOf">, me: string | null): string | null {
+/** What stands where a withheld line's text would be: which agent answered
+ *  whom, privately -- with that person's own access, so only they read it. */
+export function withheldNote(line: Pick<Line, "withheld" | "onBehalfOf" | "sender">, me: string | null): string | null {
     if (!line.withheld) return null;
+    const agent = line.sender.kind === "AGENT" && line.sender.name ? line.sender.name : "An agent";
     const whom = line.onBehalfOf ? personName(line.onBehalfOf, me) : null;
     return whom && whom !== "You"
-        ? "Answered " + whom + " — only they can read it"
-        : "Answered someone with their own access — only they can read it";
+        ? agent + " answered " + whom + " privately"
+        : agent + " answered someone privately";
 }
+
+/** What the asker reads under an answer only they can see. */
+export const ASKER_ONLY_NOTE = "Only you can see this — it used your access";
 
 /** Whether the reader may change or delete a line: their own, still there. */
 export function isMine(line: Pick<Line, "sender" | "deleted" | "withheld">, me: string | null): boolean {

@@ -13,11 +13,13 @@ use super::{
     steering_advertised, tool_call_id,
 };
 use super::{
-    PreApprovals, START_ATTEMPTS, StartGates, StartPermit, is_transient_start_failure,
-    session_options,
+    ConfigOption, Duration, PreApprovals, START_ATTEMPTS, SessionConfigOptionValue,
+    SetSessionConfigOptionRequest, StartGates, StartPermit, is_transient_start_failure,
+    option_value, session_options,
 };
 use crate::normalize::{Dialect, Normalizer, RunContext};
-use crate::protocol::RunSpec;
+use crate::protocol::{MODEL_OPTION_SET_KEY, RunSpec};
+use agent_client_protocol::schema::v1::SessionId;
 
 /// One run's normalizer, shared by the update and permission handlers. Both
 /// run on the ACP receive loop in order, so the lock is never contended; it
@@ -78,12 +80,19 @@ impl AgentDriver for AcpDriver {
                     .unwrap_or_else(|_| Value::Array(Vec::new()));
                 let capabilities = serde_json::to_value(initialization.agent_capabilities)
                     .unwrap_or_else(|_| Value::Object(Map::new()));
-                let config_options = session
+                let mut config_options: Vec<ConfigOption> = session
                     .config_options
                     .unwrap_or_default()
                     .iter()
                     .filter_map(|option| convert_config_option(&adapter.spec.key, option))
                     .collect();
+                attach_model_option_sets(
+                    &connection,
+                    &adapter.spec.key,
+                    &session.session_id,
+                    &mut config_options,
+                )
+                .await;
                 Ok(AcpProbeOutcome {
                     config_options,
                     capabilities,
@@ -172,6 +181,7 @@ async fn run_once(
         &request.run_spec,
         request.own_settings,
         request.lemma_cli_bin.as_deref(),
+        request.mcp_server.as_ref(),
     );
     let agent = build_agent(
         &request.adapter,
@@ -275,7 +285,12 @@ async fn run_once(
             )
             .await?;
             let steering_supported = steering_advertised(initialization.meta.as_ref());
-            let mcp_servers: Vec<McpServer> = mcp_server.into_iter().collect();
+            // Named once: an agent given the server in its environment would
+            // otherwise hold it twice, the second without its limits.
+            let mcp_servers: Vec<McpServer> = mcp_server
+                .filter(|_| !session_options.mcp_server_in_environment)
+                .into_iter()
+                .collect();
             let mut session = open_session(
                 &connection,
                 resume_session_id,
@@ -346,6 +361,119 @@ async fn run_once(
     match outcome {
         Ok(outcome) => Ok(outcome),
         Err(error) => Err(supervised.explain(&error, stderr).await),
+    }
+}
+
+/// The most models a probe asks for their own options. A catalogue past this
+/// is published with the rest left to the top level, rather than holding the
+/// probe for one round trip per model.
+pub(crate) const MODEL_OPTION_SET_LIMIT: usize = 32;
+
+/// How long one model's options may take to come back. Shorter than a run's
+/// setup deadline: nothing waits on this but the probe, and an agent that
+/// does not answer one model is not asked about the next.
+pub(crate) const MODEL_OPTION_SET_DEADLINE: Duration = Duration::from_secs(10);
+
+/// Give each model the options it offers, under `MODEL_OPTION_SET_KEY` on
+/// that model's entry.
+///
+/// `session/new` describes the machine's default model only, and the options
+/// beside it are that model's: Claude's and Codex's adapters publish a
+/// different set of reasoning levels once another model is chosen. Publishing
+/// only the default's let a profile pick an effort its model does not have,
+/// and hid the ones it does. A model without the key is one whose set
+/// is the top level's -- which is all a failure here costs, so nothing in it
+/// fails the probe.
+async fn attach_model_option_sets(
+    connection: &ConnectionTo<Agent>,
+    adapter_key: &str,
+    session_id: &SessionId,
+    options: &mut [ConfigOption],
+) {
+    let Some(model) = options.iter_mut().find(|option| option.category == "model") else {
+        return;
+    };
+    let model_id = model.id.clone();
+    let default = model.current_value.as_str().map(str::to_owned);
+    let mut last_asked: Option<String> = None;
+    for entry in model.options.iter_mut().take(MODEL_OPTION_SET_LIMIT) {
+        let Some(value) = option_value(entry)
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+        else {
+            continue;
+        };
+        last_asked = Some(value.clone());
+        let request = SetSessionConfigOptionRequest::new(
+            session_id.clone(),
+            model_id.clone(),
+            SessionConfigOptionValue::value_id(value.clone()),
+        );
+        match tokio::time::timeout(
+            MODEL_OPTION_SET_DEADLINE,
+            connection.send_request(request).block_task(),
+        )
+        .await
+        {
+            // An empty answer says nothing about the model, so it is left to
+            // the top level rather than published as a model with no options.
+            Ok(Ok(response)) if !response.config_options.is_empty() => {
+                let set = response
+                    .config_options
+                    .iter()
+                    .filter_map(|option| convert_config_option(adapter_key, option))
+                    .filter(|option| option.category != "model")
+                    .filter_map(|option| serde_json::to_value(option).ok())
+                    .collect();
+                entry.insert(MODEL_OPTION_SET_KEY.to_owned(), Value::Array(set));
+            }
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => {
+                tracing::warn!(
+                    harness = %adapter_key,
+                    model = %value,
+                    %error,
+                    "could not read a model's own options; publishing the default's for it"
+                );
+            }
+            Err(_) => {
+                tracing::warn!(
+                    harness = %adapter_key,
+                    model = %value,
+                    deadline_secs = MODEL_OPTION_SET_DEADLINE.as_secs(),
+                    "the agent did not answer choosing a model; publishing the default's options for the rest"
+                );
+                break;
+            }
+        }
+    }
+    // The probe's session is thrown away, but an adapter may remember the last
+    // model chosen as the machine's default, and the probe must not move it.
+    if let Some(default) = default
+        && last_asked.as_ref().is_some_and(|asked| *asked != default)
+    {
+        let restore = SetSessionConfigOptionRequest::new(
+            session_id.clone(),
+            model_id,
+            SessionConfigOptionValue::value_id(default),
+        );
+        match tokio::time::timeout(
+            MODEL_OPTION_SET_DEADLINE,
+            connection.send_request(restore).block_task(),
+        )
+        .await
+        {
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => {
+                tracing::warn!(harness = %adapter_key, %error, "could not restore the default model after the probe");
+            }
+            Err(_) => {
+                tracing::warn!(
+                    harness = %adapter_key,
+                    "the agent did not answer restoring the default model after the probe"
+                );
+            }
+        }
     }
 }
 

@@ -23,6 +23,7 @@ from app.modules.agent_surfaces.platforms.slack.errors import slack_api_error
 
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
+from app.modules.agent_surfaces.domain.place_privacy import PlaceFacts, PlacePrivacy
 
 from app.modules.agent_surfaces.platforms.slack.blocks import (
     channel_setup_confirmation_blocks,
@@ -225,6 +226,39 @@ class SlackHomeSurface:
             return name or None
         except slack_api_error():
             return None
+
+    async def place_facts(self, channel_id: str) -> PlaceFacts | None:
+        """Whether Slack keeps this conversation to its members, from
+        ``conversations.info``; None when Slack would not say."""
+        if not slack_access_token(self.credentials) or not channel_id:
+            return None
+        try:
+            client = await build_slack_client(self.credentials)
+            response = await client.conversations_info(channel=str(channel_id))
+        except slack_api_error() as exc:
+            logger.info(
+                "agent_surfaces.slack.place_privacy_unknown.observed",
+                error_code=str((exc.response or {}).get("error") or "unknown"),
+            )
+            return None
+        channel = response.get("channel") or {}
+        if not isinstance(channel, dict) or not channel:
+            return None
+        if channel.get("is_im"):
+            kind = "im"
+        elif channel.get("is_mpim"):
+            kind = "mpim"
+        elif channel.get("is_private") or channel.get("is_group"):
+            kind = "group"
+        elif channel.get("is_channel"):
+            kind = "channel"
+        else:
+            return None
+        return PlaceFacts(
+            privacy=PlacePrivacy.PUBLIC if kind == "channel" else PlacePrivacy.PRIVATE,
+            channel_type=kind,
+            shared_externally=bool(channel.get("is_ext_shared")),
+        )
 
     async def set_thread_title(
         self,

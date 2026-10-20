@@ -37,6 +37,7 @@ from uuid import UUID
 from httpx import HTTPError
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
+from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.errors import (
@@ -132,7 +133,6 @@ async def _insert_on_first_free_address(
     and a unique violation aborts a Postgres transaction outright — so without
     one, the second attempt raises PendingRollbackError, the commit fails, and
     *creating an agent* returns 500 because two of them wanted the same address.
-    Same reasoning, and the same shape, as `notification_repository.create`.
     """
     domain = surface_settings.resend_inbound_domain or ""
     addresses = candidate_addresses(
@@ -239,6 +239,7 @@ async def provision_email_surface(
             credential_mode=SurfaceCredentialMode.SYSTEM,
         )
     except (AgentSurfaceError, HTTPError, OSError, SQLAlchemyError) as exc:
+        raise_if_database_unavailable(exc)
         # Deliberately not a bare ``Exception``. These are the mail system or
         # the database saying no — a refused domain, Resend unreachable, a name
         # already taken, a savepoint that cannot open on a transaction another

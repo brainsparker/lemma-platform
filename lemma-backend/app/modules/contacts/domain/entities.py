@@ -13,88 +13,41 @@ needs less than changing a payout account.
 
 from __future__ import annotations
 
-import re
 from datetime import datetime
-from enum import StrEnum
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 
+from app.modules.contacts.domain.kinds import (
+    PROVING_STRENGTHS,
+    IdentityKind,
+    IdentityStrength,
+)
+from app.modules.contacts.domain.handles import (
+    is_start_request,
+    is_stop_request,
+    normalize_handle,
+)
 
-class IdentityKind(StrEnum):
-    """What sort of handle names a contact."""
-
-    PHONE = "PHONE"
-    EMAIL = "EMAIL"
-    TELEGRAM = "TELEGRAM"
-    #: A signed-in user of the customer's own product, as named in a token
-    #: their server signed: ``host:{their user id}``. Keyed by the pod, not the
-    #: widget, so the same customer reached through another of the pod's
-    #: widgets -- or a widget made again -- is still the same contact.
-    HOST = "HOST"
-
-
-class IdentityStrength(StrEnum):
-    """Who vouched for a handle.
-
-    ``CHANNEL``: the platform the message came through, in a payload whose
-    signature was checked (WhatsApp, Telegram), or the receiving mail service's
-    authentication verdict (email). ``HOST`` and ``CODE``: see their values.
-    ``MEMBER``: a pod member added it by hand,
-    which says who the member believes it is and nothing about who writes from
-    it -- so it never makes a message count as that contact on its own.
-    """
-
-    CHANNEL = "CHANNEL"
-    MEMBER = "MEMBER"
-    #: The customer's server, in a token signed with a web widget's secret.
-    HOST = "HOST"
-    #: The person entered a one-time code sent to the handle.
-    CODE = "CODE"
-
-
-_NOT_DIGITS = re.compile(r"\D")
-
-
-def normalize_handle(kind: IdentityKind, value: str) -> str:
-    """The one spelling a handle is stored and looked up under.
-
-    A phone number keeps its digits only, which is how WhatsApp names a sender
-    (``wa_id``) and what makes ``+44 7700 900123`` and ``447700900123`` one
-    person. An email address is case-folded: providers treat the local part as
-    case-insensitive in practice, and two contacts for one inbox would split a
-    customer's history in two.
-    """
-    cleaned = value.strip()
-    if kind is IdentityKind.PHONE:
-        return _NOT_DIGITS.sub("", cleaned)
-    if kind is IdentityKind.EMAIL:
-        return cleaned.lower()
-    return cleaned
-
-
-#: What a contact writes to stop hearing from the pod, as carriers and mail
-#: senders have long taught people to: ``STOP`` on a text channel, and the
-#: words people use for the same thing by email.
-STOP_WORDS = frozenset({"STOP", "STOPALL", "UNSUBSCRIBE", "OPTOUT", "OPT OUT"})
-
-
-def is_stop_request(text: str) -> bool:
-    """Whether a whole message is a request to stop, and nothing else.
-
-    The whole message only: "stop sending me the wrong size" is a question for
-    the bot, not an unsubscribe. Trailing punctuation is forgiven, case and
-    surrounding space are ignored.
-    """
-    words = " ".join(text.strip().rstrip(".!").split()).upper()
-    return words in STOP_WORDS
+__all__ = [
+    "PROVING_STRENGTHS",
+    "Contact",
+    "ContactHandle",
+    "IdentityKind",
+    "IdentityStrength",
+    "is_start_request",
+    "is_stop_request",
+    "normalize_handle",
+]
 
 
 class ContactHandle(BaseModel):
-    """One handle of one contact, and what decides whether the pod may write to it.
+    """One handle of one contact.
 
     The one shape for a handle, whichever side of the module boundary reads it:
-    the contacts API lists it, a follow-up picks the handle to write to by it.
+    the contacts API lists it, outreach picks the handle to write to by it.
+    Whether the pod may write to it is not here: an opt-out is kept by the
+    handle's hash (``contact_suppressions``), so it outlives the handle.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -106,10 +59,25 @@ class ContactHandle(BaseModel):
     strength: IdentityStrength
     verified_at: datetime
     last_inbound_at: datetime | None = None
-    unsubscribed_at: datetime | None = None
+    #: Who named the handle, where several could: the product a host identity
+    #: is a user of. ``None`` for every other kind.
+    issuer: str | None = None
+    #: The handle as it arrived, before it was normalised -- what to show.
+    value_raw: str | None = None
 
 
 class Contact(BaseModel):
+    """Somebody the pod talks to who is not a member.
+
+    *Anonymous* while the only thing known about them is a browser
+    (``IdentityKind.WEB``); every other handle was vouched for by something.
+    Derived from the handles rather than stored, so it cannot disagree with them.
+
+    ``merged_into_id`` is set once this contact turned out to be another, older
+    one: the row stays, holding nothing, so anything that still names it can be
+    led to the contact it became.
+    """
+
     model_config = ConfigDict(frozen=True)
 
     id: UUID
@@ -117,3 +85,9 @@ class Contact(BaseModel):
     display_name: str | None
     created_at: datetime
     identities: tuple[ContactHandle, ...] = ()
+    merged_into_id: UUID | None = None
+    answered_at: datetime | None = None
+
+    @property
+    def is_anonymous(self) -> bool:
+        return all(handle.kind is IdentityKind.WEB for handle in self.identities)

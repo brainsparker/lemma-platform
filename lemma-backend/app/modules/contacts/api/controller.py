@@ -8,6 +8,7 @@ deleting one -- a request to see or to forget a person -- takes a pod admin.
 
 from __future__ import annotations
 
+import base64
 from datetime import datetime
 from uuid import UUID
 
@@ -52,13 +53,26 @@ class ContactResponse(BaseModel):
     display_name: str | None = None
     created_at: datetime
     identities: list[ContactIdentityResponse] = Field(default_factory=list)
+    is_anonymous: bool = Field(
+        default=False,
+        description=(
+            "Known only by the browser they wrote from: a web visitor nobody "
+            "has vouched for yet."
+        ),
+    )
+    answered_at: datetime | None = Field(
+        default=None,
+        description=(
+            "When an agent first answered them; what the contact limit counts."
+        ),
+    )
 
 
 class ContactListResponse(BaseModel):
     items: list[ContactResponse]
-    next_before: str | None = Field(
+    next_cursor: str | None = Field(
         default=None,
-        description="Pass as `before` for the next page; absent on the last.",
+        description="Pass as `cursor` for the next page; absent on the last.",
     )
 
 
@@ -96,28 +110,40 @@ def _response(contact: Contact) -> ContactResponse:
             )
             for identity in contact.identities
         ],
+        is_anonymous=contact.is_anonymous,
+        answered_at=contact.answered_at,
     )
 
 
 async def _found(uow: UoWDep, *, pod_id: UUID, contact_id: UUID) -> Contact:
-    contact = await ContactRepository(uow.session).get(
-        pod_id=pod_id, contact_id=contact_id
-    )
+    """The contact, or the one it was merged into: a link kept from before a
+    merge still leads to the person."""
+    contacts = ContactRepository(uow.session)
+    contact = await contacts.get(pod_id=pod_id, contact_id=contact_id)
+    if contact is not None and contact.merged_into_id is not None:
+        contact = await contacts.get(pod_id=pod_id, contact_id=contact.merged_into_id)
     if contact is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Contact not found")
     return contact
 
 
-def _list_cursor(before: str | None) -> ContactCursor | None:
-    """``created_at|id`` of the last contact on the previous page."""
-    if before is None:
+def _encode_cursor(contact: Contact) -> str:
+    """The last contact of a page, opaque: ``created_at|id``, base64."""
+    raw = f"{contact.created_at.isoformat()}|{contact.id}".encode()
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+def _list_cursor(cursor: str | None) -> ContactCursor | None:
+    """The page after the one a cursor of ours ended; anything else is a 400."""
+    if cursor is None:
         return None
-    at, _, contact_id = before.partition("|")
     try:
+        raw = base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)).decode()
+        at, _, contact_id = raw.partition("|")
         return ContactCursor(
             created_at=datetime.fromisoformat(at), contact_id=UUID(contact_id)
         )
-    except ValueError:
+    except ValueError:  # bad base64, text or fields alike
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST, detail="That cursor is not one we gave"
         ) from None
@@ -127,22 +153,23 @@ def _list_cursor(before: str | None) -> ContactCursor | None:
     "",
     operation_id="contact.list",
     response_model=ContactListResponse,
-    dependencies=[require_action(Permissions.CONVERSATION_READ)],
+    dependencies=[require_action(Permissions.CONTACT_READ)],
 )
 async def list_contacts(
     pod_id: UUID,
     uow: UoWDep,
     limit: int = Query(default=50, ge=1, le=MAX_PAGE),
-    before: str | None = Query(default=None, max_length=100),
+    cursor: str | None = Query(default=None, max_length=200),
 ) -> ContactListResponse:
-    """The pod's contacts, newest first."""
+    """The pod's contacts, newest first. Follow `next_cursor` until it is
+    absent."""
     contacts = await ContactRepository(uow.session).list(
-        pod_id=pod_id, limit=limit, before=_list_cursor(before)
+        pod_id=pod_id, limit=limit, before=_list_cursor(cursor)
     )
     last = contacts[-1] if len(contacts) == limit else None
     return ContactListResponse(
         items=[_response(contact) for contact in contacts],
-        next_before=f"{last.created_at.isoformat()}|{last.id}" if last else None,
+        next_cursor=_encode_cursor(last) if last else None,
     )
 
 
@@ -150,7 +177,7 @@ async def list_contacts(
     "/{contact_id}",
     operation_id="contact.get",
     response_model=ContactResponse,
-    dependencies=[require_action(Permissions.CONVERSATION_READ)],
+    dependencies=[require_action(Permissions.CONTACT_READ)],
 )
 async def get_contact(pod_id: UUID, contact_id: UUID, uow: UoWDep) -> ContactResponse:
     return _response(await _found(uow, pod_id=pod_id, contact_id=contact_id))
@@ -165,13 +192,16 @@ async def get_contact(pod_id: UUID, contact_id: UUID, uow: UoWDep) -> ContactRes
 async def update_contact(
     pod_id: UUID, contact_id: UUID, request: ContactUpdateRequest, uow: UoWDep
 ) -> ContactResponse:
+    # The person a merged contact's id now leads to is the one renamed: the
+    # absorbed row is never shown again.
+    contact = await _found(uow, pod_id=pod_id, contact_id=contact_id)
     repository = ContactRepository(uow.session)
     if not await repository.rename(
-        pod_id=pod_id, contact_id=contact_id, display_name=request.display_name
+        pod_id=pod_id, contact_id=contact.id, display_name=request.display_name
     ):
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Contact not found")
     await uow.commit()
-    return _response(await _found(uow, pod_id=pod_id, contact_id=contact_id))
+    return _response(await _found(uow, pod_id=pod_id, contact_id=contact.id))
 
 
 @router.get(
@@ -196,9 +226,11 @@ async def export_contact(
         after = ExportCursor.decode(cursor) if cursor else None
     except BadExportCursor as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from None
+    # The person a merged contact's id leads to is the one exported: what was
+    # said under the old id has moved to them.
     contact = await _found(uow, pod_id=pod_id, contact_id=contact_id)
     page = await export_page(
-        uow_factory, pod_id=pod_id, contact_id=contact_id, cursor=after
+        uow_factory, pod_id=pod_id, contact_id=contact.id, cursor=after
     )
     return ContactExportResponse(
         contact=_response(contact),

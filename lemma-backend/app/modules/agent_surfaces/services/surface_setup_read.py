@@ -12,16 +12,22 @@ from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceStatus,
     SurfacePlatform,
 )
-from app.modules.agent_surfaces.domain.ports import SurfaceAccountPort
 from app.modules.agent_surfaces.domain.setup_actions import build_surface_setup_actions
+from app.modules.agent_surfaces.domain.surface_representation import (
+    SurfaceConnection,
+    SurfaceConnectionStatus,
+)
 from app.modules.agent_surfaces.platforms.common import computed_webhook_url
 
 
 class SurfaceSetupReadMixin:
-    _account_port: SurfaceAccountPort | None
-
     async def get_surface_setup_by_name(
-        self, *, pod_id: UUID, name: str, reveal_secrets: bool
+        self,
+        *,
+        pod_id: UUID,
+        name: str,
+        reveal_secrets: bool,
+        connection: SurfaceConnection | None,
     ) -> dict[str, Any]:
         """The remaining setup work on this surface, for one reader.
 
@@ -32,6 +38,12 @@ class SurfaceSetupReadMixin:
         reader who could change the surface anyway, not to everyone holding
         ``AGENT_READ`` on the pod. Required rather than defaulted: whether the
         caller may see them is not a question a call site should be able to skip.
+
+        ``connection`` is the surface's account as ``SurfaceConnectionResolver``
+        reads it for this reader -- best-effort, so None when it could not be
+        read. Required for the same reason: it is how Slack removing the app is
+        seen at all (the account is what ``services/app_uninstall`` retires),
+        and who connected it is who the reinstall step names.
         """
         surface = await self.get_surface_by_name_in_pod(pod_id=pod_id, name=name)
         guide = self.get_platform_setup_guide(surface.surface_type.value)
@@ -44,6 +56,7 @@ class SurfaceSetupReadMixin:
             surface=surface, is_custom_app=is_custom_app
         )
         cannot_verify = signing_secret_missing or app_id_missing
+        retired = _slack_retired(surface, connection)
         frontend_url = settings.frontend_url.rstrip("/")
         actions = build_surface_setup_actions(
             platform=surface.surface_type,
@@ -52,7 +65,7 @@ class SurfaceSetupReadMixin:
             slack_socket_mode=surface_settings.enable_slack_socket_mode,
             slack_signing_secret_missing=signing_secret_missing,
             slack_app_id_missing=app_id_missing,
-            slack_uninstalled=await self._slack_account_retired(surface),
+            slack_retired_connection=retired,
             # Connectors have no route of their own in the workspace: Settings
             # opens at a section named in `?settings=`. The space in the path
             # is what picks the organization whose connectors those are.
@@ -74,7 +87,9 @@ class SurfaceSetupReadMixin:
             "platform": surface.surface_type,
             "exists": True,
             "status": (
-                AgentSurfaceStatus.NEEDS_SETUP if cannot_verify else surface.status
+                AgentSurfaceStatus.NEEDS_SETUP
+                if cannot_verify or retired is not None
+                else surface.status
             ),
             "ready": not any(action.is_blocking for action in actions)
             and not pending_consent,
@@ -106,22 +121,19 @@ class SurfaceSetupReadMixin:
         credentials = await self._credential_resolver.slack_webhook_credentials(surface)
         return not bool(credentials.signing_secret), not bool(credentials.app_id)
 
-    async def _slack_account_retired(self, surface: AgentSurfaceEntity) -> bool:
-        """Whether Slack took this surface's app away (``app_uninstall``).
 
-        Read off the account, because that is where the uninstall is recorded:
-        the surface keeps its channels and settings for when it comes back.
-        """
-        if (
-            surface.surface_type is not SurfacePlatform.SLACK
-            or surface.account_id is None
-            or self._account_port is None
-        ):
-            return False
-        # The summary, not the account: one status field needs no credentials
-        # decrypted, and a setup read should hold none.
-        summaries = await self._account_port.list_account_summaries(
-            [surface.account_id]
-        )
-        account = summaries.get(surface.account_id)
-        return account is not None and account.needs_reauthorization
+def _slack_retired(
+    surface: AgentSurfaceEntity, connection: SurfaceConnection | None
+) -> SurfaceConnection | None:
+    """The connection, when it is a Slack one Slack took the app away from.
+
+    Read off the account, because that is where the uninstall is recorded: the
+    surface keeps its channels and settings for when it comes back.
+    """
+    if (
+        surface.surface_type is SurfacePlatform.SLACK
+        and connection is not None
+        and connection.status is SurfaceConnectionStatus.REAUTH_REQUIRED
+    ):
+        return connection
+    return None

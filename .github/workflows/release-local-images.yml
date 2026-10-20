@@ -1646,6 +1646,10 @@ jobs:
       # updates itself every night has more chances to prove it, not fewer.
       - name: Verify the updater payload is notarized
         shell: bash
+        env:
+          # Set only while the update signing key is rotated (desktop/README.md,
+          # "Rotating the update signing key"); the check then requires the mismatch.
+          LEMMA_UPDATER_KEY_ROTATION: ${{ vars.LEMMA_UPDATER_KEY_ROTATION }}
         run: |
           set -euo pipefail
           tarball="desktop/target/release/bundle/macos/Lemma.app.tar.gz"

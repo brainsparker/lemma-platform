@@ -31,8 +31,8 @@ export {
     Eye as ShowIcon, EyeSlash as HideIcon,
     // The space's home, and the presentation starter on it.
     House as HomeIcon, PresentationChart as SlidesIcon, Play as PlayIcon,
-    // A space's group chats.
-    ChatsCircle as GroupsIcon,
+    // A space's channels, and the button that opens what is true about one.
+    ChatsCircle as GroupsIcon, Info as InfoIcon,
     // The people a space's bots answer who are not in it.
     AddressBook as ContactsIcon,
     // An empty Files list's way in, and the help menu's three doors: the

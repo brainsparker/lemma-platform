@@ -48,6 +48,9 @@ class ResolvedAgentRuntime:
     # capabilities must survive that, because "nothing selected" says nothing
     # about whether the thing on the other end can read an image.
     unselected_capabilities: list[RuntimeModelCapability] = field(default_factory=list)
+    # The run's own Agent Host selections -- pod default, teammate and
+    # conversation, already layered -- laid over the profile's at dispatch.
+    selection_overrides: dict[str, str] = field(default_factory=dict)
 
     @property
     def capabilities(self) -> list[RuntimeModelCapability]:
@@ -91,6 +94,7 @@ class ResolvedAgentRuntime:
             # natively.
             model_capabilities=[capability.value for capability in self.capabilities],
             config=_config_dict(self.profile.config),
+            selection_overrides=dict(self.selection_overrides),
         )
 
 

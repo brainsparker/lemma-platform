@@ -107,6 +107,14 @@ pub(crate) struct TargetWorker {
     /// within moments of opening: two hosts sharing one credential, each
     /// taking the link from the other. Each one waits longer before trying.
     pub(crate) superseded_streak: u32,
+    /// Whether the last read of this pairing's settings failed, so a broken
+    /// `config.json` is reported once rather than on every read.
+    pub(crate) local_controls_unreadable: bool,
+    /// Runs whose task ended without ending the run, each with whether it had
+    /// been asked to stop. Kept until the journal takes their terminal state,
+    /// so a journal that refuses that write once does not leave the run
+    /// heartbeating for ever. See `reap_finished_now`.
+    pub(crate) orphaned_runs: HashMap<Uuid, bool>,
     /// Answers Lemma's `op` requests. `None` where host execution cannot
     /// work at all, in which case every op is answered
     /// `exec_server_unavailable` by the link itself.
@@ -282,6 +290,8 @@ impl TargetWorker {
             host_execution: false,
             clock_offset: chrono::Duration::zero(),
             superseded_streak: 0,
+            local_controls_unreadable: false,
+            orphaned_runs: HashMap::new(),
             #[cfg(unix)]
             exec_relay,
         })
@@ -373,7 +383,7 @@ impl TargetWorker {
             if self.shutting_down() {
                 return self.graceful_shutdown(None).await;
             }
-            self.housekeeping()?;
+            self.housekeeping();
             let connected = tokio::select! {
                 connected = link::connect_with(
                     &self.target.base_url,
@@ -394,8 +404,7 @@ impl TargetWorker {
                     // any refusals before it were the transient kind.
                     self.revoked_refusals = 0;
                     self.note_lemma_time(connected.welcome.server_time);
-                    self.journal
-                        .update_target_state(self.target.target_id, "ONLINE", None)?;
+                    self.note_target_state("ONLINE", None);
                     let opened = std::time::Instant::now();
                     match self.session(connected).await? {
                         SessionEnd::Shutdown => return Ok(()),
@@ -419,7 +428,7 @@ impl TargetWorker {
                             });
                             let after = after.or_else(|| self.superseded_wait(&error, opened));
                             if let Some(after) = after {
-                                self.note_offline(&error.to_string())?;
+                                self.note_offline(&error.to_string());
                                 self.wait_retry(after).await;
                                 continue;
                             }
@@ -430,7 +439,7 @@ impl TargetWorker {
                 Err(error) => error,
             };
             if error.is_upgrade_required() {
-                self.note_offline("this Lemma needs a newer Agent Host")?;
+                self.note_offline("this Lemma needs a newer Agent Host");
                 anyhow::bail!("target requires a newer Agent Host protocol");
             }
             if error.is_revoked_or_missing() {
@@ -462,7 +471,7 @@ impl TargetWorker {
             // backoff like any other refusal Lemma may recover from: giving
             // up for good on it disabled a pairing that a restarted or
             // restored Lemma would have accepted again.
-            self.note_offline(&error.to_string())?;
+            self.note_offline(&error.to_string());
             self.wait_retry(retry).await;
             retry = (retry * 2).min(RETRY_MAX);
         }
@@ -579,7 +588,13 @@ impl TargetWorker {
                 }
                 push = pushes.recv() => match push {
                     Some(Push::Commands(commands)) => {
-                        self.handle_commands(commands).await?;
+                        // As in `send_control`: a journal that could not take
+                        // one batch is no reason to end the worker -- that
+                        // ends every agent this pairing is running with it.
+                        // Lemma redelivers a command nobody acknowledged.
+                        if let Err(error) = self.handle_commands(commands).await {
+                            tracing::error!(%error, "could not take the commands Lemma pushed");
+                        }
                         if let Err(error) = self.send_control(&handle).await {
                             return Ok(SessionEnd::Lost { error, after: reconnect_after });
                         }
@@ -609,9 +624,9 @@ impl TargetWorker {
                     // the next scheduled refresh.
                     self.refresh_due = std::time::Instant::now();
                     self.force_probe = true;
-                    self.housekeeping()?;
+                    self.housekeeping();
                 }
-                _ = housekeeping.tick() => self.housekeeping()?,
+                _ = housekeeping.tick() => self.housekeeping(),
                 error = handle.closed() => {
                     return Ok(SessionEnd::Lost { error, after: reconnect_after });
                 }
@@ -620,12 +635,35 @@ impl TargetWorker {
     }
 
     /// Everything the loop does on its own clock rather than on a signal.
-    pub(crate) fn housekeeping(&mut self) -> anyhow::Result<()> {
-        self.enforce_cancellations()?;
+    ///
+    /// Nothing here can end the worker. It used to: a journal busy for one
+    /// write, or a `config.json` caught half-written, returned out of the link
+    /// loop, and the worker's end aborted every run on this pairing -- each
+    /// agent killed mid-turn for a bookkeeping pass the next tick would have
+    /// managed. Each step logs and is tried again a second later.
+    pub(crate) fn housekeeping(&mut self) {
+        if let Err(error) = self.enforce_cancellations() {
+            tracing::error!(%error, "could not enforce run cancellations; trying again");
+        }
         self.reap_finished_now();
         if self.controls_due <= std::time::Instant::now() {
             self.controls_due = std::time::Instant::now() + LOCAL_CONTROL_INTERVAL;
-            self.apply_local_controls()?;
+            match self.apply_local_controls() {
+                Ok(()) => self.local_controls_unreadable = false,
+                // The settings last read stay in force, as `HostRuntime::serve`
+                // keeps its last good config. Said once, not every five
+                // seconds for as long as the file stays broken.
+                Err(error) => {
+                    if !self.local_controls_unreadable {
+                        self.local_controls_unreadable = true;
+                        tracing::error!(
+                            target = %self.target.name,
+                            %error,
+                            "could not read this pairing's settings; keeping the last ones read"
+                        );
+                    }
+                }
+            }
         }
         self.drain_published();
         if self.reprobe_requested.swap(false, Ordering::SeqCst) {
@@ -636,7 +674,6 @@ impl TargetWorker {
             self.refresh_harnesses();
             self.refresh_due = std::time::Instant::now() + HARNESS_REFRESH_INTERVAL;
         }
-        Ok(())
     }
 
     /// Take a batch of commands, judging each against the harnesses this host
@@ -809,13 +846,20 @@ impl TargetWorker {
         }
     }
 
-    pub(crate) fn note_offline(&self, error: &str) -> anyhow::Result<()> {
-        self.journal.update_target_state(
-            self.target.target_id,
-            "OFFLINE",
-            Some(&redact_error(error)),
-        )?;
-        Ok(())
+    pub(crate) fn note_offline(&self, error: &str) {
+        self.note_target_state("OFFLINE", Some(&redact_error(error)));
+    }
+
+    /// Record the link's state for the status page. Only that reads it, so a
+    /// journal that cannot take the write is logged, not fatal: ending the
+    /// worker over it would kill every run on the pairing.
+    pub(crate) fn note_target_state(&self, state: &str, error: Option<&str>) {
+        if let Err(write) = self
+            .journal
+            .update_target_state(self.target.target_id, state, error)
+        {
+            tracing::error!(error = %write, state, "could not record this pairing's link state");
+        }
     }
 
     pub(crate) fn shutting_down(&self) -> bool {

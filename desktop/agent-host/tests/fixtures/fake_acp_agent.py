@@ -62,6 +62,45 @@ def start_failure():
     return None
 
 
+def effort(current, levels):
+    return {
+        "id": "effort",
+        "name": "Effort",
+        "category": "thought_level",
+        "type": "select",
+        "currentValue": current,
+        "options": [{"value": level, "name": level.title()} for level in levels],
+    }
+
+
+# "per-model-options": each model offers its own reasoning levels, as Claude's
+# and Codex's adapters do, and one model's cannot be read at all.
+PER_MODEL_EFFORT = {
+    "fake-1": ("medium", ["low", "medium"]),
+    "fake-2": ("high", ["low", "high", "max"]),
+}
+PER_MODEL_CATALOG = [
+    {"value": "fake-1", "name": "Fake 1"},
+    {"value": "fake-2", "name": "Fake 2"},
+    {"value": "fake-broken", "name": "Fake Broken"},
+]
+
+
+def per_model_options(model):
+    current, levels = PER_MODEL_EFFORT[model]
+    return [
+        {
+            "id": "model",
+            "name": "Model",
+            "category": "model",
+            "type": "select",
+            "currentValue": model,
+            "options": PER_MODEL_CATALOG,
+        },
+        effort(current, levels),
+    ]
+
+
 def emit(message):
     sys.stdout.write(json.dumps(message, separators=(",", ":")) + "\n")
     sys.stdout.flush()
@@ -144,6 +183,23 @@ for raw_line in sys.stdin:
                 "error": {"code": -32603, "message": "session not found"},
             }
         )
+    elif method == "session/new" and MODE == "per-model-options":
+        result(
+            request_id,
+            {"sessionId": "fake-session", "configOptions": per_model_options("fake-1")},
+        )
+    elif method == "session/set_config_option" and MODE == "per-model-options":
+        value = message["params"]["value"]
+        if value in PER_MODEL_EFFORT:
+            result(request_id, {"configOptions": per_model_options(value)})
+        else:
+            emit(
+                {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "error": {"code": -32602, "message": f"cannot switch to {value}"},
+                }
+            )
     elif method in {"session/new", "session/load"}:
         result(
             request_id,

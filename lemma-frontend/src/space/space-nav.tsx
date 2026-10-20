@@ -4,8 +4,9 @@ import { useQuery } from "@tanstack/react-query";
 import { unbound } from "@/thread/conversation-list";
 import { source, type Pod, type SpaceView, type Tab } from "@/data";
 import { AppsIcon, ContactsIcon, FileIcon, FolderIcon, GroupsIcon, PlusIcon, TableIcon, WorkflowIcon } from "@/ui/icons";
-import { sayWaiting, waitingTotal } from "@/data/groups";
-import { useGroups } from "./group-queries";
+import { inboxBadge } from "@/channels/model";
+import { useInbox } from "@/channels/waiting-panel";
+import { useMaySeeContacts } from "./contact-queries";
 import { useFeature } from "@/site/analytics/flags";
 
 const VIEWS: { view: SpaceView; label: string; icon: React.ReactNode }[] = [
@@ -18,7 +19,7 @@ const VIEWS: { view: SpaceView; label: string; icon: React.ReactNode }[] = [
 /** What a recent item is, for its icon. */
 function RecentGlyph({ tab }: { tab: Tab }) {
     if (tab.kind === "app") return <AppsIcon size={17} />;
-    if (tab.kind === "group") return <GroupsIcon size={17} />;
+    if (tab.kind === "channel") return <GroupsIcon size={17} />;
     if (tab.kind === "table" || tab.kind === "record") return <TableIcon size={17} />;
     return <FileIcon size={17} />;
 }
@@ -46,12 +47,14 @@ export function SpaceNav({ pod, activeId, recents, onPick, openChatId, onOpenCha
         staleTime: 60_000,
     });
     const yours = unbound(chats.data).filter(chat => chat.kind.toUpperCase() !== "TASK").slice(0, 8);
-    /* Questions people outside the space are waiting on you for, in any of
-       its groups — the list the Groups page reads, under its key. */
-    const groupsOn = useFeature("groups");
-    const contactsOn = useFeature("contacts");
-    const groups = useGroups(pod.id, false, groupsOn);
-    const waiting = waitingTotal(groups.data ?? []);
+    /* What is new for you across the space's channels — the inbox the bell
+       reads, under its key: questions waiting on you first, then mentions,
+       then channels with anything new. */
+    const contactsFlag = useFeature("contacts");
+    const maySeeContacts = useMaySeeContacts(pod.id);
+    const contactsOn = contactsFlag && maySeeContacts;
+    const inbox = useInbox(pod.id);
+    const news = inboxBadge(inbox.data ?? { channels: 0, mentions: 0, waiting: 0 });
 
     return (
         <nav className="snav" aria-label={pod.name + "’s space"}>
@@ -68,14 +71,14 @@ export function SpaceNav({ pod, activeId, recents, onPick, openChatId, onOpenCha
                     </button>
                 ))}
                 <button className="side__item" title="Workflows" aria-current={activeId === "space:workflows" ? "page" : undefined} onClick={onWorkflows}><WorkflowIcon size={18} /><span>Workflows</span></button>
-                {/* On one group's page this is the section it is in, not the page. */}
-                {groupsOn && <button className="side__item" title="Groups" aria-current={activeId === "space:groups" ? "page" : activeId.startsWith("group:") ? "true" : undefined} onClick={() => onPick("space:groups")}>
-                    <GroupsIcon size={18} /><span>Groups</span>
-                    {waiting > 0 && <>
-                        <span className="snav__count" aria-hidden="true">{waiting}</span>
-                        <span className="sr-only">, {sayWaiting(waiting)}</span>
+                {/* On one channel's page this is the section it is in, not the page. */}
+                <button className="side__item" title="Channels" aria-current={activeId === "space:channels" ? "page" : activeId.startsWith("channel:") ? "true" : undefined} onClick={() => onPick("space:channels")}>
+                    <GroupsIcon size={18} /><span>Channels</span>
+                    {news && <>
+                        <span className="snav__count" data-tone={news.tone} aria-hidden="true">{news.count > 99 ? "99+" : news.count}</span>
+                        <span className="sr-only">, {news.said}</span>
                     </>}
-                </button>}
+                </button>
                 {contactsOn && <button className="side__item" title="Contacts" aria-current={activeId === "space:contacts" ? "page" : undefined} onClick={() => onPick("space:contacts")}>
                     <ContactsIcon size={18} /><span>Contacts</span>
                 </button>}

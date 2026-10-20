@@ -17,6 +17,7 @@ from uuid import UUID
 
 from mcp.types import CallToolResult, Tool
 
+from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -27,7 +28,6 @@ from app.modules.agent.services.surface_context import (
 from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation
 from app.modules.agent.domain.outsiders import Audience
-from app.modules.agent.services.outsider_audience import with_effective_audience
 from app.modules.agent.domain.private_notes import run_is_private
 from app.modules.agent.domain.vision import vision_mode_from_runtime_profile
 from app.modules.agent.services.vision_service import vision_delegate_available
@@ -325,7 +325,6 @@ class ConversationMCPService:
             )
             if conversation is None:
                 raise ValueError(f"Conversation {conversation_id} not found")
-            conversation = await with_effective_audience(uow, conversation)
             run = None
             if agent_run_id is not None:
                 run = await conversation_repo.get_agent_run(agent_run_id)
@@ -467,7 +466,8 @@ class ConversationMCPService:
                 organization_id=organization_id,
                 user_id=user_id,
             )
-        except DomainError, RuntimeError, SQLAlchemyError:
+        except (DomainError, RuntimeError, SQLAlchemyError) as exc:
+            raise_if_database_unavailable(exc)
             # Named rather than bare: these are what resolution actually fails
             # with -- an archived or deleted profile, a missing repository, a
             # database that will not answer. Anything else is a bug and should

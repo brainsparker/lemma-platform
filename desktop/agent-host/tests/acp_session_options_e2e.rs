@@ -6,7 +6,8 @@
 //! the host to delivering them: Claude Code's in the session's `_meta` (on a
 //! new session and a resumed one alike), and nothing of the kind when the
 //! person chose Claude Code's own skills and settings. Codex and `OpenCode`
-//! get no personal-setup switches at all, only Lemma's web-tool overrides.
+//! get no personal-setup switches at all, only Lemma's web-tool overrides
+//! (and, for Codex, Lemma's server in its config).
 //! Every agent still has Lemma's MCP server, sign-in and instructions.
 
 use std::collections::BTreeMap;
@@ -232,6 +233,8 @@ async fn claude_code_with_its_own_settings_keeps_them() {
     let options = &sessions(&traffic)[0]["params"]["_meta"]["claudeCode"]["options"];
     assert!(options.get("settingSources").is_none(), "{options}");
     assert!(options.get("strictMcpConfig").is_none(), "{options}");
+    // Lemma's tools are in the prompt either way, not behind a search.
+    assert_eq!(options["env"]["ENABLE_TOOL_SEARCH"], json!("false"));
     // Lemma's browser is the one the person watches, whatever the setting.
     assert!(
         options["disallowedTools"]
@@ -588,10 +591,27 @@ async fn each_agent_keeps_lemmas_server_sign_in_and_instructions() {
         );
         let session = sessions(&traffic)[0];
         let servers = session["params"]["mcpServers"].as_array().unwrap();
-        assert!(
-            servers.iter().any(|server| server["name"] == "lemma"),
-            "{agent}: {session}"
-        );
+        if agent == "codex" {
+            // Codex is given the server in its config, where it can carry
+            // the bridge's call limit, and only there.
+            let config: Value =
+                serde_json::from_str(environment["CODEX_CONFIG"].as_str().unwrap()).unwrap();
+            assert_eq!(
+                config["mcp_servers"]["lemma"]["tool_timeout_sec"],
+                json!(1800),
+                "{config}"
+            );
+            assert_eq!(
+                config["mcp_servers"]["lemma"]["command"],
+                json!("lemma-agent-host")
+            );
+            assert!(servers.is_empty(), "{session}");
+        } else {
+            assert!(
+                servers.iter().any(|server| server["name"] == "lemma"),
+                "{agent}: {session}"
+            );
+        }
 
         if agent == "claude-code" {
             let meta = &session["params"]["_meta"];
@@ -616,13 +636,17 @@ async fn each_agent_keeps_lemmas_server_sign_in_and_instructions() {
                 prompts(&traffic)[0].contains("You are Lemma's agent."),
                 "{agent}: {traffic:?}"
             );
-            // And none of the switches that would hide the person's setup.
+            // And none of the switches that would hide the person's setup:
+            // Codex's config holds Lemma's server and nothing else.
             assert!(
-                !environment
-                    .keys()
-                    .any(|name| name.starts_with("OPENCODE_") || name == "CODEX_CONFIG"),
+                !environment.keys().any(|name| name.starts_with("OPENCODE_")),
                 "{agent}: {environment:?}"
             );
+            if let Some(config) = environment.get("CODEX_CONFIG") {
+                let config: Value = serde_json::from_str(config.as_str().unwrap()).unwrap();
+                let keys: Vec<&String> = config.as_object().unwrap().keys().collect();
+                assert_eq!(keys, ["mcp_servers"], "{agent}: {config}");
+            }
         }
     }
 }

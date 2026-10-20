@@ -1,0 +1,321 @@
+"use client";
+
+import { useEffect, useId, useRef, useState, useSyncExternalStore, type DragEvent, type KeyboardEvent } from "react";
+import { useMutation } from "@tanstack/react-query";
+import { AttachIcon, CloseIcon, SendIcon } from "@/ui/icons";
+import { channelApi } from "./api";
+import { attachmentSaid, carriedFiles, dragHasFiles, enterSends, uniqueNames, uploadProgress, type AttachmentState } from "./compose-model";
+import { draftKey, keepDraft, readDraft } from "./drafts";
+import { problemOf } from "./problem";
+import { insertMention, matchMentionable, mentionAt, mentionsIn, pickedIn, removeMention, type Mentionable } from "./mentions";
+import { composerChoices, sourceLabel, type ChannelDetail, type Line, type Part } from "./model";
+
+type FilePart = Extract<Part, { type: "file" }>;
+
+/** One file on its way into a line: picked, pasted or dropped, then
+ *  uploaded when the line is sent, and kept uploaded if the send fails so a
+ *  retry does not upload it twice. */
+interface Attached {
+    key: string;
+    file: File;
+    uploaded: FilePart | null;
+    uploading: boolean;
+    failed: string | null;
+}
+
+let attachedCount = 0;
+
+function stateOf(one: Attached): AttachmentState {
+    return one.uploaded ? "uploaded" : one.uploading ? "uploading" : one.failed ? "failed" : "waiting";
+}
+
+/** A screen with no hover and a coarse pointer: a phone's or a tablet's,
+ *  where Enter is the keyboard's return key. */
+function subscribeTouch(notify: () => void): () => void {
+    if (typeof window === "undefined" || !window.matchMedia) return () => {};
+    const query = window.matchMedia("(hover: none) and (pointer: coarse)");
+    query.addEventListener?.("change", notify);
+    return () => query.removeEventListener?.("change", notify);
+}
+
+function touchNow(): boolean {
+    return typeof window !== "undefined" && Boolean(window.matchMedia?.("(hover: none) and (pointer: coarse)").matches);
+}
+
+/** Writing in a channel, or in one thread of it.
+ *
+ *  Enter sends and Shift+Enter breaks the line; on a touch screen Enter
+ *  breaks it and the send button sends. `@` opens the people and agents who
+ *  can be named -- the channel's agents first -- and each one picked shows
+ *  as a chip while their name is in the text; a named agent answers. Files
+ *  -- picked, pasted or dropped on it -- go up when the line is sent, each
+ *  saying how it is getting on, and travel as file parts. A send that fails
+ *  keeps everything typed and attached, and sending again is the same line
+ *  (`client_message_id`). What is typed, and who was picked, is kept per
+ *  thread while the reader is elsewhere. */
+export function Composer({ podId, channel, people, threadRootId, placeholder, disabledReason, onPosted, onTyping }: {
+    podId: string;
+    channel: ChannelDetail;
+    people: Mentionable[];
+    threadRootId?: string;
+    placeholder: string;
+    /** Why the reader may not write here, when they may not. */
+    disabledReason?: string | null;
+    onPosted: (line: Line) => void;
+    /** Somebody is typing: the socket's typing note, throttled by the caller. */
+    onTyping?: () => void;
+}) {
+    const ids = useId();
+    const box = useRef<HTMLTextAreaElement>(null);
+    const picker = useRef<HTMLInputElement>(null);
+    const draft = draftKey(podId, channel.id, threadRootId);
+    const [kept] = useState(() => readDraft(draft));
+    const [text, setText] = useState(kept.text);
+    const [caret, setCaret] = useState(0);
+    const [picked, setPicked] = useState<Mentionable[]>(kept.picked);
+    const [files, setFiles] = useState<Attached[]>([]);
+    const [dragging, setDragging] = useState(false);
+    const touch = useSyncExternalStore(subscribeTouch, touchNow, () => false);
+    const [membersOnly, setMembersOnly] = useState(false);
+    const [place, setPlace] = useState("");
+    const [highlight, setHighlight] = useState(0);
+    const [dismissed, setDismissed] = useState<number | null>(null);
+    const choices = composerChoices(channel);
+    /* One name per line being written: sending it again after a failure is
+       the same line, not a second one. Anything changed is a new line. */
+    const lineId = useRef<string | null>(null);
+
+    /* The words and the people picked in them, kept together. */
+    useEffect(() => { keepDraft(draft, { text, picked: pickedIn(text, picked) }); }, [draft, text, picked]);
+
+    const attach = (chosen: readonly File[]) => {
+        if (!chosen.length) return;
+        lineId.current = null;
+        setFiles((was) => [...was, ...chosen.map((file) => ({ key: String(++attachedCount), file, uploaded: null, uploading: false, failed: null }))]);
+    };
+
+    const at = mentionAt(text, caret);
+    const offered = at && dismissed !== at.start ? matchMentionable(people, at.query) : [];
+    const menuOpen = offered.length > 0;
+    const chips = pickedIn(text, picked);
+
+    const send = useMutation({
+        mutationFn: async (body: { text: string; mentions: ReturnType<typeof mentionsIn> }) => {
+            const api = channelApi(podId);
+            /* Named before anything uploads: the line's files go in a folder
+               of its own, under names unique within it. */
+            const clientMessageId = (lineId.current ??= crypto.randomUUID());
+            const names = uniqueNames(files.map((one) => one.file.name));
+            const parts: FilePart[] = [];
+            for (let index = 0; index < files.length; index += 1) {
+                const one = files[index];
+                if (one.uploaded) { parts.push(one.uploaded); continue; }
+                one.uploading = true;
+                one.failed = null;
+                setFiles((was) => [...was]);
+                try {
+                    const uploaded = await api.attach(channel.id, one.file, { clientMessageId, name: names[index] });
+                    one.uploaded = uploaded;
+                    parts.push(uploaded);
+                } catch (problem) {
+                    one.failed = problemOf(problem, "Couldn’t upload it.");
+                    throw new Error("“" + one.file.name + "” didn’t upload. Remove it or try again.");
+                } finally {
+                    one.uploading = false;
+                    setFiles((was) => [...was]);
+                }
+            }
+            return api.post(channel.id, {
+                clientMessageId,
+                text: body.text,
+                mentions: body.mentions,
+                files: parts,
+                membersOnly: choices.notes && membersOnly,
+                sourceId: membersOnly ? null : place || null,
+                threadRootId: threadRootId ?? null,
+            });
+        },
+        onSuccess: (line) => {
+            lineId.current = null;
+            setText("");
+            setPicked([]);
+            setFiles([]);
+            onPosted(line);
+            box.current?.focus();
+        },
+    });
+
+    const submit = () => {
+        const said = text.trim();
+        if ((!said && files.length === 0) || send.isPending || disabledReason) return;
+        send.mutate({ text: said, mentions: mentionsIn(said, picked) });
+    };
+
+    const pick = (who: Mentionable) => {
+        if (!at) return;
+        const next = insertMention(text, at, caret, who);
+        lineId.current = null;
+        setText(next.text);
+        setPicked((was) => [...was, who]);
+        setCaret(next.caret);
+        setHighlight(0);
+        requestAnimationFrame(() => {
+            box.current?.focus();
+            box.current?.setSelectionRange(next.caret, next.caret);
+        });
+    };
+
+    const unpick = (who: Mentionable) => {
+        lineId.current = null;
+        setText(removeMention(text, who));
+        setPicked((was) => was.filter((one) => !(one.kind === who.kind && one.id === who.id)));
+        box.current?.focus();
+    };
+
+    const keys = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+        if (event.nativeEvent.isComposing) return;
+        if (menuOpen) {
+            if (event.key === "ArrowDown") { event.preventDefault(); setHighlight((was) => (was + 1) % offered.length); return; }
+            if (event.key === "ArrowUp") { event.preventDefault(); setHighlight((was) => (was - 1 + offered.length) % offered.length); return; }
+            if (event.key === "Enter" || event.key === "Tab") { event.preventDefault(); pick(offered[Math.min(highlight, offered.length - 1)]); return; }
+            if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); if (at) setDismissed(at.start); return; }
+        }
+        if (enterSends({ key: event.key, shiftKey: event.shiftKey, isComposing: event.nativeEvent.isComposing }, touch)) { event.preventDefault(); submit(); }
+    };
+
+    const dragOver = (event: DragEvent<HTMLFormElement>) => {
+        if (!dragHasFiles(event.dataTransfer?.types)) return;
+        event.preventDefault();
+        if (!dragging) setDragging(true);
+    };
+    const dropped = (event: DragEvent<HTMLFormElement>) => {
+        setDragging(false);
+        const chosen = carriedFiles(event.dataTransfer);
+        if (!chosen.length) return;
+        event.preventDefault();
+        if (!send.isPending) attach(chosen);
+    };
+
+    if (disabledReason) {
+        return <p className="chcompose chcompose--off" role="note">{disabledReason}</p>;
+    }
+
+    const listId = ids + "-people";
+    const active = menuOpen ? listId + "-" + Math.min(highlight, offered.length - 1) : undefined;
+    const sending = send.isPending;
+    const progress = uploadProgress(files.map(stateOf));
+    return (
+        <form
+            className="chcompose"
+            aria-busy={sending || undefined}
+            data-note={(choices.notes && membersOnly) || undefined}
+            data-dragging={dragging || undefined}
+            onSubmit={(event) => { event.preventDefault(); submit(); }}
+            onDragOver={dragOver}
+            onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false); }}
+            onDrop={dropped}
+        >
+            {menuOpen && (
+                <ul className="chcompose__menu" role="listbox" id={listId} aria-label="Name someone">
+                    {offered.map((who, index) => (
+                        <li
+                            key={who.kind + who.id}
+                            id={listId + "-" + index}
+                            role="option"
+                            aria-selected={index === Math.min(highlight, offered.length - 1)}
+                            className="chcompose__option"
+                            onMouseDown={(event) => { event.preventDefault(); pick(who); }}
+                        >
+                            <span>{who.name}</span>
+                            <small>{who.kind === "AGENT" ? (who.inChannel === false ? "Agent — answers this once" : "Agent in this channel") : who.kind === "CONTACT" ? "Contact" : "Member"}</small>
+                        </li>
+                    ))}
+                </ul>
+            )}
+            {(chips.length > 0 || files.length > 0) && (
+                <ul className="chcompose__chips" aria-label="With this line">
+                    {chips.map((who) => (
+                        <li key={"m" + who.kind + who.id} className="chchip" data-agent={who.kind === "AGENT" || undefined}>
+                            <span>@{who.name}</span>
+                            <button type="button" className="chchip__x" aria-label={"Don’t name " + who.name} disabled={sending} onClick={() => unpick(who)}><CloseIcon size={12} /></button>
+                        </li>
+                    ))}
+                    {files.map((one) => (
+                        <li key={one.key} className="chchip chchip--file" data-failed={one.failed ? "" : undefined} data-state={stateOf(one)} title={one.failed ?? undefined}>
+                            <span>{one.file.name}{attachmentSaid(stateOf(one)) ? " — " + attachmentSaid(stateOf(one)) : ""}</span>
+                            <button type="button" className="chchip__x" aria-label={"Remove " + one.file.name} disabled={sending} onClick={() => { lineId.current = null; setFiles((was) => was.filter((other) => other.key !== one.key)); }}><CloseIcon size={12} /></button>
+                        </li>
+                    ))}
+                </ul>
+            )}
+            {progress && <p className="chcompose__progress" role="status">{progress}</p>}
+            <label className="sr-only" htmlFor={ids + "-text"}>{placeholder}</label>
+            <textarea
+                ref={box}
+                id={ids + "-text"}
+                className="chcompose__text"
+                rows={Math.min(8, Math.max(1, text.split("\n").length))}
+                value={text}
+                placeholder={placeholder}
+                maxLength={8000}
+                readOnly={sending}
+                role="combobox"
+                aria-expanded={menuOpen}
+                aria-controls={menuOpen ? listId : undefined}
+                aria-activedescendant={active}
+                aria-autocomplete="list"
+                onChange={(event) => {
+                    lineId.current = null;
+                    setText(event.target.value);
+                    setCaret(event.target.selectionStart ?? event.target.value.length);
+                    setDismissed(null);
+                    if (event.target.value.trim()) onTyping?.();
+                }}
+                onSelect={(event) => setCaret(event.currentTarget.selectionStart ?? 0)}
+                onKeyDown={keys}
+                onPaste={(event) => {
+                    const pasted = carriedFiles(event.clipboardData);
+                    if (!pasted.length || sending) return;
+                    event.preventDefault();
+                    attach(pasted);
+                }}
+                enterKeyHint={touch ? "enter" : "send"}
+            />
+            <div className="chcompose__bar">
+                <input
+                    ref={picker}
+                    type="file"
+                    multiple
+                    hidden
+                    onChange={(event) => {
+                        const chosen = Array.from(event.target.files ?? []);
+                        event.target.value = "";
+                        attach(chosen);
+                    }}
+                />
+                <button type="button" className="icon-button chcompose__attach" aria-label="Attach files" title="Attach files" disabled={sending} onClick={() => picker.current?.click()}>
+                    <AttachIcon size={18} />
+                </button>
+                {choices.notes && (
+                    <label className="chcompose__note">
+                        <input type="checkbox" checked={membersOnly} disabled={sending} onChange={(event) => setMembersOnly(event.target.checked)} />
+                        <span>Note to members only</span>
+                    </label>
+                )}
+                {choices.places.length > 0 && !membersOnly && (
+                    <label className="chcompose__place">
+                        <span className="sr-only">Send to</span>
+                        <select value={place} disabled={sending} onChange={(event) => setPlace(event.target.value)}>
+                            <option value="">Where it last heard from</option>
+                            {choices.places.map((one) => <option key={one.id} value={one.id}>{sourceLabel(one.id, channel.places)}</option>)}
+                        </select>
+                    </label>
+                )}
+                <button type="submit" className="icon-button chcompose__send" aria-label={sending ? "Sending" : membersOnly ? "Send note to members" : "Send"} disabled={sending || (!text.trim() && files.length === 0)}>
+                    <SendIcon size={18} />
+                </button>
+            </div>
+            {send.isError && <p className="cline__problem" role="alert">{problemOf(send.error, "Couldn’t send that.")} What you wrote is still here.</p>}
+        </form>
+    );
+}

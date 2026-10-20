@@ -19,6 +19,7 @@ choose, and has no edge back into any of this.
 
 from __future__ import annotations
 
+from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
 from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
 
 from app.modules.agent_surfaces.domain.channel_setup import (
@@ -182,7 +183,8 @@ class AppEventHandler:
                 adapter=adapter,
                 credentials=credentials,
             )
-        except SQLAlchemyError:
+        except SQLAlchemyError as exc:
+            raise_if_database_unavailable(exc)
             logger.warning(
                 "agent_surfaces.app_event_handler.channel_setup_failed.failed",
                 surface_id=str(surface.id),
@@ -421,12 +423,16 @@ class AppEventHandler:
         if parsed is None:
             return False
         if parsed.kind is SurfaceLifecycleKind.UNINSTALLED:
+            # Before the actor's authorization, which it has none of: the
+            # signature that resolved the receivers is what authorizes it.
             await retire_uninstalled_app(
                 self.uow,
                 surfaces_repo=self.surface_repository,
+                credential_resolver=self.credential_resolver,
                 request=request,
                 parsed=parsed,
             )
+            await self.uow.commit()
             return True
 
         (
@@ -463,7 +469,8 @@ class AppEventHandler:
         surface, ctx = selected
         try:
             await self._handle_lifecycle_event(surface=surface, parsed=parsed, ctx=ctx)
-        except SQLAlchemyError:
+        except SQLAlchemyError as exc:
+            raise_if_database_unavailable(exc)
             logger.warning(
                 "agent_surfaces.app_event_handler.lifecycle_event_failed.failed",
                 surface_id=str(surface.id),

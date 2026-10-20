@@ -30,7 +30,7 @@ it, and a creation lease keeps two requests from both reaching Slack. The
 install ``create_auth_config`` makes commits on its own, so a create that fails
 or is cancelled afterwards undoes itself by deleting the install and the Slack
 app, shielded from the cancellation. Apps nobody authorises are swept
-(``sweep_unauthorised_apps``).
+(``slack_app_sweep.sweep_unauthorised_apps``).
 """
 
 from __future__ import annotations
@@ -49,11 +49,9 @@ from app.core.authorization.delegation import is_pod_default_agent
 from app.core.helpers.humanize import humanize_name
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.contracts.agents import agent_name_in_pod
 from app.modules.agent_surfaces.domain.errors import (
-    AgentSurfaceError,
     SlackAppCreationBusyError,
     SlackAppCreationForbiddenError,
     SlackAppCreationNotSetUpError,
@@ -103,9 +101,6 @@ ROTATION_LEASE = timedelta(seconds=60)
 #: with a retryable 409, and how long it waits between reads.
 _LEASE_WAITS = 5
 _LEASE_WAIT_SECONDS = 1.0
-#: How long an app Lemma made may wait for somebody to authorise it.
-UNAUTHORISED_APP_KEPT = timedelta(days=7)
-_SWEEP_BATCH = 50
 
 
 @dataclass(frozen=True)
@@ -465,10 +460,9 @@ class SlackAppProvisioner:
         except BaseException:
             await asyncio.shield(self._release_rotation(row_id, generation))
             raise
-        stored = await self.tokens.store_rotation(
-            row_id, generation=generation, token=rotated
-        )
-        await self.uow.commit()
+        # Slack has spent the old refresh token now: a cancellation before the
+        # new pair is committed would lose it, so the store is shielded.
+        stored = await asyncio.shield(self._store_rotation(row_id, generation, rotated))
         if not stored:
             # A person pasted a new token while this rotated the old one; theirs
             # is kept, and this access token is still good to use once.
@@ -477,6 +471,15 @@ class SlackAppProvisioner:
                 team_id=team_id,
             )
         return rotated.access_token
+
+    async def _store_rotation(
+        self, row_id: UUID, generation: int, rotated: slack.RotatedConfigurationToken
+    ) -> bool:
+        stored = await self.tokens.store_rotation(
+            row_id, generation=generation, token=rotated
+        )
+        await self.uow.commit()
+        return stored
 
     async def _release_rotation(self, row_id: UUID, generation: int) -> None:
         try:
@@ -511,74 +514,3 @@ class SlackAppProvisioner:
     ) -> None:
         if not await self._may_manage(organization_id, user_id):
             raise SlackAppCreationForbiddenError()
-
-
-async def sweep_unauthorised_apps(
-    uow_factory: UnitOfWorkFactory,
-    *,
-    calls: SlackAppCalls | None = None,
-    installs: OrgInstalls | None = None,
-    kept: timedelta = UNAUTHORISED_APP_KEPT,
-) -> int:
-    """Delete the Slack apps Lemma made that nobody authorised in ``kept``.
-
-    An app whose install has an account was authorised: only its pending row
-    goes. Otherwise the app goes from Slack, then its install (and the row with
-    it). A workspace whose token is gone or refused cannot be asked to delete
-    the app, so the install and row still go and the app id is logged. Returns
-    how many rows it settled.
-    """
-    installs = installs or OrgInstalls()
-    async with uow_factory() as uow:
-        rows = await SlackPendingAppBindingRepository(uow.session).made_before(
-            datetime.now(UTC) - kept, limit=_SWEEP_BATCH
-        )
-        stale = [
-            (row.id, row.organization_id, row.team_id, row.app_id, row.auth_config_id)
-            for row in rows
-        ]
-    settled = 0
-    for row_id, organization_id, team_id, app_id, auth_config_id in stale:
-        async with uow_factory() as uow:
-            if await installs.is_authorised(uow, auth_config_id):
-                await SlackPendingAppBindingRepository(uow.session).delete(row_id)
-                settled += 1
-                continue
-            provisioner = SlackAppProvisioner(uow, calls=calls, installs=installs)
-            try:
-                access_token: SecretStr | None = await provisioner.fresh_access_token(
-                    organization_id, team_id
-                )
-            except (
-                SlackAppCreationNotSetUpError,
-                SlackAppCreationTokenExpiredError,
-            ):
-                access_token = None
-            except AgentSurfaceError:
-                # Slack is busy or failing; the next sweep tries again.
-                logger.warning(
-                    "agent_surfaces.slack_app_creation.sweep.degraded",
-                    team_id=team_id,
-                    app_id=app_id,
-                    exc_info=True,
-                )
-                continue
-            app_deleted = False
-            if access_token is not None and app_id:
-                async with connection_released(uow.session):
-                    app_deleted = await provisioner.slack.delete_app(
-                        access_token, app_id
-                    )
-            await installs.delete_unauthorised(
-                uow, organization_id=organization_id, auth_config_id=auth_config_id
-            )
-            await SlackPendingAppBindingRepository(uow.session).delete(row_id)
-            settled += 1
-            logger.info(
-                "agent_surfaces.slack_app_creation.unauthorised_app_swept",
-                organization_id=str(organization_id),
-                team_id=team_id,
-                app_id=app_id,
-                app_deleted=app_deleted,
-            )
-    return settled

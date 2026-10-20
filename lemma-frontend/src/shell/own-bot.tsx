@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { source } from "@/data";
 import type { AccountConnect, Connectable, Pod, SlackAppWorkspace } from "@/data";
 import { CheckIcon, CopyIcon, ExternalIcon, RefreshIcon } from "@/ui/icons";
@@ -178,6 +178,7 @@ function MadeByLemma({
     const [error, setError] = useState<string | null>(null);
     const where = (one: SlackAppWorkspace) => one.teamName || one.teamId;
     const chosen = workspaces.find((one) => one.teamId === teamId) ?? workspaces[0];
+    const queryClient = useQueryClient();
 
     const create = useMutation({
         mutationFn: async () => {
@@ -191,7 +192,12 @@ function MadeByLemma({
             setMade(result);
             if (!result.authorization.authorizeUrl) setError("Made, but this deployment cannot start the authorisation.");
         },
-        onError: (problem) => setError(problem instanceof Error ? problem.message : "Slack did not make the app."),
+        onError: (problem) => {
+            setError(problem instanceof Error ? problem.message : "Slack did not make the app.");
+            /* A token Slack refused marks its workspace: read the list again so
+               the sheet asks for a new one instead of offering this again. */
+            void queryClient.invalidateQueries({ queryKey: ["slack-app-workspaces", pod.id] });
+        },
     });
 
     return (

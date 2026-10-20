@@ -267,17 +267,16 @@ async def test_an_error_before_any_platform_call_is_tried_again(
     async def blink(*_args, **_kwargs):
         raise OperationalError("SELECT 1", {}, Exception("connection reset"))
 
-    monkeypatch.setattr(channel_deliveries, "source_by_id", blink)
-    with pytest.raises(OperationalError):
-        await _deliver(delivery_id)
+    # Only the blink is undone: the fixtures' fake-platform wiring stays.
+    with monkeypatch.context() as blinking:
+        blinking.setattr(channel_deliveries, "source_by_id", blink)
+        with pytest.raises(OperationalError):
+            await _deliver(delivery_id)
 
     failed = await _row(delivery_id)
     assert failed.status is DeliveryStatus.FAILED
     assert failed.claimed_at is None
     assert len(_telegram_answers(message_store)) == 0
-    monkeypatch.undo()
-    monkeypatch.setattr(surface_settings, "enable_telegram_polling_mode", False)
-    monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
     await _due_now(delivery_id)
     await _deliver(delivery_id)
     assert (await _row(delivery_id)).status is DeliveryStatus.SENT

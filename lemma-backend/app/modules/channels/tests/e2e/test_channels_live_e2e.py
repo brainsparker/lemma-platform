@@ -83,6 +83,9 @@ async def test_a_channel_streams_its_lines_and_resumes_from_its_cursor(
             "c", "channel", channel_id=channel["id"], since=cursor
         )
         assert resumed["type"] == "subscribed", resumed
+        # It is told where it was, not the head: dropping before the gap
+        # arrives resumes from here again rather than past what it missed.
+        assert resumed["cursor"] == cursor
         assert (await live.event("c", "line.created", message__id=third["id"]))[
             "message"
         ]["text"] == "while away"

@@ -723,18 +723,24 @@ def upgrade() -> None:
         "VALIDATE CONSTRAINT fk_agent_conversations_channel"
     )
     # Concurrently, outside the transaction: conversations are written on
-    # every turn, and a plain build would block those writers.
+    # every turn, and a plain build would block those writers. A build that
+    # failed on an earlier try leaves an invalid index of that name, which
+    # IF NOT EXISTS would keep for good -- so drop it, then build.
     with op.get_context().autocommit_block():
+        for name in (
+            "ix_agent_conversations_channel_id",
+            "uq_agent_conversations_channel_person",
+        ):
+            op.execute(f"DROP INDEX CONCURRENTLY IF EXISTS {name}")
         op.create_index(
             "ix_agent_conversations_channel_id",
             "agent_conversations",
             ["channel_id"],
             postgresql_concurrently=True,
-            if_not_exists=True,
         )
         # A person has one live conversation per agent in a channel.
         op.execute(
-            "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "
+            "CREATE UNIQUE INDEX CONCURRENTLY "
             "uq_agent_conversations_channel_person ON agent_conversations "
             "(channel_id, coalesce(agent_id, pod_id), coalesce(contact_id, user_id)) "
             "WHERE channel_id IS NOT NULL AND parent_id IS NULL AND NOT is_archived"

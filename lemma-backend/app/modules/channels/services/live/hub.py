@@ -260,7 +260,7 @@ class ChannelsHub:
         channel_id: UUID,
         since: str | None,
     ) -> None:
-        """Index a ``channel`` subscription, sending its gap since ``since``.
+        """Index a ``channel`` subscription, from ``since`` then its gap.
 
         Visibility is decided under the lock, after the head is read: a
         removal committing later takes a change past that head, which the next
@@ -290,7 +290,7 @@ class ChannelsHub:
                     on_release=self._release_channel,
                 )
                 connection.subscriptions[subscription_id] = sub
-                connection.offer_subscribed(subscription_id, head.cursor)
+                connection.offer_subscribed(subscription_id, since or head.cursor)
                 await self._send_gap(uow, sub, channel, head, since)
                 if sub.active:
                     # Nothing awaited from here: a delta relayed now reaches

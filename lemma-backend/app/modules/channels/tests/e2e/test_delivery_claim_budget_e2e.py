@@ -132,7 +132,25 @@ async def _plans(
     return await explain(engine, statements)
 
 
-def _assert_probes(name: str, plans: list[Plan]) -> None:
+async def _others_still_due(channel_id: UUID) -> int:
+    """Deliveries other tests left still to go: ``due`` is the deployment's
+    sweep, so it passes over theirs as well as ours."""
+    async with async_session_maker() as session:
+        return int(
+            await session.scalar(
+                text(
+                    "SELECT count(*) FROM channel_message_deliveries WHERE "
+                    "status IN ('PENDING', 'FAILED') AND channel_id <> :c"
+                ),
+                {"c": channel_id},
+            )
+            or 0
+        )
+
+
+def _assert_probes(
+    name: str, plans: list[Plan], *, ceiling: int = ROWS_CEILING
+) -> None:
     for plan in plans:
         tree = f"{name}: {' '.join(plan.sql.split())[:160]}\n{plan.tree()}"
         print(f"\n  {tree}")
@@ -148,8 +166,8 @@ def _assert_probes(name: str, plans: list[Plan]) -> None:
             f"{name} walks the channel's lines:\n{tree}"
         )
         read = plan.rows_read("channel_message_deliveries")
-        assert read <= ROWS_CEILING, (
-            f"{name} touched {read} deliveries, more than {ROWS_CEILING}:\n{tree}"
+        assert read <= ceiling, (
+            f"{name} touched {read} deliveries, more than {ceiling}:\n{tree}"
         )
 
 
@@ -165,6 +183,10 @@ async def test_a_claim_probes_the_targets_due_rows_not_the_channels_history(
     claimable = await _plans(engine, lambda deliveries: deliveries.claim(oldest))
     behind = await _plans(engine, lambda deliveries: deliveries.claim(newest))
     sweep = await _plans(engine, lambda deliveries: deliveries.due(limit=100))
+    # Each row the sweep passes is read once, and again by each candidate's
+    # "anything older to this target?" probe; the sent history is never in
+    # the index it walks, which the checks below hold exactly.
+    others = await _others_still_due(channel_id)
 
     async with async_session_maker() as session:
         repository = DeliveryRepository(session)
@@ -182,8 +204,8 @@ async def test_a_claim_probes_the_targets_due_rows_not_the_channels_history(
     for name, plans in (
         ("claim", claimable),
         ("claim behind an older one", behind),
-        ("due", sweep),
         ("next for a place", following),
         ("next for a member", pushes),
     ):
         _assert_probes(name, plans)
+    _assert_probes("due", sweep, ceiling=ROWS_CEILING + others * (len(due) + 1))

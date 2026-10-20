@@ -13,9 +13,11 @@ from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
+from websockets.exceptions import ConnectionClosed
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.live.config import live_settings
+from app.core.server_limits import WS_MAX_BYTES
 from app.modules.agent.services.realtime import (
     publish_conversation_event,
     token_payload,
@@ -783,6 +785,25 @@ async def test_the_frame_limit_counts_bytes(pod: Pod, backend_server) -> None:
         assert refused["code"] == "invalid" and "too large" in str(refused["message"])
         await live.send(op="ping")
         await live.until("pong")
+
+
+async def test_a_message_past_the_servers_cap_closes_the_socket_with_1009(
+    pod: Pod, backend_server
+) -> None:
+    """The server refuses it while it arrives -- never read whole into memory
+    to be refused after. Under the cap, a frame too large for the protocol is
+    refused in place and the socket carries on."""
+    async with live_socket(backend_server, pod.id, pod.owner["token"]) as live:
+        await live.send(op="ping", pad="x" * (WS_MAX_BYTES - 1024))
+        refused = await live.until("error")
+        assert refused["code"] == "invalid" and "too large" in str(refused["message"])
+        await live.ws.send("x" * (WS_MAX_BYTES + 1))
+        with pytest.raises(ConnectionClosed):
+            await live.recv(timeout=10)
+        assert live.ws.close_code == 1009
+    async with live_socket(backend_server, pod.id, pod.owner["token"]) as again:
+        await again.send(op="ping")
+        await again.until("pong")
 
 
 async def test_a_change_that_moves_none_of_a_readers_counts_sends_them_nothing(

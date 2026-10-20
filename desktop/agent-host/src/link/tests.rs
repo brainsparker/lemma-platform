@@ -69,6 +69,56 @@ async fn a_frame_larger_than_lemma_reads_is_refused_before_it_is_sent() {
         .unwrap();
 }
 
+/// A tool result Lemma staged rather than sent -- one with large images -- is
+/// fetched and checked before the caller sees it; one that does not match
+/// what the answer named is refused, not handed over.
+#[tokio::test]
+async fn a_staged_tool_result_is_fetched_before_anyone_sees_it() {
+    use super::transfer::sha256_hex;
+
+    let stub = StubLink::start().await;
+    let link = connected(&stub).await.handle;
+    let image = "A".repeat(3 * protocol::MAX_MESSAGE_BYTES);
+    let result =
+        json!({ "content": [{ "type": "image", "mimeType": "image/png", "data": image }] });
+    let body = serde_json::to_vec(&result).unwrap();
+    stub.state
+        .staged
+        .lock()
+        .unwrap()
+        .insert("big".to_owned(), body.clone());
+    stub.state.mcp_answers.lock().unwrap().insert(
+        "tools/call".to_owned(),
+        json!({ protocol::STAGED_FIELD: { "id": "big", "size": body.len(), "sha256": sha256_hex(&body) } }),
+    );
+    let call = protocol::McpBody {
+        run_id: Uuid::new_v4(),
+        conversation_id: Uuid::new_v4(),
+        token: "token".into(),
+        method: "tools/call".into(),
+        params: json!({ "name": "view_image" }),
+        request_id: None,
+    };
+    assert_eq!(link.mcp(&call).await.unwrap(), result);
+
+    // Named with the wrong digest: refused, as that one request.
+    stub.state
+        .staged
+        .lock()
+        .unwrap()
+        .insert("liar".to_owned(), body.clone());
+    stub.state.mcp_answers.lock().unwrap().insert(
+        "tools/call".to_owned(),
+        json!({ protocol::STAGED_FIELD: { "id": "liar", "size": body.len(), "sha256": sha256_hex(b"x") } }),
+    );
+    let refused = link.mcp(&call).await.unwrap_err();
+    assert!(
+        matches!(&refused, LinkError::Rejected { code, retryable: false, .. } if code == connection::STAGED_UNAVAILABLE),
+        "{refused}"
+    );
+    assert!(!link.is_closed());
+}
+
 /// Pairing is the one exchange without a secret, because it is the exchange
 /// that issues one, and it leaves nothing open behind it.
 #[tokio::test]
@@ -275,6 +325,7 @@ async fn the_hello_carries_host_execution() {
             hello: HostHello::current("installation"),
             capacity: capacity(),
             host_execution: Some(status.clone()),
+            staged_bodies: true,
         },
         None,
     )
@@ -341,6 +392,7 @@ mod host_execution {
                 hello: HostHello::current("installation"),
                 capacity: capacity(),
                 host_execution: None,
+                staged_bodies: true,
             },
             Some(relay.clone()),
         )

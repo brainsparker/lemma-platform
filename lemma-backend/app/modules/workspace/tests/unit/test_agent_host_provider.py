@@ -54,6 +54,7 @@ from app.modules.workspace.providers.agent_host_ops import (
     INLINE_DATA_BYTES,
     OP_MAX_DATA_BYTES,
     PYTHON_ON_HOST_SENTENCE,
+    WRITE_CHUNK_BYTES,
 )
 from app.modules.workspace.providers.base import (
     ProviderCapability,
@@ -569,7 +570,7 @@ async def test_a_ranged_read_asks_for_only_that_range(provider, transport, insta
 async def test_a_large_write_is_chunked_and_only_the_last_chunk_is_final(
     provider, transport, instance
 ):
-    body = b"z" * (OP_MAX_DATA_BYTES * 2 + 17)
+    body = b"z" * (WRITE_CHUNK_BYTES * 2 + 17)
     digest = "sha256:" + hashlib.sha256(body).hexdigest()
     transport.answers["file.write"] = lambda params: (
         _stat(params["path"], size=len(body), sha=digest) if params["final"] else {}
@@ -591,14 +592,14 @@ async def test_a_large_write_is_chunked_and_only_the_last_chunk_is_final(
     writes = transport.params("file.write")
     assert [w["offset"] for w in writes] == [
         0,
-        OP_MAX_DATA_BYTES,
-        2 * OP_MAX_DATA_BYTES,
+        WRITE_CHUNK_BYTES,
+        2 * WRITE_CHUNK_BYTES,
     ]
     assert [w["final"] for w in writes] == [False, False, True]
     assert len({w["upload_id"] for w in writes}) == 1
     sent = transport.sent["file.write"]
     assert all("data" not in w for w in writes)
-    assert all(len(chunk) <= OP_MAX_DATA_BYTES for chunk in sent)
+    assert all(len(chunk) <= WRITE_CHUNK_BYTES for chunk in sent)
     assert b"".join(sent) == body
     assert "expected_sha256" not in writes[0]
     assert writes[-1]["expected_sha256"] == digest

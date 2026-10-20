@@ -56,6 +56,11 @@ OP_MAX_DATA_BYTES = 1024 * 1024
 #: ``LINK_INLINE_DATA_BYTES`` on the link.
 INLINE_DATA_BYTES = 256 * 1024
 
+#: The most one ``file.write`` chunk carries. Half a transfer: a host released
+#: before transfers is sent the chunk inline by its link session, and base64
+#: of half a mebibyte still fits a frame Lemma sends.
+WRITE_CHUNK_BYTES = 512 * 1024
+
 #: The longest one ``process.read`` may wait on the host.
 _MAX_WAIT_MS = 30_000
 
@@ -412,7 +417,7 @@ class AgentHostOpsMixin:
         upload_id = str(uuid4())
         offset = 0
         pending: bytes | None = None
-        async for chunk in rechunk(data, OP_MAX_DATA_BYTES):
+        async for chunk in rechunk(data, WRITE_CHUNK_BYTES):
             if pending is not None:
                 await self._write_chunk(
                     instance,

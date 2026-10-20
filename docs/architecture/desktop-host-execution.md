@@ -172,8 +172,9 @@ crosses HTTP as a *transfer* the op names
   its SHA-256 in `x-lemma-sha256`), and answers `size` and `sha256` instead of
   `data`. Lemma takes the bytes only if they match that answer.
 
-Each chunk is at most `OP_MAX_DATA_BYTES` (1 MiB), so large files still move
-as ranged reads and chunked writes. The relay -- outside the sandbox -- does
+A read chunk is at most `OP_MAX_DATA_BYTES` (1 MiB) and a write chunk half
+that (`WRITE_CHUNK_BYTES`, so it still fits a frame inline for a host without
+transfers), so large files still move as ranged reads and chunked writes. The relay -- outside the sandbox -- does
 the HTTP half, and the exec-server still reads and writes base64 `data` on its
 stdio; confined, it has no network. What still travels inline is held to
 `INLINE_DATA_BYTES` (256 KiB before base64): `process.read` output (Lemma

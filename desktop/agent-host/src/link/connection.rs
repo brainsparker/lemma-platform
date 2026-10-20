@@ -24,6 +24,7 @@ use super::protocol::{
     MAX_MESSAGE_BYTES, McpBody, McpOkBody, OpBody, OpOkBody, PublishedHarness, ReconnectBody,
     WelcomeBody, close, host, server,
 };
+use super::transfer::{TransferClient, is_staged};
 use crate::host_exec::wire::{OP_FAILED, OpFailure, kind};
 use crate::protocol::{Command, EventAck, EventBatch, HarnessSnapshot, HostCapacity, HostHello};
 
@@ -214,6 +215,9 @@ pub struct LinkHandle {
     closed: watch::Receiver<Option<LinkError>>,
     /// What the `welcome` said Lemma keeps: see `idempotent_tool_calls`.
     idempotent_tool_calls: bool,
+    /// Fetches what Lemma staged rather than sent; `None` on a pairing link,
+    /// which has no secret to fetch with.
+    staged: Option<TransferClient>,
     _tasks: Arc<LinkTasks>,
 }
 
@@ -372,9 +376,38 @@ impl LinkHandle {
 
     /// One MCP request. No timeout of its own: a tool call takes as long as
     /// the tool does, and the run's deadline is what bounds it.
+    ///
+    /// A result Lemma staged rather than sent -- one with large images -- is
+    /// fetched here, so callers only ever see the result itself.
     pub async fn mcp(&self, body: &McpBody) -> Result<Value, LinkError> {
         let answer: McpOkBody = self.request(host::MCP, body, None).await?;
-        Ok(answer.result)
+        self.resolve_staged(answer.result).await
+    }
+
+    /// `value`, with a staged part of a frame fetched and put back.
+    ///
+    /// A fetch that may pass on a retry fails like a link that dropped, so
+    /// the caller retries as it would then; one that cannot is a refusal.
+    pub async fn resolve_staged(&self, value: Value) -> Result<Value, LinkError> {
+        if !is_staged(&value) {
+            return Ok(value);
+        }
+        let Some(client) = &self.staged else {
+            return Err(LinkError::Protocol(
+                "Lemma staged part of a frame on a link that cannot fetch it".to_owned(),
+            ));
+        };
+        client.resolve_staged(value).await.map_err(|error| {
+            if error.is_transient() {
+                LinkError::Transport(error.to_string())
+            } else {
+                LinkError::Rejected {
+                    code: STAGED_UNAVAILABLE.to_owned(),
+                    message: error.to_string(),
+                    retryable: false,
+                }
+            }
+        })
     }
 
     /// Wait for a person's answer to a parked tool call. Lemma answers when
@@ -592,6 +625,7 @@ pub async fn open(
         next_id: Arc::new(AtomicU64::new(1)),
         closed,
         idempotent_tool_calls: false,
+        staged: authorization.and_then(|secret| TransferClient::new(base, secret).ok()),
         _tasks: Arc::new(LinkTasks {
             writer: Some(writer),
             reader: Some(reader),
@@ -682,6 +716,7 @@ pub async fn connect(
             hello,
             capacity,
             host_execution: None,
+            staged_bodies: true,
         },
         None,
     )
@@ -693,9 +728,11 @@ pub async fn connect(
 pub async fn connect_with(
     base: &Url,
     host_secret: &str,
-    hello: HelloBody,
+    mut hello: HelloBody,
     ops: Option<Arc<dyn OpHandler>>,
 ) -> Result<Connected, LinkError> {
+    // This link fetches what Lemma stages: it holds the secret to.
+    hello.staged_bodies = true;
     let body =
         serde_json::to_value(hello).map_err(|error| LinkError::Protocol(error.to_string()))?;
     let (connected, _) = open(base, Some(host_secret), (host::HELLO, body), ops).await?;
@@ -787,6 +824,9 @@ fn push_from(frame: Frame) -> Option<Push> {
         }
     }
 }
+
+/// The code a staged answer that could not be fetched fails with.
+pub const STAGED_UNAVAILABLE: &str = "STAGED_UNAVAILABLE";
 
 /// The code a request too large to send is refused with, here, before it
 /// reaches the socket.

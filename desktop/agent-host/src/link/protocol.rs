@@ -46,6 +46,14 @@ pub const DIGEST_HEADER: &str = "x-lemma-sha256";
 /// of its inline `data` (or a resource's `blob`).
 pub const BLOB_FIELD: &str = "lemma_blob";
 
+/// The key a part of a frame Lemma staged instead of sending is replaced by
+/// -- a large tool result, a large command payload. See
+/// `TransferClient::resolve_staged`.
+pub const STAGED_FIELD: &str = "lemma_staged";
+
+/// The most one staged body carries.
+pub const STAGED_BODY_MAX_BYTES: usize = 32 * 1024 * 1024;
+
 /// One message on the link.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Frame {
@@ -143,6 +151,10 @@ pub struct HelloBody {
     /// rather than the next reconnect.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host_execution: Option<HostExecutionStatus>,
+    /// This host fetches a part of a frame Lemma staged rather than sent
+    /// (`STAGED_FIELD`). `connect_with` sets it: the link it opens can.
+    #[serde(default)]
+    pub staged_bodies: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -388,6 +400,17 @@ mod tests {
         assert_eq!(bulk["blob_max_bytes"], BLOB_MAX_BYTES);
         assert_eq!(bulk["digest_header"], DIGEST_HEADER);
         assert_eq!(bulk["blob_field"], BLOB_FIELD);
+        assert_eq!(bulk["staged_field"], STAGED_FIELD);
+        assert_eq!(bulk["staged_body_max_bytes"], STAGED_BODY_MAX_BYTES);
+        assert_eq!(bulk["hello_flag"], "staged_bodies");
+        let hello = serde_json::to_value(HelloBody {
+            hello: crate::protocol::HostHello::current("i"),
+            capacity: crate::protocol::HostCapacity::default(),
+            host_execution: None,
+            staged_bodies: true,
+        })
+        .unwrap();
+        assert_eq!(hello["staged_bodies"], true);
         assert_eq!(bulk["transfer_path"], "/agent-host/transfers/{transfer_id}");
         assert_eq!(
             bulk["blob_path"],

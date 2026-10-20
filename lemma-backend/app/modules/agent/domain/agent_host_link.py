@@ -170,6 +170,9 @@ class LinkErrorCode(str, Enum):
     #: An ``op`` the host could not perform. ``detail.kind`` says why; see
     #: ``OP_FAILURE_KINDS``.
     OP_FAILED = "OP_FAILED"
+    #: The answer would have been a frame past the link's 1 MiB ceiling, so it
+    #: was not sent. Never retryable: the same request has the same answer.
+    FRAME_TOO_LARGE = "FRAME_TOO_LARGE"
 
 
 class HostFrameType(str, Enum):
@@ -251,6 +254,10 @@ class HostExecutionCapability(BaseModel):
 class HelloBody(BaseModel):
     hello: HostHello
     capacity: AgentHostCapacity = Field(default_factory=AgentHostCapacity)
+    #: The host fetches a part of a frame Lemma staged instead of sending
+    #: (``{"lemma_staged": ...}``; ``domain/agent_host_transfer``). Absent from
+    #: a host released before it, which is sent nothing staged.
+    staged_bodies: bool = False
     #: Absent from a host too old to know it, which means "no host execution".
     host_execution: HostExecutionCapability | None = None
 

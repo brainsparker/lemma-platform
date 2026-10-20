@@ -17,7 +17,11 @@ use sha2::{Digest as _, Sha256};
 use url::Url;
 use uuid::Uuid;
 
-use super::protocol::{BLOB_MAX_BYTES, DIGEST_HEADER, TRANSFER_MAX_BYTES};
+use serde_json::Value;
+
+use super::protocol::{
+    BLOB_MAX_BYTES, DIGEST_HEADER, STAGED_BODY_MAX_BYTES, STAGED_FIELD, TRANSFER_MAX_BYTES,
+};
 
 /// How long one transfer may take, end to end. A chunk is at most 1 MiB and a
 /// blob 5 MiB; past this the network, not the size, is the problem.
@@ -101,10 +105,42 @@ impl TransferClient {
         size: usize,
         sha256: &str,
     ) -> Result<Vec<u8>, TransferError> {
+        self.fetch_at_most(transfer_id, size, sha256, TRANSFER_MAX_BYTES)
+            .await
+    }
+
+    /// Put back a part of a frame Lemma staged rather than sent, if `value`
+    /// is one: `{"lemma_staged": {id, size, sha256}}` becomes the JSON it
+    /// names, fetched and checked against that size and digest. Anything else
+    /// is returned as it is.
+    pub async fn resolve_staged(&self, value: Value) -> Result<Value, TransferError> {
+        let Some(reference) = staged_reference(&value) else {
+            return Ok(value);
+        };
+        let body = self
+            .fetch_at_most(
+                &reference.id,
+                reference.size,
+                &reference.sha256,
+                STAGED_BODY_MAX_BYTES,
+            )
+            .await?;
+        serde_json::from_slice(&body).map_err(|error| {
+            TransferError::Mismatch(format!("the staged body is not JSON: {error}"))
+        })
+    }
+
+    async fn fetch_at_most(
+        &self,
+        transfer_id: &str,
+        size: usize,
+        sha256: &str,
+        limit: usize,
+    ) -> Result<Vec<u8>, TransferError> {
         check_transfer_id(transfer_id)?;
-        if size > TRANSFER_MAX_BYTES {
+        if size > limit {
             return Err(TransferError::Mismatch(format!(
-                "a transfer carries at most {TRANSFER_MAX_BYTES} bytes"
+                "a transfer carries at most {limit} bytes"
             )));
         }
         let url = self.url(&format!("agent-host/transfers/{transfer_id}"))?;
@@ -177,6 +213,31 @@ impl TransferClient {
         refused(&response)?;
         Ok(digest)
     }
+}
+
+/// What a staged part of a frame names.
+#[derive(Debug, serde::Deserialize)]
+struct StagedReference {
+    id: String,
+    size: usize,
+    sha256: String,
+}
+
+/// The reference `value` is, when it is nothing but one.
+fn staged_reference(value: &Value) -> Option<StagedReference> {
+    let fields = value.as_object()?;
+    if fields.len() != 1 {
+        return None;
+    }
+    serde_json::from_value(fields.get(STAGED_FIELD)?.clone()).ok()
+}
+
+/// Whether `value` is a staged part of a frame, to be fetched.
+#[must_use]
+pub fn is_staged(value: &Value) -> bool {
+    value
+        .as_object()
+        .is_some_and(|fields| fields.len() == 1 && fields.contains_key(STAGED_FIELD))
 }
 
 /// A transfer id is Lemma's, but it becomes part of a URL here: anything but

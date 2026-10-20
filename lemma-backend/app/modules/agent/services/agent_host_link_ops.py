@@ -62,7 +62,10 @@ from app.modules.agent.infrastructure.agent_host.transfers import (
     TransferRefusal,
     TransferRefused,
 )
-from app.modules.agent.services.agent_host_link_wire import LinkWriter
+from app.modules.agent.services.agent_host_link_wire import (
+    LinkWriter,
+    OutboundFrameTooLarge,
+)
 
 
 logger = get_logger(__name__)
@@ -202,6 +205,12 @@ class LinkOpRelay:
                 TIMEOUT,
                 f"{notice.method} did not finish before its deadline",
                 retryable=True,
+            )
+        except OutboundFrameTooLarge as refused:
+            reply = _failure(
+                LinkErrorCode.OP_FAILED.value,
+                "too_large",
+                f"{notice.method}: {refused}",
             )
         except TransferRefused as refused:
             reply = _failure(

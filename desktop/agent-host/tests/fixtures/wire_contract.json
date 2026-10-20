@@ -274,7 +274,8 @@
       "UNAUTHORIZED",
       "UNAVAILABLE",
       "INTERNAL",
-      "OP_FAILED"
+      "OP_FAILED",
+      "FRAME_TOO_LARGE"
     ]
   },
   "tool_events": [
@@ -472,6 +473,10 @@
     "transfer_path": "/agent-host/transfers/{transfer_id}",
     "blob_path": "/agent-host/runs/{run_id}/blobs/{sha256}",
     "digest_header": "x-lemma-sha256",
-    "blob_field": "lemma_blob"
+    "blob_field": "lemma_blob",
+    "staged_field": "lemma_staged",
+    "staged_body_max_bytes": 33554432,
+    "outbound_inline_bytes": 524288,
+    "hello_flag": "staged_bodies"
   }
 }

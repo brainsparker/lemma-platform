@@ -34,13 +34,16 @@ _FROM_HOST = "from_host"
 # What a host fetching a transfer gets: 0 nothing it may have (unknown,
 # expired, another host's, or the other direction -- one answer for all, so a
 # host learns nothing about transfers that are not its own), 1 already
-# fetched, or 2 with the bytes and their digest.
+# fetched, or 2 with the bytes and their digest. A staged body is ``reusable``:
+# the frame naming it may be sent again (a resent command, a retried tool
+# call), so it is fetched as often as asked until it expires.
 _FETCH_SCRIPT = """
-local meta = redis.call('HMGET', KEYS[1], 'host', 'direction', 'data', 'sha256')
+local meta = redis.call(
+  'HMGET', KEYS[1], 'host', 'direction', 'data', 'sha256', 'reusable')
 if not meta[1] or meta[1] ~= ARGV[1] or meta[2] ~= 'to_host' then
   return {0}
 end
-if redis.call('HSETNX', KEYS[1], 'taken', '1') == 0 then
+if meta[5] ~= '1' and redis.call('HSETNX', KEYS[1], 'taken', '1') == 0 then
   return {1}
 end
 return {2, meta[3], meta[4]}
@@ -146,6 +149,32 @@ class AgentHostTransferStore:
                     "size": staged.size,
                     "sha256": staged.sha256,
                     "data": data,
+                },
+            )
+            pipe.expire(key, max(1, ttl_seconds))
+            await pipe.execute()
+        return staged
+
+    async def stage_body_for_host(
+        self, *, host_id: UUID, body: bytes, ttl_seconds: int
+    ) -> StagedTransfer:
+        """Hold part of a frame Lemma sends ``host_id`` for it to fetch instead.
+
+        Reusable until it expires, unlike an op's transfer: the frame that
+        names it may be sent again, and every copy has to resolve.
+        """
+        staged = StagedTransfer(id=uuid4().hex, size=len(body), sha256=sha256_hex(body))
+        key = transfer_key(staged.id)
+        async with self._client().pipeline(transaction=True) as pipe:
+            pipe.hset(
+                key,
+                mapping={
+                    "host": str(host_id),
+                    "direction": _TO_HOST,
+                    "size": staged.size,
+                    "sha256": staged.sha256,
+                    "data": body,
+                    "reusable": "1",
                 },
             )
             pipe.expire(key, max(1, ttl_seconds))

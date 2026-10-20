@@ -27,8 +27,16 @@ names them, ``{"type": "image", "mimeType", "lemma_blob": {"sha256",
 "size"}}``, where it used to carry ``data`` inline. A blob is kept as long as
 the run's event stream is, because the event is read when the stream is.
 
+**Staged bodies** carry what Lemma would otherwise *send* past the ceiling: a
+tool result with images in an ``mcp_ok``, a command whose payload is too large
+to share a frame. The part is replaced by ``{"lemma_staged": {"id", "size",
+"sha256"}}``, and the host ``GET``s the JSON from the same transfer route and
+puts it back before reading the frame. A staged body is reusable until it
+expires, because the frame naming it may be sent again.
+
 Everything else that rides the link is bounded instead, by
-``LINK_INLINE_DATA_BYTES`` and ``LINK_EVENT_BATCH_MAX_BYTES``.
+``LINK_INLINE_DATA_BYTES`` and ``LINK_EVENT_BATCH_MAX_BYTES``, and every frame
+Lemma sends passes one guard (``LinkWriter.send_frame``).
 """
 
 from __future__ import annotations
@@ -64,6 +72,28 @@ TRANSFER_GRACE_SECONDS = 60
 #: event naming it is read from there (``event_stream._STREAM_TTL_SECONDS``).
 BLOB_TTL_SECONDS = 24 * 60 * 60
 
+#: The key a staged part of an outbound frame is replaced by.
+STAGED_FIELD = "lemma_staged"
+
+#: The most one staged body carries. A tool result is capped well below this
+#: by the host's MCP bridge (8 MiB); this only bounds a broken one.
+STAGED_BODY_MAX_BYTES = 32 * 1024 * 1024
+
+#: A tool result or command payload past this, encoded, is staged rather than
+#: sent inline: half the message ceiling, so the frame carrying the rest --
+#: and the other commands packed beside it -- always fits.
+LINK_OUTBOUND_INLINE_BYTES = 512 * 1024
+
+#: The most commands one frame packs, encoded, leaving room for its envelope.
+LINK_OUTBOUND_FRAME_BYTES = 960 * 1024
+
+#: How long a staged tool result waits for the host: the bridge fetches it as
+#: soon as the answer arrives, so this only has to outlast a slow network.
+STAGED_RESULT_TTL_SECONDS = 10 * 60
+
+#: How long a staged command payload outlives the command's own expiry.
+STAGED_COMMAND_GRACE_SECONDS = 60
+
 #: The most binary data an ``op`` still carries inline, before base64:
 #: ``process.read`` output, ``process.input``, ``secret.deliver`` and
 #: ``process.start``'s ``initial_input``. Small enough that base64 and the
@@ -86,6 +116,12 @@ def is_sha256_hex(value: object) -> bool:
 
 
 __all__ = [
+    "LINK_OUTBOUND_FRAME_BYTES",
+    "LINK_OUTBOUND_INLINE_BYTES",
+    "STAGED_BODY_MAX_BYTES",
+    "STAGED_COMMAND_GRACE_SECONDS",
+    "STAGED_FIELD",
+    "STAGED_RESULT_TTL_SECONDS",
     "BLOB_FIELD",
     "BLOB_MAX_BYTES",
     "BLOB_PATH",

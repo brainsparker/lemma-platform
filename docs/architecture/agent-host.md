@@ -647,7 +647,7 @@ to `desktop/agent-host/tests/fixtures/wire_contract.json`.
 | Direction | `type` | Body | Answered by |
 |---|---|---|---|
 | host → Lemma | `pair` | `pairing_code`, `display_name`, `hello`, `reenable` (default false) | `paired` (`host_id`, `user_id`, `host_secret`), then close |
-| host → Lemma | `hello` | `hello`, `capacity`, `host_execution` | `welcome` (`host_id`, `user_id`, `protocol_version`, `heartbeat_ms`, `server_time`, `idempotent_tool_calls`) |
+| host → Lemma | `hello` | `hello`, `capacity`, `host_execution`, `staged_bodies` | `welcome` (`host_id`, `user_id`, `protocol_version`, `heartbeat_ms`, `server_time`, `idempotent_tool_calls`) |
 | host → Lemma | `control` | `capacity`, `acknowledged_command_ids`, `checkpoints`, `rejections`, `host_execution` | `control_ok` (`commands`, `refused`) |
 | host → Lemma | `events` | one run's contiguous batch | `events_ok` (`ack`) or `error` |
 | host → Lemma | `harnesses` | `harnesses` | `harnesses_ok` (`items`) |
@@ -731,7 +731,7 @@ secret>`), outside the OpenAPI schema like the link
 
 | Route | What | Refused with |
 |---|---|---|
-| `GET /agent-host/transfers/{id}` | a `file.write` chunk Lemma staged for this host's op | 404 not this host's, unknown or expired; 409 already fetched |
+| `GET /agent-host/transfers/{id}` | a `file.write` chunk Lemma staged for this host's op, or a part of a frame Lemma staged rather than sent (below) | 404 not this host's, unknown or expired; 409 an op's chunk already fetched |
 | `PUT /agent-host/transfers/{id}` | a `file.read` chunk, into the slot the op named; SHA-256 in `x-lemma-sha256` | 404; 409 already delivered; 413 past the slot's `max_bytes`; 422 digest |
 | `PUT /agent-host/runs/{run_id}/blobs/{sha256}` | an image a run's event names, before the event is sent | 404 a run this host does not hold; 413 past 5 MiB; 422 digest |
 
@@ -748,7 +748,37 @@ did the inline image. The host only changes the copy it sends: the journal
 keeps the agent's event, so a replay uploads again rather than naming a blob
 that may have expired.
 
-What still rides the link is bounded on the host:
+**The other direction.** Nothing Lemma sends a host passes 1 MiB either. The
+host would read a larger frame, but the link is the machine's only socket, and
+one frame of several megabytes holds up every answer queued behind it
+(`agent_host_link_outbound.py`):
+
+| Frame | Worst case before | Now |
+|---|---|---|
+| `mcp_ok` | a tool result with images: 5 MiB of image, about 6.7 MiB base64, plus its text | a result past 512 KiB is staged; the answer is `{"result": {"lemma_staged": {id, size, sha256}}}` |
+| `commands`, `control_ok` | every command due at once, a START_RUN's prompt and system prompt unbounded | a payload past 512 KiB is staged as `{"payload": {"lemma_staged": …}}`; commands are packed into as many frames as they need (960 KiB each), the rest of a `control_ok` following as `commands` pushes |
+| `op` | a `file.write` chunk inline (1 MiB, 1.33 MiB base64) | file data is a transfer; a host without transfers gets 512 KiB chunks inline |
+| `harnesses_ok`, `interaction_ok` | echoes of what the host sent; a person's answer | bounded by the guard |
+| `welcome`, `paired`, `events_ok`, `revoked`, `reconnect`, `error` | small and fixed | unchanged |
+
+A staged part is fetched from `GET /agent-host/transfers/{id}` and checked
+against the size and SHA-256 its reference names, then put back before anyone
+reads the frame (`LinkHandle::mcp`, `TargetWorker::resolve_staged_payloads`).
+Unlike an op's chunk it can be fetched again until it expires (ten minutes for
+a tool result, a minute past a command's own expiry), because the frame naming
+it may be sent again. A command whose payload cannot be fetched yet is left
+unacknowledged for Lemma to send again; one that cannot be fetched at all is
+refused like any payload the host cannot read. A host says it fetches staged
+parts with `staged_bodies: true` on `hello`.
+
+And one guard every outbound frame passes, `LinkWriter.send_frame`: a frame
+still past `WS_MAX_BYTES` is not sent, and logs
+`agent.agent_host_link.frame_too_large`. An answer becomes an `error` with code
+`FRAME_TOO_LARGE` for that one request, never retryable; a push or an `op` is
+failed back to the code that sent it (an op as `too_large`). The link stays
+open either way.
+
+What still rides the link from the host is bounded on the host:
 
 - an `events` frame by bytes as well as count: a batch closes before 512 KiB
   (`EVENT_BATCH_MAX_BYTES`), and an event still past that once its
@@ -758,7 +788,15 @@ What still rides the link is bounded on the host:
   sent -- `FRAME_TOO_LARGE`, a rejection of that one request -- and an op
   answer that large becomes a `too_large` failure.
 
-A Desktop released before this sends images inline and ignores `max_bytes`.
+A Desktop released before staged bodies sends no `staged_bodies`. Lemma sends
+it no staged part: a tool result past 512 KiB loses its images, last first,
+until it fits, with a text block telling the agent how many were left out and
+that updating Desktop delivers them; a command too large for a frame is not
+sent to it at all (`agent.agent_host_link.command_too_large`), so its run waits
+until the dispatch deadline fails it. Everything smaller reaches it as before.
+
+A Desktop released before transfers also sends images inline and ignores
+`max_bytes`.
 Its batches of 256 events can pass 1 MiB, and then its link closes with 1009
 and the same batch is sent again on every reconnect: event delivery from that
 computer stalls behind it until Desktop is updated. Its file reads and writes still work, because

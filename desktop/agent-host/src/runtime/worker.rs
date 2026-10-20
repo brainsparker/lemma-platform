@@ -120,6 +120,9 @@ pub(crate) struct TargetWorker {
     /// `exec_server_unavailable` by the link itself.
     #[cfg(unix)]
     pub(crate) exec_relay: Option<Arc<crate::host_exec::relay::ExecRelay>>,
+    /// HTTP to this workspace as this host: what Lemma staged rather than
+    /// sent -- a command's large payload -- is fetched with it.
+    pub(crate) transfers: Option<crate::link::transfer::TransferClient>,
 }
 
 /// One run in flight, and the two ways it can be stopped.
@@ -304,6 +307,7 @@ impl TargetWorker {
             orphaned_runs: HashMap::new(),
             #[cfg(unix)]
             exec_relay,
+            transfers,
         })
     }
 
@@ -407,6 +411,7 @@ impl TargetWorker {
                         hello: HostHello::current(&self.installation_id),
                         capacity: self.capacity(),
                         host_execution: Some(self.host_execution_status()),
+                        staged_bodies: true,
                     },
                     self.op_handler(),
                 ) => connected,
@@ -705,6 +710,7 @@ impl TargetWorker {
         // channel, or no publish at all yet. Both are corrected before any
         // command is judged against a harness.
         self.sync_harnesses_for_commands().await;
+        let commands = self.resolve_staged_payloads(commands).await;
         for command in commands {
             if let Err(error) = self.handle_command(&command) {
                 if let Some(rejection) = command_rejection(&command, &error) {
@@ -719,6 +725,49 @@ impl TargetWorker {
             }
         }
         Ok(())
+    }
+
+    /// Commands with any payload Lemma staged fetched and put back.
+    ///
+    /// One whose fetch may pass later is left for Lemma to send again -- it
+    /// was not acknowledged -- rather than failed. One that cannot is passed
+    /// on as it is, and refused as a payload this host cannot read.
+    pub(crate) async fn resolve_staged_payloads(
+        &self,
+        commands: Vec<crate::protocol::Command>,
+    ) -> Vec<crate::protocol::Command> {
+        let mut resolved = Vec::with_capacity(commands.len());
+        for mut command in commands {
+            if crate::link::transfer::is_staged(&command.payload) {
+                let Some(client) = &self.transfers else {
+                    resolved.push(command);
+                    continue;
+                };
+                match client
+                    .resolve_staged(std::mem::take(&mut command.payload))
+                    .await
+                {
+                    Ok(payload) => command.payload = payload,
+                    Err(error) if error.is_transient() => {
+                        tracing::warn!(
+                            command_id = %command.command_id,
+                            %error,
+                            "could not fetch a command's payload yet; Lemma will send it again"
+                        );
+                        continue;
+                    }
+                    Err(error) => {
+                        tracing::error!(
+                            command_id = %command.command_id,
+                            %error,
+                            "could not fetch a command's payload"
+                        );
+                    }
+                }
+            }
+            resolved.push(command);
+        }
+        resolved
     }
 
     /// Send what the journal owes Lemma, and take whatever it hands back.

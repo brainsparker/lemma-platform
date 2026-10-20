@@ -337,6 +337,10 @@ def test_bulk_bytes_bounds_and_routes_are_shared() -> None:
     assert transfer.BLOB_PATH == bulk["blob_path"]
     assert transfer.DIGEST_HEADER == bulk["digest_header"]
     assert transfer.BLOB_FIELD == bulk["blob_field"]
+    assert transfer.STAGED_FIELD == bulk["staged_field"]
+    assert transfer.STAGED_BODY_MAX_BYTES == bulk["staged_body_max_bytes"]
+    assert transfer.LINK_OUTBOUND_INLINE_BYTES == bulk["outbound_inline_bytes"]
+    assert bulk["hello_flag"] in HelloBody.model_fields
 
 
 def test_the_host_execution_capability_rides_on_hello_and_control() -> None:

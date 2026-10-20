@@ -4,6 +4,7 @@ from typing import Any, Callable
 
 import typer
 
+from ..channel_view import render_inbox, render_search
 from ..confirm import confirm_destructive
 from ..io import emit, to_plain
 from ..sdk import pod_client
@@ -34,14 +35,19 @@ _STATUSES = ("open", "waiting_on_contact", "closed")
 _VISIBILITIES = ("PUBLIC", "PRIVATE")
 
 
-def _run(ctx: typer.Context, pod: str | None, call: Callable[[Any], Any]) -> None:
+def _run(
+    ctx: typer.Context,
+    pod: str | None,
+    call: Callable[[Any], Any],
+    render: Callable[[Any, Any], None] = emit,
+) -> None:
     """Call the pod's SDK and print what comes back."""
     state = state_from_ctx(ctx)
     result = run_with_client(
         ctx, lambda client, s: to_plain(call(pod_client(client, s, pod)))
     )
     if result is not None:
-        emit(state, result)
+        render(state, result)
 
 
 def _pick(value: str, allowed: tuple[str, ...], flag: str) -> str:
@@ -405,7 +411,7 @@ def inbox(
     pod: str | None = typer.Option(None, "--pod"),
 ) -> None:
     """Show what is new for you across the pod, and what is waiting on you."""
-    _run(ctx, pod, lambda p: p.channels.inbox())
+    _run(ctx, pod, lambda p: p.channels.inbox(), render_inbox)
 
 
 @app.command("search")
@@ -426,6 +432,7 @@ def search(
         lambda p: p.channels.search(
             query, channel_id=channel, cursor=cursor, limit=limit
         ),
+        render_search,
     )
 
 

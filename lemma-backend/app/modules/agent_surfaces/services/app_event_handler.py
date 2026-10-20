@@ -71,6 +71,7 @@ from app.modules.agent_surfaces.services.app_home import (
 from app.modules.agent_surfaces.services.configuration_prompt import (
     prompt_for_configuration,
 )
+from app.modules.agent_surfaces.services.app_uninstall import retire_uninstalled_app
 from app.modules.agent_surfaces.services.group_hello import say_hello_in_group
 from app.modules.agent_surfaces.services.group_registry import (
     adopt_connected_channel,
@@ -421,6 +422,18 @@ class AppEventHandler:
             )
         if parsed is None:
             return False
+        if parsed.kind is SurfaceLifecycleKind.UNINSTALLED:
+            # Before the actor's authorization, which it has none of: the
+            # signature that resolved the receivers is what authorizes it.
+            await retire_uninstalled_app(
+                self.uow,
+                surfaces_repo=self.surface_repository,
+                credential_resolver=self.credential_resolver,
+                request=request,
+                parsed=parsed,
+            )
+            await self.uow.commit()
+            return True
 
         (
             candidates,

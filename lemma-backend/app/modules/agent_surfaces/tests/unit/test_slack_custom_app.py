@@ -176,6 +176,10 @@ async def test_the_manifest_subscribes_to_everything_this_branch_needs():
         # Shared with another company, or no longer.
         "channel_shared",
         "channel_unshared",
+        # The app removed, or its bot token revoked: neither is sent to an app
+        # that did not ask, and without them a removed app reads as connected.
+        "app_uninstalled",
+        "tokens_revoked",
         "app_mention",
         "message.im",
         "message.channels",

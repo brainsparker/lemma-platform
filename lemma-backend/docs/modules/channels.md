@@ -116,8 +116,10 @@ One rule, twice: `domain/access.may_see` and its SQL twin
   pod's people the platform shows are there -- seated as they speak, and out
   when the platform says they left (`contracts/places.left_place`) -- plus
   whoever a member adds, and admins who join on request; those last two stay
-  whatever the platform's roster does. The bot taken out of the place archives
-  the channel; put back, it returns.
+  whatever the platform's roster does. The bot taken out of the place -- or
+  its app removed from the workspace, which takes it out of every place at
+  once (`contracts/places.shared_places_of_surfaces`) -- archives the channel;
+  put back, it returns.
 
 ### Permissions
 

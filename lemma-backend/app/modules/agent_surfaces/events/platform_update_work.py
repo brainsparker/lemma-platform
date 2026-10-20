@@ -2,8 +2,8 @@
 
 The bot joined a channel, somebody opened the app home, WhatsApp created (or
 refused) a group the bot asked for, somebody left a group or the bot was taken
-out of one, a send Meta now says failed, a message heard there edited or
-deleted. Each used to
+out of one, Slack removed the app, a send Meta now says failed, a message
+heard there edited or deleted. Each used to
 be applied inline in the one serial consumer every pod's messages waited
 behind; now each is its own small item, written by the request that received
 it. A JOB: an app home is published back to Slack, a group's invite link is

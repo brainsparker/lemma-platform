@@ -153,6 +153,7 @@ class SurfaceInstallationRepositoryPort(Protocol):
         external_workspace_id: str | None = None,
         system_credentials_only: bool = False,
         surface_identity_id: str | None = None,
+        also_paused: bool = False,
         limit: int | None = None,
     ) -> list[AgentSurfaceEntity]: ...
 

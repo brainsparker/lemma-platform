@@ -841,9 +841,9 @@ _run-backend:
 	@cd $(BACKEND_DIR) && rm -f $(notdir $(BACKEND_PID_FILE)) && \
 		$(COMMON_DEV_ENV) $(BACKEND_DEV_ENV) $(WORKSPACE_DEV_ENV) $(OTEL_DEV_ENV) $(LLM_OTEL_DEV_ENV) \
 		bash -c "if [ '$(RELOAD)' = '1' ]; then \
-			uv run --extra local uvicorn local_app:app --host 0.0.0.0 --port $(DEV_BACKEND_PORT) --reload & echo \$$! > $(notdir $(BACKEND_PID_FILE)); \
+			uv run --extra local uvicorn local_app:app --host 0.0.0.0 --port $(DEV_BACKEND_PORT) --ws-max-size 1048576 --reload & echo \$$! > $(notdir $(BACKEND_PID_FILE)); \
 		else \
-			uv run --extra local uvicorn local_app:app --host 0.0.0.0 --port $(DEV_BACKEND_PORT) & echo \$$! > $(notdir $(BACKEND_PID_FILE)); \
+			uv run --extra local uvicorn local_app:app --host 0.0.0.0 --port $(DEV_BACKEND_PORT) --ws-max-size 1048576 & echo \$$! > $(notdir $(BACKEND_PID_FILE)); \
 		fi; wait"
 
 _run-frontend:

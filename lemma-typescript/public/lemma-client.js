@@ -11061,10 +11061,14 @@ var LemmaClient = (() => {
         if (contentType) {
           const jsonTypes = ["application/json", "application/problem+json"];
           const isJSON = jsonTypes.some((type) => contentType.toLowerCase().startsWith(type));
+          const textTypes = ["text/", "application/javascript", "application/xml", "application/yaml"];
+          const isText = textTypes.some((type) => contentType.toLowerCase().startsWith(type));
           if (isJSON) {
             return await response.json();
-          } else {
+          } else if (isText) {
             return await response.text();
+          } else {
+            return await response.blob();
           }
         }
       } catch (error) {
@@ -15701,7 +15705,9 @@ var LemmaClient = (() => {
     /**
      * Send Notice
      * Tell another member of the pod something, in their own channel. The
-     * same `Idempotency-Key` from the same member is the same notice.
+     * same `Idempotency-Key` from the same member is the same notice; sent with
+     * other text, it is refused (422). A member sends at most
+     * `NOTICES_PER_MINUTE` a minute (429).
      * @param podId
      * @param member The member to tell: a pod member id, user id, or email address.
      * @param requestBody
@@ -15723,7 +15729,9 @@ var LemmaClient = (() => {
         body: requestBody,
         mediaType: "application/json",
         errors: {
-          422: `Validation Error`
+          404: `Nobody in this pod is that member.`,
+          422: `Validation Error`,
+          429: `Too many notices this minute; see Retry-After.`
         }
       });
     }
@@ -16373,7 +16381,7 @@ var LemmaClient = (() => {
      * @param podId
      * @param kind
      * @param visibility Only `PUBLIC` or only `PRIVATE` channels; a member's and a contact's own channel are private.
-     * @param q Only channels whose title holds these words, in any case.
+     * @param q Only channels named by every one of these words, in any order and case: by title, or -- a member's or a contact's own channel -- by whose it is.
      * @param archived
      * @param contactId Only this contact's channel.
      * @param assignee `me`, or a member's user id: contacts' channels assigned to them.
@@ -16410,7 +16418,11 @@ var LemmaClient = (() => {
           "limit": limit
         },
         errors: {
-          422: `Validation Error`
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
         }
       });
     }
@@ -16418,7 +16430,8 @@ var LemmaClient = (() => {
      * Create Channel
      * A group made in Lemma: public unless asked otherwise, with its maker as
      * its owner and the members and agents named in it. The same
-     * `Idempotency-Key` from the same member returns the group it made.
+     * `Idempotency-Key` from the same member returns the group it made; sent
+     * with another title, topic or visibility, it is refused (422).
      * @param podId
      * @param requestBody
      * @param idempotencyKey
@@ -16438,7 +16451,11 @@ var LemmaClient = (() => {
         body: requestBody,
         mediaType: "application/json",
         errors: {
-          422: `Validation Error`
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
         }
       });
     }
@@ -16457,7 +16474,11 @@ var LemmaClient = (() => {
           "pod_id": podId
         },
         errors: {
-          422: `Validation Error`
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
         }
       });
     }
@@ -16476,7 +16497,11 @@ var LemmaClient = (() => {
           "pod_id": podId
         },
         errors: {
-          422: `Validation Error`
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
         }
       });
     }
@@ -16498,7 +16523,11 @@ var LemmaClient = (() => {
           "channel_id": channelId
         },
         errors: {
-          422: `Validation Error`
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
         }
       });
     }
@@ -16520,7 +16549,11 @@ var LemmaClient = (() => {
           "channel_id": channelId
         },
         errors: {
-          422: `Validation Error`
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
         }
       });
     }
@@ -16549,7 +16582,11 @@ var LemmaClient = (() => {
         body: requestBody,
         mediaType: "application/json",
         errors: {
-          422: `Validation Error`
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
         }
       });
     }
@@ -16578,7 +16615,11 @@ var LemmaClient = (() => {
           "limit": limit
         },
         errors: {
-          422: `Validation Error`
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
         }
       });
     }
@@ -16606,7 +16647,11 @@ var LemmaClient = (() => {
           "limit": limit
         },
         errors: {
-          422: `Validation Error`
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
         }
       });
     }
@@ -16631,14 +16676,20 @@ var LemmaClient = (() => {
         body: requestBody,
         mediaType: "application/json",
         errors: {
-          422: `Validation Error`
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
         }
       });
     }
     /**
      * Leave Channel
      * Leave a channel. Leaving one not joined is nothing; a member's own
-     * channel cannot be left.
+     * channel cannot be left, nor a private group by the last person in it (409
+     * `LAST_MEMBER`). A group's last owner leaving hands it to whoever has been
+     * in it longest.
      * @param podId
      * @param channelId
      * @returns void
@@ -16653,7 +16704,11 @@ var LemmaClient = (() => {
           "channel_id": channelId
         },
         errors: {
-          422: `Validation Error`
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
         }
       });
     }
@@ -16678,7 +16733,11 @@ var LemmaClient = (() => {
         body: requestBody,
         mediaType: "application/json",
         errors: {
-          422: `Validation Error`
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
         }
       });
     }
@@ -16702,14 +16761,19 @@ var LemmaClient = (() => {
           "channel_id": channelId
         },
         errors: {
-          422: `Validation Error`
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
         }
       });
     }
     /**
      * Remove Member
      * Take somebody out of a group -- its owners' or an editor's -- or leave a
-     * channel oneself.
+     * channel oneself. A group keeps an owner, and a private one somebody in it
+     * (409 `LAST_OWNER`, `LAST_MEMBER`): its last owner leaving hands it on.
      * @param podId
      * @param channelId
      * @param kind
@@ -16728,7 +16792,11 @@ var LemmaClient = (() => {
           "member_id": memberId
         },
         errors: {
-          422: `Validation Error`
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
         }
       });
     }
@@ -16756,7 +16824,11 @@ var LemmaClient = (() => {
         body: requestBody,
         mediaType: "application/json",
         errors: {
-          422: `Validation Error`
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
         }
       });
     }
@@ -16787,7 +16859,11 @@ var LemmaClient = (() => {
           "limit": limit
         },
         errors: {
-          422: `Validation Error`
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
         }
       });
     }
@@ -16817,13 +16893,19 @@ var LemmaClient = (() => {
         body: requestBody,
         mediaType: "application/json",
         errors: {
-          422: `Validation Error`
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
         }
       });
     }
     /**
      * Delete Message
-     * Delete one's own line: it keeps its place, saying nothing.
+     * Delete a line: it keeps its place, saying nothing. One's own -- or,
+     * for who may change the channel, anybody's, shown as removed by them. A
+     * copy already sent outside Lemma stays as sent.
      * @param podId
      * @param channelId
      * @param messageId
@@ -16840,7 +16922,11 @@ var LemmaClient = (() => {
           "message_id": messageId
         },
         errors: {
-          422: `Validation Error`
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
         }
       });
     }
@@ -16867,7 +16953,11 @@ var LemmaClient = (() => {
         body: requestBody,
         mediaType: "application/json",
         errors: {
-          422: `Validation Error`
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
         }
       });
     }
@@ -16899,7 +16989,11 @@ var LemmaClient = (() => {
         body: requestBody,
         mediaType: "application/json",
         errors: {
-          422: `Validation Error`
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
         }
       });
     }
@@ -16923,14 +17017,20 @@ var LemmaClient = (() => {
           "message_id": messageId
         },
         errors: {
-          422: `Validation Error`
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
         }
       });
     }
     /**
      * Retry Delivery
-     * Try a failed or given-up send again, now: for who wrote the line, or
-     * may change the channel.
+     * Try a failed or given-up send again, now. A send to a place: for who
+     * wrote the line, or may change the channel -- anybody else who reads the
+     * line is refused. A push to a member: theirs alone, as only they see it.
+     * It is one more try: a send that fails again on its last is given up.
      * @param podId
      * @param channelId
      * @param messageId
@@ -16949,7 +17049,11 @@ var LemmaClient = (() => {
           "delivery_id": deliveryId
         },
         errors: {
-          422: `Validation Error`
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
         }
       });
     }
@@ -16975,22 +17079,59 @@ var LemmaClient = (() => {
           "file_id": fileId
         },
         errors: {
-          422: `Validation Error`
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
+        }
+      });
+    }
+    /**
+     * Share Message
+     * Share an agent's answer made with your own access with everybody in the
+     * channel. Until then only you read it; the others are shown that it was
+     * given. Yours alone to share; sharing it again changes nothing.
+     * @param podId
+     * @param channelId
+     * @param messageId
+     * @returns ChannelMessageResponse Successful Response
+     * @throws ApiError
+     */
+    static channelMessageShare(podId, channelId, messageId) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/share",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId,
+          "message_id": messageId
+        },
+        errors: {
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
         }
       });
     }
     /**
      * List Thread
-     * A thread: its first line, and its replies oldest first after `after_seq`.
+     * A thread: its first line, and a page of its replies, oldest first
+     * within it -- from the start, after `after_seq`, before `before_seq`, or
+     * (`newest`) the latest.
      * @param podId
      * @param channelId
      * @param messageId
      * @param afterSeq
+     * @param beforeSeq
+     * @param newest The newest page of replies, rather than the first.
      * @param limit
      * @returns ThreadResponse Successful Response
      * @throws ApiError
      */
-    static channelMessageThread(podId, channelId, messageId, afterSeq, limit = 50) {
+    static channelMessageThread(podId, channelId, messageId, afterSeq, beforeSeq, newest = false, limit = 50) {
       return request(OpenAPI, {
         method: "GET",
         url: "/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/thread",
@@ -17001,17 +17142,26 @@ var LemmaClient = (() => {
         },
         query: {
           "after_seq": afterSeq,
+          "before_seq": beforeSeq,
+          "newest": newest,
           "limit": limit
         },
         errors: {
-          422: `Validation Error`
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
         }
       });
     }
     /**
      * Mark Read
-     * The reader has seen the channel up to line `seq`: it never goes back,
-     * and never past the newest line. Mentions up to it are read too.
+     * The reader has seen the timeline up to line `seq`: it never goes back,
+     * and never past the newest line. Lines of the timeline naming them up to
+     * it are read too; replies naming them are not -- with `thread_root_id`,
+     * the reader has seen that thread up to `seq`, and what named them there is
+     * read, while the timeline's `read_seq` stays where it was.
      * @param podId
      * @param channelId
      * @param requestBody
@@ -17029,14 +17179,19 @@ var LemmaClient = (() => {
         body: requestBody,
         mediaType: "application/json",
         errors: {
-          422: `Validation Error`
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
         }
       });
     }
     /**
      * Get Inbox
      * What is new for the reader across the pod: the badges, the questions
-     * waiting on them, and the unread lines naming them -- newest first.
+     * waiting on them, the unread lines naming them -- newest first -- and the
+     * contacts waiting on a reply.
      * @param podId
      * @returns InboxResponse Successful Response
      * @throws ApiError
@@ -17049,7 +17204,11 @@ var LemmaClient = (() => {
           "pod_id": podId
         },
         errors: {
-          422: `Validation Error`
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
         }
       });
     }
@@ -17092,7 +17251,11 @@ var LemmaClient = (() => {
           "limit": limit
         },
         errors: {
-          422: `Validation Error`
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
         }
       });
     }
@@ -17288,8 +17451,9 @@ var LemmaClient = (() => {
     );
   }
   var ChannelsNamespace = class {
-    constructor(client) {
+    constructor(client, http) {
       __publicField(this, "client", client);
+      __publicField(this, "http", http);
       /** A group channel's sources from the bot's side, and bringing the bot into
        *  a group (a WhatsApp group, a Telegram link). */
       __publicField(this, "sources");
@@ -17417,10 +17581,12 @@ var LemmaClient = (() => {
         () => ChannelsService.channelMemberMeUpdate(podId, channelId, body)
       );
     }
-    /** The caller has seen the channel up to line `seq`. It never goes back, and
-     *  never past the newest line. */
-    markRead(podId, channelId, seq) {
-      return this.client.request(() => ChannelsService.channelRead(podId, channelId, { seq }));
+    /** The caller has seen the channel's timeline up to line `seq` -- or, with
+     *  `threadRootId`, that thread: a mention is read where it was said. It never
+     *  goes back, and never past the newest line. */
+    markRead(podId, channelId, seq, threadRootId) {
+      const body = { seq, ...threadRootId ? { thread_root_id: threadRootId } : {} };
+      return this.client.request(() => ChannelsService.channelRead(podId, channelId, body));
     }
     // -- lines ------------------------------------------------------------------
     /** The timeline, oldest first: the newest page, the page before `beforeSeq`,
@@ -17466,11 +17632,15 @@ var LemmaClient = (() => {
       );
     }
     /** Change what one of the caller's own lines says: absent is unchanged,
-     *  `parts: null` clears them. */
+     *  `parts: null` clears them. Parts sent replace the line's parts, and
+     *  name whoever their mentions name, as a post does. */
     edit(podId, channelId, messageId, body) {
       const edit = typeof body === "string" ? { text: body } : body;
       return this.client.request(
-        () => ChannelsService.channelMessageUpdate(podId, channelId, messageId, edit)
+        () => (
+          // The generated type flattens `parts` to `null`: the API takes a list.
+          ChannelsService.channelMessageUpdate(podId, channelId, messageId, edit)
+        )
       );
     }
     /** Delete one of the caller's own lines; it keeps its place, empty. */
@@ -17486,6 +17656,14 @@ var LemmaClient = (() => {
         () => ChannelsService.channelMessageAnswer(podId, channelId, messageId, { answer })
       );
     }
+    /** Share an agent's answer made with the caller's own access with
+     *  everybody in the channel (`can_share` on the line). Until then only the
+     *  caller reads it; sharing it again changes nothing. */
+    share(podId, channelId, messageId) {
+      return this.client.request(
+        () => ChannelsService.channelMessageShare(podId, channelId, messageId)
+      );
+    }
     /** Where a line went outside Lemma, and what became of each send. */
     deliveries(podId, channelId, messageId) {
       return this.client.request(
@@ -17493,11 +17671,10 @@ var LemmaClient = (() => {
       );
     }
     /** A file a line shares (a `file` part's `file_id`), read as the line's
-     *  writer reads it. */
+     *  writer reads it: the bytes, as a `Blob` of the file's content type. */
     file(podId, channelId, messageId, fileId) {
-      return this.client.request(
-        () => ChannelsService.channelMessageFile(podId, channelId, messageId, fileId)
-      );
+      const path = [podId, "channels", channelId, "messages", messageId, "files", fileId].map(encodeURIComponent).join("/");
+      return this.http.requestBytes("GET", `/pods/${path}`);
     }
     /** Try a failed or given-up send again, now. */
     retryDelivery(podId, channelId, messageId, deliveryId) {
@@ -17628,10 +17805,11 @@ var LemmaClient = (() => {
      * @param podId
      * @param limit
      * @param cursor
+     * @param q Only contacts whose name, email address or number holds this.
      * @returns ContactListResponse Successful Response
      * @throws ApiError
      */
-    static contactList(podId, limit = 50, cursor) {
+    static contactList(podId, limit = 50, cursor, q) {
       return request(OpenAPI, {
         method: "GET",
         url: "/pods/{pod_id}/contacts",
@@ -17640,7 +17818,8 @@ var LemmaClient = (() => {
         },
         query: {
           "limit": limit,
-          "cursor": cursor
+          "cursor": cursor,
+          "q": q
         },
         errors: {
           422: `Validation Error`
@@ -20905,7 +21084,7 @@ var LemmaClient = (() => {
       this.organizations = new OrganizationsNamespace(this._generated, this._http);
       this.podSurfaces = new PodSurfacesNamespace(this._generated);
       this.podLinks = new PodLinksNamespace(this._generated);
-      this.channels = new ChannelsNamespace(this._generated);
+      this.channels = new ChannelsNamespace(this._generated, this._http);
       this.contacts = new ContactsNamespace(this._generated);
       this.userSurfaces = new UserSurfacesNamespace(this._generated);
     }

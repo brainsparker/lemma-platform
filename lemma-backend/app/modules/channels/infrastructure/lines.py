@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.channels.domain.entities import (
     ChannelMessage,
+    QuestionState,
     Sender,
     SenderKind,
 )
@@ -43,7 +44,13 @@ from app.modules.channels.infrastructure.models import (
     ChannelSourceModel,
 )
 from app.modules.channels.infrastructure.revisions import HeldHead, hold, next_rev
-from app.modules.channels.infrastructure.rows import MAX_LINES, message_entity, now
+from app.modules.channels.infrastructure.rows import (
+    MAX_LINES,
+    message_entity,
+    nameless,
+    now,
+    sender_values,
+)
 
 #: The constraints that hold a line to its own channel: its thread, the line
 #: it replies to, the place it was heard at or carried to.
@@ -82,28 +89,6 @@ class NewLine:
     thread_root_id: UUID | None = None
 
 
-def _sender_values(sender: Sender) -> dict[str, object]:
-    behalf = sender.on_behalf_of
-    return {
-        "sender_kind": sender.kind.value,
-        "sender_user_id": sender.user_id,
-        "sender_contact_id": sender.contact_id,
-        "sender_agent_id": sender.agent_id,
-        "on_behalf_user_id": behalf.user_id if behalf else None,
-        "on_behalf_contact_id": behalf.contact_id if behalf else None,
-        "sender_name": sender.display_name[:255] if sender.display_name else None,
-    }
-
-
-def _nameless(row: ChannelMessageModel) -> bool:
-    """Said by somebody nobody could name: no member, no contact."""
-    return (
-        row.sender_kind == SenderKind.CONTACT.value
-        and row.sender_contact_id is None
-        and row.sender_user_id is None
-    )
-
-
 def _with_question() -> Select[tuple[ChannelMessageModel, ChannelQuestionModel]]:
     return select(ChannelMessageModel, ChannelQuestionModel).outerjoin(
         ChannelQuestionModel,
@@ -123,6 +108,8 @@ def _advance(head: HeldHead, row: ChannelMessageModel) -> None:
         head.line_at = row.created_at
     else:
         head.take(row.thread_root_id)
+        head.replies += 1
+        head.values["replies"] = head.replies
 
 
 async def _in_its_channel(write: Awaitable[object]) -> None:
@@ -177,7 +164,9 @@ class LineRepository:
             channel_id=channel_id,
             pod_id=head.pod_id,
             seq=head.last_seq + 1,
-            body=line.text,
+            # Postgres text holds no NUL: a member's is refused at the API,
+            # and one heard on a platform is dropped from what it said.
+            body=line.text.replace("\x00", ""),
             parts=dump_parts(list(line.parts)),
             source_id=line.source_id,
             target_source_id=line.target_source_id,
@@ -190,7 +179,7 @@ class LineRepository:
             reply_ref=dict(line.reply_ref) if line.reply_ref is not None else None,
             reply_to_id=line.reply_to_id,
             thread_root_id=line.thread_root_id,
-            **_sender_values(line.sender),
+            **sender_values(line.sender),
         )
         self.session.add(row)
         await _in_its_channel(self.session.flush())
@@ -276,8 +265,8 @@ class LineRepository:
         if row.reply_ref is None and line.reply_ref is not None:
             row.reply_ref = dict(line.reply_ref)
         sender = line.sender
-        if _nameless(row) and (sender.user_id or sender.contact_id):
-            values = _sender_values(sender)
+        if nameless(row) and (sender.user_id or sender.contact_id):
+            values = sender_values(sender)
             values["sender_name"] = row.sender_name or values["sender_name"]
             for key, value in values.items():
                 setattr(row, key, value)
@@ -308,8 +297,12 @@ class LineRepository:
         )
         return message_entity(row) if row is not None else None
 
-    async def delete(self, message_id: UUID) -> ChannelMessage | None:
-        """Forget what a line said; it keeps its place in the timeline."""
+    async def delete(
+        self, message_id: UUID, *, by_user_id: UUID | None = None
+    ) -> ChannelMessage | None:
+        """Forget what a line said; it keeps its place in the timeline, and
+        who deleted it (``by_user_id``; none when its platform did). A reply
+        deleted no longer counts on its thread."""
         await self._changing(message_id)
         row = await self.session.scalar(
             update(ChannelMessageModel)
@@ -322,7 +315,39 @@ class LineRepository:
                 parts=[],
                 reply_ref=None,
                 deleted_at=now(),
+                deleted_by_user_id=by_user_id,
             )
+            .returning(ChannelMessageModel)
+        )
+        if row is None:
+            return None
+        if row.thread_root_id is not None:
+            await self._uncount_reply(row)
+        return message_entity(row)
+
+    async def _uncount_reply(self, reply: ChannelMessageModel) -> None:
+        """A deleted reply leaves its thread's count; the root, whose count
+        its readers are shown, is sent again."""
+        await next_rev(self.session, reply.channel_id, message_id=reply.thread_root_id)
+        thread = ChannelThreadModel
+        await self.session.execute(
+            update(thread)
+            .where(thread.root_id == reply.thread_root_id)
+            .values(reply_count=func.greatest(thread.reply_count - 1, 0))
+        )
+
+    async def share(self, message_id: UUID) -> ChannelMessage | None:
+        """Open an answer to everybody in its channel; ``None`` when it was
+        shared or deleted meanwhile -- a second share changes nothing."""
+        await self._changing(message_id)
+        row = await self.session.scalar(
+            update(ChannelMessageModel)
+            .where(
+                ChannelMessageModel.id == message_id,
+                ChannelMessageModel.deleted_at.is_(None),
+                ChannelMessageModel.shared_at.is_(None),
+            )
+            .values(shared_at=now())
             .returning(ChannelMessageModel)
         )
         return message_entity(row) if row is not None else None
@@ -349,6 +374,23 @@ class LineRepository:
         if found is None:
             return None
         return message_entity(found[0], question=found[1])
+
+    async def counted(self, line: ChannelMessage) -> ChannelMessage:
+        """The line with its thread's count, when it is a thread's root: read
+        from ``channel_threads`` alone."""
+        thread = ChannelThreadModel
+        found = (
+            await self.session.execute(
+                select(thread.reply_count, thread.last_reply_at).where(
+                    thread.root_id == line.id
+                )
+            )
+        ).first()
+        if found is None:
+            return line
+        return line.model_copy(
+            update={"reply_count": int(found[0]), "last_reply_at": found[1]}
+        )
 
     async def by_ids(self, ids: Sequence[UUID]) -> dict[UUID, ChannelMessage]:
         if not ids:
@@ -400,43 +442,92 @@ class LineRepository:
         return await self._with_replies(rows)
 
     async def thread(
-        self, root_id: UUID, *, limit: int, after_seq: int | None = None
+        self,
+        root_id: UUID,
+        *,
+        limit: int,
+        after_seq: int | None = None,
+        before_seq: int | None = None,
+        newest: bool = False,
     ) -> list[ChannelMessage]:
+        """A thread's replies oldest first: from its start, after
+        ``after_seq`` -- or, ``newest`` or before ``before_seq``, the page
+        that ends there."""
         message = ChannelMessageModel
         statement = _with_question().where(message.thread_root_id == root_id)
         if after_seq is not None:
             statement = statement.where(message.seq > after_seq)
-        rows = await self.session.execute(
-            statement.order_by(message.seq).limit(max(1, min(limit, MAX_LINES)))
+        if before_seq is not None:
+            statement = statement.where(message.seq < before_seq)
+        size = max(1, min(limit, MAX_LINES))
+        backwards = newest or before_seq is not None
+        rows = list(
+            await self.session.execute(
+                statement.order_by(
+                    message.seq.desc() if backwards else message.seq
+                ).limit(size)
+            )
         )
+        if backwards:
+            rows.reverse()
         return [message_entity(row[0], question=row[1]) for row in rows]
 
     async def changed_since(
-        self, channel_id: UUID, *, after_rev: int, limit: int
+        self,
+        channel_id: UUID,
+        *,
+        after_rev: int,
+        limit: int,
+        up_to_rev: int | None = None,
+        asked_after_seq: int | None = None,
     ) -> list[ChannelMessage]:
-        """Lines of the channel changed after its change ``after_rev``, in the
-        order they last changed -- thread replies too. What a live subscriber
-        resuming from there is sent."""
+        """Lines of the channel changed after its change ``after_rev`` and up
+        to ``up_to_rev``, in the order they last changed -- thread replies
+        too. What a live subscriber resuming from there is sent.
+
+        ``limit`` is the caller's own, not ``MAX_LINES``: the live topic asks
+        for one more than its batch to learn there are too many, and a cap
+        under that would answer "all of them" with some left out.
+        ``asked_after_seq``: only lines newer than it holding a question still
+        open -- what the inbox looks for new questions in."""
         change = ChannelChangeModel
         last = func.max(change.rev).label("last")
+        window = [
+            change.channel_id == channel_id,
+            change.rev > after_rev,
+            change.message_id.is_not(None),
+        ]
+        if up_to_rev is not None:
+            window.append(change.rev <= up_to_rev)
         moved = (
             select(change.message_id, last)
-            .where(
-                change.channel_id == channel_id,
-                change.rev > after_rev,
-                change.message_id.is_not(None),
-            )
+            .where(*window)
             .group_by(change.message_id)
             .order_by(last)
-            .limit(max(1, min(limit, MAX_LINES)))
-            .subquery()
         )
+        if asked_after_seq is not None:
+            asked = ChannelQuestionModel
+            moved = moved.where(
+                change.message_id.in_(
+                    select(asked.message_id)
+                    .join(
+                        ChannelMessageModel,
+                        ChannelMessageModel.id == asked.message_id,
+                    )
+                    .where(
+                        asked.channel_id == channel_id,
+                        ChannelMessageModel.seq > asked_after_seq,
+                        asked.state == QuestionState.OPEN.value,
+                    )
+                )
+            )
+        page = moved.limit(max(1, limit)).subquery()
         rows = list(
             await self.session.execute(
                 _with_question()
-                .join(moved, moved.c.message_id == ChannelMessageModel.id)
+                .join(page, page.c.message_id == ChannelMessageModel.id)
                 .where(ChannelMessageModel.channel_id == channel_id)
-                .order_by(moved.c.last)
+                .order_by(page.c.last)
             )
         )
         return await self._with_replies(rows)

@@ -6,16 +6,20 @@
 * ``agent.channel_answer`` -- starts that agent's turn, as the member, in their
   conversation with it in the channel (``services.channel_answers``). A JOB:
   authorizing the member commits before the conversation is opened. A retry
-  finds the turn it already started (the line is the turn's client id).
+  finds the turn it already started (the line is the turn's client id). A
+  line in a group waiting for its agent to finish answering another thread
+  there is put off (``LineWaits``), uncharged, until that run has ended.
 * ``agent.channel_reply`` -- subscribed to ``AgentRunFinished`` for a run of
   a member's own conversation: one that answers a line in Lemma posts its
-  answer in that line's thread (if it ended with one), and tells the line's
-  live readers it is done either way. FAST; the run is the line's client id,
-  so a retry posts nothing new.
+  answer in that line's thread (if it ended with one, or why it did not),
+  and tells the line's live readers it is done either way. A contact's run
+  that failed calls for a person (``services.contact_run_failures``). FAST;
+  the run is the line's client id, so a retry posts nothing new.
 """
 
 from __future__ import annotations
 
+from datetime import timedelta
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
@@ -26,6 +30,7 @@ from app.core.infrastructure.db.uow_factory import (
     UnitOfWorkFactory,
 )
 from app.core.infrastructure.work import (
+    Defer,
     FastContext,
     JobContext,
     WorkClass,
@@ -44,8 +49,16 @@ from app.modules.agent.events.work_kinds import (
     channel_line_key,
     channel_reply_key,
 )
-from app.modules.agent.services.channel_answers import answer_line, post_run_answer
+from app.modules.agent.services.channel_answers import (
+    LineWaits,
+    answer_line,
+    post_run_answer,
+)
+from app.modules.agent.services.contact_run_failures import after_contact_run
 from app.modules.channels.contracts.facts import ChannelMessagePosted
+
+#: How long a line waiting on its agent's other thread is put off at a time.
+LINE_WAITS_FOR = timedelta(seconds=3)
 
 
 class ChannelLinePayload(BaseModel):
@@ -104,11 +117,14 @@ async def fan_out(ctx: FastContext, payload: ChannelLinePayload) -> None:
 def make_channel_answer(uow_factory: UnitOfWorkFactory | None = None):
     async def channel_answer(ctx: JobContext, payload: ChannelAnswerWork) -> None:
         ctx.raise_if_stopping()
-        await answer_line(
-            uow_factory or SessionUnitOfWorkFactory(async_session_maker),
-            message_id=payload.message_id,
-            agent_id=payload.agent_id,
-        )
+        try:
+            await answer_line(
+                uow_factory or SessionUnitOfWorkFactory(async_session_maker),
+                message_id=payload.message_id,
+                agent_id=payload.agent_id,
+            )
+        except LineWaits:
+            raise Defer(LINE_WAITS_FOR) from None
 
     return channel_answer
 
@@ -120,6 +136,12 @@ async def post_reply(ctx: FastContext, payload: ChannelReplyPayload) -> None:
         conversation_id=payload.conversation_id,
         answered=ended_with_an_answer(payload.status, payload.conversation_status),
         paused=payload.conversation_status == "WAITING",
+    )
+    await after_contact_run(
+        ctx.uow,
+        run_id=payload.run_id,
+        conversation_id=payload.conversation_id,
+        status=payload.status,
     )
 
 

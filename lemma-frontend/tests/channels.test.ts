@@ -30,6 +30,7 @@ import {
     type Channel,
     type Line,
 } from "../src/channels/model.ts";
+import { bellCount } from "../src/channels/waiting.ts";
 
 const ME = "user-dana";
 const dana = { kind: "MEMBER", id: ME, name: "Dana Jones" };
@@ -108,10 +109,18 @@ test("says what is new, and the sidebar's badge puts questions first", () => {
     assert.equal(sayUnread(direct.unread), "2 new, a question waiting on you");
     assert.equal(sayUnread(launch.unread), "100 or more new, mentions you");
     assert.equal(sayUnread({ lines: 0, mentions: 0, waiting: 0, readSeq: 0 }), null);
-    assert.deepEqual(inboxBadge({ channels: 3, mentions: 2, waiting: 1 }), { count: 1, tone: "waiting", said: "1 question waiting on you" });
+    /* What the bell counts, so the two agree. */
+    assert.deepEqual(inboxBadge({ channels: 3, mentions: 2, waiting: 1 }), { count: 3, tone: "waiting", said: "1 question waiting on you, 2 mentions of you" });
     assert.deepEqual(inboxBadge({ channels: 3, mentions: 2, waiting: 0 }), { count: 2, tone: "mention", said: "2 mentions of you" });
-    assert.deepEqual(inboxBadge({ channels: 1, mentions: 0, waiting: 0 }), { count: 1, tone: "new", said: "1 channel with something new" });
-    assert.equal(inboxBadge({ channels: 0, mentions: 0, waiting: 0 }), null);
+    assert.deepEqual(inboxBadge({ channels: 0, mentions: 0, waiting: 0 }, 4), { count: 4, tone: "new", said: "4 new lines in your channel" });
+    /* A group with new lines and nothing for the reader -- every public
+       group they never joined -- is not counted: the bell says nothing new. */
+    assert.equal(inboxBadge({ channels: 11, mentions: 0, waiting: 0 }), null);
+    for (const [totals, direct] of [[{ mentions: 2, waiting: 1 }, 3], [{ mentions: 0, waiting: 0 }, 0], [{ mentions: 5, waiting: 0 }, 0]] as const) {
+        const bell = bellCount(totals, direct);
+        assert.equal(inboxBadge(totals, direct)?.count.toString() ?? null, bell.badge);
+        assert.equal(inboxBadge(totals, direct)?.said ?? "Nothing new for you", bell.said);
+    }
 });
 
 const detail = readChannelDetail({
@@ -181,10 +190,18 @@ test("an agent's line says whom it acted for", () => {
     assert.equal(personName(null, ME), "Someone");
 });
 
-test("a withheld answer says whom it answered, never what", () => {
-    assert.equal(withheldNote(line({ sender: lem, on_behalf_of: priya, withheld: true }), ME), "Answered Priya — only they can read it");
-    assert.equal(withheldNote(line({ sender: lem, withheld: true }), ME), "Answered someone with their own access — only they can read it");
+test("a withheld answer says which agent answered whom, privately, never what", () => {
+    assert.equal(withheldNote(line({ sender: lem, on_behalf_of: priya, withheld: true }), ME), "Lem answered Priya privately");
+    assert.equal(withheldNote(line({ sender: lem, withheld: true }), ME), "Lem answered someone privately");
     assert.equal(withheldNote(line({ sender: lem, text: "hi" }), ME), null);
+});
+
+test("an answer only its asker reads says so, and may be shared only by them", () => {
+    const mine = line({ sender: lem, on_behalf_of: dana, text: "41%", visibility: "asker_only", can_share: true });
+    assert.equal(mine.visibility, "asker_only");
+    assert.equal(mine.canShare, true);
+    assert.equal(line({ sender: lem, text: "hi" }).visibility, "channel");
+    assert.equal(line({ sender: lem, can_share: true, deleted: true }).canShare, false);
 });
 
 test("only the reader's own lines, still there, are theirs to change", () => {
@@ -210,6 +227,12 @@ test("a question is the reader's to answer only when it awaits them", () => {
     assert.equal(answerSummary({ decision: "DENY" }), "Denied");
     assert.equal(answerSummary({ decision: "APPROVE_ONCE" }), "Approved");
     assert.equal(answerSummary({ amount: 3 }), null);
+    /* An agent's ask_user, as the API stores the answer. */
+    assert.equal(answerSummary({ answers: { Drink: "Coffee" } }), "Coffee");
+    assert.equal(answerSummary({ answers: { Drink: ["Tea", "Coffee"], When: "Now" } }), "Tea, Coffee; Now");
+    assert.equal(answerSummary({ answers: {} }), null);
+    assert.equal(answerSummary({ approved: true }), "Approved");
+    assert.equal(answerSummary({ approved: false }), "Denied");
 });
 
 test("a question on a line is answered the way the bell answers one", () => {

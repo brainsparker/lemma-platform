@@ -94,6 +94,7 @@ class FormQuestions:
         schema: dict[str, object] | None,
         actor_user_id: UUID | None,
         expires_at: datetime | None,
+        node_label: str | None = None,
     ) -> None:
         assignee = await pod_member_user_id(
             self._uow, pod_id=pod_id, pod_member_id=assigned_pod_member_id
@@ -107,7 +108,14 @@ class FormQuestions:
             return
         ref = form_ref(run_id, node_id, wait_id)
         fields = describe_fields(schema)
-        title = f"{flow_name or 'A workflow'} needs your input"
+        # The form's own name, as its author labelled the step, says what is
+        # asked; the workflow's says what for.
+        label = " ".join((node_label or "").split())
+        title = (
+            f"{flow_name or 'A workflow'}: {label}"
+            if label
+            else f"{flow_name or 'A workflow'} needs your input"
+        )
         channel = await direct_channel(self._uow, pod_id=pod_id, user_id=assignee)
         agent_id = effective_agent_id(None, pod_id=pod_id)
         await post(

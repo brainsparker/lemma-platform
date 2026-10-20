@@ -859,6 +859,9 @@ code.gsheet__code-text {
 /* ── the Channels page ───────────────────────────────────────────────── */
 .channels {
     max-width: 960px;
+    /* Space past the last row for the floating Ask pill (42px, 16px up), so
+       no row or unread count is left under it. */
+    padding-bottom: 72px;
 }
 .channels__head {
     display: flex;
@@ -893,7 +896,9 @@ code.gsheet__code-text {
 }
 .channels__filter {
     display: flex;
-    gap: 4px;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 4px;
     margin-bottom: 20px;
 }
 .channels__tab {
@@ -1298,6 +1303,7 @@ code.gsheet__code-text {
     color: var(--ink-3);
 }
 .cline__edit {
+    position: relative;
     display: flex;
     flex-direction: column;
     gap: 6px;
@@ -1348,6 +1354,16 @@ code.gsheet__code-text {
 }
 .cline__asked[data-open] {
     color: var(--ink-2);
+}
+/* An agent's answer only its asker reads, and the way to share it. */
+.cline__private {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 10px;
+    margin: 4px 0 0;
+    font-size: 12.5px;
+    color: var(--ink-3);
 }
 .cline__answer {
     color: var(--ink);
@@ -1487,6 +1503,11 @@ code.gsheet__code-text {
     background: var(--paper);
     box-shadow: var(--depth-raise);
     list-style: none;
+}
+/* Not enough space above the box (a line at the top of the timeline): below it. */
+.chcompose__menu--below {
+    top: calc(100% + 6px);
+    bottom: auto;
 }
 .chcompose__option {
     display: flex;
@@ -1865,6 +1886,38 @@ code.gsheet__code-text {
     font: inherit;
     font-size: 13px;
 }
+/* The About panel's own field selects, drawn like the rest. A select left to
+   the platform is white on a dark theme, and so is the list it opens: the
+   options are painted too, and the dark scheme is asked for where it is
+   dark. */
+.gside .gsheet__field select {
+    height: 32px;
+    padding: 0 8px;
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-sm);
+    background: var(--paper);
+    color: var(--ink);
+    font: inherit;
+    font-size: 13px;
+}
+.gside .gsheet__field select:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.gside select option,
+.cside__add select option {
+    background: var(--paper);
+    color: var(--ink);
+}
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) .gside select {
+        color-scheme: dark;
+    }
+}
+:root[data-theme="dark"] .gside select {
+    color-scheme: dark;
+}
 .ccontact__hours-row {
     display: flex;
     align-items: center;
@@ -2013,7 +2066,10 @@ code.gsheet__code-text {
         margin-left: 16px;
         margin-right: 16px;
     }
+    /* The contact views on a row of their own, starting at its edge, rather
+       than wrapping inside the first row and indented by it. */
     .channels__views {
+        flex-basis: 100%;
         margin-left: 0;
         padding-left: 0;
         border-left: 0;

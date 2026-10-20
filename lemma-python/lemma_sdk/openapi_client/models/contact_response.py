@@ -24,6 +24,8 @@ class ContactResponse:
     Attributes:
         created_at (datetime.datetime):
         id (UUID):
+        label (str): What to call them: their name, else the handle they are known by (an email address, a number), else
+            that they are a web visitor.
         answered_at (datetime.datetime | None | Unset): When an agent first answered them; what the contact limit
             counts.
         display_name (None | str | Unset):
@@ -34,6 +36,7 @@ class ContactResponse:
 
     created_at: datetime.datetime
     id: UUID
+    label: str
     answered_at: datetime.datetime | None | Unset = UNSET
     display_name: None | str | Unset = UNSET
     identities: list[ContactIdentityResponse] | Unset = UNSET
@@ -44,6 +47,8 @@ class ContactResponse:
         created_at = self.created_at.isoformat()
 
         id = str(self.id)
+
+        label = self.label
 
         answered_at: None | str | Unset
         if isinstance(self.answered_at, Unset):
@@ -74,6 +79,7 @@ class ContactResponse:
             {
                 "created_at": created_at,
                 "id": id,
+                "label": label,
             }
         )
         if answered_at is not UNSET:
@@ -95,6 +101,8 @@ class ContactResponse:
         created_at = isoparse(d.pop("created_at"))
 
         id = UUID(d.pop("id"))
+
+        label = d.pop("label")
 
         def _parse_answered_at(data: object) -> datetime.datetime | None | Unset:
             if data is None:
@@ -138,6 +146,7 @@ class ContactResponse:
         contact_response = cls(
             created_at=created_at,
             id=id,
+            label=label,
             answered_at=answered_at,
             display_name=display_name,
             identities=identities,

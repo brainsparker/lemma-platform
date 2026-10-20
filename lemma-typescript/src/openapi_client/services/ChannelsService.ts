@@ -38,7 +38,7 @@ export class ChannelsService {
      * @param podId
      * @param kind
      * @param visibility Only `PUBLIC` or only `PRIVATE` channels; a member's and a contact's own channel are private.
-     * @param q Only channels whose title holds these words, in any case.
+     * @param q Only channels named by every one of these words, in any order and case: by title, or -- a member's or a contact's own channel -- by whose it is.
      * @param archived
      * @param contactId Only this contact's channel.
      * @param assignee `me`, or a member's user id: contacts' channels assigned to them.
@@ -90,7 +90,11 @@ export class ChannelsService {
                 'limit': limit,
             },
             errors: {
-                422: `Validation Error`,
+                400: `A cursor this API did not give.`,
+                403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+                404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+                409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+                422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`,
             },
         });
     }
@@ -98,7 +102,8 @@ export class ChannelsService {
      * Create Channel
      * A group made in Lemma: public unless asked otherwise, with its maker as
      * its owner and the members and agents named in it. The same
-     * `Idempotency-Key` from the same member returns the group it made.
+     * `Idempotency-Key` from the same member returns the group it made; sent
+     * with another title, topic or visibility, it is refused (422).
      * @param podId
      * @param requestBody
      * @param idempotencyKey
@@ -122,7 +127,11 @@ export class ChannelsService {
             body: requestBody,
             mediaType: 'application/json',
             errors: {
-                422: `Validation Error`,
+                400: `A cursor this API did not give.`,
+                403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+                404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+                409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+                422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`,
             },
         });
     }
@@ -143,7 +152,11 @@ export class ChannelsService {
                 'pod_id': podId,
             },
             errors: {
-                422: `Validation Error`,
+                400: `A cursor this API did not give.`,
+                403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+                404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+                409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+                422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`,
             },
         });
     }
@@ -164,7 +177,11 @@ export class ChannelsService {
                 'pod_id': podId,
             },
             errors: {
-                422: `Validation Error`,
+                400: `A cursor this API did not give.`,
+                403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+                404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+                409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+                422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`,
             },
         });
     }
@@ -189,7 +206,11 @@ export class ChannelsService {
                 'channel_id': channelId,
             },
             errors: {
-                422: `Validation Error`,
+                400: `A cursor this API did not give.`,
+                403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+                404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+                409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+                422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`,
             },
         });
     }
@@ -214,7 +235,11 @@ export class ChannelsService {
                 'channel_id': channelId,
             },
             errors: {
-                422: `Validation Error`,
+                400: `A cursor this API did not give.`,
+                403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+                404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+                409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+                422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`,
             },
         });
     }
@@ -247,7 +272,11 @@ export class ChannelsService {
             body: requestBody,
             mediaType: 'application/json',
             errors: {
-                422: `Validation Error`,
+                400: `A cursor this API did not give.`,
+                403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+                404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+                409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+                422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`,
             },
         });
     }
@@ -281,7 +310,11 @@ export class ChannelsService {
                 'limit': limit,
             },
             errors: {
-                422: `Validation Error`,
+                400: `A cursor this API did not give.`,
+                403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+                404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+                409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+                422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`,
             },
         });
     }
@@ -314,7 +347,11 @@ export class ChannelsService {
                 'limit': limit,
             },
             errors: {
-                422: `Validation Error`,
+                400: `A cursor this API did not give.`,
+                403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+                404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+                409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+                422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`,
             },
         });
     }
@@ -343,14 +380,20 @@ export class ChannelsService {
             body: requestBody,
             mediaType: 'application/json',
             errors: {
-                422: `Validation Error`,
+                400: `A cursor this API did not give.`,
+                403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+                404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+                409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+                422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`,
             },
         });
     }
     /**
      * Leave Channel
      * Leave a channel. Leaving one not joined is nothing; a member's own
-     * channel cannot be left.
+     * channel cannot be left, nor a private group by the last person in it (409
+     * `LAST_MEMBER`). A group's last owner leaving hands it to whoever has been
+     * in it longest.
      * @param podId
      * @param channelId
      * @returns void
@@ -368,7 +411,11 @@ export class ChannelsService {
                 'channel_id': channelId,
             },
             errors: {
-                422: `Validation Error`,
+                400: `A cursor this API did not give.`,
+                403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+                404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+                409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+                422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`,
             },
         });
     }
@@ -397,7 +444,11 @@ export class ChannelsService {
             body: requestBody,
             mediaType: 'application/json',
             errors: {
-                422: `Validation Error`,
+                400: `A cursor this API did not give.`,
+                403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+                404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+                409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+                422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`,
             },
         });
     }
@@ -424,14 +475,19 @@ export class ChannelsService {
                 'channel_id': channelId,
             },
             errors: {
-                422: `Validation Error`,
+                400: `A cursor this API did not give.`,
+                403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+                404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+                409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+                422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`,
             },
         });
     }
     /**
      * Remove Member
      * Take somebody out of a group -- its owners' or an editor's -- or leave a
-     * channel oneself.
+     * channel oneself. A group keeps an owner, and a private one somebody in it
+     * (409 `LAST_OWNER`, `LAST_MEMBER`): its last owner leaving hands it on.
      * @param podId
      * @param channelId
      * @param kind
@@ -455,7 +511,11 @@ export class ChannelsService {
                 'member_id': memberId,
             },
             errors: {
-                422: `Validation Error`,
+                400: `A cursor this API did not give.`,
+                403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+                404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+                409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+                422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`,
             },
         });
     }
@@ -489,7 +549,11 @@ export class ChannelsService {
             body: requestBody,
             mediaType: 'application/json',
             errors: {
-                422: `Validation Error`,
+                400: `A cursor this API did not give.`,
+                403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+                404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+                409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+                422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`,
             },
         });
     }
@@ -526,7 +590,11 @@ export class ChannelsService {
                 'limit': limit,
             },
             errors: {
-                422: `Validation Error`,
+                400: `A cursor this API did not give.`,
+                403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+                404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+                409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+                422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`,
             },
         });
     }
@@ -561,13 +629,19 @@ export class ChannelsService {
             body: requestBody,
             mediaType: 'application/json',
             errors: {
-                422: `Validation Error`,
+                400: `A cursor this API did not give.`,
+                403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+                404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+                409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+                422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`,
             },
         });
     }
     /**
      * Delete Message
-     * Delete one's own line: it keeps its place, saying nothing.
+     * Delete a line: it keeps its place, saying nothing. One's own -- or,
+     * for who may change the channel, anybody's, shown as removed by them. A
+     * copy already sent outside Lemma stays as sent.
      * @param podId
      * @param channelId
      * @param messageId
@@ -588,7 +662,11 @@ export class ChannelsService {
                 'message_id': messageId,
             },
             errors: {
-                422: `Validation Error`,
+                400: `A cursor this API did not give.`,
+                403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+                404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+                409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+                422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`,
             },
         });
     }
@@ -620,7 +698,11 @@ export class ChannelsService {
             body: requestBody,
             mediaType: 'application/json',
             errors: {
-                422: `Validation Error`,
+                400: `A cursor this API did not give.`,
+                403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+                404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+                409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+                422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`,
             },
         });
     }
@@ -657,7 +739,11 @@ export class ChannelsService {
             body: requestBody,
             mediaType: 'application/json',
             errors: {
-                422: `Validation Error`,
+                400: `A cursor this API did not give.`,
+                403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+                404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+                409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+                422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`,
             },
         });
     }
@@ -685,14 +771,20 @@ export class ChannelsService {
                 'message_id': messageId,
             },
             errors: {
-                422: `Validation Error`,
+                400: `A cursor this API did not give.`,
+                403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+                404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+                409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+                422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`,
             },
         });
     }
     /**
      * Retry Delivery
-     * Try a failed or given-up send again, now: for who wrote the line, or
-     * may change the channel.
+     * Try a failed or given-up send again, now. A send to a place: for who
+     * wrote the line, or may change the channel -- anybody else who reads the
+     * line is refused. A push to a member: theirs alone, as only they see it.
+     * It is one more try: a send that fails again on its last is given up.
      * @param podId
      * @param channelId
      * @param messageId
@@ -716,7 +808,11 @@ export class ChannelsService {
                 'delivery_id': deliveryId,
             },
             errors: {
-                422: `Validation Error`,
+                400: `A cursor this API did not give.`,
+                403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+                404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+                409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+                422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`,
             },
         });
     }
@@ -747,17 +843,58 @@ export class ChannelsService {
                 'file_id': fileId,
             },
             errors: {
-                422: `Validation Error`,
+                400: `A cursor this API did not give.`,
+                403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+                404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+                409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+                422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`,
+            },
+        });
+    }
+    /**
+     * Share Message
+     * Share an agent's answer made with your own access with everybody in the
+     * channel. Until then only you read it; the others are shown that it was
+     * given. Yours alone to share; sharing it again changes nothing.
+     * @param podId
+     * @param channelId
+     * @param messageId
+     * @returns ChannelMessageResponse Successful Response
+     * @throws ApiError
+     */
+    public static channelMessageShare(
+        podId: string,
+        channelId: string,
+        messageId: string,
+    ): CancelablePromise<ChannelMessageResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/share',
+            path: {
+                'pod_id': podId,
+                'channel_id': channelId,
+                'message_id': messageId,
+            },
+            errors: {
+                400: `A cursor this API did not give.`,
+                403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+                404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+                409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+                422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`,
             },
         });
     }
     /**
      * List Thread
-     * A thread: its first line, and its replies oldest first after `after_seq`.
+     * A thread: its first line, and a page of its replies, oldest first
+     * within it -- from the start, after `after_seq`, before `before_seq`, or
+     * (`newest`) the latest.
      * @param podId
      * @param channelId
      * @param messageId
      * @param afterSeq
+     * @param beforeSeq
+     * @param newest The newest page of replies, rather than the first.
      * @param limit
      * @returns ThreadResponse Successful Response
      * @throws ApiError
@@ -767,6 +904,8 @@ export class ChannelsService {
         channelId: string,
         messageId: string,
         afterSeq?: (number | null),
+        beforeSeq?: (number | null),
+        newest: boolean = false,
         limit: number = 50,
     ): CancelablePromise<ThreadResponse> {
         return __request(OpenAPI, {
@@ -779,17 +918,26 @@ export class ChannelsService {
             },
             query: {
                 'after_seq': afterSeq,
+                'before_seq': beforeSeq,
+                'newest': newest,
                 'limit': limit,
             },
             errors: {
-                422: `Validation Error`,
+                400: `A cursor this API did not give.`,
+                403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+                404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+                409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+                422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`,
             },
         });
     }
     /**
      * Mark Read
-     * The reader has seen the channel up to line `seq`: it never goes back,
-     * and never past the newest line. Mentions up to it are read too.
+     * The reader has seen the timeline up to line `seq`: it never goes back,
+     * and never past the newest line. Lines of the timeline naming them up to
+     * it are read too; replies naming them are not -- with `thread_root_id`,
+     * the reader has seen that thread up to `seq`, and what named them there is
+     * read, while the timeline's `read_seq` stays where it was.
      * @param podId
      * @param channelId
      * @param requestBody
@@ -811,14 +959,19 @@ export class ChannelsService {
             body: requestBody,
             mediaType: 'application/json',
             errors: {
-                422: `Validation Error`,
+                400: `A cursor this API did not give.`,
+                403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+                404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+                409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+                422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`,
             },
         });
     }
     /**
      * Get Inbox
      * What is new for the reader across the pod: the badges, the questions
-     * waiting on them, and the unread lines naming them -- newest first.
+     * waiting on them, the unread lines naming them -- newest first -- and the
+     * contacts waiting on a reply.
      * @param podId
      * @returns InboxResponse Successful Response
      * @throws ApiError
@@ -833,7 +986,11 @@ export class ChannelsService {
                 'pod_id': podId,
             },
             errors: {
-                422: `Validation Error`,
+                400: `A cursor this API did not give.`,
+                403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+                404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+                409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+                422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`,
             },
         });
     }
@@ -888,7 +1045,11 @@ export class ChannelsService {
                 'limit': limit,
             },
             errors: {
-                422: `Validation Error`,
+                400: `A cursor this API did not give.`,
+                403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+                404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+                409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+                422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`,
             },
         });
     }

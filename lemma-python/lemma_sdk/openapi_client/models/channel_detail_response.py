@@ -51,6 +51,8 @@ class ChannelDetailResponse:
         last_seq (int | Unset):  Default: 0.
         me (MyMembershipResponse | Unset):
         members (list[ChannelMemberResponse] | Unset):
+        opted_out (bool | None | Unset): A contact's channel: whether they asked the pod to stop writing to a handle of
+            theirs -- lines to it are not sent until they write from it again (the contact's `identities` say which).
         person (None | PersonRef | Unset): Whose channel it is: the member's for a DIRECT one, the contact's for a
             CONTACT one; absent for a GROUP.
         source_places (list[ChannelSourceResponse] | Unset):
@@ -78,6 +80,7 @@ class ChannelDetailResponse:
     last_seq: int | Unset = 0
     me: MyMembershipResponse | Unset = UNSET
     members: list[ChannelMemberResponse] | Unset = UNSET
+    opted_out: bool | None | Unset = UNSET
     person: None | PersonRef | Unset = UNSET
     source_places: list[ChannelSourceResponse] | Unset = UNSET
     source_settings: None | SourceSettingsResponse | Unset = UNSET
@@ -156,6 +159,12 @@ class ChannelDetailResponse:
             for members_item_data in self.members:
                 members_item = members_item_data.to_dict()
                 members.append(members_item)
+
+        opted_out: bool | None | Unset
+        if isinstance(self.opted_out, Unset):
+            opted_out = UNSET
+        else:
+            opted_out = self.opted_out
 
         person: dict[str, Any] | None | Unset
         if isinstance(self.person, Unset):
@@ -242,6 +251,8 @@ class ChannelDetailResponse:
             field_dict["me"] = me
         if members is not UNSET:
             field_dict["members"] = members
+        if opted_out is not UNSET:
+            field_dict["opted_out"] = opted_out
         if person is not UNSET:
             field_dict["person"] = person
         if source_places is not UNSET:
@@ -377,6 +388,15 @@ class ChannelDetailResponse:
 
                 members.append(members_item)
 
+        def _parse_opted_out(data: object) -> bool | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(bool | None | Unset, data)
+
+        opted_out = _parse_opted_out(d.pop("opted_out", UNSET))
+
         def _parse_person(data: object) -> None | PersonRef | Unset:
             if data is None:
                 return data
@@ -491,6 +511,7 @@ class ChannelDetailResponse:
             last_seq=last_seq,
             me=me,
             members=members,
+            opted_out=opted_out,
             person=person,
             source_places=source_places,
             source_settings=source_settings,

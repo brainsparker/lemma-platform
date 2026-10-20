@@ -130,6 +130,26 @@ def _parse_response(
 
         return response_200
 
+    if response.status_code == 400:
+        response_400 = ErrorResponse.from_dict(response.json())
+
+        return response_400
+
+    if response.status_code == 403:
+        response_403 = ErrorResponse.from_dict(response.json())
+
+        return response_403
+
+    if response.status_code == 404:
+        response_404 = ErrorResponse.from_dict(response.json())
+
+        return response_404
+
+    if response.status_code == 409:
+        response_409 = ErrorResponse.from_dict(response.json())
+
+        return response_409
+
     if response.status_code == 422:
         response_422 = ErrorResponse.from_dict(response.json())
 
@@ -180,7 +200,8 @@ def sync_detailed(
         kind (ChannelKind | None | Unset):
         visibility (None | Unset | Visibility): Only `PUBLIC` or only `PRIVATE` channels; a
             member's and a contact's own channel are private.
-        q (None | str | Unset): Only channels whose title holds these words, in any case.
+        q (None | str | Unset): Only channels named by every one of these words, in any order and
+            case: by title, or -- a member's or a contact's own channel -- by whose it is.
         archived (bool | Unset):  Default: False.
         contact_id (None | Unset | UUID): Only this contact's channel.
         assignee (None | str | Unset): `me`, or a member's user id: contacts' channels assigned to
@@ -255,7 +276,8 @@ def sync(
         kind (ChannelKind | None | Unset):
         visibility (None | Unset | Visibility): Only `PUBLIC` or only `PRIVATE` channels; a
             member's and a contact's own channel are private.
-        q (None | str | Unset): Only channels whose title holds these words, in any case.
+        q (None | str | Unset): Only channels named by every one of these words, in any order and
+            case: by title, or -- a member's or a contact's own channel -- by whose it is.
         archived (bool | Unset):  Default: False.
         contact_id (None | Unset | UUID): Only this contact's channel.
         assignee (None | str | Unset): `me`, or a member's user id: contacts' channels assigned to
@@ -325,7 +347,8 @@ async def asyncio_detailed(
         kind (ChannelKind | None | Unset):
         visibility (None | Unset | Visibility): Only `PUBLIC` or only `PRIVATE` channels; a
             member's and a contact's own channel are private.
-        q (None | str | Unset): Only channels whose title holds these words, in any case.
+        q (None | str | Unset): Only channels named by every one of these words, in any order and
+            case: by title, or -- a member's or a contact's own channel -- by whose it is.
         archived (bool | Unset):  Default: False.
         contact_id (None | Unset | UUID): Only this contact's channel.
         assignee (None | str | Unset): `me`, or a member's user id: contacts' channels assigned to
@@ -398,7 +421,8 @@ async def asyncio(
         kind (ChannelKind | None | Unset):
         visibility (None | Unset | Visibility): Only `PUBLIC` or only `PRIVATE` channels; a
             member's and a contact's own channel are private.
-        q (None | str | Unset): Only channels whose title holds these words, in any case.
+        q (None | str | Unset): Only channels named by every one of these words, in any order and
+            case: by title, or -- a member's or a contact's own channel -- by whose it is.
         archived (bool | Unset):  Default: False.
         contact_id (None | Unset | UUID): Only this contact's channel.
         assignee (None | str | Unset): `me`, or a member's user id: contacts' channels assigned to

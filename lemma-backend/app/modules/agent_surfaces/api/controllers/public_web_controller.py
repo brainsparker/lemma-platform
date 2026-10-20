@@ -98,6 +98,10 @@ class HistoryMessage(BaseModel):
     text: str
     sequence: int
     client_nonce: str | None = None
+    from_person: bool = Field(
+        default=False,
+        description="A person on the team wrote it, not the bot.",
+    )
 
 
 class HistoryResponse(BaseModel):
@@ -324,6 +328,7 @@ async def web_read_history(
                 text=m.text,
                 sequence=m.sequence,
                 client_nonce=m.client_nonce,
+                from_person=m.from_person,
             )
             for m in messages
         ]

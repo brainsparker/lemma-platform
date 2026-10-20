@@ -321,7 +321,7 @@ function People({ pod, channel, may, onLeft }: { pod: Pod; channel: ChannelDetai
                         <li key={one.person.kind + (id ?? name)}>
                             <span className="gface" aria-hidden="true" data-online={(one.person.kind === "MEMBER" && id && online.has(id)) || undefined}>{initials(one.person.name ?? name)}</span>
                             <span className="gpeople__who">
-                                <span>{name}{one.person.kind === "MEMBER" && id && online.has(id) && !you ? <span className="sr-only">, here now</span> : null}</span>
+                                <span title={name}>{name}{one.person.kind === "MEMBER" && id && online.has(id) && !you ? <span className="sr-only">, here now</span> : null}</span>
                                 <small>{one.person.kind === "CONTACT" ? "Outside " + pod.name : (one.role === "owner" ? "Owner" : "Member") + " · in " + pod.name}</small>
                             </span>
                             {manage && one.person.kind === "MEMBER" && id && !you && (
@@ -349,7 +349,19 @@ function People({ pod, channel, may, onLeft }: { pod: Pod; channel: ChannelDetai
                     );
                 })}
             </ul>
-            {(seatedAgents.length > 0 || manage) && (
+            {/* Each picker under its own list: people under the people,
+                agents under the Agents heading. */}
+            {manage && candidates.length > 0 && (
+                <form className="cside__add" onSubmit={(event) => { event.preventDefault(); if (adding) add.mutate({ people: [adding] }); }}>
+                    <label className="sr-only" htmlFor={channel.id + "-add"}>Add someone from {pod.name}</label>
+                    <select id={channel.id + "-add"} value={adding} onChange={(event) => setAdding(event.target.value)}>
+                        <option value="">Add someone from {pod.name}…</option>
+                        {candidates.map((member) => <option key={member.userId} value={member.userId}>{member.name}</option>)}
+                    </select>
+                    <button type="submit" className="ghost-pill" disabled={!adding || add.isPending}>{add.isPending ? "Adding…" : "Add"}</button>
+                </form>
+            )}
+            {(seatedAgents.length > 0 || (manage && agentCandidates.length > 0)) && (
                 <>
                     <h4 className="gside__label">Agents</h4>
                     <ul className="gpeople">
@@ -360,7 +372,7 @@ function People({ pod, channel, may, onLeft }: { pod: Pod; channel: ChannelDetai
                                 <li key={"agent" + (id ?? name)}>
                                     <span className="gface gface--agent" aria-hidden="true">{initials(name)}</span>
                                     <span className="gpeople__who">
-                                        <span>{name}</span>
+                                        <span title={name}>{name}</span>
                                         <small>{one.answers === "EVERY_LINE" ? "Answers every line" : "Answers when named"}</small>
                                     </span>
                                     {manage && id && channel.kind === "GROUP" && (
@@ -380,32 +392,22 @@ function People({ pod, channel, may, onLeft }: { pod: Pod; channel: ChannelDetai
                             );
                         })}
                     </ul>
+                    {manage && agentCandidates.length > 0 && (
+                        <form className="cside__add" onSubmit={(event) => { event.preventDefault(); if (addingAgent) add.mutate({ agents: [{ id: addingAgent, answers: "MENTIONED" }] }); }}>
+                            <label className="sr-only" htmlFor={channel.id + "-add-agent"}>Add an agent</label>
+                            <select id={channel.id + "-add-agent"} value={addingAgent} onChange={(event) => setAddingAgent(event.target.value)}>
+                                <option value="">Add an agent…</option>
+                                {agentCandidates.map((agent) => <option key={agent.id} value={agent.id}>{agent.label}</option>)}
+                            </select>
+                            <button type="submit" className="ghost-pill" disabled={!addingAgent || add.isPending}>Add</button>
+                        </form>
+                    )}
                 </>
             )}
             {(change.isError || remove.isError) && (
                 <p className="gside__problem" role="alert">
                     {isForbidden(change.error ?? remove.error) ? "Only who made this channel, or an editor, can change who is in it." : problemOf(change.error ?? remove.error, "Couldn’t do that.")}
                 </p>
-            )}
-            {manage && candidates.length > 0 && (
-                <form className="cside__add" onSubmit={(event) => { event.preventDefault(); if (adding) add.mutate({ people: [adding] }); }}>
-                    <label className="sr-only" htmlFor={channel.id + "-add"}>Add someone from {pod.name}</label>
-                    <select id={channel.id + "-add"} value={adding} onChange={(event) => setAdding(event.target.value)}>
-                        <option value="">Add someone from {pod.name}…</option>
-                        {candidates.map((member) => <option key={member.userId} value={member.userId}>{member.name}</option>)}
-                    </select>
-                    <button type="submit" className="ghost-pill" disabled={!adding || add.isPending}>{add.isPending ? "Adding…" : "Add"}</button>
-                </form>
-            )}
-            {manage && agentCandidates.length > 0 && (
-                <form className="cside__add" onSubmit={(event) => { event.preventDefault(); if (addingAgent) add.mutate({ agents: [{ id: addingAgent, answers: "MENTIONED" }] }); }}>
-                    <label className="sr-only" htmlFor={channel.id + "-add-agent"}>Add an agent</label>
-                    <select id={channel.id + "-add-agent"} value={addingAgent} onChange={(event) => setAddingAgent(event.target.value)}>
-                        <option value="">Add an agent…</option>
-                        {agentCandidates.map((agent) => <option key={agent.id} value={agent.id}>{agent.label}</option>)}
-                    </select>
-                    <button type="submit" className="ghost-pill" disabled={!addingAgent || add.isPending}>Add</button>
-                </form>
             )}
             {add.isError && <p className="gside__problem" role="alert">{problemOf(add.error, "Couldn’t add them.")}</p>}
             {join.isError && <p className="gside__problem" role="alert">{problemOf(join.error, "Couldn’t join it.")}</p>}

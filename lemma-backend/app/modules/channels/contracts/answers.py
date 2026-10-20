@@ -22,6 +22,7 @@ __all__ = [
     "LineAnswer",
     "answers_of_run",
     "line_answered_in",
+    "lines_of_run",
     "settle_answers",
     "start_answering",
 ]
@@ -98,3 +99,10 @@ async def line_answered_in(
             return of_run[0].message_id
     latest = await answers.latest_of(conversation_id)
     return latest.message_id if latest is not None else None
+
+
+async def lines_of_run(uow: SqlAlchemyUnitOfWork, run_id: UUID) -> list[UUID]:
+    """The lines ``run_id`` answers, oldest first."""
+    return [
+        answer.message_id for answer in await LineAnswers(uow.session).of_run(run_id)
+    ]

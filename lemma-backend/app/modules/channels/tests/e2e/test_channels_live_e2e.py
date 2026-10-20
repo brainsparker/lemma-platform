@@ -8,13 +8,16 @@ test shortcut. The socket must never show what a GET would not.
 
 from __future__ import annotations
 
+import asyncio
 from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
+from websockets.exceptions import ConnectionClosed
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.live.config import live_settings
+from app.core.server_limits import WS_MAX_BYTES
 from app.modules.agent.services.realtime import (
     publish_conversation_event,
     token_payload,
@@ -37,7 +40,7 @@ from app.modules.channels.tests.e2e.channel_pod import (
     group,
     say,
 )
-from app.modules.test_support.e2e.live_socket import live_socket
+from app.modules.test_support.e2e.live_socket import Frame, LiveClient, live_socket
 from app.modules.test_support.e2e.runtime import backend_server as _backend_server
 
 pytestmark = [pytest.mark.e2e]
@@ -99,6 +102,22 @@ async def test_a_channel_streams_its_lines_and_resumes_from_its_cursor(
 
         fourth = await say(pod, channel["id"], "live again")
         await live.event("c", "line.created", message__id=fourth["id"])
+
+
+async def test_a_line_removed_by_a_manager_reaches_its_watchers_as_theirs(
+    pod: Pod, backend_server
+) -> None:
+    channel = await group(pod, title="Moderated")
+    said = await say(pod, channel["id"], "off topic", as_user=pod.user)
+    async with live_socket(backend_server, pod.id, pod.user["token"]) as live:
+        await live.subscribe("c", "channel", channel_id=channel["id"])
+        removed = await pod.client(pod.editor).delete(
+            f"{pod.base}/{channel['id']}/messages/{said['id']}"
+        )
+        assert removed.status_code == 204, removed.text
+        deleted = await live.event("c", "line.deleted", message__id=said["id"])
+        assert deleted["message"]["text"] is None
+        assert deleted["message"]["removed_by"]["id"] == pod.editor["id"]
 
 
 async def test_a_cursor_not_ours_answers_resync(pod: Pod, backend_server) -> None:
@@ -610,3 +629,227 @@ async def test_subscriptions_frames_and_unknown_topics_are_refused_in_place(
         assert missing["code"] == "not_found"
         presence = await live.call("presence")
         assert pod.owner["id"] in presence["result"]["online"]
+
+
+# -- catching up: more than one read, and cursors honest ------------------------------
+
+#: More lines than a read of the timeline returns (``rows.MAX_LINES``).
+_BURST = 320
+
+
+async def _burst(db_session: AsyncSession, pod: Pod, channel_id: str) -> list[str]:
+    """``_BURST`` lines in one transaction: one change of the channel for the
+    hub to hear, however many lines it holds."""
+    uow = SqlAlchemyUnitOfWork(db_session)
+    ids: list[str] = []
+    for n in range(_BURST):
+        line = await post(
+            uow,
+            channel_id=UUID(channel_id),
+            line=NewLine(sender=Sender.member(UUID(pod.owner["id"])), text=f"b{n}"),
+        )
+        assert line is not None
+        ids.append(str(line.id))
+    await db_session.commit()
+    return ids
+
+
+async def _created_or_resync(
+    live: LiveClient, sub: str, wanted: list[str], *, timeout: float = 30
+) -> tuple[set[str], Frame | None]:
+    """The lines of ``wanted`` sent as created on ``sub`` until all are, or
+    the resync that stood in for them."""
+
+    async def _read() -> tuple[set[str], Frame | None]:
+        while True:
+            seen = set(_ids(live.events(sub, "line.created")))
+            if set(wanted) <= seen:
+                return seen, None
+            frame = await live.recv(timeout)
+            if frame["type"] == "resync" and frame.get("id") == sub:
+                return seen, frame
+
+    return await asyncio.wait_for(_read(), timeout)
+
+
+def _seq(cursor: object) -> int:
+    return int(str(cursor).partition(":")[2])
+
+
+async def test_resuming_past_one_read_sends_every_line_or_resyncs(
+    pod: Pod, db_session: AsyncSession, backend_server, monkeypatch
+) -> None:
+    """Away for more lines than one read returns: all of them come back, or,
+    past the batch limit, a resync -- never some, labelled caught up."""
+    channel = await group(pod, title="Away long")
+    async with live_socket(backend_server, pod.id, pod.owner["token"]) as live:
+        await live.subscribe("c", "channel", channel_id=channel["id"])
+        cursor = live.cursor("c")
+    ids = await _burst(db_session, pod, channel["id"])
+
+    async with live_socket(backend_server, pod.id, pod.owner["token"]) as live:
+        await live.subscribe("c", "channel", channel_id=channel["id"], since=cursor)
+        seen, resync = await _created_or_resync(live, "c", ids)
+        assert resync is None, resync
+        assert set(ids) <= seen
+
+    # Fewer than were said (``_BURST``).
+    monkeypatch.setattr(live_settings, "live_max_changes_per_batch", 250)
+    async with live_socket(backend_server, pod.id, pod.owner["token"]) as live:
+        await live.subscribe("c", "channel", channel_id=channel["id"], since=cursor)
+        seen, resync = await _created_or_resync(live, "c", ids)
+        assert resync is not None and resync["reason"] == "too_many", seen
+        assert not seen, "a resync was sent beside some of the lines"
+
+
+async def test_a_burst_past_one_read_reaches_a_watcher_whole(
+    pod: Pod, db_session: AsyncSession, backend_server
+) -> None:
+    channel = await group(pod, title="Burst")
+    async with live_socket(backend_server, pod.id, pod.owner["token"]) as live:
+        await live.subscribe("c", "channel", channel_id=channel["id"])
+        ids = await _burst(db_session, pod, channel["id"])
+        seen, resync = await _created_or_resync(live, "c", ids)
+        assert resync is None, resync
+        assert set(ids) <= seen
+
+
+async def test_lines_arrive_once_and_never_past_their_batch_cursor(
+    pod: Pod, backend_server
+) -> None:
+    """A line committed while the hub reads is the next batch's: not sent
+    ahead of the cursor it rides under, and then again."""
+    channel = await group(pod, title="Steady")
+    async with live_socket(backend_server, pod.id, pod.owner["token"]) as live:
+        await live.subscribe("c", "channel", channel_id=channel["id"])
+        said: list[str] = []
+        for _ in range(12):
+            lines = await asyncio.gather(
+                *(say(pod, channel["id"], "steady") for _ in range(5))
+            )
+            said.extend(line["id"] for line in lines)
+        await _created_or_resync(live, "c", said)
+        await live.quiet(1.0)
+    created = _ids(live.events("c", "line.created"))
+    assert len(created) == len(set(created)), "a line was created twice"
+    for frame in live.frames:
+        if frame["type"] != "events" or frame.get("id") != "c":
+            continue
+        for event in frame["events"]:  # type: ignore[union-attr]
+            if event["type"].startswith("line."):
+                assert event["message"]["seq"] <= _seq(frame["cursor"]), frame
+
+
+async def test_a_bad_cursor_is_not_echoed_and_an_impossible_one_resyncs(
+    pod: Pod, backend_server
+) -> None:
+    channel = await group(pod, title="Cursors")
+    await say(pod, channel["id"], "one")
+    await say(pod, channel["id"], "two")
+    async with live_socket(backend_server, pod.id, pod.owner["token"]) as live:
+        head = (await live.subscribe("h", "channel", channel_id=channel["id"]))[
+            "cursor"
+        ]
+        bad = await live.subscribe(
+            "b", "channel", channel_id=channel["id"], since="x:y"
+        )
+        assert bad["cursor"] == head
+        assert (await live.until("resync", "b"))["reason"] == "cursor_expired"
+
+        # Its change behind the head, its line ahead of it: no cursor given out.
+        told = await live.subscribe(
+            "i", "channel", channel_id=channel["id"], since=f"1:{_seq(head) + 50}"
+        )
+        assert told["cursor"] == head
+        assert (await live.until("resync", "i"))["reason"] == "cursor_expired"
+        await live.quiet(1.0)
+        assert live.events("i", "line.edited") == []
+
+
+async def test_a_read_past_what_a_line_number_holds_is_invalid(
+    pod: Pod, backend_server
+) -> None:
+    channel = await group(pod, title="Huge")
+    async with live_socket(backend_server, pod.id, pod.owner["token"]) as live:
+        for seq in (2**63, 10**30):
+            refused = await live.call("read", channel_id=channel["id"], seq=seq)
+            assert refused["type"] == "error", refused
+            assert refused["code"] == "invalid", refused
+
+
+async def test_the_frame_limit_counts_bytes(pod: Pod, backend_server) -> None:
+    """Fewer characters than the limit, more bytes: refused."""
+    async with live_socket(backend_server, pod.id, pod.owner["token"]) as live:
+        await live.send(op="ping", pad="€" * 6000)
+        refused = await live.until("error")
+        assert refused["code"] == "invalid" and "too large" in str(refused["message"])
+        await live.send(op="ping")
+        await live.until("pong")
+
+
+async def test_a_message_past_the_servers_cap_closes_the_socket_with_1009(
+    pod: Pod, backend_server
+) -> None:
+    """The server refuses it while it arrives -- never read whole into memory
+    to be refused after. Under the cap, a frame too large for the protocol is
+    refused in place and the socket carries on."""
+    async with live_socket(backend_server, pod.id, pod.owner["token"]) as live:
+        await live.send(op="ping", pad="x" * (WS_MAX_BYTES - 1024))
+        refused = await live.until("error")
+        assert refused["code"] == "invalid" and "too large" in str(refused["message"])
+        await live.ws.send("x" * (WS_MAX_BYTES + 1))
+        with pytest.raises(ConnectionClosed):
+            await live.recv(timeout=10)
+        assert live.ws.close_code == 1009
+    async with live_socket(backend_server, pod.id, pod.owner["token"]) as again:
+        await again.send(op="ping")
+        await again.until("pong")
+
+
+async def test_a_change_that_moves_none_of_a_readers_counts_sends_them_nothing(
+    pod: Pod, backend_server
+) -> None:
+    elsewhere = await group(pod, title="Not theirs")
+    theirs = await group(pod, title="Theirs", members=[pod.editor["id"]])
+    async with live_socket(backend_server, pod.id, pod.editor["token"]) as editor:
+        await editor.subscribe("i", "inbox")
+        await say(pod, elsewhere["id"], "nothing to them")
+        await editor.quiet(1.0)
+        await say(pod, theirs["id"], "news for them")
+        await editor.event("i", "inbox.updated", channel_id=theirs["id"])
+        await editor.quiet(1.0)
+        updates = editor.events("i", "inbox.updated")
+    assert [update["channel_id"] for update in updates] == [theirs["id"]], updates
+
+
+async def test_a_question_after_many_lines_in_one_change_still_waits(
+    pod: Pod, db_session: AsyncSession, backend_server
+) -> None:
+    """The inbox looks for new questions by asking for them, not in the
+    first lines of a change."""
+    channel = await group(pod, title="Busy asks")
+    owner = UUID(pod.owner["id"])
+    async with live_socket(backend_server, pod.id, pod.owner["token"]) as live:
+        await live.subscribe("i", "inbox")
+        uow = SqlAlchemyUnitOfWork(db_session)
+        for n in range(60):
+            await post(
+                uow,
+                channel_id=UUID(channel["id"]),
+                line=NewLine(sender=Sender.member(owner), text=f"chatter {n}"),
+            )
+        line = await post(
+            uow,
+            channel_id=UUID(channel["id"]),
+            line=NewLine(sender=Sender.member(owner), text="and then: may I?"),
+            question=NewQuestion(
+                kind=QuestionKind.APPROVAL,
+                ref=f"e2e:{uuid4()}",
+                asker=await an_asker(UUID(pod.id), owner),
+                question={"prompt": "May I?"},
+                awaits=Principal.member(owner),
+            ),
+        )
+        await db_session.commit()
+        assert line is not None
+        await live.event("i", "question.waiting", message_id=str(line.id))

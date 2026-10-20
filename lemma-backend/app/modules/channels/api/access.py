@@ -23,11 +23,13 @@ marking read
 Answering a question                   ``channel.read``; only the person it
                                        waits on
 Writing, editing, deleting one's       ``channel.write`` (+ ``contact.message``
-lines; starting a group; retrying      in a CONTACT channel)
-one's own line's delivery
+lines; starting a group; retrying      in a CONTACT channel); a push to
+one's own line's delivery (or any,     oneself is retried by its recipient
+with ``may_manage``)                   alone, with ``channel.write``
 Group: rename, topic, visibility,      ``channel.write`` and the channel's
 archive, delete, members, roles,       owner -- or ``channel.manage``
-agents roster                          (``may_manage``)
+agents roster; deleting anybody's      (``may_manage``)
+line (shown as removed by them)
 CONTACT channel: assignee, status,     ``channel.write`` + ``contact.message``
 agent switch, hand-back window
 Seeing a CONTACT channel at all        ``contact.read``
@@ -49,6 +51,7 @@ from uuid import UUID
 from fastapi import Depends, HTTPException, status
 
 from app.core.api.dependencies import CurrentUser
+from app.core.api.schemas import ErrorResponse
 from app.core.authorization.context import Context, ResourceRef
 from app.core.authorization.dependencies import PodContextDep
 from app.core.authorization.permissions import Permissions
@@ -108,20 +111,80 @@ async def get_caller(pod_id: UUID, user: CurrentUser, ctx: PodContextDep) -> Cal
 CallerDep = Annotated[Caller, Depends(get_caller)]
 
 
+# -- refusals ----------------------------------------------------------------------
+#
+# Each carries a code a client can match on (the error envelope's ``code``),
+# not only a status: ``CHANNEL_NOT_FOUND``, ``WRONG_CHANNEL_KIND``,
+# ``LAST_OWNER`` ... A 422 is ``VALIDATION_ERROR``, as a request the schema
+# refused is.
+
+
+def refusal(status_code: int, code: str, message: str) -> HTTPException:
+    return HTTPException(status_code, detail={"code": code, "message": message})
+
+
+def refusal_message(error: HTTPException) -> str:
+    """What a refusal says, without its code."""
+    detail = error.detail
+    if isinstance(detail, dict) and isinstance(detail.get("message"), str):
+        return detail["message"]
+    return str(detail)
+
+
 def missing(what: str = "Channel") -> HTTPException:
-    return HTTPException(status.HTTP_404_NOT_FOUND, detail=f"{what} not found")
+    return refusal(
+        status.HTTP_404_NOT_FOUND,
+        f"{what.upper().replace(' ', '_')}_NOT_FOUND",
+        f"{what} not found",
+    )
 
 
-def conflict(detail: str) -> HTTPException:
-    return HTTPException(status.HTTP_409_CONFLICT, detail=detail)
+def conflict(detail: str, *, code: str = "CHANNEL_CONFLICT") -> HTTPException:
+    return refusal(status.HTTP_409_CONFLICT, code, detail)
+
+
+def wrong_kind(detail: str) -> HTTPException:
+    """Asked of a channel of the wrong kind: a member's own, a contact's, a
+    group's."""
+    return conflict(detail, code="WRONG_CHANNEL_KIND")
 
 
 def forbidden(detail: str) -> HTTPException:
-    return HTTPException(status.HTTP_403_FORBIDDEN, detail=detail)
+    return refusal(status.HTTP_403_FORBIDDEN, "INSUFFICIENT_PERMISSION", detail)
 
 
 def unprocessable(detail: str) -> HTTPException:
-    return HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=detail)
+    return refusal(status.HTTP_422_UNPROCESSABLE_CONTENT, "VALIDATION_ERROR", detail)
+
+
+#: What a channel route may answer besides its success: the shared error
+#: envelope (``ErrorResponse``) under each status, for the OpenAPI document.
+ERRORS: dict[int | str, dict[str, object]] = {
+    400: {"model": ErrorResponse, "description": "A cursor this API did not give."},
+    403: {
+        "model": ErrorResponse,
+        "description": "Not allowed: `INSUFFICIENT_PERMISSION`.",
+    },
+    404: {
+        "model": ErrorResponse,
+        "description": (
+            "Not there, or not the reader's to see: `CHANNEL_NOT_FOUND`, "
+            "`LINE_NOT_FOUND`, `MEMBER_NOT_FOUND` ..."
+        ),
+    },
+    409: {
+        "model": ErrorResponse,
+        "description": (
+            "Not in this channel's state: `CHANNEL_ARCHIVED`, "
+            "`WRONG_CHANNEL_KIND`, `LAST_OWNER`, `LAST_MEMBER`, "
+            "`NOT_JOINED`, `CHANNEL_CONFLICT`."
+        ),
+    },
+    422: {
+        "model": ErrorResponse,
+        "description": "The request cannot be done as asked: `VALIDATION_ERROR`.",
+    },
+}
 
 
 async def visible(
@@ -188,6 +251,8 @@ def decode_cursor(cursor: str | None) -> tuple[datetime, UUID] | None:
         at, _, row_id = raw.partition("|")
         return datetime.fromisoformat(at), UUID(row_id)
     except ValueError:  # bad base64, text or fields alike
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, detail="That cursor is not one we gave"
+        raise refusal(
+            status.HTTP_400_BAD_REQUEST,
+            "INVALID_CURSOR",
+            "That cursor is not one we gave",
         ) from None

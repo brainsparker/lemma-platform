@@ -381,6 +381,33 @@ async def test_a_question_decided_elsewhere_closes_with_that_decision(scenario):
     assert closed.answered_by == Principal.member(seeded.user_id)
 
 
+async def test_a_question_written_past_stops_waiting_rather_than_being_denied(
+    scenario,
+):
+    """The member writes something else while an ask waits: the run is told
+    no (it must not wait on it), but the line was never answered -- it shows
+    cancelled, not answered "DENY" by them."""
+    seeded = await seeded_conversation(scenario)
+    call = await _paused(seeded, tool_name="ask_user", tool_args=TWO_QUESTIONS)
+    with suppress_agent_run_enqueue():
+        async with owner_uow(seeded) as uow:
+            await build_conversation_service(uow).add_user_message_and_start_run(
+                conversation_id=seeded.conversation_id,
+                user_id=seeded.user_id,
+                content="Never mind, show me the invoices.",
+                pod_id=seeded.pod_id,
+            )
+            await uow.commit()
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        await sync_pause_questions(uow, seeded.conversation_id)
+        await uow.commit()
+
+    closed = await _question(seeded, call)
+    assert closed.state is QuestionState.CANCELLED
+    assert closed.answer is None
+    assert closed.answered_by is None
+
+
 async def test_a_pause_is_asked_once_however_often_its_run_ends(scenario):
     seeded = await seeded_conversation(scenario)
     call = await _paused(seeded, tool_name="ask_user", tool_args=TWO_QUESTIONS)

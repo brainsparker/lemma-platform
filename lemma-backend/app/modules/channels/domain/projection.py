@@ -83,16 +83,49 @@ def withheld_from(
     the pod reading the timeline need not be one of them, and may not be able
     to see what it was made from. One whose principal is no longer known is
     withheld from everybody. Never withheld: a line in the reader's own direct
-    channel, which the agent posted there to tell them, and a question put to
-    the reader, which they have to read to answer.
+    channel, which the agent posted there to tell them, a question put to the
+    reader, which they have to read to answer, and an answer its member shared
+    with the channel (``shareable_by``).
     """
     sender = message.sender
     if sender.kind is not SenderKind.AGENT or not sender.used_a_members_access:
         return False
-    if in_their_direct:
+    if in_their_direct or message.shared_at is not None:
         return False
     question = message.question
     if question is not None and question.awaits == Principal.member(user_id):
         return False
     behalf = sender.on_behalf_of
     return behalf is None or behalf.user_id != user_id
+
+
+def asker_only(message: ChannelMessage, *, in_a_direct: bool = False) -> bool:
+    """Whether this answer is read in full only by the member it was made for:
+    an agent's line made with their own access, not shared, outside a direct
+    channel (where its one member is the asker anyway). Others in the channel
+    are shown that it was given (``withheld_from``)."""
+    sender = message.sender
+    return (
+        sender.kind is SenderKind.AGENT
+        and sender.used_a_members_access
+        and sender.on_behalf_of is not None
+        and sender.on_behalf_of.user_id is not None
+        and message.shared_at is None
+        and not message.is_deleted
+        and not in_a_direct
+    )
+
+
+def shareable_by(
+    message: ChannelMessage, *, user_id: UUID, in_a_direct: bool = False
+) -> bool:
+    """Whether ``user_id`` may share this answer with the channel: it is read
+    only by them, and was made for them -- with their access, so whether the
+    others may read it is theirs to decide. Never with a contact: sharing
+    opens it to the pod's members, not to anybody outside (``may_read``)."""
+    behalf = message.sender.on_behalf_of
+    return (
+        asker_only(message, in_a_direct=in_a_direct)
+        and behalf is not None
+        and behalf.user_id == user_id
+    )

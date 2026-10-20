@@ -34,10 +34,11 @@ is a close frame the client can read, never a failed upgrade:
 | Close code | Meaning | Client should |
 | --- | --- | --- |
 | `4401` | No session, or it expired; or, on an open socket, the session it was opened with ended (signed out, revoked, expired) | Refresh the session, then reconnect |
-| `4403` | The caller may not read the pod (`pod.read`) | Stop |
+| `4403` | The caller may not read the pod (`pod.read`); or, on an open socket, no longer may -- checked as the socket refreshes its slot (every 30 s) and on `presence` | Stop |
 | `4404` | No such pod | Stop |
 | `4429` | The user already holds `LIVE_MAX_SOCKETS_PER_USER_PER_POD` sockets on this pod | Close another, or wait |
 | `1011` | Server error | Reconnect with backoff |
+| `1009` | A message over 1 MiB: the server stops reading it as it arrives | Do not send it again; nothing a client sends is that large |
 
 A socket ends with its session. Signing out, or anything that revokes a
 user's sessions (a password reset, a deactivated account), closes every live
@@ -58,7 +59,16 @@ subscription after each `ready`, each with its own last cursor.
 
 The client names each subscription and each call with its own `id` (1-64
 characters, unique among the socket's open subscriptions); the server answers
-on that id. Client frames are JSON text, at most 16 KiB.
+on that id. Client frames are JSON text, at most 16 KiB of UTF-8. A larger one
+is refused with an `invalid` error and the socket stays open -- up to 1 MiB,
+the most the server reads of any websocket message (`WS_MAX_BYTES`,
+`app/core/server_limits.py`). Past that the server closes the socket with
+`1009` while the message is still arriving, so it is never held whole. The
+ceiling is uvicorn's (`ws_max_size`), the same for every socket the API
+serves, and every launcher passes it (`--ws-max-size 1048576`;
+`test_ws_max_size_everywhere` holds them to it). Bulk bytes -- files, images --
+travel over the HTTP API, never a socket; that holds for the Agent Host link
+too.
 
 ### Client to server
 
@@ -245,7 +255,7 @@ moves the watch to it.
 | --- | --- | --- | --- |
 | `typing` | `channel_id`, `thread_root_id` (optional: typing in that thread) | `{}` | `channel.write`, may see the channel, and `contact.message` in a CONTACT channel. Reaches the channel's other subscribers, never the caller's own sockets. Send at most every ~3 s while typing |
 | `read` | `channel_id`, `seq` (≥ 0) | `{channel_id, read_seq}` | `POST /channels/{c}/read`, the same rule and the same write: it never goes back, and never past the newest line. Other sockets hear `read.updated` and `inbox.updated` |
-| `presence` | | `{online: [user_id, …]}` | A socket on the pod. Users with a socket open now (claims lapse after 90 s without one). The same record says who had the app open lately (`core/live/presence.seen_within`), which channels reads to hold back a push the member would have read in the app ([channels.md](channels.md#posting-a-line)); with Redis unreachable it says nobody, so the push goes |
+| `presence` | | `{online: [user_id, …]}` | A socket on the pod. Users with a socket open now (claims lapse after 90 s without one). The same record says who had the app open lately (`core/live/presence.seen_within`), which channels reads to hold a push a few minutes while the member may read it in the app ([channels.md](channels.md#posting-a-line)); with Redis unreachable it says nobody, so the push goes |
 
 ## Limits
 

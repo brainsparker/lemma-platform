@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 import typer
+from rich.markup import escape
 
 from ..chat import (
     emit_stream_events,
@@ -640,4 +641,6 @@ def _render_pending_approvals(pending: list[dict[str, Any]], decision: str) -> N
         # with a large argument payload would otherwise bury the list it is in.
         summary = str(detail)[:120] if detail else ""
         suffix = f" {summary}" if summary else ""
-        err_console.print(f"  [dim]{item['id']}[/dim] {name}{suffix}", highlight=False)
+        err_console.print(
+            f"  [dim]{item['id']}[/dim] {escape(f'{name}{suffix}')}", highlight=False
+        )

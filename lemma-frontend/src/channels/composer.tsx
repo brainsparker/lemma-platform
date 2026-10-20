@@ -7,7 +7,8 @@ import { channelApi } from "./api";
 import { attachmentSaid, carriedFiles, dragHasFiles, enterSends, uniqueNames, uploadProgress, type AttachmentState } from "./compose-model";
 import { draftKey, keepDraft, readDraft } from "./drafts";
 import { problemOf } from "./problem";
-import { insertMention, matchMentionable, mentionAt, mentionsIn, pickedIn, removeMention, type Mentionable } from "./mentions";
+import { useMentionPicker } from "./mention-picker";
+import { mentionsIn, pickedIn, removeMention, type Mentionable } from "./mentions";
 import { composerChoices, sourceLabel, type ChannelDetail, type Line, type Part } from "./model";
 
 type FilePart = Extract<Part, { type: "file" }>;
@@ -71,15 +72,12 @@ export function Composer({ podId, channel, people, threadRootId, placeholder, di
     const draft = draftKey(podId, channel.id, threadRootId);
     const [kept] = useState(() => readDraft(draft));
     const [text, setText] = useState(kept.text);
-    const [caret, setCaret] = useState(0);
     const [picked, setPicked] = useState<Mentionable[]>(kept.picked);
     const [files, setFiles] = useState<Attached[]>([]);
     const [dragging, setDragging] = useState(false);
     const touch = useSyncExternalStore(subscribeTouch, touchNow, () => false);
     const [membersOnly, setMembersOnly] = useState(false);
     const [place, setPlace] = useState("");
-    const [highlight, setHighlight] = useState(0);
-    const [dismissed, setDismissed] = useState<number | null>(null);
     const choices = composerChoices(channel);
     /* One name per line being written: sending it again after a failure is
        the same line, not a second one. Anything changed is a new line. */
@@ -94,9 +92,13 @@ export function Composer({ podId, channel, people, threadRootId, placeholder, di
         setFiles((was) => [...was, ...chosen.map((file) => ({ key: String(++attachedCount), file, uploaded: null, uploading: false, failed: null }))]);
     };
 
-    const at = mentionAt(text, caret);
-    const offered = at && dismissed !== at.start ? matchMentionable(people, at.query) : [];
-    const menuOpen = offered.length > 0;
+    const mention = useMentionPicker({
+        people,
+        text,
+        setText,
+        box,
+        onPicked: (who) => { lineId.current = null; setPicked((was) => [...was, who]); },
+    });
     const chips = pickedIn(text, picked);
 
     const send = useMutation({
@@ -151,20 +153,6 @@ export function Composer({ podId, channel, people, threadRootId, placeholder, di
         send.mutate({ text: said, mentions: mentionsIn(said, picked) });
     };
 
-    const pick = (who: Mentionable) => {
-        if (!at) return;
-        const next = insertMention(text, at, caret, who);
-        lineId.current = null;
-        setText(next.text);
-        setPicked((was) => [...was, who]);
-        setCaret(next.caret);
-        setHighlight(0);
-        requestAnimationFrame(() => {
-            box.current?.focus();
-            box.current?.setSelectionRange(next.caret, next.caret);
-        });
-    };
-
     const unpick = (who: Mentionable) => {
         lineId.current = null;
         setText(removeMention(text, who));
@@ -174,12 +162,7 @@ export function Composer({ podId, channel, people, threadRootId, placeholder, di
 
     const keys = (event: KeyboardEvent<HTMLTextAreaElement>) => {
         if (event.nativeEvent.isComposing) return;
-        if (menuOpen) {
-            if (event.key === "ArrowDown") { event.preventDefault(); setHighlight((was) => (was + 1) % offered.length); return; }
-            if (event.key === "ArrowUp") { event.preventDefault(); setHighlight((was) => (was - 1 + offered.length) % offered.length); return; }
-            if (event.key === "Enter" || event.key === "Tab") { event.preventDefault(); pick(offered[Math.min(highlight, offered.length - 1)]); return; }
-            if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); if (at) setDismissed(at.start); return; }
-        }
+        if (mention.keyDown(event)) return;
         if (enterSends({ key: event.key, shiftKey: event.shiftKey, isComposing: event.nativeEvent.isComposing }, touch)) { event.preventDefault(); submit(); }
     };
 
@@ -200,8 +183,6 @@ export function Composer({ podId, channel, people, threadRootId, placeholder, di
         return <p className="chcompose chcompose--off" role="note">{disabledReason}</p>;
     }
 
-    const listId = ids + "-people";
-    const active = menuOpen ? listId + "-" + Math.min(highlight, offered.length - 1) : undefined;
     const sending = send.isPending;
     const progress = uploadProgress(files.map(stateOf));
     return (
@@ -215,23 +196,7 @@ export function Composer({ podId, channel, people, threadRootId, placeholder, di
             onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false); }}
             onDrop={dropped}
         >
-            {menuOpen && (
-                <ul className="chcompose__menu" role="listbox" id={listId} aria-label="Name someone">
-                    {offered.map((who, index) => (
-                        <li
-                            key={who.kind + who.id}
-                            id={listId + "-" + index}
-                            role="option"
-                            aria-selected={index === Math.min(highlight, offered.length - 1)}
-                            className="chcompose__option"
-                            onMouseDown={(event) => { event.preventDefault(); pick(who); }}
-                        >
-                            <span>{who.name}</span>
-                            <small>{who.kind === "AGENT" ? (who.inChannel === false ? "Agent — answers this once" : "Agent in this channel") : who.kind === "CONTACT" ? "Contact" : "Member"}</small>
-                        </li>
-                    ))}
-                </ul>
-            )}
+            {mention.menu}
             {(chips.length > 0 || files.length > 0) && (
                 <ul className="chcompose__chips" aria-label="With this line">
                     {chips.map((who) => (
@@ -259,19 +224,12 @@ export function Composer({ podId, channel, people, threadRootId, placeholder, di
                 placeholder={placeholder}
                 maxLength={8000}
                 readOnly={sending}
-                role="combobox"
-                aria-expanded={menuOpen}
-                aria-controls={menuOpen ? listId : undefined}
-                aria-activedescendant={active}
-                aria-autocomplete="list"
+                {...mention.boxProps}
                 onChange={(event) => {
+                    if (!mention.changed(event.target.value, event.target.selectionStart)) return;
                     lineId.current = null;
-                    setText(event.target.value);
-                    setCaret(event.target.selectionStart ?? event.target.value.length);
-                    setDismissed(null);
                     if (event.target.value.trim()) onTyping?.();
                 }}
-                onSelect={(event) => setCaret(event.currentTarget.selectionStart ?? 0)}
                 onKeyDown={keys}
                 onPaste={(event) => {
                     const pasted = carriedFiles(event.clipboardData);

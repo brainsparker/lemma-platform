@@ -62,8 +62,10 @@ async def plan_changes(
 ) -> Plan:
     """The channel's changes after ``since`` up to ``head``, for each
     subscriber as they may read them."""
+    # Up to the head read for this batch, whose cursor it is sent under: a
+    # line changed since is the next batch's, not sent twice nor ahead of it.
     lines = await LineRepository(uow.session).changed_since(
-        channel.id, after_rev=since.rev, limit=limit + 1
+        channel.id, after_rev=since.rev, limit=limit + 1, up_to_rev=head.rev
     )
     view = (
         await lines_view(uow, channel, lines, since_seq=since.seq)
@@ -103,20 +105,25 @@ async def gap_since(
     if position is None:
         return ResyncReason.CURSOR_EXPIRED
     since_rev, since_seq = position
-    if (since_rev, since_seq) > (head.rev, head.seq):
+    if since_rev > head.rev:
         # Past this hub's head: another process's hub may simply be ahead of
         # it. Past the channel's own, it is no cursor this topic gave out.
         now = (await heads_of(uow, [channel.id])).get(channel.id)
-        if now is None or (since_rev, since_seq) > (now.rev, now.seq):
+        if now is None or since_rev > now.rev or since_seq > now.seq:
             return ResyncReason.CURSOR_EXPIRED
         return []
+    if since_seq > head.seq:
+        # A line numbered past the channel's newest, at a change no later than
+        # its own: no cursor this topic gave out. Read as one, every line up
+        # to it would be told as edited rather than created.
+        return ResyncReason.CURSOR_EXPIRED
     if since_rev == head.rev:
         return []
     if not await kept_since(uow.session, channel.id, since_rev):
         # Older than the change log keeps (``revisions.CHANGE_RETENTION``).
         return ResyncReason.CURSOR_EXPIRED
     lines = await LineRepository(uow.session).changed_since(
-        channel.id, after_rev=since_rev, limit=limit + 1
+        channel.id, after_rev=since_rev, limit=limit + 1, up_to_rev=head.rev
     )
     if len(lines) > limit:
         return ResyncReason.TOO_MANY

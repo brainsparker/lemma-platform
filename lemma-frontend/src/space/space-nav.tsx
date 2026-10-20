@@ -5,7 +5,7 @@ import { unbound } from "@/thread/conversation-list";
 import { source, type Pod, type SpaceView, type Tab } from "@/data";
 import { AppsIcon, ContactsIcon, FileIcon, FolderIcon, GroupsIcon, PlusIcon, TableIcon, WorkflowIcon } from "@/ui/icons";
 import { inboxBadge } from "@/channels/model";
-import { useInbox } from "@/channels/waiting-panel";
+import { useInbox, useMyChannel } from "@/channels/waiting-panel";
 import { useMaySeeContacts } from "./contact-queries";
 import { useFeature } from "@/site/analytics/flags";
 
@@ -47,14 +47,15 @@ export function SpaceNav({ pod, activeId, recents, onPick, openChatId, onOpenCha
         staleTime: 60_000,
     });
     const yours = unbound(chats.data).filter(chat => chat.kind.toUpperCase() !== "TASK").slice(0, 8);
-    /* What is new for you across the space's channels — the inbox the bell
-       reads, under its key: questions waiting on you first, then mentions,
-       then channels with anything new. */
+    /* What is new for you across the space's channels — what the bell
+       counts, read under the same keys: questions waiting on you, mentions of
+       you, and new lines in your own channel. */
     const contactsFlag = useFeature("contacts");
     const maySeeContacts = useMaySeeContacts(pod.id);
     const contactsOn = contactsFlag && maySeeContacts;
     const inbox = useInbox(pod.id);
-    const news = inboxBadge(inbox.data ?? { channels: 0, mentions: 0, waiting: 0 });
+    const mine = useMyChannel(pod.id);
+    const news = inboxBadge(inbox.data ?? { mentions: 0, waiting: 0 }, mine?.unread.lines ?? 0);
 
     return (
         <nav className="snav" aria-label={pod.name + "’s space"}>

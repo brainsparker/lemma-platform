@@ -38,17 +38,49 @@ export function readSearchPage(raw: unknown): Page<SearchHit> {
     };
 }
 
+/** Markdown read as the words it shows: an agent's answer is markdown, and
+ *  `**Constraints**` in a result is noise. Links and images keep their
+ *  words; code keeps its text; the marks go. */
+export function plainOf(markdown: string): string {
+    return markdown
+        .replace(/```[^\n]*\n?/g, " ")
+        .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
+        .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+        .replace(/`([^`]*)`/g, "$1")
+        .replace(/^\s{0,3}(?:#{1,6}\s+|>\s?|[-*+]\s+|\d+[.)]\s+)/gm, "")
+        .replace(/(\*\*|__|~~)(?=\S)([\s\S]*?\S)\1/g, "$2")
+        .replace(/(^|[^\w*])[*_](?=\S)([^*_\n]*?\S)[*_](?!\w)/g, "$1$2")
+        .replace(/^\s*(?:[-*_]\s*){3,}$/gm, " ");
+}
+
 /** The words of a line around what was searched for, the first match in the
- *  middle, cut to `width` -- as pieces, so a view can mark the matches
- *  without parsing HTML. */
+ *  middle, cut to about `width` at word edges, its markdown read as plain
+ *  words -- as pieces, so a view can mark the matches without parsing
+ *  HTML. */
 export function snippet(text: string, query: string, width = 160): { text: string; match: boolean }[] {
-    const flat = text.replace(/\s+/g, " ").trim();
+    const flat = plainOf(text).replace(/\s+/g, " ").trim();
     const words = query.toLowerCase().split(/\s+/).filter((word) => word.length > 0);
-    if (!words.length) return [{ text: flat.slice(0, width), match: false }];
     const lower = flat.toLowerCase();
-    const first = Math.min(...words.map((word) => lower.indexOf(word)).filter((at) => at >= 0), flat.length);
-    const start = first > width / 2 && first < flat.length ? Math.max(0, first - Math.floor(width / 3)) : 0;
-    const cut = (start > 0 ? "…" : "") + flat.slice(start, start + width) + (start + width < flat.length ? "…" : "");
+    const first = words.length ? Math.min(...words.map((word) => lower.indexOf(word)).filter((at) => at >= 0), flat.length) : 0;
+    let start = first > width / 2 && first < flat.length ? Math.max(0, first - Math.floor(width / 3)) : 0;
+    let end = Math.min(flat.length, start + width);
+    /* Never half a word: start after a space, end before one. */
+    if (start > 0) {
+        const space = flat.indexOf(" ", start - 1);
+        if (space >= 0 && space < first) start = space + 1;
+    }
+    if (end < flat.length) {
+        const space = flat.lastIndexOf(" ", end);
+        if (space > Math.max(start, first)) end = space;
+    }
+    const cut = (start > 0 ? "…" : "") + flat.slice(start, end) + (end < flat.length ? "…" : "");
+    if (!words.length) return [{ text: cut, match: false }];
     const pattern = new RegExp("(" + words.map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|") + ")", "gi");
     return cut.split(pattern).filter((piece) => piece !== "").map((piece) => ({ text: piece, match: words.includes(piece.toLowerCase()) }));
+}
+
+/** What a result shows: the line's own words where the reader has them --
+ *  whole, so the cut is made here -- and the server's cut where not. */
+export function hitText(hit: Pick<SearchHit, "line" | "snippet">): string {
+    return hit.line.text ?? hit.snippet ?? "";
 }

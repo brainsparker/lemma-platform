@@ -81,6 +81,17 @@ class DirectMessages:
         )
         if line is None:
             raise AgentSurfaceValidationError("There is nothing to send.")
+        if (
+            message.key is not None
+            and line.edited_at is None
+            and not line.is_deleted
+            and line.text != message.text.replace("\x00", "")
+        ):
+            # The key named an earlier send that said something else: a
+            # retry is the same request, never a quiet stand-in for a new one.
+            raise AgentSurfaceValidationError(
+                "That Idempotency-Key was used for another message; send a new key."
+            )
         return line
 
 

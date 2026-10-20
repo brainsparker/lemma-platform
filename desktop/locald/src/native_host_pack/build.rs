@@ -558,7 +558,7 @@ pub(crate) fn build(
         "services": [
             {
                 "id": "backend",
-                "command": argv(&bindings.python, &["-m", "uvicorn", "local_app:app", "--host", "127.0.0.1", "--port", &backend_port.to_string(), "--ws", "websockets-sansio"]),
+                "command": argv(&bindings.python, &["-m", "uvicorn", "local_app:app", "--host", "127.0.0.1", "--port", &backend_port.to_string(), "--ws", "websockets-sansio", "--ws-max-size", "1048576"]),
                 "cwd": path_text(&backend_dir)?,
                 "env": backend_env,
                 "dependencies": [],

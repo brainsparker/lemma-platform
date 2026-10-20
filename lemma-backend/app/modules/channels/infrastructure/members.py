@@ -1,4 +1,5 @@
-"""Who is in a channel -- members, contacts, agents -- and how far members read.
+"""Who is in a channel -- members, contacts, agents. How far they read is
+``read_state``.
 
 Every seat says why it was taken (``SeatedBy``), and a stronger reason
 replaces a weaker one when the person is seated again: the platform showing
@@ -28,7 +29,6 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import InstrumentedAttribute
 
-from app.core.live.signals import signal_after_commit
 from app.modules.channels.domain.entities import (
     AgentAnswers,
     Channel,
@@ -43,8 +43,8 @@ from app.modules.channels.infrastructure.models import (
     ChannelModel,
     ChannelReadStateModel,
 )
+from app.modules.channels.infrastructure.read_state import ReadState
 from app.modules.channels.infrastructure.revisions import (
-    read_signal,
     touch_channel,
     touch_channels,
 )
@@ -72,7 +72,7 @@ def _strength(
     )
 
 
-class MemberRepository:
+class MemberRepository(ReadState):
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
@@ -135,7 +135,41 @@ class MemberRepository:
         made = bool(seated.scalar_one())
         if made:
             await touch_channel(self.session, channel.id)
+            if principal.user_id is not None:
+                await self._read_from_now(channel, principal.user_id)
         return made
+
+    async def _read_from_now(self, channel: Channel, user_id: UUID) -> None:
+        """A member new to a channel starts reading at its newest line: what
+        was said before they came is history, not news. A line that named
+        them before stays unread -- it is theirs to read."""
+        state = ChannelReadStateModel
+        head = (
+            select(ChannelModel.last_seq, ChannelModel.replies)
+            .where(ChannelModel.id == channel.id)
+            .subquery()
+        )
+        statement = insert(state).from_select(
+            ["channel_id", "pod_id", "user_id", "last_read_seq", "read_replies"],
+            select(
+                literal(channel.id),
+                literal(channel.pod_id),
+                literal(user_id),
+                head.c.last_seq,
+                head.c.replies,
+            ),
+        )
+        await self.session.execute(
+            statement.on_conflict_do_update(
+                index_elements=["user_id", "channel_id"],
+                set_={
+                    "last_read_seq": statement.excluded.last_read_seq,
+                    "read_replies": statement.excluded.read_replies,
+                    "updated_at": func.now(),
+                },
+                where=state.last_read_seq < statement.excluded.last_read_seq,
+            )
+        )
 
     async def add_agent(
         self,
@@ -285,6 +319,30 @@ class MemberRepository:
         )
         return member_entity(row) if row else None
 
+    async def someone_else(
+        self, channel_id: UUID, user_id: UUID, *, role: MemberRole | None = None
+    ) -> UUID | None:
+        """The member other than ``user_id`` longest in the channel -- in
+        ``role``, when named -- or ``None``. The channel's row is locked
+        first, so two members leaving it at once cannot each count on the
+        other."""
+        await self.session.execute(
+            select(ChannelModel.id)
+            .where(ChannelModel.id == channel_id)
+            .with_for_update()
+        )
+        seat = ChannelMemberModel
+        statement = select(seat.user_id).where(
+            seat.channel_id == channel_id,
+            seat.user_id.is_not(None),
+            seat.user_id != user_id,
+        )
+        if role is not None:
+            statement = statement.where(seat.role == role.value)
+        return await self.session.scalar(
+            statement.order_by(seat.created_at, seat.id).limit(1)
+        )
+
     async def users_in(self, channel_id: UUID, user_ids: Collection[UUID]) -> set[UUID]:
         if not user_ids:
             return set()
@@ -364,62 +422,6 @@ class MemberRepository:
         await self.session.execute(delete(ChannelMemberModel).where(*seats))
 
     # -- read state ---------------------------------------------------------------
-
-    async def mark_read(self, *, channel_id: UUID, user_id: UUID, seq: int) -> int:
-        """They have read up to ``seq``; it never goes back. Returns where they
-        are now."""
-        state = ChannelReadStateModel
-        top = select(ChannelModel.last_seq).where(ChannelModel.id == channel_id)
-        upto = func.least(seq, top.scalar_subquery())
-        pod = select(ChannelModel.pod_id).where(ChannelModel.id == channel_id)
-        statement = (
-            insert(state)
-            .values(
-                channel_id=channel_id,
-                pod_id=pod.scalar_subquery(),
-                user_id=user_id,
-                last_read_seq=upto,
-            )
-            .on_conflict_do_update(
-                index_elements=["user_id", "channel_id"],
-                set_={
-                    "last_read_seq": func.greatest(state.last_read_seq, upto),
-                    "updated_at": func.now(),
-                },
-            )
-            .returning(state.last_read_seq)
-        )
-        read_seq = int(await self.session.scalar(statement) or 0)
-        pod_id = await self.session.scalar(
-            select(ChannelModel.pod_id).where(ChannelModel.id == channel_id)
-        )
-        if pod_id is not None:
-            signal_after_commit(self.session, pod_id, read_signal(channel_id, user_id))
-        return read_seq
-
-    async def read_seq(self, *, channel_id: UUID, user_id: UUID) -> int:
-        found = await self.session.scalar(
-            select(ChannelReadStateModel.last_read_seq).where(
-                ChannelReadStateModel.channel_id == channel_id,
-                ChannelReadStateModel.user_id == user_id,
-            )
-        )
-        return int(found or 0)
-
-    async def read_seqs(
-        self, *, channel_ids: Collection[UUID], user_id: UUID
-    ) -> dict[UUID, int]:
-        if not channel_ids:
-            return {}
-        rows = await self.session.execute(
-            select(
-                ChannelReadStateModel.channel_id, ChannelReadStateModel.last_read_seq
-            ).where(
-                ChannelReadStateModel.user_id == user_id,
-                ChannelReadStateModel.channel_id.in_(sorted(channel_ids)),
-            )
-        )
-        return {row[0]: int(row[1]) for row in rows}
 
     async def remove_platform_seat(
         self, channel_id: UUID, principal: Principal

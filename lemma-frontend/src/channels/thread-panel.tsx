@@ -21,7 +21,7 @@ const FOCUS_PAGES = 8;
  *  reply begun in one thread stays with it. Beside the timeline, not over
  *  it: Tab moves on out of it; Escape closes it and gives focus back to what
  *  opened it. Who is typing a reply here is said here, and only here. */
-export function ThreadPanel({ podId, channel, root, people, visible, mayWrite, writeRefused, answering, agentName, highlight, typing = [], onTyping, onClose }: {
+export function ThreadPanel({ podId, channel, root, people, visible, mayWrite, writeRefused, answering, agentName, highlight, typing = [], replyAsked = 0, onTyping, onClose }: {
     podId: string;
     channel: ChannelDetail;
     root: Line;
@@ -34,12 +34,20 @@ export function ThreadPanel({ podId, channel, root, people, visible, mayWrite, w
     highlight: string | null;
     /** The names of whoever is typing a reply in this thread. */
     typing?: string[];
+    /** Changes each time the reader opens this thread to reply in it: the
+     *  reply box takes the focus. */
+    replyAsked?: number;
     onTyping: (threadRootId: string) => void;
     onClose: () => void;
 }) {
     const cache = useQueryClient();
     const panel = useRef<HTMLElement>(null);
     const keys = usePanelFocus(panel, onClose, { focusFirst: false, trap: false });
+    /* After the panel has taken the focus on opening, so the reply box is
+       where it lands. */
+    useEffect(() => {
+        if (replyAsked) panel.current?.querySelector<HTMLTextAreaElement>(".chcompose__text")?.focus();
+    }, [replyAsked]);
     const thread = useThread(podId, channel.id, root.id, visible);
     const replies = thread.replies;
     const posted = (line: Line) => {

@@ -190,6 +190,27 @@ test("a thread past its first page is read on, oldest first, after its last repl
     }
 });
 
+test("a thread opened to reply in puts the caret in its reply box; one opened from search does not", async () => {
+    const { ThreadPanel } = await import("../src/channels/thread-panel.tsx");
+    const view = await page();
+    api.thread = (async () => ({ items: [], nextAfter: null })) as never;
+    const panel = (replyAsked: number) => createElement(ThreadPanel, {
+        podId: "pod", channel: channel as never, root: line(1) as never, people: [], visible: true, mayWrite: true,
+        writeRefused: null, answering: [], agentName: () => "Lem", highlight: null, replyAsked, onTyping: () => {}, onClose: () => {},
+    });
+    try {
+        await view.draw(panel(0));
+        assert.notEqual(view.dom.window.document.activeElement?.tagName, "TEXTAREA");
+        await view.draw(createElement("p", null, "closed"));
+        await view.draw(panel(1));
+        const focused = view.dom.window.document.activeElement as HTMLTextAreaElement | null;
+        assert.equal(focused?.getAttribute("placeholder"), "Reply in the thread");
+    } finally {
+        delete api.thread;
+        await view.close();
+    }
+});
+
 test("an image drawn again shows a URL of its own, never the one revoked when it was last taken down", async () => {
     const { FileChip } = await import("../src/channels/parts.tsx");
     const view = await page();

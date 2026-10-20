@@ -1504,6 +1504,11 @@ code.gsheet__code-text {
     box-shadow: var(--depth-raise);
     list-style: none;
 }
+/* Not enough space above the box (a line at the top of the timeline): below it. */
+.chcompose__menu--below {
+    top: calc(100% + 6px);
+    bottom: auto;
+}
 .chcompose__option {
     display: flex;
     flex-direction: column;

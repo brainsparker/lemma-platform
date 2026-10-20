@@ -376,6 +376,41 @@ test("a line is changed with the composer's @ menu, the caret after its last wor
     }
 });
 
+test("on a line at the top of the timeline the edit box's @ menu opens below, not under the header", async () => {
+    const { LineView } = await import("../src/channels/line.tsx");
+    const { MentionablesContext } = await import("../src/channels/mention-picker.tsx");
+    const view = await page();
+    const bolt = { kind: "AGENT", id: "agent-bolt", name: "Bolt", inChannel: true };
+    const mine = line(7, { sender: { kind: "MEMBER", id: "me", name: "Me" }, text: "ask him" });
+    /* The timeline scrolls from 100px down, under the header; the menu is
+       120px tall. */
+    let boxTop = 140;
+    const proto = view.dom.window.HTMLElement.prototype;
+    const rect = proto.getBoundingClientRect;
+    proto.getBoundingClientRect = function (this: HTMLElement) {
+        const top = this.tagName === "TEXTAREA" ? boxTop : this.classList.contains("timeline") ? 100 : 0;
+        return { top, height: this.getAttribute("role") === "listbox" ? 120 : 0 } as DOMRect;
+    };
+    const menu = () => view.dom.window.document.querySelector("[role=listbox]")!;
+    try {
+        await view.draw(createElement(MentionablesContext.Provider, { value: [bolt] as never },
+            createElement("div", { className: "timeline", style: { overflowY: "auto" } },
+                createElement("ol", null, createElement(LineView, { podId: "pod", channel: channel as never, line: mine as never })))));
+        const editButton = [...view.dom.window.document.querySelectorAll("button")].find((button) => button.textContent === "Edit")!;
+        await act(async () => { editButton.click(); });
+        await typeInto(view, "ask him @Bo");
+        assert.ok(menu().classList.contains("chcompose__menu--below"), "40px of space is not enough: it opens below");
+
+        await typeInto(view, "ask him ");
+        boxTop = 400;
+        await typeInto(view, "ask him @Bo");
+        assert.ok(!menu().classList.contains("chcompose__menu--below"), "with space above, it opens above as before");
+    } finally {
+        proto.getBoundingClientRect = rect;
+        await view.close();
+    }
+});
+
 test("a change to the words alone sends only the words", async () => {
     const { LineView } = await import("../src/channels/line.tsx");
     const view = await page();

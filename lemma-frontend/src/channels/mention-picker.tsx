@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useId, useRef, useState, type KeyboardEvent, type RefObject } from "react";
+import { createContext, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import { insertMention, matchMentionable, mentionAt, type Mentionable } from "./mentions";
 
 /** Who can be named where a line is written, for the boxes that are not the
@@ -35,6 +35,16 @@ export function useMentionPicker({ people, text, setText, box, onPicked }: {
     const open = offered.length > 0;
     const listId = ids + "-people";
     const chosen = Math.min(highlight, offered.length - 1);
+    const list = useRef<HTMLUListElement>(null);
+    const [below, setBelow] = useState(false);
+    /* The menu opens above the box -- unless that would put it under
+       whatever the box scrolls beneath, as on a line at the top of the
+       timeline, under the channel's header. Then it opens below. */
+    useLayoutEffect(() => {
+        if (!open || !box.current || !list.current) return;
+        const above = box.current.getBoundingClientRect().top - scrollTop(box.current);
+        setBelow(above < list.current.getBoundingClientRect().height + 6);
+    }, [open, offered.length, box]);
 
     const pick = (who: Mentionable) => {
         if (!at) return;
@@ -76,7 +86,7 @@ export function useMentionPicker({ people, text, setText, box, onPicked }: {
     };
 
     const menu = open ? (
-        <ul className="chcompose__menu" role="listbox" id={listId} aria-label="Name someone">
+        <ul ref={list} className={"chcompose__menu" + (below ? " chcompose__menu--below" : "")} role="listbox" id={listId} aria-label="Name someone">
             {offered.map((who, index) => (
                 <li
                     key={who.kind + who.id}
@@ -104,4 +114,15 @@ export function useMentionPicker({ people, text, setText, box, onPicked }: {
     };
 
     return { open, menu, boxProps, changed, keyDown, setCaret };
+}
+
+/** The top of what `element` is seen through: its nearest ancestor that
+ *  scrolls, else the window. */
+function scrollTop(element: HTMLElement): number {
+    const view = element.ownerDocument.defaultView;
+    for (let at = element.parentElement; at && view; at = at.parentElement) {
+        const { overflowY } = view.getComputedStyle(at);
+        if (overflowY === "auto" || overflowY === "scroll") return at.getBoundingClientRect().top;
+    }
+    return 0;
 }

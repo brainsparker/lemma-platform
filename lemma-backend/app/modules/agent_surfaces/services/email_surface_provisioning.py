@@ -286,6 +286,7 @@ async def create_surface_on_minted_address(
     credential_mode: SurfaceCredentialMode | None,
     account_id: UUID | None = None,
     ctx: Any = None,
+    contacts_chosen: bool | None = None,
 ) -> AgentSurfaceEntity:
     """``create_surface``, with a readable inbound address when it needs one.
 
@@ -326,6 +327,7 @@ async def create_surface_on_minted_address(
             credential_mode=credential_mode,
             account_id=account_id,
             ctx=ctx,
+            contacts_chosen=contacts_chosen,
         )
 
     # The inbound domain alone, deliberately not ``email_is_configured()``.

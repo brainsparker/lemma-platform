@@ -61,7 +61,10 @@ from app.modules.agent_surfaces.services.chat_onboarding import (
     ChatOnboardingCoordinator,
 )
 from app.modules.agent_surfaces.services.slack_person_proof import record_proof
-from app.modules.agent_surfaces.tests.e2e.helpers import _load_slack_dm_fixture
+from app.modules.agent_surfaces.tests.e2e.helpers import (
+    _create_agent,
+    _load_slack_dm_fixture,
+)
 from app.modules.agent_surfaces.tests.e2e.surface_work_support import (
     clean_surface_work,  # noqa: F401  (fixture)
     drain,
@@ -607,6 +610,45 @@ async def test_a_new_bot_in_the_pods_organizations_workspace_answers_anyone(
     contacts = detail.json()["config"]["contacts"]
     assert contacts["answer"] == "anyone"
     assert contacts["looked_after_by"] == fixed_test_user["id"]
+
+
+@pytest.mark.parametrize(
+    ("sent", "kept"),
+    [({}, "anyone"), ({"contacts": {"answer": "off"}}, "off")],
+    ids=["nothing-sent", "chose-off"],
+)
+async def test_a_contact_policy_sent_with_a_new_bot_is_kept_as_sent(
+    authenticated_client, db_session, test_pod, fixed_test_user, fake_slack, sent, kept
+):
+    """ "Off" sent on purpose is a choice, not the default it looks like."""
+    workspace = await _bound(
+        authenticated_client, db_session, test_pod, fixed_test_user, fake_slack
+    )
+    bot = _id("U")
+    account = await _slack_account(
+        db_session,
+        user_id=fixed_test_user["id"],
+        organization_id=UUID(test_pod["organization_id"]),
+        config_source="ORG_CUSTOM",
+        raw={"app_id": _id("A"), "bot_user_id": bot, "team": {"id": workspace.team}},
+        fake_slack=fake_slack,
+        token=f"xoxb-{bot.lower()}",
+    )
+    agent = await _create_agent(authenticated_client, test_pod["id"])
+
+    created = await authenticated_client.post(
+        f"/pods/{test_pod['id']}/surfaces",
+        json={
+            "platform": "SLACK",
+            "account_id": str(account.id),
+            "name": f"slack-{bot.lower()}",
+            "default_agent_name": agent["name"],
+            **({"config": sent} if sent else {}),
+        },
+    )
+
+    assert created.status_code == 200, created.text
+    assert created.json()["config"]["contacts"]["answer"] == kept
 
 
 # -- forgetting ------------------------------------------------------------------

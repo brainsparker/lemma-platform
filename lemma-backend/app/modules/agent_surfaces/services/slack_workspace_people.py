@@ -130,17 +130,25 @@ class WorkspacePeople:
             return None
         return handle
 
-    async def answer_by_default(self, entity: AgentSurfaceEntity) -> None:
+    async def answer_by_default(
+        self,
+        entity: AgentSurfaceEntity,
+        *,
+        chosen: bool | None = None,
+        config_given: bool = False,
+    ) -> None:
         """A new Slack bot in a workspace its pod's organization holds answers
         the workspace's people, looked after by whoever connected it.
 
-        Only a policy nobody set -- answering off, looked after by nobody -- is
-        filled in, and only on a new bot: one made before the workspace was
-        held keeps what it had. Whoever looks after contacts reads their
-        chats, so the person who connected the bot must be one who may
-        (``contact.read``), as turning contacts on by hand requires.
+        Only when its creator sent no contact policy (``chosen``): "off" sent
+        on purpose has the default's value, so the value cannot say. A
+        creator that does not say is taken to have chosen when it brought a
+        config of its own (``config_given``). Only a new bot: one made before
+        the workspace was held keeps what it had. Whoever looks after contacts
+        reads their chats, so the person who connected the bot must be one who
+        may (``contact.read``), as turning contacts on by hand requires.
         """
-        if (
+        if (config_given if chosen is None else chosen) or (
             entity.surface_type is not SurfacePlatform.SLACK
             or entity.account_id is None
             or entity.config.contacts != SurfaceContactPolicy()

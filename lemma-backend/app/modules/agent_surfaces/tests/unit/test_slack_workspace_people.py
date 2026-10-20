@@ -234,3 +234,18 @@ async def test_a_bot_in_a_workspace_nobody_holds_keeps_off(held, may_look_after)
     await _people().answer_by_default(surface)
 
     assert surface.config.contacts.answer is ContactAnswer.OFF
+
+
+@pytest.mark.parametrize(
+    ("chosen", "config_given"),
+    [(True, False), (None, True)],
+    ids=["sent-off", "brought-a-config-and-did-not-say"],
+)
+async def test_off_sent_on_purpose_is_kept(may_look_after, chosen, config_given):
+    """Its value is the default's, so only the creator can say it was sent."""
+    surface = _surface()
+    may_look_after.allowed.add(may_look_after.connector)
+
+    await _people().answer_by_default(surface, chosen=chosen, config_given=config_given)
+
+    assert surface.config.contacts.answer is ContactAnswer.OFF

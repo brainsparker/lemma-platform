@@ -142,7 +142,10 @@ class AgentSurfaceService(
         surface_identity_email: str | None = None,
         surface_identity_id: str | None = None,
         ctx: Context | None = None,
+        contacts_chosen: bool | None = None,
     ) -> AgentSurfaceEntity:
+        # ``contacts_chosen``: whether a contact policy was sent (see
+        # ``WorkspacePeople.answer_by_default``).
         # A surface is addressed by its pod-unique name (defaults to the
         # platform); several surfaces of the same platform can coexist under
         # distinct names (e.g. different bots → different agents). Distinct bot
@@ -208,7 +211,9 @@ class AgentSurfaceService(
                 )
             entity.surface_identity_email = surface_identity_email
         if self._workspace_people is not None:
-            await self._workspace_people.answer_by_default(entity)
+            await self._workspace_people.answer_by_default(
+                entity, chosen=contacts_chosen, config_given=config is not None
+            )
         self._validate_runtime_supported(entity)
         await self.activate_if_tenant_consented(entity)
         await ensure_one_surface_per_agent(

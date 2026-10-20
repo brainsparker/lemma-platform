@@ -313,9 +313,12 @@ class LineRepository:
         )
         return message_entity(row) if row is not None else None
 
-    async def delete(self, message_id: UUID) -> ChannelMessage | None:
-        """Forget what a line said; it keeps its place in the timeline. A
-        reply deleted no longer counts on its thread."""
+    async def delete(
+        self, message_id: UUID, *, by_user_id: UUID | None = None
+    ) -> ChannelMessage | None:
+        """Forget what a line said; it keeps its place in the timeline, and
+        who deleted it (``by_user_id``; none when its platform did). A reply
+        deleted no longer counts on its thread."""
         await self._changing(message_id)
         row = await self.session.scalar(
             update(ChannelMessageModel)
@@ -328,6 +331,7 @@ class LineRepository:
                 parts=[],
                 reply_ref=None,
                 deleted_at=now(),
+                deleted_by_user_id=by_user_id,
             )
             .returning(ChannelMessageModel)
         )

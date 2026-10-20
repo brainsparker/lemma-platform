@@ -174,6 +174,11 @@ class ChannelMessageModel(UUIDAuditBase):
             postgresql_where=text("on_behalf_contact_id IS NOT NULL"),
         ),
         Index(
+            "ix_channel_messages_deleted_by",
+            "deleted_by_user_id",
+            postgresql_where=text("deleted_by_user_id IS NOT NULL"),
+        ),
+        Index(
             "ix_channel_messages_run",
             "agent_run_id",
             postgresql_where=text("agent_run_id IS NOT NULL"),
@@ -235,9 +240,16 @@ class ChannelMessageModel(UUIDAuditBase):
     parts: Mapped[list[dict[str, object]]] = mapped_column(
         JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
     )
+    #: Each word stemmed (``english``: "running" is "run") and as written
+    #: (``simple``), so a word being typed is found by its start either way
+    #: (``line_search``).
     search: Mapped[str] = mapped_column(
         TSVECTOR,
-        Computed("to_tsvector('simple', coalesce(body, ''))", persisted=True),
+        Computed(
+            "to_tsvector('english', coalesce(body, ''))"
+            " || to_tsvector('simple', coalesce(body, ''))",
+            persisted=True,
+        ),
         nullable=True,
     )
     members_only: Mapped[bool] = mapped_column(
@@ -266,6 +278,11 @@ class ChannelMessageModel(UUIDAuditBase):
     #: member with everybody in the channel (``domain.projection``).
     shared_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+    #: The member who deleted it: its writer, or somebody who may change the
+    #: channel removing it. Absent when its platform said it was deleted.
+    deleted_by_user_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
 
 

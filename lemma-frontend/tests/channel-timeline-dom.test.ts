@@ -504,3 +504,48 @@ test("somebody else reads that the agent answered the asker privately, with no w
         await view.close();
     }
 });
+
+test("who may change a channel removes somebody else's line, after asking; the line then says who removed it", async () => {
+    const { LineView } = await import("../src/channels/line.tsx");
+    const { readLine } = await import("../src/channels/model.ts");
+    const view = await page();
+    const removed: unknown[][] = [];
+    api.remove = (async (...args: unknown[]) => { removed.push(args); }) as never;
+    const buttons = () => [...view.dom.window.document.querySelectorAll("button")].map((button) => button.textContent);
+    const press = async (label: string) => {
+        const button = [...view.dom.window.document.querySelectorAll("button")].find((one) => one.textContent === label)!;
+        await act(async () => { button.click(); });
+        await view.flush();
+    };
+    const member = { ...channel, me: { ...channel.me, role: "member", canManage: false } };
+    try {
+        await view.draw(createElement("ol", null, createElement(LineView, { podId: "pod", channel: member as never, line: line(7) as never })));
+        assert.ok(!buttons().includes("Delete"), "a member deletes only their own lines");
+        assert.ok(!buttons().includes("Edit"));
+
+        await view.draw(createElement("ol", null, createElement(LineView, { podId: "pod", channel: channel as never, line: line(7) as never })));
+        assert.ok(!buttons().includes("Edit"), "nobody edits another's line");
+        await press("Delete");
+        assert.match(view.body(), /Remove Priya’s line for everyone\?/);
+        assert.equal(removed.length, 0, "it asks first");
+        await press("Delete");
+        assert.deepEqual(removed, [["c1", "l7"]]);
+
+        const gone = readLine({
+            id: "l7", seq: 7, sender: priya, text: "should not show", deleted: true, created_at: "",
+            removed_by: { kind: "MEMBER", id: "user-sam", name: "Sam" },
+        })!;
+        await view.draw(createElement("ol", null, createElement(LineView, { podId: "pod", channel: channel as never, line: gone })));
+        assert.match(view.body(), /Removed by Sam\./);
+        assert.ok(!view.body().includes("should not show"));
+        const byMe = { ...gone, removedBy: { kind: "MEMBER", id: "me", name: "Me" } };
+        await view.draw(createElement("ol", null, createElement(LineView, { podId: "pod", channel: channel as never, line: byMe as never })));
+        assert.match(view.body(), /Removed by you\./);
+        const own = readLine({ id: "l8", seq: 8, sender: priya, deleted: true, created_at: "" })!;
+        await view.draw(createElement("ol", null, createElement(LineView, { podId: "pod", channel: channel as never, line: own })));
+        assert.match(view.body(), /This line was deleted\./);
+    } finally {
+        delete api.remove;
+        await view.close();
+    }
+});

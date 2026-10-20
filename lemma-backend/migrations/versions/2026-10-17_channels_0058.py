@@ -252,7 +252,7 @@ CREATE TABLE channel_messages (
 	sender_name VARCHAR(255),
 	body TEXT NOT NULL,
 	parts JSONB DEFAULT '[]'::jsonb NOT NULL,
-	search TSVECTOR GENERATED ALWAYS AS (to_tsvector('simple', coalesce(body, ''))) STORED,
+	search TSVECTOR GENERATED ALWAYS AS (to_tsvector('english', coalesce(body, '')) || to_tsvector('simple', coalesce(body, ''))) STORED,
 	members_only BOOLEAN DEFAULT false NOT NULL,
 	conversation_id UUID,
 	agent_run_id UUID,
@@ -264,6 +264,7 @@ CREATE TABLE channel_messages (
 	edited_at TIMESTAMP WITH TIME ZONE,
 	deleted_at TIMESTAMP WITH TIME ZONE,
 	shared_at TIMESTAMP WITH TIME ZONE,
+	deleted_by_user_id UUID,
 	id UUID NOT NULL,
 	created_at TIMESTAMP WITH TIME ZONE NOT NULL,
 	updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
@@ -286,9 +287,11 @@ CREATE TABLE channel_messages (
 	FOREIGN KEY(on_behalf_user_id) REFERENCES users (id) ON DELETE SET NULL,
 	FOREIGN KEY(on_behalf_contact_id) REFERENCES contacts (id) ON DELETE SET NULL,
 	FOREIGN KEY(conversation_id) REFERENCES agent_conversations (id) ON DELETE SET NULL,
-	FOREIGN KEY(agent_run_id) REFERENCES agent_runs (id) ON DELETE SET NULL
+	FOREIGN KEY(agent_run_id) REFERENCES agent_runs (id) ON DELETE SET NULL,
+	FOREIGN KEY(deleted_by_user_id) REFERENCES users (id) ON DELETE SET NULL
 );
 CREATE INDEX ix_channel_messages_conversation ON channel_messages (conversation_id, seq) WHERE conversation_id IS NOT NULL;
+CREATE INDEX ix_channel_messages_deleted_by ON channel_messages (deleted_by_user_id) WHERE deleted_by_user_id IS NOT NULL;
 CREATE INDEX ix_channel_messages_on_behalf_contact ON channel_messages (on_behalf_contact_id) WHERE on_behalf_contact_id IS NOT NULL;
 CREATE INDEX ix_channel_messages_on_behalf_user ON channel_messages (on_behalf_user_id) WHERE on_behalf_user_id IS NOT NULL;
 CREATE INDEX ix_channel_messages_pod_time ON channel_messages (pod_id, created_at);

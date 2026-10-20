@@ -24,6 +24,7 @@ from websockets.exceptions import ConnectionClosed
 
 from app.core.live.config import live_settings
 from app.core.live.connection import LiveConnection
+from app.core.server_limits import WS_MAX_BYTES
 from app.modules.datastore.domain.live import SubscribeRequest
 from app.modules.datastore.services.live.registry import LiveHubRegistry
 from app.modules.datastore.services.live.access import TableLiveAccess
@@ -691,6 +692,27 @@ async def test_old_endpoint_closes_4403_when_access_is_revoked(
             while True:
                 await asyncio.wait_for(ws.recv(), 20)
     assert closed.value.rcvd is not None and closed.value.rcvd.code == 4403
+
+
+async def test_old_endpoint_closes_1009_on_a_message_past_the_servers_cap(
+    live_pod: DatastoreApi, fixed_test_user, backend_server
+) -> None:
+    """The previous socket reads nothing a client sends, and the server
+    still refuses an oversized message as it arrives: closed with 1009, and
+    the next socket opens as usual."""
+    url = _ws_url(backend_server, f"/pods/{live_pod.pod_id}/datastore/changes")
+    headers = {"Authorization": f"Bearer {fixed_test_user['token']}"}
+    async with connect(url, additional_headers=headers) as ws:
+        ready = json.loads(await asyncio.wait_for(ws.recv(), 10))
+        assert ready["type"] == "ready"
+        await ws.send("x" * (WS_MAX_BYTES + 1))
+        with pytest.raises(ConnectionClosed) as closed:
+            while True:
+                await asyncio.wait_for(ws.recv(), 10)
+    assert closed.value.rcvd is not None and closed.value.rcvd.code == 1009
+    async with connect(url, additional_headers=headers) as again:
+        ready = json.loads(await asyncio.wait_for(again.recv(), 10))
+        assert ready["type"] == "ready"
 
 
 async def test_sockets_opening_together_never_hold_more_than_the_limit(

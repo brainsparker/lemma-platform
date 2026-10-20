@@ -500,6 +500,9 @@ class ChannelMessage(BaseModel):
     #: An agent's answer made with a member's own access, shared by that
     #: member with the channel: no longer theirs alone to read.
     shared_at: datetime | None = None
+    #: The member who deleted it: its writer, or somebody who may change the
+    #: channel removing another's line (``removed_by``).
+    deleted_by_user_id: UUID | None = None
     #: The question it asks, if it asks one.
     question: Question | None = None
     #: On a thread's root, as read with it: how many replies, and the last's time.
@@ -509,6 +512,17 @@ class ChannelMessage(BaseModel):
     @property
     def is_deleted(self) -> bool:
         return self.deleted_at is not None
+
+    @property
+    def removed_by(self) -> UUID | None:
+        """The member who deleted somebody else's line, when one did."""
+        by = self.deleted_by_user_id
+        if by is None or self.deleted_at is None:
+            return None
+        sender = self.sender
+        if sender.kind is SenderKind.MEMBER and sender.user_id == by:
+            return None
+        return by
 
     @property
     def place_id(self) -> UUID | None:

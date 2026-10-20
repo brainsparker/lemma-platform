@@ -134,6 +134,9 @@ export interface Line {
     createdAt: string;
     editedAt: string | null;
     deleted: boolean;
+    /** On a deleted line: the member who removed it, when that was not who
+     *  wrote it -- somebody who may change the channel. */
+    removedBy: PersonRef | null;
     withheld: boolean;
     /** `asker_only`: an agent's answer made with one member's own access,
      *  which only that member reads in full. */
@@ -352,6 +355,7 @@ export function readLine(raw: unknown): Line | null {
         createdAt: String(row.created_at ?? ""),
         editedAt: words(row.edited_at),
         deleted,
+        removedBy: deleted ? readPerson(row.removed_by) : null,
         withheld,
         visibility: row.visibility === "asker_only" ? "asker_only" : "channel",
         canShare: row.can_share === true && !deleted,

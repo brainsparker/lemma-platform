@@ -53,7 +53,13 @@ people and agents. A heard line is edited or deleted when its platform says
 the message was (Slack `message_changed` / `message_deleted`, Teams
 `messageUpdate` / `messageDelete`, Telegram `edited_message`), through the same
 `revise_line` / `erase_line` a member's edit takes, and only the line heard as
-that message at that place (`agent_surfaces/services/line_changes`). Its thread, the line it replies to and the places it was
+that message at that place (`agent_surfaces/services/line_changes`).
+Who may change a channel may also delete anybody's line in it -- a member's,
+a contact's, an agent's -- but never edit it: the line records who did
+(`deleted_by_user_id`), every reader sees it as removed by them
+(`removed_by`), live readers get it as any delete, and the removal is logged
+(`channels.line.removed_by_manager.observed`). A copy already sent outside
+Lemma -- to a contact's platform, a Slack channel, a push -- is not recalled. Its thread, the line it replies to and the places it was
 heard at or carried to are of its own channel, and the database holds that:
 each is a foreign key to `(id, channel_id)` of the line or the source.
 
@@ -127,7 +133,7 @@ On top of seeing a channel, one table (`api/access.py` holds the same one).
 | Answering a question | `channel.read`, and being the person it waits on |
 | Writing, editing and deleting one's own lines; starting a group; retrying one's own line's delivery to a place (any line's, for who may change the channel; anybody else reading it is refused, 403); notices | `channel.write` (+ `contact.message` in a `CONTACT` channel) |
 | Retrying a push | `channel.write`, and being the member it was to |
-| A group's title, topic, visibility, archive, delete, members, roles, agents | `channel.write` and being its owner -- or `channel.manage` |
+| A group's title, topic, visibility, archive, delete, members, roles, agents; deleting anybody's line in it (never editing it) | `channel.write` and being its owner -- or `channel.manage` |
 | A contact's channel: assignee, status, the agent switch, the hand-back window | `channel.write` + `contact.message` |
 | Seeing a `CONTACT` channel at all | `contact.read` |
 | A group source's settings (`/channels/{c}/sources/{s}`) | seeing the channel (else 404) or `channel.manage`, and the bot's `agent.read`; changing them, `agent.update` and answering for the group -- or nobody in the pod does, or a pod admin |
@@ -334,7 +340,12 @@ Under `/pods/{pod_id}` -- everybody named one way, a `PersonRef`
   answer is left out by the query itself --, newest first, each hit with its
   `rank` and a plain-text `snippet`; narrowed by `channel_id`, `kind`,
   `sender_kind` + `sender_id`, `since` / `until`, and `archived` to search
-  archived channels too; cursor). The index keeps the pod beside the words
+  archived channels too; cursor). Every word must be in the line, matched
+  by its start so a search finds as it is typed (`alph` finds `alpha`), and
+  both stemmed (`english`: `run` finds `running`) and as written (`simple`:
+  `runn` finds `running` too); the stored vector holds both forms. What a
+  reader types is only ever words -- `to_tsquery` syntax in it is a
+  separator, never an operator. The index keeps the pod beside the words
   (`GIN (pod_id, channel_id, search)`, `btree_gin`, so one channel's matches are found without the pod's), and the lines by when they were said
   (`ix_channel_messages_pod_time`): a common word's newest page is found by
   walking back from the newest line until the page is full, never by finding,

@@ -17,8 +17,10 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.infrastructure.db.session import async_session_maker
+from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
 from app.core.infrastructure.work import WorkClass, WorkRegistry
 from app.core.infrastructure.work.testing import run_until_idle
+from app.modules.channels.contracts import NewLine, Principal, Sender, post
 from app.modules.channels.events.member_joined_work import (
     register_member_joined_work,
 )
@@ -173,6 +175,77 @@ async def test_a_contacts_channel_takes_contact_read_to_see_and_message_to_write
     editor = pod.client(pod.editor)
     said = await editor.post(f"{channel}/messages", json={"text": "hello Dana"})
     assert said.status_code == 201, said.text
+
+
+# -- removing somebody else's line -------------------------------------------------
+
+
+async def test_who_may_change_a_channel_removes_anybodys_line_but_never_edits_it(
+    pod: Pod,
+):
+    town = await group(pod, title="Town square")
+    by_user = await say(pod, town["id"], "buy cheap pills", as_user=pod.user)
+    by_editor = await say(pod, town["id"], "welcome all", as_user=pod.editor)
+    own = await say(pod, town["id"], "my own slip", as_user=pod.user)
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        by_agent = await post(
+            uow,
+            channel_id=UUID(town["id"]),
+            line=NewLine(
+                sender=Sender.agent(
+                    UUID(pod.id), on_behalf_of=Principal.member(UUID(pod.user["id"]))
+                ),
+                text="spam, spam",
+            ),
+        )
+        await uow.commit()
+    assert by_agent is not None
+    lines = f"{pod.base}/{town['id']}/messages"
+    user, editor = pod.client(pod.user), pod.client(pod.editor)
+
+    refused = await user.delete(f"{lines}/{by_editor['id']}")
+    assert refused.status_code == 403, refused.text
+    rewritten = await editor.patch(f"{lines}/{by_user['id']}", json={"text": "fixed"})
+    assert rewritten.status_code == 403, rewritten.text
+
+    for line_id in (by_user["id"], by_agent.id):
+        removed = await editor.delete(f"{lines}/{line_id}")
+        assert removed.status_code == 204, removed.text
+    assert (await user.delete(f"{lines}/{own['id']}")).status_code == 204
+
+    read = await user.get(lines)
+    assert read.status_code == 200, read.text
+    shown = {line["id"]: line for line in read.json()["items"]}
+    for line_id in (by_user["id"], str(by_agent.id)):
+        assert shown[line_id]["deleted"] is True
+        assert shown[line_id]["text"] is None
+        assert shown[line_id]["removed_by"]["id"] == pod.editor["id"]
+        assert shown[line_id]["removed_by"]["name"]
+    assert shown[own["id"]]["deleted"] is True
+    assert shown[own["id"]]["removed_by"] is None, "one's own delete is not a removal"
+    assert shown[by_editor["id"]]["text"] == "welcome all"
+
+    # A member who owns their group moderates it too.
+    theirs = await group(pod, title="User's corner", as_user=pod.user)
+    stray = await say(pod, theirs["id"], "off topic", as_user=pod.editor)
+    taken = await user.delete(f"{pod.base}/{theirs['id']}/messages/{stray['id']}")
+    assert taken.status_code == 204, taken.text
+
+
+async def test_a_contacts_line_is_removed_by_who_writes_to_contacts(
+    pod: Pod, db_session: AsyncSession
+):
+    source, _ = await contact_place(db_session, pod)
+    lines = f"{pod.base}/{source.channel_id}/messages"
+    editor = pod.client(pod.editor)
+    [said] = (await editor.get(lines)).json()["items"]
+
+    removed = await editor.delete(f"{lines}/{said['id']}")
+
+    assert removed.status_code == 204, removed.text
+    [after] = (await editor.get(lines)).json()["items"]
+    assert after["deleted"] is True
+    assert after["removed_by"]["id"] == pod.editor["id"]
 
 
 # -- PATCH -------------------------------------------------------------------------

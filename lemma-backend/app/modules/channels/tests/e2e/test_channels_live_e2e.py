@@ -13,9 +13,11 @@ from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
+from websockets.exceptions import ConnectionClosed
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.live.config import live_settings
+from app.core.server_limits import WS_MAX_BYTES
 from app.modules.agent.services.realtime import (
     publish_conversation_event,
     token_payload,
@@ -100,6 +102,22 @@ async def test_a_channel_streams_its_lines_and_resumes_from_its_cursor(
 
         fourth = await say(pod, channel["id"], "live again")
         await live.event("c", "line.created", message__id=fourth["id"])
+
+
+async def test_a_line_removed_by_a_manager_reaches_its_watchers_as_theirs(
+    pod: Pod, backend_server
+) -> None:
+    channel = await group(pod, title="Moderated")
+    said = await say(pod, channel["id"], "off topic", as_user=pod.user)
+    async with live_socket(backend_server, pod.id, pod.user["token"]) as live:
+        await live.subscribe("c", "channel", channel_id=channel["id"])
+        removed = await pod.client(pod.editor).delete(
+            f"{pod.base}/{channel['id']}/messages/{said['id']}"
+        )
+        assert removed.status_code == 204, removed.text
+        deleted = await live.event("c", "line.deleted", message__id=said["id"])
+        assert deleted["message"]["text"] is None
+        assert deleted["message"]["removed_by"]["id"] == pod.editor["id"]
 
 
 async def test_a_cursor_not_ours_answers_resync(pod: Pod, backend_server) -> None:
@@ -767,6 +785,25 @@ async def test_the_frame_limit_counts_bytes(pod: Pod, backend_server) -> None:
         assert refused["code"] == "invalid" and "too large" in str(refused["message"])
         await live.send(op="ping")
         await live.until("pong")
+
+
+async def test_a_message_past_the_servers_cap_closes_the_socket_with_1009(
+    pod: Pod, backend_server
+) -> None:
+    """The server refuses it while it arrives -- never read whole into memory
+    to be refused after. Under the cap, a frame too large for the protocol is
+    refused in place and the socket carries on."""
+    async with live_socket(backend_server, pod.id, pod.owner["token"]) as live:
+        await live.send(op="ping", pad="x" * (WS_MAX_BYTES - 1024))
+        refused = await live.until("error")
+        assert refused["code"] == "invalid" and "too large" in str(refused["message"])
+        await live.ws.send("x" * (WS_MAX_BYTES + 1))
+        with pytest.raises(ConnectionClosed):
+            await live.recv(timeout=10)
+        assert live.ws.close_code == 1009
+    async with live_socket(backend_server, pod.id, pod.owner["token"]) as again:
+        await again.send(op="ping")
+        await again.until("pong")
 
 
 async def test_a_change_that_moves_none_of_a_readers_counts_sends_them_nothing(

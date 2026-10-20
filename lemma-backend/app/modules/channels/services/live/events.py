@@ -159,13 +159,18 @@ class LinesView:
     since_seq: int
     #: Members' lines' sends, by line: shown to each line's writer.
     deliveries: dict[UUID, list[Delivery]] = field(default_factory=dict)
-    _encoded: dict[tuple[UUID, bool, bool], list[str]] = field(default_factory=dict)
+    _encoded: dict[tuple[UUID, bool, bool, bool], list[str]] = field(
+        default_factory=dict
+    )
 
     def events_for(self, reader_id: UUID) -> list[str]:
         events: list[str] = []
         for line in self.lines:
             hidden = hidden_from(line, self.channel, reader_id)
-            key = (line.id, hidden, wrote(line, reader_id))
+            behalf = line.sender.on_behalf_of
+            # The member an answer was made for reads it with ``can_share``.
+            for_them = behalf is not None and behalf.user_id == reader_id
+            key = (line.id, hidden, wrote(line, reader_id), for_them)
             if key not in self._encoded:
                 self._encoded[key] = self._encode(line, reader_id)
             events.extend(self._encoded[key])

@@ -497,6 +497,9 @@ class ChannelMessage(BaseModel):
     thread_root_id: UUID | None = None
     edited_at: datetime | None = None
     deleted_at: datetime | None = None
+    #: An agent's answer made with a member's own access, shared by that
+    #: member with the channel: no longer theirs alone to read.
+    shared_at: datetime | None = None
     #: The question it asks, if it asks one.
     question: Question | None = None
     #: On a thread's root, as read with it: how many replies, and the last's time.

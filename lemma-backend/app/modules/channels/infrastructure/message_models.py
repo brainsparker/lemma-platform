@@ -262,6 +262,11 @@ class ChannelMessageModel(UUIDAuditBase):
     deleted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    #: An agent's answer made with a member's own access, shared by that
+    #: member with everybody in the channel (``domain.projection``).
+    shared_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 class ChannelMentionModel(UUIDAuditBase):

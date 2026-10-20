@@ -5,6 +5,7 @@ import type { AgentSeat } from "../openapi_client/models/AgentSeat.js";
 import type { ChannelCreateRequest } from "../openapi_client/models/ChannelCreateRequest.js";
 import type { ChannelEditRequest } from "../openapi_client/models/ChannelEditRequest.js";
 import type { ChannelKind } from "../openapi_client/models/ChannelKind.js";
+import type { ChannelMessageResponse } from "../openapi_client/models/ChannelMessageResponse.js";
 import type { ChannelPostRequest } from "../openapi_client/models/ChannelPostRequest.js";
 import type { ChannelUpdateRequest } from "../openapi_client/models/ChannelUpdateRequest.js";
 import type { ContactStatus } from "../openapi_client/models/ContactStatus.js";
@@ -329,6 +330,16 @@ export class ChannelsNamespace {
     return this.client.request(() =>
       ChannelsService.channelMessageAnswer(podId, channelId, messageId, { answer }),
     );
+  }
+
+  /** Share an agent's answer made with the caller's own access with
+   *  everybody in the channel (`can_share` on the line). Until then only the
+   *  caller reads it; sharing it again changes nothing. */
+  share(podId: string, channelId: string, messageId: string): Promise<ChannelMessageResponse> {
+    const path = [podId, "channels", channelId, "messages", messageId, "share"]
+      .map(encodeURIComponent)
+      .join("/");
+    return this.http.request<ChannelMessageResponse>("POST", `/pods/${path}`);
   }
 
   /** Where a line went outside Lemma, and what became of each send. */

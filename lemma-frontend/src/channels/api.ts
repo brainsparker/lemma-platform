@@ -72,6 +72,9 @@ export interface ChannelApi {
      *  shares. Without, they stay as they are. */
     edit(channelId: string, lineId: string, text: string, parts?: readonly Part[]): Promise<Line>;
     remove(channelId: string, lineId: string): Promise<void>;
+    /** Share an agent's answer made with the reader's access with everybody
+     *  in the channel (`canShare` on the line). */
+    share(channelId: string, lineId: string): Promise<Line>;
     /** The reader has seen the channel up to line `seq`. */
     /** Read the timeline to `seq` -- or, with `threadRootId`, that thread. */
     markRead(channelId: string, seq: number, threadRootId?: string | null): Promise<void>;
@@ -188,6 +191,9 @@ function liveApi(podId: string): ChannelApi {
         },
         async remove(channelId, lineId) {
             await client().channels.deleteMessage(podId, channelId, lineId);
+        },
+        async share(channelId, lineId) {
+            return must(readLine(await client().channels.share(podId, channelId, lineId)), "line");
         },
         async markRead(channelId, seq, threadRootId) {
             await client().channels.markRead(podId, channelId, seq, threadRootId);

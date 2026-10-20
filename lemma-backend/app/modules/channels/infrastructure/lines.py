@@ -348,6 +348,22 @@ class LineRepository:
             .values(reply_count=func.greatest(thread.reply_count - 1, 0))
         )
 
+    async def share(self, message_id: UUID) -> ChannelMessage | None:
+        """Open an answer to everybody in its channel; ``None`` when it was
+        shared or deleted meanwhile -- a second share changes nothing."""
+        await self._changing(message_id)
+        row = await self.session.scalar(
+            update(ChannelMessageModel)
+            .where(
+                ChannelMessageModel.id == message_id,
+                ChannelMessageModel.deleted_at.is_(None),
+                ChannelMessageModel.shared_at.is_(None),
+            )
+            .values(shared_at=now())
+            .returning(ChannelMessageModel)
+        )
+        return message_entity(row) if row is not None else None
+
     async def _changing(self, message_id: UUID) -> None:
         """The line is about to change: a change of its channel, taken before
         the line is touched (``revisions``)."""

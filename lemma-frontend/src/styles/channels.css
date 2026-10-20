@@ -1355,6 +1355,16 @@ code.gsheet__code-text {
 .cline__asked[data-open] {
     color: var(--ink-2);
 }
+/* An agent's answer only its asker reads, and the way to share it. */
+.cline__private {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 10px;
+    margin: 4px 0 0;
+    font-size: 12.5px;
+    color: var(--ink-3);
+}
 .cline__answer {
     color: var(--ink);
 }

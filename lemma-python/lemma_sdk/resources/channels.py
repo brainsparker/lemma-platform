@@ -573,6 +573,25 @@ class PodChannels(BoundResource):
             body_model=ChannelAnswerRequest,
         )
 
+    def share(
+        self, channel_id: str | UUID, message_id: str | UUID
+    ) -> ChannelMessageResponse:
+        """Share an agent's answer made with the caller's own access with
+        everybody in the channel (``can_share`` on the line). Until then only
+        the caller reads it; sharing it again changes nothing."""
+        response = self.generated.get_httpx_client().request(
+            method="post",
+            url=(
+                f"/pods/{self._pod_uuid()}/channels/{as_uuid(channel_id)}"
+                f"/messages/{as_uuid(message_id)}/share"
+            ),
+        )
+        if response.status_code >= 400:
+            raise self._transport.error_from_response(
+                response.status_code, None, response.content
+            )
+        return ChannelMessageResponse.from_dict(response.json())
+
     def deliveries(
         self, channel_id: str | UUID, message_id: str | UUID
     ) -> DeliveriesResponse:

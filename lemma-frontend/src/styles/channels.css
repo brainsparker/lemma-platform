@@ -859,7 +859,7 @@ code.gsheet__code-text {
 /* ── the Channels page ───────────────────────────────────────────────── */
 .channels {
     max-width: 960px;
-    /* Room past the last row for the floating Ask pill (42px, 16px up), so
+    /* Space past the last row for the floating Ask pill (42px, 16px up), so
        no row or unread count is left under it. */
     padding-bottom: 72px;
 }
@@ -1872,7 +1872,7 @@ code.gsheet__code-text {
     font-size: 13px;
 }
 /* The About panel's own field selects, drawn like the rest. A select left to
-   the platform is white in a dark room, and so is the list it opens: the
+   the platform is white on a dark theme, and so is the list it opens: the
    options are painted too, and the dark scheme is asked for where it is
    dark. */
 .gside .gsheet__field select {

@@ -21,7 +21,6 @@ and the `Annotated` aliases a route signature needs. Everything else asks here.
 
 from __future__ import annotations
 
-from functools import partial
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -53,20 +52,14 @@ from app.modules.agent_surfaces.infrastructure.adapters.registry import (
 from app.modules.agent_surfaces.infrastructure.repositories.external_user_repository import (
     ExternalSurfaceUserRepository,
 )
-from app.modules.agent_surfaces.infrastructure.repositories.notification_repository import (
-    NotificationRepository,
-)
-from app.modules.agent_surfaces.infrastructure.repositories.conversation_link_repository import (
-    SurfaceConversationLinkRepository,
-)
 from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
     SurfaceRepository,
 )
-from app.modules.agent_surfaces.services.outside_questions import outside_origin
 from app.modules.agent_surfaces.services.app_event_handler import AppEventHandler
 from app.modules.agent_surfaces.services.configuration_access import (
     ConfigurationAccess,
 )
+from app.modules.agent_surfaces.services.channel_places import ChannelSeatsInDatabase
 from app.modules.agent_surfaces.services.conversation_binder import ConversationBinder
 from app.modules.agent_surfaces.services.credential_resolver import (
     SurfaceCredentialResolver,
@@ -84,11 +77,12 @@ from app.modules.agent_surfaces.services.ingress_service import (
     AgentSurfaceIngressService,
 )
 from app.modules.agent_surfaces.services.member_reach import MemberReach
+from app.modules.agent_surfaces.services.channel_deliveries import ChannelDeliveries
+from app.modules.agent_surfaces.services.direct_messages import DirectMessages
+from app.modules.agent_surfaces.services.member_pushes import MemberPushes
 from app.modules.agent_surfaces.services.notification_rate_limiter import (
-    NotificationRateLimiter,
-)
-from app.modules.agent_surfaces.services.notification_service import (
-    NotificationService,
+    EmailBudget,
+    PushBudget,
 )
 from app.modules.agent_surfaces.services.pod_name_lookup import pod_name_for
 from app.modules.agent_surfaces.services.surface_connection_resolver import (
@@ -139,7 +133,6 @@ def build_surface_delivery(uow: SqlAlchemyUnitOfWork) -> SurfaceDelivery:
     return SurfaceDelivery(
         uow=uow,
         surface_repository=build_surface_repository(uow),
-        conversation_link_repository=SurfaceConversationLinkRepository(uow),
         adapter_registry=SurfacePlatformAdapterRegistry(),
         credential_resolver=SurfaceCredentialResolver(uow=uow),
     )
@@ -166,7 +159,7 @@ def build_member_reach(uow: SqlAlchemyUnitOfWork) -> MemberReach:
         egress=build_surface_egress(uow),
         pod_membership_port=SqlAlchemySurfaceRoutingResolutionAdapter(uow),
         external_user_repository=ExternalSurfaceUserRepository(uow),
-        conversation_link_repository=SurfaceConversationLinkRepository(uow),
+        seats=ChannelSeatsInDatabase(uow),
     )
 
 
@@ -205,7 +198,6 @@ def build_surface_router(uow: SqlAlchemyUnitOfWork) -> SurfaceRouter:
     return SurfaceRouter(
         uow=uow,
         surface_repository=build_surface_repository(uow),
-        conversation_link_repository=SurfaceConversationLinkRepository(uow),
         pod_membership_port=SqlAlchemySurfaceRoutingResolutionAdapter(uow),
         identity_service=SurfaceIdentityResolutionService(uow, external_users),
         credential_resolver=SurfaceCredentialResolver(uow=uow),
@@ -217,7 +209,6 @@ def build_conversation_binder(uow: SqlAlchemyUnitOfWork) -> ConversationBinder:
     return ConversationBinder(
         uow=uow,
         surface_repository=build_surface_repository(uow),
-        conversation_link_repository=SurfaceConversationLinkRepository(uow),
     )
 
 
@@ -228,7 +219,6 @@ def build_surface_ingress(uow: SqlAlchemyUnitOfWork) -> AgentSurfaceIngressServi
         router=build_surface_router(uow),
         binder=build_conversation_binder(uow),
         surface_repository=build_surface_repository(uow),
-        conversation_link_repository=SurfaceConversationLinkRepository(uow),
         credential_resolver=SurfaceCredentialResolver(uow=uow),
     )
 
@@ -251,18 +241,32 @@ def build_surface_turn_starter(uow_factory: UnitOfWorkFactory) -> SurfaceTurnSta
     return SurfaceTurnStarter(uow_factory=uow_factory, reprepare=reprepare)
 
 
-def build_notification_service(uow: SqlAlchemyUnitOfWork) -> NotificationService:
-    return NotificationService(
+def build_direct_messages(uow: SqlAlchemyUnitOfWork) -> DirectMessages:
+    return DirectMessages(
+        uow=uow, pod_membership_port=SqlAlchemySurfaceRoutingResolutionAdapter(uow)
+    )
+
+
+def build_member_pushes(uow: SqlAlchemyUnitOfWork) -> MemberPushes:
+    return MemberPushes(
         uow=uow,
-        notification_repository=NotificationRepository(uow),
         surface_repository=build_surface_repository(uow),
-        conversation_link_repository=SurfaceConversationLinkRepository(uow),
         external_user_repository=ExternalSurfaceUserRepository(uow),
         egress=build_surface_egress(uow),
         pod_membership_port=SqlAlchemySurfaceRoutingResolutionAdapter(uow),
-        outside_origin_reader=partial(outside_origin, uow),
-        rate_limiter=NotificationRateLimiter(),
         surface_provisioner=_build_system_email_provisioner(uow),
+        email_budget=EmailBudget(),
+        push_budget=PushBudget(),
+    )
+
+
+def build_channel_deliveries(uow_factory: UnitOfWorkFactory) -> ChannelDeliveries:
+    """The worker's half: each send scopes its own short units of work, and no
+    pooled connection is held across a platform call."""
+    return ChannelDeliveries(
+        uow_factory,
+        egress_for=build_surface_egress,
+        pushes_for=build_member_pushes,
     )
 
 

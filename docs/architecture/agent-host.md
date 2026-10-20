@@ -434,8 +434,9 @@ holds the host to all of it for every agent;
 `claude` in a fake home to check the upstream behaviour this relies on.
 
 Answering what a person owes works the same as in-process: an Agent Host
-run is served `respond_to_notification` and `submit_workflow_form` over MCP
-(the in-process harness gets them from its open-notifications capability),
+run is served `answer_question` over MCP -- a question or a workflow form
+waiting on the person, a line in their own channel (the in-process harness
+gets it from its open-questions capability),
 and what is still open rides in the turn's prompt rather than the system
 prompt, which a provider session keeps from its first turn. With host
 execution on, the runtime prompt names the release's own `lemma` CLI, which

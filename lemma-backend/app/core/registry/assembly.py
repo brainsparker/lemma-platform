@@ -104,18 +104,35 @@ def register_module_periodic_work(modules: Sequence[LemmaModule]) -> None:
             module.register_periodic_work()
 
 
+def configure_live(modules: Sequence[LemmaModule]) -> None:
+    """Put core's and every module's topics, calls and streams on the pod's
+    live socket, and serve it."""
+    from app.core.live import core_contribution
+    from app.core.live.topics import install_live
+
+    install_live(core_contribution())
+    for module in modules:
+        if module.live is not None:
+            install_live(module.live())
+
+
 def include_module_routers(app: "FastAPI", modules: Sequence[LemmaModule]) -> None:
-    """Include every module's API routers, in module-list then thunk order."""
+    """Include every module's API routers, in module-list then thunk order,
+    and the pod's live socket the modules feed."""
+    from app.core.live.api import router as live_router
+
     register_module_work(modules)
     configure_resource_names(modules)
     configure_pod_liveness(modules)
     configure_plan_limits(modules)
     configure_namespace_directory(modules)
+    configure_live(modules)
     for module in modules:
         if module.routers is None:
             continue
         for router in module.routers():
             app.include_router(router)
+    app.include_router(live_router)
 
 
 async def enter_api_lifespans(

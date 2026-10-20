@@ -118,7 +118,7 @@ What the migrations do:
 * **Armed** -- every TIME schedule gets its next fire (one already past due is
   skipped to its next occurrence, not fired late); flow timers, decisions,
   expiring waits and parked runs get their items; active agent waits, AGENT
-  workflow waits and open notifications' expiry get theirs.
+  workflow waits get theirs.
 * **Ended, saying so** -- a file waiting to be indexed is FAILED ("Retry
   processing to index this file"); a function run and the workflow on it,
   a running agent turn, a conversation paused on an approval that was decided
@@ -129,8 +129,12 @@ What the migrations do:
   surface reply the old transport owed, and everything else still in Redis or
   the outbox.
 
-The tables, the datastore database's outbox and the legacy consumer groups and
-streams are dropped by migration `0057_drop_old_transport` in the next release.
+Migration `0059_drop_old_transport`, in the next release, drops
+`domain_event_outbox` and `domain_event_inbox` whatever they still hold, with
+the columns only the old workers read. Deploy it the same way, old workers
+stopped first. A separately configured datastore database keeps an unused
+`domain_event_outbox` of its own, and Redis keeps the old streams and consumer
+groups; nothing reads either, and an operator may delete them by hand.
 
 Runbooks that counted `domain_event_outbox` rows (backlog, restore checks)
 should read `work_items` instead: queued, running and dead items per class

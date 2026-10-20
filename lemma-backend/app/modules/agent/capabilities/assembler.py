@@ -40,8 +40,8 @@ from app.modules.agent.capabilities.prompt_caching import PromptCachingCapabilit
 from app.modules.agent.capabilities.pending_user_messages import (
     PendingUserMessagesCapability,
 )
-from app.modules.agent.capabilities.open_notifications import (
-    OpenNotificationsCapability,
+from app.modules.agent.capabilities.open_questions import (
+    OpenQuestionsCapability,
 )
 from app.modules.agent.capabilities.run_context import RunContextCapability
 from app.modules.agent.domain.run_context_prompt import run_context_for
@@ -177,8 +177,8 @@ def _instructions_for(
 
     One lookup for both wrappers, because deferral is supposed to hide a
     toolset's *schemas*, never its *contract*. Messaging is the case that proves
-    it: ``message_user`` does not pause the turn, so an agent that was never
-    taught the send → wait_for → check_messages loop sends a message and then sits
+    it: ``channel_post`` does not pause the turn, so an agent that was never
+    taught the send → wait_for → channel_read(asked_by_me=True) loop sends a message and then sits
     waiting for a reply that arrives as a tool result never. Advertising the
     tool in the deferred hint while withholding that is the worst of both.
     """
@@ -346,10 +346,10 @@ async def _build_lemma_harness_tooling(
 
     # Somebody may be waiting on the person this agent is talking to. What they
     # asked is in the run's context part; this hands the run the tools that
-    # answer it. Never on a stranger's run: an open notification is the
-    # owner's question to answer.
-    if not answers_outsider and getattr(ctx, "open_notifications", None):
-        capabilities.append(OpenNotificationsCapability())
+    # answer it. Never on a stranger's run: a question waiting on a member is
+    # theirs to answer, not somebody's outside the pod.
+    if not answers_outsider and getattr(ctx, "open_questions", None):
+        capabilities.append(OpenQuestionsCapability())
 
     if enable_prompt_caching:
         pod_id = getattr(ctx, "pod_id", None)

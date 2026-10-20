@@ -122,6 +122,7 @@ class _SurfaceService:
 
 def _observer(service: _SurfaceService) -> SurfaceAgentRunProgressObserver:
     return SurfaceAgentRunProgressObserver(
+        contact_gate=_no_contact_refuses,
         uow_factory=_UowFactory(),
         egress_factory=lambda _uow: service,
     )
@@ -136,6 +137,7 @@ async def test_progress_observer_streams_tool_comment_progress():
     service = _SurfaceService()
     observer = _observer(service)
     conversation = SimpleNamespace(
+        contact_id=None,
         id=uuid4(),
         metadata={"surface_platform": "TELEGRAM"},
     )
@@ -167,6 +169,7 @@ async def test_progress_observer_strips_thinking_from_tool_comment():
     service = _SurfaceService()
     observer = _observer(service)
     conversation = SimpleNamespace(
+        contact_id=None,
         id=uuid4(),
         metadata={"surface_platform": "TELEGRAM"},
     )
@@ -197,6 +200,7 @@ async def test_progress_observer_skips_all_reasoning_tool_comment():
     service = _SurfaceService()
     observer = _observer(service)
     conversation = SimpleNamespace(
+        contact_id=None,
         id=uuid4(),
         metadata={"surface_platform": "SLACK"},
     )
@@ -224,7 +228,10 @@ async def test_progress_observer_ignores_email_display_resource():
     service = _SurfaceService()
     observer = _observer(service)
     conversation = SimpleNamespace(
-        id=uuid4(), pod_id=uuid4(), metadata={"surface_platform": "GMAIL"}
+        contact_id=None,
+        id=uuid4(),
+        pod_id=uuid4(),
+        metadata={"surface_platform": "GMAIL"},
     )
 
     await observer.on_event(
@@ -249,6 +256,7 @@ async def test_progress_observer_refreshes_telegram_typing_in_process(monkeypatc
     service = _SurfaceService()
     observer = _observer(service)
     conversation = SimpleNamespace(
+        contact_id=None,
         id=uuid4(),
         metadata={"surface_platform": "TELEGRAM"},
     )
@@ -281,7 +289,9 @@ async def test_progress_observer_stays_quiet_when_there_was_no_answer_at_all():
     """
     service = _SurfaceService()
     observer = _observer(service)
-    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "SLACK"})
+    conversation = SimpleNamespace(
+        id=uuid4(), contact_id=None, metadata={"surface_platform": "SLACK"}
+    )
 
     await observer.on_run_finished(conversation, SimpleNamespace(agent_run_id=None))
 
@@ -292,6 +302,7 @@ async def test_progress_observer_stops_when_indicator_cannot_be_sent(monkeypatch
     service = _SurfaceService(send_result=False)
     observer = _observer(service)
     conversation = SimpleNamespace(
+        contact_id=None,
         id=uuid4(),
         metadata={"surface_platform": "TELEGRAM"},
     )
@@ -319,7 +330,7 @@ async def test_progress_observer_renders_waiting_tool_call_once():
     service = _SurfaceService()
     observer = _observer(service)
     conversation = SimpleNamespace(
-        id=uuid4(), metadata={"surface_platform": "TELEGRAM"}
+        contact_id=None, id=uuid4(), metadata={"surface_platform": "TELEGRAM"}
     )
     waiting = AgentEvent(
         type=AgentEventType.WAITING,
@@ -367,7 +378,7 @@ class TestAgentHostPermissionPrompt:
         service = _SurfaceService()
         observer = _observer(service)
         conversation = SimpleNamespace(
-            id=uuid4(), metadata={"surface_platform": "TELEGRAM"}
+            contact_id=None, id=uuid4(), metadata={"surface_platform": "TELEGRAM"}
         )
 
         await observer.on_event(
@@ -389,7 +400,7 @@ class TestAgentHostPermissionPrompt:
         service = _SurfaceService()
         observer = _observer(service)
         conversation = SimpleNamespace(
-            id=uuid4(), metadata={"surface_platform": "TELEGRAM"}
+            contact_id=None, id=uuid4(), metadata={"surface_platform": "TELEGRAM"}
         )
 
         await observer.on_event(
@@ -408,7 +419,9 @@ async def _run_with_progress_then_answer(service, platform: str):
     is a tool step.
     """
     observer = _observer(service)
-    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": platform})
+    conversation = SimpleNamespace(
+        id=uuid4(), contact_id=None, metadata={"surface_platform": platform}
+    )
     if platform == "SLACK":
         await observer.on_event(
             AgentEvent(
@@ -447,7 +460,9 @@ async def test_text_tokens_stream_to_slack_as_they_arrive():
     """The answer appears as it is written, not all at once when the run ends."""
     service = _SurfaceService()
     observer = _observer(service)
-    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "SLACK"})
+    conversation = SimpleNamespace(
+        id=uuid4(), contact_id=None, metadata={"surface_platform": "SLACK"}
+    )
 
     # One delta over the flush threshold goes out immediately.
     await observer.on_event(
@@ -461,7 +476,9 @@ async def test_thinking_tokens_never_reach_the_surface():
     """Reasoning is not the answer — the same rule every other path enforces."""
     service = _SurfaceService()
     observer = _observer(service)
-    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "SLACK"})
+    conversation = SimpleNamespace(
+        id=uuid4(), contact_id=None, metadata={"surface_platform": "SLACK"}
+    )
 
     await observer.on_event(
         _token("thinking", "y" * 500), conversation, SimpleNamespace(agent_run_id=None)
@@ -478,7 +495,9 @@ async def test_first_delta_is_immediate_then_small_ones_batch():
     """
     service = _SurfaceService()
     observer = _observer(service)
-    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "SLACK"})
+    conversation = SimpleNamespace(
+        id=uuid4(), contact_id=None, metadata={"surface_platform": "SLACK"}
+    )
 
     for _ in range(5):
         await observer.on_event(
@@ -493,7 +512,7 @@ async def test_telegram_ignores_token_events():
     service = _SurfaceService()
     observer = _observer(service)
     conversation = SimpleNamespace(
-        id=uuid4(), metadata={"surface_platform": "TELEGRAM"}
+        contact_id=None, id=uuid4(), metadata={"surface_platform": "TELEGRAM"}
     )
 
     await observer.on_event(
@@ -512,7 +531,9 @@ async def test_reasoning_split_across_deltas_never_reaches_slack():
     """
     service = _SurfaceService()
     observer = _observer(service)
-    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "SLACK"})
+    conversation = SimpleNamespace(
+        id=uuid4(), contact_id=None, metadata={"surface_platform": "SLACK"}
+    )
 
     for delta in [
         "Here is the plan. <thi",
@@ -538,7 +559,9 @@ async def test_slack_gets_no_step_timeline_while_text_streams():
     """
     service = _SurfaceService()
     observer = _observer(service)
-    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "SLACK"})
+    conversation = SimpleNamespace(
+        id=uuid4(), contact_id=None, metadata={"surface_platform": "SLACK"}
+    )
 
     await observer.on_event(
         AgentEvent(
@@ -564,7 +587,9 @@ async def test_slack_opens_the_stream_at_run_start_so_channels_show_something():
     """
     service = _SurfaceService()
     observer = _observer(service)
-    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "SLACK"})
+    conversation = SimpleNamespace(
+        id=uuid4(), contact_id=None, metadata={"surface_platform": "SLACK"}
+    )
 
     await observer.on_run_started(conversation, SimpleNamespace(agent_run_id=None))
 
@@ -574,7 +599,9 @@ async def test_slack_opens_the_stream_at_run_start_so_channels_show_something():
 async def test_failed_token_append_stays_buffered_until_confirmed():
     service = _SurfaceService()
     observer = _observer(service)
-    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "SLACK"})
+    conversation = SimpleNamespace(
+        id=uuid4(), contact_id=None, metadata={"surface_platform": "SLACK"}
+    )
     attempts = 0
 
     async def append(**kwargs):
@@ -606,7 +633,7 @@ async def test_non_streaming_platforms_do_not_open_a_stream_at_run_start():
     service = _SurfaceService()
     observer = _observer(service)
     conversation = SimpleNamespace(
-        id=uuid4(), metadata={"surface_platform": "TELEGRAM"}
+        contact_id=None, id=uuid4(), metadata={"surface_platform": "TELEGRAM"}
     )
 
     await observer.on_run_started(conversation, SimpleNamespace(agent_run_id=None))
@@ -627,7 +654,9 @@ def _plan_return(*lines: str) -> AgentEvent:
 
 
 def _conversation(platform: str) -> SimpleNamespace:
-    return SimpleNamespace(id=uuid4(), metadata={"surface_platform": platform})
+    return SimpleNamespace(
+        id=uuid4(), contact_id=None, metadata={"surface_platform": platform}
+    )
 
 
 async def test_the_plan_is_drawn_as_a_checklist_not_as_using_write_todos():
@@ -914,7 +943,7 @@ async def test_a_prompt_that_did_not_arrive_is_asked_again_in_plain_words(caplog
     service = _SurfaceService(send_result=False)
     observer = _observer(service)
     conversation = SimpleNamespace(
-        id=uuid4(), metadata={"surface_platform": "WHATSAPP"}
+        contact_id=None, id=uuid4(), metadata={"surface_platform": "WHATSAPP"}
     )
 
     await observer.on_event(
@@ -943,7 +972,7 @@ async def test_a_prompt_that_cannot_be_asked_even_in_words_can_be_tried_again():
     service.text_fallback_result = False
     observer = _observer(service)
     conversation = SimpleNamespace(
-        id=uuid4(), metadata={"surface_platform": "WHATSAPP"}
+        contact_id=None, id=uuid4(), metadata={"surface_platform": "WHATSAPP"}
     )
 
     await observer.on_event(
@@ -965,7 +994,7 @@ async def test_a_prompt_that_raised_is_logged_and_asked_in_words(caplog):
     service.send_approval_prompt_for_conversation = broken
     observer = _observer(service)
     conversation = SimpleNamespace(
-        id=uuid4(), metadata={"surface_platform": "WHATSAPP"}
+        contact_id=None, id=uuid4(), metadata={"surface_platform": "WHATSAPP"}
     )
 
     await observer.on_event(
@@ -983,7 +1012,7 @@ async def test_a_web_conversation_that_pauses_is_not_asked_about_anywhere():
     """The observer is attached to every run, and most are not on a surface."""
     service = _SurfaceService(send_result=False)
     observer = _observer(service)
-    conversation = SimpleNamespace(id=uuid4(), metadata={})
+    conversation = SimpleNamespace(id=uuid4(), contact_id=None, metadata={})
 
     await observer.on_event(
         _waiting(), conversation, SimpleNamespace(agent_run_id=None)
@@ -1012,3 +1041,8 @@ async def test_the_observer_never_sends_the_answer_it_only_takes_display_down():
     assert service.messages == []
     assert service.finished == []
     assert len(service.cleared) == 1
+
+
+async def _no_contact_refuses(_conversation_id) -> bool:
+    """No contact here refuses the answer (``contact_stream_gate``)."""
+    return False

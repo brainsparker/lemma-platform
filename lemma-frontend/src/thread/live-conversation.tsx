@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAssistantSession } from "lemma-sdk/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { lemma } from "@/session/client";
+import { withSocketConversations } from "@/live/socket-conversations";
 import { NEW_CONVERSATION, saidAboutSending, source } from "@/data";
 import { initialsOf } from "@/data/agent-names";
 import type { ApprovalDecision } from "./approval";
@@ -15,6 +16,7 @@ import { allConversationsKey, applyTitle, insertConversation, patchConversationL
 import { Transcript } from "./transcript";
 import type { Streaming } from "./turns";
 import { Composer } from "./composer";
+import { ModelPicker, useSavingModel } from "./model-picker";
 import { useChannelReply } from "./use-channel-reply";
 import { splitQueued, withdrawFailure, withoutSent } from "./queued";
 import { sendToConversation, steerConversation } from "./send-message";
@@ -32,6 +34,11 @@ import { conversationRefOf } from "@/data/live";
 import { draftKeyFor } from "./drafts";
 import { useAsksFollowWaiting } from "./use-conversation-asks";
 import { CONVERSATION_ASKS } from "./waiting-on-you";
+import type { Choice } from "@/data/runtimes";
+
+/** The notice a run sends while it waits for a free slot on the person's
+ *  computer; `WAITING_FOR_SLOT_STATUS` in the backend's `event_text.py`. */
+const WAITING_FOR_SLOT = "agent_host.waiting_for_slot";
 
 /** The conversation, on the SDK's own session.
  *
@@ -105,7 +112,9 @@ export function LiveConversation({
     callError?: string | null;
     callRefresh?: string;
 }) {
-    const client = useMemo(() => lemma(pod.id), [pod.id]);
+    /* The run streams over the pod's live socket, shared with every other
+       live view of the pod, and over SSE when the socket cannot carry it. */
+    const client = useMemo(() => withSocketConversations(lemma(pod.id), pod.id), [pod.id]);
     /* Who is answering. A conversation names its bot by `agent_id`, and a new
        one about to be made names it in `createWith`; either way the reply is
        that bot's, not the space's own. */
@@ -140,6 +149,9 @@ export function LiveConversation({
        session owns. A ref rather than the session's own field, which cannot be
        read from inside the options that construct it. */
     const streamingIn = useRef<string | null>(null);
+    /* The run is queued behind others on the person's own computer, which
+       otherwise shows as "Working" with nothing under it for minutes. */
+    const [slotWait, setSlotWait] = useState<string | null>(null);
 
     /* What the agent's runtime said while a run went — a model it no longer
        offers, a session it lost. These arrive on the stream and nowhere else,
@@ -175,7 +187,11 @@ export function LiveConversation({
             if (!target) return;
             patchConversationLists(queryClient, pod.id, (list) => applyTitle(list, target, title));
         },
-        onNotice: (text) => {
+        onNotice: (text, kind) => {
+            if (kind === WAITING_FOR_SLOT) {
+                setSlotWait(text);
+                return;
+            }
             const note = { text, turnId: lastTurnId.current, conversationId: streamingIn.current };
             setRuntimeNotes((was) => [...was, note]);
         },
@@ -281,6 +297,14 @@ export function LiveConversation({
 
     useEffect(() => { streamingIn.current = session.conversationId; }, [session.conversationId]);
 
+    /* Gone the moment the run shows any sign of having started, or ends: the
+       server says it once, not again when the wait is over. Not on messages
+       landing: loading older history, or the person steering the queued run,
+       adds messages while the run is still waiting for a slot. */
+    const underway = !session.isStreaming
+        || Boolean(session.streamingText || session.streamingThinking || session.streamingTool);
+    useEffect(() => { setSlotWait(null); }, [underway]);
+
     /* What this conversation looked like the last time it was open here, or
        when someone last rested on it in the history: drawn while the server is
        re-read, so going back to a conversation is not a skeleton and a wait.
@@ -290,6 +314,14 @@ export function LiveConversation({
     const fromCache = historyLoading && cached ? cached : null;
     const conversationRecord = session.conversation ?? fromCache?.conversation ?? null;
 
+    /* A model picked before the conversation exists. It has nowhere to be
+       stored until there is a conversation, so it waits here and goes up with
+       the one the first send creates. */
+    const [pickedModel, setPickedModel] = useState<Choice | null>(null);
+    /* The sentence for an upload that failed, kept for the note under the box:
+       the send that was carrying it fails too, and "that did not send" is the
+       wrong half of what happened. */
+    const uploadFailure = useRef<string | null>(null);
     const [pending, setPending] = useState<readonly PendingSend[]>([]);
     /* Steers whose request is still in the air. */
     const steering = useRef<Set<string>>(new Set());
@@ -428,6 +460,24 @@ export function LiveConversation({
     }, [transcript, notesHere]);
     useEffect(() => { lastTurnId.current = turns.at(-1)?.id ?? ""; }, [turns]);
 
+    /* Memoised, because the box around it is: the pane redraws for every few
+       tokens of a reply, and a node made fresh each time would redraw the box
+       with it. */
+    const savingModel = useSavingModel();
+    const modelPicker = useMemo(
+        () => (bot?.pinnedRuntime ? null : (
+            <ModelPicker
+                podId={pod.id}
+                orgId={pod.orgId}
+                conversationId={session.conversationId}
+                locked={turns.length > 0}
+                picked={pickedModel}
+                onPicked={setPickedModel}
+            />
+        )),
+        [bot?.pinnedRuntime, pod.id, pod.orgId, session.conversationId, turns.length, pickedModel],
+    );
+
     /* What the run is blocked on, read straight out of the transcript.
        An approval IS a tool call: `request_approval` streams in like any
        other, and its id is the approval id. The old code fetched the
@@ -514,9 +564,17 @@ export function LiveConversation({
                     landed.push({ name: written.name ?? one.file.name, path: written.path });
                     settled.push({ ...one, status: "uploaded", path: written.path, error: undefined });
                 } catch (problem) {
+                    /* Named, because "upload failed" with two files attached
+                       leaves the reader to guess which one, and the chip that
+                       does say it is a title nobody hovers. The name comes
+                       first whatever the reason is — the platform's refusal
+                       and an unreachable server both say nothing of the file. */
+                    const reason = saidAboutSending(problem, "");
+                    const sentence = "Couldn’t upload " + one.file.name + "." + (reason ? " " + reason : "");
+                    uploadFailure.current = sentence;
                     setAttachments(was => markAttachment(was, one.key, {
                         status: "failed",
-                        error: saidAboutSending(problem, "Upload failed"),
+                        error: sentence,
                     }));
                     throw problem;
                 }
@@ -538,6 +596,8 @@ export function LiveConversation({
     const steer = useCallback(
         async (text: string, id: string) => {
             setSendError(null);
+            /* A failure from an earlier attempt is not this one's to report. */
+            uploadFailure.current = null;
             /* In the tray at once, as "sending…", until the server's copy
                takes its place there or in the transcript. */
             const going = pendingSend(text, "steer", session.messages);
@@ -559,7 +619,10 @@ export function LiveConversation({
                         ...settled,
                         ...was.filter(one => !settled.some(back => back.key === one.key)),
                     ]),
-                    report: message => { if (mounted.current) setSendError(message); },
+                    report: message => {
+                        if (mounted.current) setSendError(uploadFailure.current ?? message);
+                        uploadFailure.current = null;
+                    },
                 });
             } catch (problem) {
                 /* The composer puts the words back; the tray lets them go. */
@@ -615,6 +678,7 @@ export function LiveConversation({
             setSending(true);
             setSendError(null);
             setSendProblem(null);
+            uploadFailure.current = null;
             /* On screen now, before the conversation exists or the server has
                heard a word of it. Its id rides along in the metadata, which is
                how the server's copy is known to be this one. */
@@ -640,7 +704,18 @@ export function LiveConversation({
                        for. Omitting the field is the only payload that means
                        "the pod's own assistant". */
                     create: async () => {
-                        const made = await client.conversations.create({ pod_id: pod.id, ...createWith } as Parameters<typeof client.conversations.create>[0]);
+                        const made = await client.conversations.create({
+                            pod_id: pod.id,
+                            ...createWith,
+                            /* The model chosen while the box was still a
+                               draft. Sent with the conversation rather than
+                               patched onto it afterwards, so the first run
+                               -- the one the choice was made for -- already
+                               runs on it. */
+                            ...(pickedModel
+                                ? { agent_runtime: { profile_id: pickedModel.runtimeId, model_name: pickedModel.model || null } }
+                                : {}),
+                        } as Parameters<typeof client.conversations.create>[0]);
                         /* A folder chosen while composing is parked in the
                            desktop shell. Adopted here, before the session
                            learns the id and before the first run reads it. */
@@ -717,7 +792,8 @@ export function LiveConversation({
                 void refreshConversationLists(queryClient, pod.id);
             } catch (problem) {
                 if (mounted.current) {
-                    setSendError(saidAboutSending(problem, "That did not send."));
+                    setSendError(uploadFailure.current ?? saidAboutSending(problem, "That did not send."));
+                    uploadFailure.current = null;
                     setSendProblem(problem);
                     /* Kept where it was written, marked as not sent, with Retry
                        and Edit under it. Not thrown back to the composer: the
@@ -835,6 +911,7 @@ export function LiveConversation({
                         args: session.streamingTool.args,
                     }
                   : null,
+              waiting: slotWait,
           }
         : null;
 
@@ -993,7 +1070,7 @@ export function LiveConversation({
                 /* `sending` lasts as long as the stream this pane opened, which
                    is the whole run -- so it only holds the box before the run
                    is visibly going. After that, sending again is steering. */
-                busy={(sending && !running) || historyLoading || Boolean(loadError)}
+                busy={(sending && !running) || historyLoading || Boolean(loadError) || savingModel}
                 canStop={running && !winding}
                 queued={queued}
                 queuedNote={
@@ -1014,6 +1091,12 @@ export function LiveConversation({
                 onStop={stop}
                 onVoice={onVoice}
                 draftKey={draftKey}
+                model={
+                    /* Read-only once it has answered, and gone for a teammate
+                       that names its own model: the picker would offer to
+                       change what that agent's own configuration decides. */
+                    modelPicker
+                }
             />
         </>
     );

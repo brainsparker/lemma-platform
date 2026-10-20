@@ -19,6 +19,8 @@ import { hasApiUrl, lemma } from "@/session/client";
 import { source as data } from "@/data";
 import { bestAccount } from "@/data/accounts";
 import { Mark } from "@/shell/mark";
+import { personalNameFor } from "@/org/arrival";
+import { forgetInstall, markInstallArrival, rememberInstall } from "./pending-install";
 import type { Pod } from "@/data/types";
 import type { ImportStatusResponse, VariableSpec } from "../import-types";
 import {
@@ -28,6 +30,8 @@ import {
     contentsLine,
     groupSteps,
     humanize,
+    installedApp,
+    landingPath,
     needsAnswer,
     statusLine,
     suggestedValue,
@@ -67,6 +71,19 @@ export function InstallPanel(props: Props) {
 
 function Gate(props: Props) {
     const session = useSession();
+    /* Written before anything can send the person away — sign-in, a new
+       organization — so the workspace can offer the install back if the way
+       home is lost. Cleared when the install finishes. */
+    useEffect(() => {
+        try {
+            rememberInstall(window.localStorage, {
+                path: window.location.pathname + window.location.search,
+                title: props.title,
+            });
+        } catch {
+            /* no storage */
+        }
+    }, [props.title]);
     if (!hasApiUrl() || data.label === "sample")
         return (
             <Panel>
@@ -94,11 +111,80 @@ function Gate(props: Props) {
                     adds before anything is installed.
                 </p>
                 <button className={s.primary} onClick={session.signIn}>
-                    Sign in to install
+                    Sign in or create an account
                 </button>
             </Panel>
         );
     return <Journey {...props} />;
+}
+
+/** A workspace for somebody who has none, made here rather than on a page of
+ *  its own. Somebody who came to install a template has no reason to know
+ *  what an organization is; they need somewhere for it to go, named after
+ *  them, and the install carrying on. */
+function FirstWorkspace({ onMade }: { onMade: () => void }) {
+    const session = useSession();
+    const suggested = personalNameFor(session.user?.name);
+    const [name, setName] = useState(suggested);
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState("");
+    async function make() {
+        setBusy(true);
+        setError("");
+        try {
+            const typed = name.trim();
+            await data.createOrg({
+                name: typed || suggested,
+                /* Untouched, the name is ours, and a second Ada gets a
+                   workspace rather than a complaint about a name she never
+                   chose. */
+                derived: !typed || typed === suggested,
+            });
+            onMade();
+        } catch (e) {
+            setError(
+                e instanceof Error ? e.message : "Could not make your workspace.",
+            );
+            setBusy(false);
+        }
+    }
+    return (
+        <form
+            onSubmit={(e) => {
+                e.preventDefault();
+                void make();
+            }}
+        >
+            <p className={s.muted}>
+                First, a workspace for your teammates. It is private to you;
+                you can invite people later.
+            </p>
+            <label className={s.field}>
+                <span>Workspace name</span>
+                <input
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    maxLength={80}
+                />
+            </label>
+            <button className={s.primary} disabled={busy}>
+                {busy ? (
+                    <>
+                        <CircleNotch size={16} className={s.spin} aria-hidden />
+                        Making it…
+                    </>
+                ) : (
+                    "Continue"
+                )}
+            </button>
+            {error && (
+                <p role="alert" className={s.error}>
+                    <Warning size={16} aria-hidden />
+                    <span>{error}</span>
+                </p>
+            )}
+        </form>
+    );
 }
 
 function Panel({ children }: { children: React.ReactNode }) {
@@ -197,6 +283,16 @@ function Journey({ repo, owner, title }: Props) {
             clearTimeout(timer);
         };
     }, [polling, jobId, podId, retry]);
+
+    const finished = job?.status === "COMPLETED";
+    useEffect(() => {
+        if (!finished) return;
+        try {
+            forgetInstall(window.localStorage);
+        } catch {
+            /* no storage */
+        }
+    }, [finished]);
 
     async function review() {
         setBusy(true);
@@ -332,12 +428,7 @@ function Journey({ repo, owner, title }: Props) {
         return (
             <Panel>
                 <h2 className={s.panelTitle}>Install {title}</h2>
-                <p className={s.muted}>
-                    You need an organization to hire a teammate into.
-                </p>
-                <a className={s.primary} href="/organizations/new">
-                    Create an organization
-                </a>
+                <FirstWorkspace onMade={() => void orgs.refetch()} />
             </Panel>
         );
 
@@ -518,6 +609,16 @@ function Journey({ repo, owner, title }: Props) {
     const cancelled =
         job.status === "CANCELLED" || job.status === "PARTIALLY_CANCELLED";
     const missing = asked.some((v) => v.required && !valueOf(v));
+    /* The app this install brought, if it brought one. It decides where the
+       person goes when they leave this panel — see `landingPath`. */
+    const app = installedApp(plan?.steps ?? []);
+    const markArrival = () => {
+        try {
+            markInstallArrival(window.sessionStorage);
+        } catch {
+            /* no storage */
+        }
+    };
 
     /* ── Done ───────────────────────────────────────────────────────── */
     if (job.status === "COMPLETED")
@@ -535,15 +636,27 @@ function Journey({ repo, owner, title }: Props) {
                     <h2 className={s.panelTitle}>{who} is ready</h2>
                     <p className={s.muted}>
                         {who !== title && title + " is installed. "}
-                        Say hello and give it its first job.
+                        {app
+                            ? "It came with " + humanize(app) + "."
+                            : "Say hello and give it its first job."}
                     </p>
                 </div>
                 <a
                     className={s.primary}
-                    href={"/t/" + encodeURIComponent(job.pod_id)}
+                    href={landingPath(job.pod_id, plan?.steps ?? [])}
+                    onClick={markArrival}
                 >
-                    Open {who}
+                    Open {app ? humanize(app) : who}
                 </a>
+                {app && (
+                    <a
+                        className={s.quiet}
+                        href={"/t/" + encodeURIComponent(job.pod_id)}
+                        onClick={markArrival}
+                    >
+                        Or open {who} instead
+                    </a>
+                )}
                 {warnings.length > 0 && <Warnings list={warnings} />}
             </Panel>
         );

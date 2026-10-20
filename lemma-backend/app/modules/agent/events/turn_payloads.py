@@ -30,4 +30,12 @@ class ConversationWork(BaseModel):
     run_id: UUID | None = None
 
 
-__all__ = ["AgentTurnWork", "ConversationWork"]
+class RepliesArrived(BaseModel):
+    """Every question one batch of a conversation asked has closed."""
+
+    conversation_id: UUID
+    pod_id: UUID
+    batch_id: str | None = None
+
+
+__all__ = ["AgentTurnWork", "ConversationWork", "RepliesArrived"]

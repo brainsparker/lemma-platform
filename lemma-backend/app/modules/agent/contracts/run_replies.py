@@ -26,6 +26,12 @@ class RunReplyMaterial:
     private: bool
 
 
+def answer_line_client_id(run_id: UUID) -> str:
+    """The channel line a run's answer is, named by the run: wherever it is
+    posted -- in Lemma, or for a platform -- a retry is the same line."""
+    return f"run:{run_id}"
+
+
 def _answer_text(output: object) -> str | None:
     if isinstance(output, str):
         return output.strip() or None
@@ -51,4 +57,4 @@ async def run_reply_material(
     )
 
 
-__all__ = ["RunReplyMaterial", "run_reply_material"]
+__all__ = ["RunReplyMaterial", "answer_line_client_id", "run_reply_material"]

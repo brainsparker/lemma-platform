@@ -30,7 +30,7 @@ from app.modules.datastore.domain.file_entities import (
     DatastoreFileUpdateEntity,
 )
 from app.modules.datastore.domain.errors import DatastoreDomainError
-from app.core.authorization.authz_epoch import bump_pod_authz_epoch
+from app.core.authorization.authz_epoch import bump_pod_files_epoch
 from app.modules.datastore.events.file_work import (
     cleanup_payload,
     add_file_cleanup_work,
@@ -96,9 +96,14 @@ class FileUseCases:
         directory_path: str = "/",
         search_enabled: bool = True,
         visibility: str | None = None,
+        rename_on_conflict: bool = False,
     ) -> DatastoreFileEntity:
         """Persist draft -> upload bytes -> finalize, with no DB connection
-        held while object storage receives the file."""
+        held while object storage receives the file.
+
+        ``rename_on_conflict`` is for uploads, whose name is chosen by whoever
+        is uploading rather than by the caller: a name already in the folder
+        becomes ``name (1).ext`` instead of a refusal."""
         async with pod_context_scope(
             self._uow_factory, request=request, user_id=user_id, pod_id=pod_id
         ) as scope:
@@ -112,6 +117,7 @@ class FileUseCases:
                 directory_path=directory_path,
                 search_enabled=search_enabled,
                 visibility=visibility,
+                rename_on_conflict=rename_on_conflict,
             )
 
         storage_written = False
@@ -266,7 +272,7 @@ class FileUseCases:
                     pod_id=cleanup.pod_id,
                     payload=cleanup_payload(cleanup),
                 )
-            scope.uow.after_commit(lambda: bump_pod_authz_epoch(pod_id))
+            scope.uow.after_commit(lambda: bump_pod_files_epoch(pod_id))
         if in_process:
             # e2e runs no ingestion worker for this; purge here, still with no
             # connection held.

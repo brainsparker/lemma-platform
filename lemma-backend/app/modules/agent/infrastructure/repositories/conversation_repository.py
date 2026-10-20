@@ -288,8 +288,10 @@ class ConversationRepository(
         search: str | None = None,
         cursor: ConversationListCursor | None = None,
         limit: int = 20,
+        in_channel: bool | None = None,
     ) -> tuple[list[ConversationEntity], ConversationListCursor | None]:
         stmt = list_statement(
+            in_channel=in_channel,
             user_id=user_id,
             pod_id=pod_id,
             agent_selection=agent_selection,

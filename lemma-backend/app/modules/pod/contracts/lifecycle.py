@@ -43,6 +43,17 @@ class PodDeleted(Fact):
         return org_namespace(self.organization_id)
 
 
+class PodMemberAdded(Fact):
+    """Someone became a member of a pod -- however: made it, was added,
+    accepted an invitation, joined or was let in."""
+
+    pod_id: UUID
+    user_id: UUID
+
+    def work_namespace(self) -> str:
+        return pod_namespace(self.pod_id)
+
+
 class PodMemberRemoved(Fact):
     """Someone stopped being a member of a pod."""
 
@@ -53,4 +64,4 @@ class PodMemberRemoved(Fact):
         return pod_namespace(self.pod_id)
 
 
-__all__ = ["PodCreated", "PodDeleted", "PodMemberRemoved"]
+__all__ = ["PodCreated", "PodDeleted", "PodMemberAdded", "PodMemberRemoved"]

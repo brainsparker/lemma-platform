@@ -31,9 +31,13 @@ flowchart LR
 
 The canonical registration order is identity, pod, pod bundle, datastore,
 schedule, connectors, agent, function, apps, workflow, agent surfaces,
-contacts, icon, usage, workspace, web login, MCP access, decisions, and analytics. Order affects router and lifespan registration, but
+contacts, channels, icon, usage, workspace, web login, MCP access, decisions, and analytics. Order affects router and lifespan registration, but
 modules should communicate through explicit ports or domain events rather than
 depending on import order.
+
+The pod's live socket, `/pods/{pod_id}/live`, is core's transport that modules
+put topics and calls on (`LemmaModule.live`): [live.md](live.md) is its wire
+protocol and how a module adds a topic.
 
 ## Module catalog
 
@@ -49,19 +53,20 @@ depending on import order.
 | [function](function.md) | Versioned deterministic function definitions and sandboxed runs | `functions`, `function_runs` |
 | [apps](apps.md) | Pod app metadata, source/dist releases, and public asset hosting | `apps`, `app_releases` |
 | [workflow](workflow.md) | Workflow graphs, execution, waits, forms, and resumptions | `workflow_flows`, `workflow_flow_runs`, `workflow_run_waits` |
-| [agent_surfaces](agent_surfaces.md) | External chat/email ingress, identity mapping, and delivery | `agent_surfaces`, `agent_surface_external_users`, `agent_surface_conversation_links` |
+| [agent_surfaces](agent_surfaces.md) | External chat/email ingress, identity mapping, and delivery | `agent_surfaces`, `agent_surface_external_users`, `surface_deliveries` |
 | [icon](icon.md) | Public raster icon upload and retrieval | None; bytes live in public object/local storage |
 | [usage](usage.md) | Model-usage metering, reservations, limits, and reporting | `usage_records`, `usage_limit_counters`, `usage_contacts_caps` |
 | [workspace](workspace.md) | sandbox/session access and workspace tool runtime | `sandboxes`, `sandbox_instances`; live process/session state stays in the sandbox runtime and Redis |
 | [mcp_access](mcp_access.md) | Outside MCP clients: the OAuth authorization server, consent, and connected clients | `mcp_oauth_clients`, `mcp_oauth_grants`, `mcp_oauth_tokens`; pending authorizations and codes are short-lived Redis keys |
 | [contacts](contacts.md) | People a pod's bots answer who are not members, and the handles they are known by | `contacts`, `contact_identities` |
+| [channels](channels.md) | The places members, contacts and agents talk: one timeline per place, fed by outside sources | `external_accounts`, `channels`, `channel_members`, `channel_read_state`, `channel_sources`, `channel_messages`, `channel_mentions`, `channel_questions`, `channel_message_deliveries` |
 | [decisions](decisions.md) | Stateless closed-question decisions over pluggable providers | None; the per-organization rate window is a short-lived Redis counter |
 
 ## Tables owned by core
 
 These tables belong to no module. Five carry authorization, three carry the
 work runtime, and two are left from the old event transport until migration
-`0057_drop_old_transport` drops them. They sit in `app/core` because every
+`0059_drop_old_transport` drops them. They sit in `app/core` because every
 module depends on them, which is why the catalog above points at them instead
 of repeating them in each row.
 
@@ -71,8 +76,8 @@ of repeating them in each row.
 | `roles`, `role_permissions` | Organization- or pod-scoped roles and the permission bundle each one carries. Built-in pod roles are normalized by the pod module; custom roles are rows here |
 | `role_assignments` | Which principal — user or workload — holds which role, unique per role and principal |
 | `resource_permission_grants` | Named grants on one resource to one grantee inside one pod. This is what a delegated workload's context is built from, and what a bundle carries by name rather than by id |
-| `domain_event_outbox` | Legacy. Events the old transport published to Redis Streams. Nothing writes or reads it any more; `0057` drops it |
-| `domain_event_inbox` | Legacy. The old per-consumer delivery record. Nothing writes or reads it any more; `0057` drops it |
+| `domain_event_outbox` | Legacy. Events the old transport published to Redis Streams. Nothing writes or reads it any more; `0059` drops it |
+| `domain_event_inbox` | Legacy. The old per-consumer delivery record. Nothing writes or reads it any more; `0059` drops it |
 | `work_items` | The work runtime's live work: one row per queued or running item, written in the transaction that caused it and deleted in the one that completes it, plus dead items kept for inspection and retry. Its lease columns are what let a crashed or deployed process's work be reclaimed |
 | `work_queues` | One row per (work class, namespace) that has had work: the namespace's cap on running items, its named rates, whether it is paused, and when the fair claim last served it. No readiness flag — that is derived from `work_items` |
 | `work_rate_buckets` | Token buckets for rate-limited kinds, per namespace, rate name and optional key (a trigger), refilled and spent inside the claim transaction. A missing row is a full bucket |

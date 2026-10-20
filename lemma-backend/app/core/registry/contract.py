@@ -34,6 +34,7 @@ if TYPE_CHECKING:  # type-only — never imported at runtime, so no cycles / cos
     from app.core.authorization.resource_names import ResourceNameTable
     from app.core.infrastructure.work.process import WorkerContext
     from app.core.infrastructure.work.limits import NamespaceDirectory
+    from app.core.live.topics import LiveContribution
     from app.core.ports.plan_limits import PlanLimitsFactory
 
 
@@ -68,6 +69,10 @@ compute a plan allows. At most one module in a list may declare it."""
 type NamespaceDirectoryProvider = Callable[[], NamespaceDirectory]
 """Returns what tells the work runtime which organization owns a namespace,
 so per-org and per-slug limit overrides can apply to a pod's work."""
+
+type LiveProvider = Callable[[], LiveContribution]
+"""Returns the topics, calls and streams this module puts on the pod's live
+socket. API process only; called once at assembly."""
 
 type WorkRegistrar = Callable[[], None]
 """Imports the module's work kinds and fact subscriptions for side effects.
@@ -108,6 +113,8 @@ class LemmaModule:
 
     # --- API process ---
     routers: RouterProvider | None = None
+    # What this module puts on the pod's live socket (`app/core/live`).
+    live: LiveProvider | None = None
     api_lifespans: Sequence[ApiLifespan] = ()
     # --- Worker process (and the embedded worker of the single-process app) ---
     worker_lifespans: Sequence[WorkerLifespan] = ()

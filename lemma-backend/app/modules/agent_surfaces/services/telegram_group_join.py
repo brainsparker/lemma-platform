@@ -133,8 +133,7 @@ async def _adopt(
     groups = SurfaceGroupRepository(uow.session)
     group, created = await groups.ensure_noting_creation(
         pod_id=surface.pod_id,
-        surface_id=surface.id,
-        platform=SurfacePlatform.TELEGRAM.value,
+        surface=surface,
         external_channel_id=str(parsed.external_channel_id),
         title=_title(parsed),
     )

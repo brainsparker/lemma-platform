@@ -107,6 +107,10 @@ async def _migrate_all(engine: AsyncEngine, names: list[str], *, width: int = 16
     await asyncio.gather(*(worker() for _ in range(width)))
 
 
+# Scale, not a contract a pull request can break on its own; the protected
+# lane runs it. The small-scale tests below keep the migration's behaviour in
+# front of every merge.
+@pytest.mark.slow
 async def test_a_thousand_schemas_migrate_once_and_a_rerun_is_a_read(
     engine: AsyncEngine,
 ) -> None:
@@ -168,6 +172,7 @@ async def test_the_backfill_never_resurrects_a_dropped_schema(
     assert exists == 0
 
 
+@pytest.mark.slow
 @pytest.mark.drives_work
 async def test_the_backfill_job_migrates_every_schema_page_by_page(
     engine: AsyncEngine, postgres_only_database_url: str, monkeypatch

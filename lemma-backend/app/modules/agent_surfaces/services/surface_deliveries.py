@@ -11,10 +11,10 @@ were written, a ``Retry-After`` holds back everything behind it rather than
 letting later messages overtake it, and a burst costs one 429 per window
 instead of one per message.
 
-Every outbound message the platform must receive once goes this way: a run's
-answer or failure notice (``surface.reply_for_run``), a held WhatsApp reply, a
-reply to a stranger, a "please resend". No network here: the FAST
-``surface.reply_for_run`` stages through this module.
+What goes this way is what the platform must receive once and has no channel
+line of its own: a held WhatsApp reply, a reply to a stranger, a "please
+resend". A run's answer is a line, sent as its channel delivery
+(``channel_deliveries``). No network here.
 """
 
 from __future__ import annotations
@@ -41,9 +41,7 @@ from app.modules.agent_surfaces.domain.deliveries import (
     DeliveryTarget,
 )
 from app.modules.agent_surfaces.events.work_kinds import SURFACE_REPLY
-from app.modules.agent_surfaces.infrastructure.repositories.conversation_link_repository import (  # noqa: E501
-    SurfaceConversationLinkRepository,
-)
+from app.modules.channels.contracts.places import reply_address
 from app.modules.agent_surfaces.infrastructure.repositories.delivery_repository import (
     DeliveryRepository,
     queued_pump_run_at,
@@ -60,25 +58,18 @@ def pump_key(destination_key: str) -> str:
     return f"dest:{destination_key}"
 
 
-def run_reply_idempotency_key(run_id: UUID) -> str:
-    return f"run-reply:{run_id}"
-
-
 async def conversation_destination(
     uow: SqlAlchemyUnitOfWork, conversation_id: UUID
 ) -> tuple[str, UUID | None]:
     """Where a conversation's messages go, as a pump key, and its surface.
 
-    The surface thread, not the conversation: a Telegram group holds one
-    conversation per member, and every one of them shares the group's limit.
+    The place, not the conversation: a Telegram group holds one conversation
+    per member, and every one of them shares the group's limit.
     """
-    link = await SurfaceConversationLinkRepository(uow).get_by_conversation_id(
-        conversation_id
-    )
-    if link is None:
+    address = await reply_address(uow, conversation_id)
+    if address is None or address.source.surface_id is None:
         return f"conversation:{conversation_id}", None
-    place = link.external_channel_id or link.external_thread_id
-    return f"{link.surface_id}:{place}", link.surface_id
+    return f"place:{address.source.id}", address.source.surface_id
 
 
 async def ensure_pump(
@@ -269,7 +260,6 @@ __all__ = [
     "namespace_for",
     "pump_key",
     "retry_delay",
-    "run_reply_idempotency_key",
     "settle_claimed_send",
     "stage_conversation_message",
     "stage_delivery",

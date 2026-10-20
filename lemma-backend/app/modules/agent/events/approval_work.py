@@ -24,7 +24,8 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import timedelta
-from uuid import UUID
+
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.authorization.context import Context
 from app.core.authorization.factory import create_authorization_data_service
@@ -59,6 +60,7 @@ from app.modules.agent.services.approval_reconciliation import (
 )
 from app.modules.agent.services.conversation_approvals import PausedCall
 from app.modules.agent.services.conversation_service import ConversationService
+from app.modules.agent.services.pause_questions import tell_where_asked
 from app.modules.agent.services.runtime_owned_uow import RuntimeOwnedUnitOfWork
 from app.modules.usage.contracts.execution import build_usage_service
 
@@ -158,7 +160,7 @@ def approval_handler(
             raise
         except Exception:
             if ctx.item.attempts + 1 >= APPROVAL_RETRY.max_attempts:
-                await _report_failure(payload.conversation_id)
+                await _report_failure(payload)
             raise
 
     return execute_approval
@@ -328,8 +330,9 @@ async def on_approval_dead(ctx: DeadContext) -> None:
         )
 
 
-async def _report_failure(conversation_id: UUID) -> None:
-    """Tell the conversation's platform that the approved action failed.
+async def _report_failure(payload: ApprovalExecution) -> None:
+    """Tell the person that the approved action failed: on the timeline, where
+    its question was asked, and on the conversation's platform.
 
     A chat tap on Approve is answered "running it now" before this runs, so a
     failure is a broken promise the person would otherwise never hear about.
@@ -339,12 +342,30 @@ async def _report_failure(conversation_id: UUID) -> None:
     # Lazily: it is only needed on this path, and importing it loads the
     # platforms.
     from app.modules.agent_surfaces.contracts.egress import (
+        APPROVED_ACTION_FAILED_NOTICE,
         report_approved_action_failed,
     )
 
+    uow_factory = SessionUnitOfWorkFactory(async_session_maker)
+    try:
+        async with uow_factory() as uow:
+            await tell_where_asked(
+                uow,
+                conversation_id=payload.conversation_id,
+                text=APPROVED_ACTION_FAILED_NOTICE,
+                key=f"approval-failed:{payload.conversation_id}:{payload.approval_id}",
+            )
+            await uow.commit()
+    except SQLAlchemyError:
+        # The caller is already handling a failure; this must not replace it
+        # with its own. The platform's notice below still goes.
+        logger.warning(
+            "agent.approval.failure_notice_line_failed.degraded",
+            conversation_id=str(payload.conversation_id),
+            exc_info=True,
+        )
     await report_approved_action_failed(
-        uow_factory=SessionUnitOfWorkFactory(async_session_maker),
-        conversation_id=conversation_id,
+        uow_factory=uow_factory, conversation_id=payload.conversation_id
     )
 
 

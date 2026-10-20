@@ -32,6 +32,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from functools import cache
 import xml.etree.ElementTree as ET
 from collections import Counter
 from pathlib import Path
@@ -371,8 +372,12 @@ def _negated_markers(markers: str) -> set[str]:
     return set(re.findall(r"\bnot\s+(\w+)", markers))
 
 
-def _module_marks(path: Path) -> set[str]:
+@cache
+def _module_marks(path: Path) -> frozenset[str]:
     """Marker names in a module-level `pytestmark`, by AST rather than by grep.
+
+    Cached: one run asks this of the same file once per shard, and the files do
+    not change while it runs.
 
     A substring search for "workspace" matches the word in a docstring, an
     import or a fixture name, so it would call most of this suite
@@ -388,7 +393,7 @@ def _module_marks(path: Path) -> set[str]:
         for inner in ast.walk(node.value):
             if isinstance(inner, ast.Attribute):
                 marks.add(inner.attr)
-    return marks
+    return frozenset(marks)
 
 
 def _session_worker_conflict(backend: Path, markers: str) -> tuple[set[str], set[str]]:

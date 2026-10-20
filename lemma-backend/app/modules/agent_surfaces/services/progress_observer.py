@@ -30,6 +30,10 @@ from app.modules.agent_surfaces.platforms.common import platform_transport_error
 from app.modules.agent_surfaces.platforms.rendering import (
     ThinkingStreamFilter,
 )
+from app.modules.agent_surfaces.services.contact_stream_gate import (
+    ContactGate,
+    contact_refuses_answers,
+)
 from app.modules.agent_surfaces.services.egress_service import SurfaceEgress
 from app.modules.agent_surfaces.services.live_display import forget_live_display
 from app.modules.agent_surfaces.services.progress_display import (
@@ -81,9 +85,11 @@ class SurfaceAgentRunProgressObserver(
     """Reflect agent run progress through platform-native surface indicators.
 
     Display only. The agent's final answer (or its failure notice) is the
-    run's ``surface_deliveries`` row, written by the transaction that finishes
-    the run and sent by the destination pump -- never by this object, so a
-    worker dying mid-run loses a progress bubble and not an answer. Its
+    run's channel line and its delivery, written once the run has finished
+    (``surface.reply_for_run``) and sent by the channel delivery executor --
+    never by this object, so a worker dying mid-run loses a progress bubble
+    and not an answer. A contact whose rules refuse the agent's answer now
+    (they opted out, or WhatsApp's window closed) is shown nothing at all. Its
     intermediate narration, reasoning (``ThinkingContent``) and tool activity
     (``ToolCallContent`` / ``ToolReturnContent``) are never delivered as chat
     messages — they only drive progress indicators. To achieve this the observer
@@ -105,9 +111,17 @@ class SurfaceAgentRunProgressObserver(
         *,
         uow_factory: UnitOfWorkFactory,
         egress_factory: Callable[[SqlAlchemyUnitOfWork], SurfaceEgress],
+        contact_gate: ContactGate | None = None,
     ) -> None:
         self.uow_factory = uow_factory
         self.egress_factory = egress_factory
+        #: Whether a conversation's contact refuses its answer now; see
+        #: ``contact_stream_gate``.
+        self.contact_gate: ContactGate = contact_gate or (
+            lambda conversation_id: contact_refuses_answers(
+                uow_factory, conversation_id
+            )
+        )
         self._typing_task: asyncio.Task[None] | None = None
         self._last_text_progress_at = 0.0
         self._last_text_progress: str | None = None
@@ -168,6 +182,12 @@ class SurfaceAgentRunProgressObserver(
         self._stays_in_lemma = not getattr(ctx, "delivers_to_surface", True)
         platform = _surface_platform(conversation)
         if platform is None or self._stays_in_lemma:
+            return
+        if conversation.contact_id is not None and await self.contact_gate(
+            conversation.id
+        ):
+            # Their answer will not go; neither does anything leading up to it.
+            self._stays_in_lemma = True
             return
         capabilities = PLATFORM_CAPABILITIES.get(platform or "")
         if capabilities is not None and capabilities.finishes_stream_with_answer:
@@ -288,10 +308,10 @@ class SurfaceAgentRunProgressObserver(
     ) -> None:
         """Finish the run's display; the answer is not the observer's to send.
 
-        The finished run writes its reply as a ``surface_deliveries`` row in the
-        transaction that finishes it (``surface.reply_for_run``), and the
-        destination pump sends it -- so a worker that dies here loses a typing
-        bubble, never the answer. What is left for the observer is display:
+        The finished run's answer is its channel line and delivery
+        (``surface.reply_for_run``), sent by the channel delivery executor --
+        so a worker that dies here loses a typing bubble, never the answer.
+        What is left for the observer is display:
 
         * the typing refresh stops;
         * a live Slack stream carrying an answer is flushed to the last token

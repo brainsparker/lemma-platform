@@ -1,20 +1,22 @@
 """A run's live stream, recorded so the run's reply can finish it in place.
 
 On Slack a run's answer streams into one message as the model writes it, and
-the reply closes that same message with the rest of the answer -- one message
-in the thread, not a stream that vanishes and a second message that repeats
-it. The stream belongs to the run's process (its observer opens and writes
-it); the reply is sent by the destination pump (``surface.reply``), which may
-run anywhere and later. So the observer records the stream here as it goes:
+the answer's delivery closes that same message with the rest of the answer --
+one message in the thread, not a stream that vanishes and a second message
+that repeats it. The stream belongs to the run's process (its observer opens
+and writes it); the answer is sent by the channel delivery executor
+(``run_answer_sends``), which may run anywhere and later. So the observer
+records the stream here as it goes:
 
 * where it is (the ``ProgressHandle``) and what of the answer it already shows;
 * ``sealed`` once the run has finished and the observer has flushed the last
-  of it and let go -- nothing else will be written to it but the reply.
+  of it and let go -- nothing else will be written to it but the answer.
 
-The pump reads the record for a run's answer (``take_live_display``), waits a
-moment for the seal when the observer is still finishing, and closes the
-stream with what is left; without a record, or when closing fails, it posts the
-answer as a new message and takes any stream down first.
+The sender reads the record for a run's answer (``take_live_display``), waits
+a moment for the seal when the observer is still finishing, and closes the
+stream with what is left, recording the stream's message as the delivery's;
+without a record, or when closing fails, it posts the answer as a new message
+and takes any stream down first.
 
 Display state, so Redis with a TTL, like decision-card handles: losing a record
 costs the person one extra message, never the answer. Every call here is best
@@ -39,7 +41,7 @@ logger = get_logger(__name__)
 
 _STORE_ERRORS = (RedisError, OSError)
 
-#: How long the pump waits for a still-finishing observer to seal the stream.
+#: How long the sender waits for a still-finishing observer to seal the stream.
 #: Past it the observer is presumed gone and the stream is closed with what the
 #: record says it shows.
 SEAL_WAIT_SECONDS = 10.0

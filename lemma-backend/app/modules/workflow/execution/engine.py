@@ -47,7 +47,7 @@ from app.modules.workflow.execution.stepper import RunStepper, StepResult
 from app.modules.workflow.domain.ports import (
     AgentPort,
     FunctionPort,
-    WorkflowNotificationPort,
+    FormQuestionPort,
 )
 from app.modules.workflow.execution.wait_failure import fail_run_for_wait
 from app.modules.workflow.execution.underlying_work import (
@@ -84,7 +84,7 @@ class WorkflowEngine(RunPublication):
         *,
         agent_adapter: AgentPort,
         function_adapter: FunctionPort,
-        notification_adapter: WorkflowNotificationPort,
+        form_questions: FormQuestionPort,
         work: WorkWriter | None = None,
         commits: bool = True,
     ):
@@ -97,7 +97,7 @@ class WorkflowEngine(RunPublication):
 
         self.agent_adapter = agent_adapter
         self.function_adapter = function_adapter
-        self.notification_adapter = notification_adapter
+        self.form_questions = form_questions
 
     def _stepper(self, ctx: Context | None) -> RunStepper:
         return RunStepper(
@@ -290,12 +290,13 @@ class WorkflowEngine(RunPublication):
         await self.wait_repo.update(wait)
         # Close the inbox entry in the same breath as the wait, so the two never
         # disagree about whether this step is still owed.
-        await self.notification_adapter.close_form_notification(
+        await self.form_questions.form_answered(
             pod_id=run.pod_id,
             run_id=run.id,
             node_id=node_id,
-            summary="Form submitted.",
+            wait_id=wait.id,
             data=merged,
+            by_user_id=requester_user_id,
         )
 
         run.resume(node_id, merged)
@@ -434,7 +435,7 @@ class WorkflowEngine(RunPublication):
             )
         # A cancelled run must not leave a question sitting in someone's inbox
         # waiting for an answer that nobody will ever read.
-        await self.notification_adapter.cancel_for_run(run_id=run.id)
+        await self.form_questions.run_ended(pod_id=run.pod_id, run_id=run.id)
         try:
             run.cancel()
         except ValueError as exc:

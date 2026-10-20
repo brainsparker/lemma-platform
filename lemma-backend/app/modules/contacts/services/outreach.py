@@ -181,8 +181,16 @@ async def opt_out(
 
 async def opt_out_by_token(
     uow: SqlAlchemyUnitOfWork, target: UnsubscribeTarget
-) -> bool:
-    return await SuppressionRepository(uow.session).suppress(
+) -> bool | None:
+    """Opt out the handle a signed link names; whether it was opted in.
+
+    None when the link's pod is gone: it writes to nobody now, and there is
+    nothing to keep the opt-out against.
+    """
+    suppressions = SuppressionRepository(uow.session)
+    if not await suppressions.pod_exists(target.pod_id):
+        return None
+    return await suppressions.suppress(
         pod_id=target.pod_id,
         kind=target.kind,
         value_hash=target.value_hash,

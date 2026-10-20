@@ -273,6 +273,14 @@ class ConnectorService:
         in `extra_headers`/`default_headers` -- so the read is levelled with
         the write and the mask is a second line, not the only one.
         """
+        return await self.may_manage_installs(
+            user_id=user_id, organization_id=organization_id
+        )
+
+    async def may_manage_installs(
+        self, *, user_id: UUID, organization_id: UUID
+    ) -> bool:
+        """Whether this member may add or remove the org's installs."""
         return await self.organization_access.user_has_organization_role(
             user_id=user_id,
             organization_id=organization_id,
@@ -344,7 +352,11 @@ class ConnectorService:
         kind: str | None = None,
         config: dict | None = None,
         name: str | None = None,
+        is_default: bool | None = None,
     ) -> AuthConfigEntity:
+        """Add an install. ``is_default`` left ``None`` makes an org's first
+        install of a connector its default; a caller making an install nobody
+        chose as the org's (a teammate's own app) passes ``False``."""
         await self._require_org_member(
             user_id=user_id,
             organization_id=organization_id,
@@ -403,7 +415,7 @@ class ConnectorService:
             config=validated_config or None,
             name=name or connector_id,
             # First install of a connector answers a bare connector_id lookup.
-            is_default=is_first_install,
+            is_default=is_first_install if is_default is None else is_default,
             created_by_user_id=user_id,
             updated_by_user_id=user_id,
         )

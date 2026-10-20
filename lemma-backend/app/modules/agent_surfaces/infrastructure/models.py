@@ -21,6 +21,11 @@ from app.modules.agent_surfaces.infrastructure.inbound_delivery_models import ( 
 from app.modules.agent_surfaces.infrastructure.slack_configuration_models import (  # noqa: F401
     SlackConfigurationTokenModel,
 )
+from app.modules.agent_surfaces.infrastructure.slack_manager_models import (  # noqa: F401
+    SlackManagerInstallModel,
+    SlackPendingAppBindingModel,
+    SlackWorkspacePersonModel,
+)
 
 from datetime import datetime
 from uuid import UUID

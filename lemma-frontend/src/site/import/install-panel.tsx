@@ -30,6 +30,8 @@ import {
     contentsLine,
     groupSteps,
     humanize,
+    installedApp,
+    landingPath,
     needsAnswer,
     statusLine,
     suggestedValue,
@@ -607,6 +609,16 @@ function Journey({ repo, owner, title }: Props) {
     const cancelled =
         job.status === "CANCELLED" || job.status === "PARTIALLY_CANCELLED";
     const missing = asked.some((v) => v.required && !valueOf(v));
+    /* The app this install brought, if it brought one. It decides where the
+       person goes when they leave this panel — see `landingPath`. */
+    const app = installedApp(plan?.steps ?? []);
+    const markArrival = () => {
+        try {
+            markInstallArrival(window.sessionStorage);
+        } catch {
+            /* no storage */
+        }
+    };
 
     /* ── Done ───────────────────────────────────────────────────────── */
     if (job.status === "COMPLETED")
@@ -624,22 +636,27 @@ function Journey({ repo, owner, title }: Props) {
                     <h2 className={s.panelTitle}>{who} is ready</h2>
                     <p className={s.muted}>
                         {who !== title && title + " is installed. "}
-                        Say hello and give it its first job.
+                        {app
+                            ? "It came with " + humanize(app) + "."
+                            : "Say hello and give it its first job."}
                     </p>
                 </div>
                 <a
                     className={s.primary}
-                    href={"/t/" + encodeURIComponent(job.pod_id)}
-                    onClick={() => {
-                        try {
-                            markInstallArrival(window.sessionStorage);
-                        } catch {
-                            /* no storage */
-                        }
-                    }}
+                    href={landingPath(job.pod_id, plan?.steps ?? [])}
+                    onClick={markArrival}
                 >
-                    Open {who}
+                    Open {app ? humanize(app) : who}
                 </a>
+                {app && (
+                    <a
+                        className={s.quiet}
+                        href={"/t/" + encodeURIComponent(job.pod_id)}
+                        onClick={markArrival}
+                    >
+                        Or open {who} instead
+                    </a>
+                )}
                 {warnings.length > 0 && <Warnings list={warnings} />}
             </Panel>
         );

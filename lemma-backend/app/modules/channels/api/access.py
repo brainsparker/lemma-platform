@@ -27,7 +27,8 @@ lines; starting a group; retrying      in a CONTACT channel)
 one's own line's delivery
 Group: rename, topic, visibility,      ``channel.write`` and the channel's
 archive, delete, members, roles,       owner -- or ``channel.manage``
-agents roster                          (``may_manage``)
+agents roster; deleting anybody's      (``may_manage``)
+line (shown as removed by them)
 CONTACT channel: assignee, status,     ``channel.write`` + ``contact.message``
 agent switch, hand-back window
 Seeing a CONTACT channel at all        ``contact.read``

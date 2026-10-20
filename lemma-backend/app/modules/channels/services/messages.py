@@ -240,20 +240,39 @@ class MemberLines:
         return edited
 
     async def delete(
-        self, channel: Channel, message_id: UUID, *, user_id: UUID
+        self,
+        channel: Channel,
+        message_id: UUID,
+        *,
+        user_id: UUID,
+        moderates: bool = False,
     ) -> ChannelMessage:
-        line = await self._own(channel, message_id, user_id=user_id)
-        deleted = await erase_line(self.uow, message_id=line.id)
+        """Delete one's own line -- or, for whoever ``moderates`` the channel
+        (may change it), anybody's: a member's, a contact's, an agent's. A copy
+        already sent outside Lemma stays as sent."""
+        line = await self._in_this(channel, message_id)
+        sender = line.sender
+        wrote_it = sender.kind is SenderKind.MEMBER and sender.user_id == user_id
+        if not wrote_it and not moderates:
+            raise LineRefused(
+                "Only who wrote a line, or who may change the channel, can delete it",
+                status_code=403,
+            )
+        deleted = await erase_line(self.uow, message_id=line.id, by_user_id=user_id)
         if deleted is None:
             raise LineRefused("That line was deleted already")
         return deleted
 
-    async def _own(
-        self, channel: Channel, message_id: UUID, *, user_id: UUID
-    ) -> ChannelMessage:
+    async def _in_this(self, channel: Channel, message_id: UUID) -> ChannelMessage:
         line = await self.lines.get(message_id)
         if line is None or line.channel_id != channel.id:
             raise LineRefused("That line is not in this channel", status_code=404)
+        return line
+
+    async def _own(
+        self, channel: Channel, message_id: UUID, *, user_id: UUID
+    ) -> ChannelMessage:
+        line = await self._in_this(channel, message_id)
         if line.sender.kind is not SenderKind.MEMBER or line.sender.user_id != user_id:
             raise LineRefused("Only who wrote a line may change it", status_code=403)
         return line
@@ -286,11 +305,13 @@ async def rewrite_line(
 
 
 async def erase_line(
-    uow: SqlAlchemyUnitOfWork, *, message_id: UUID
+    uow: SqlAlchemyUnitOfWork, *, message_id: UUID, by_user_id: UUID | None = None
 ) -> ChannelMessage | None:
-    """Forget what a line said, and whom it named; it keeps its place.
-    ``None`` when it was deleted already."""
-    deleted = await LineRepository(uow.session).delete(message_id)
+    """Forget what a line said, and whom it named; it keeps its place, and
+    the member who deleted it. ``None`` when it was deleted already."""
+    deleted = await LineRepository(uow.session).delete(
+        message_id, by_user_id=by_user_id
+    )
     if deleted is not None:
         await drop_mentions(uow.session, [deleted.id])
     return deleted

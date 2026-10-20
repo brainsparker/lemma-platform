@@ -118,6 +118,13 @@ class ChannelMessageResponse(BaseModel):
     last_reply_at: datetime | None = None
     edited_at: datetime | None = None
     deleted: bool = False
+    removed_by: PersonRef | None = Field(
+        default=None,
+        description=(
+            "On a deleted line: the member who removed it, when that was not "
+            "who wrote it -- somebody who may change the channel."
+        ),
+    )
     question: QuestionResponse | None = None
     delivered: list[LineDelivery] | None = Field(
         default=None,
@@ -313,6 +320,8 @@ def message_people(message: ChannelMessage) -> list[Principal]:
         people.append(sender)
     if message.sender.on_behalf_of:
         people.append(message.sender.on_behalf_of)
+    if message.removed_by is not None:
+        people.append(Principal.member(message.removed_by))
     question = message.question
     if question is not None:
         people.append(question.awaits)
@@ -435,6 +444,11 @@ def message_response(
         last_reply_at=message.last_reply_at,
         edited_at=message.edited_at,
         deleted=message.is_deleted,
+        removed_by=(
+            ref(Principal.member(message.removed_by), names)
+            if message.removed_by is not None
+            else None
+        ),
         question=None if hidden else _question(message, names),
         delivered=(
             [

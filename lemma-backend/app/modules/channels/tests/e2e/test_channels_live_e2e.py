@@ -102,6 +102,22 @@ async def test_a_channel_streams_its_lines_and_resumes_from_its_cursor(
         await live.event("c", "line.created", message__id=fourth["id"])
 
 
+async def test_a_line_removed_by_a_manager_reaches_its_watchers_as_theirs(
+    pod: Pod, backend_server
+) -> None:
+    channel = await group(pod, title="Moderated")
+    said = await say(pod, channel["id"], "off topic", as_user=pod.user)
+    async with live_socket(backend_server, pod.id, pod.user["token"]) as live:
+        await live.subscribe("c", "channel", channel_id=channel["id"])
+        removed = await pod.client(pod.editor).delete(
+            f"{pod.base}/{channel['id']}/messages/{said['id']}"
+        )
+        assert removed.status_code == 204, removed.text
+        deleted = await live.event("c", "line.deleted", message__id=said["id"])
+        assert deleted["message"]["text"] is None
+        assert deleted["message"]["removed_by"]["id"] == pod.editor["id"]
+
+
 async def test_a_cursor_not_ours_answers_resync(pod: Pod, backend_server) -> None:
     channel = await group(pod, title="Resync")
     async with live_socket(backend_server, pod.id, pod.owner["token"]) as live:

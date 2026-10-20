@@ -174,6 +174,11 @@ class ChannelMessageModel(UUIDAuditBase):
             postgresql_where=text("on_behalf_contact_id IS NOT NULL"),
         ),
         Index(
+            "ix_channel_messages_deleted_by",
+            "deleted_by_user_id",
+            postgresql_where=text("deleted_by_user_id IS NOT NULL"),
+        ),
+        Index(
             "ix_channel_messages_run",
             "agent_run_id",
             postgresql_where=text("agent_run_id IS NOT NULL"),
@@ -268,6 +273,11 @@ class ChannelMessageModel(UUIDAuditBase):
     )
     deleted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+    #: The member who deleted it: its writer, or somebody who may change the
+    #: channel removing it. Absent when its platform said it was deleted.
+    deleted_by_user_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
 
 

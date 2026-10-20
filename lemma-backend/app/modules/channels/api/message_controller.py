@@ -20,6 +20,7 @@ from app.core.authorization.permissions import Permissions
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.infrastructure.work import facts
+from app.core.log.log import get_logger
 from app.modules.channels.api.access import (
     ERRORS,
     Caller,
@@ -61,6 +62,8 @@ from app.modules.channels.infrastructure.lines import LineRepository
 from app.modules.channels.infrastructure.names import Names
 from app.modules.channels.services.messages import LineRefused, MemberLines, MemberPost
 from app.modules.channels.services.questions import AnswerRefused, answer
+
+logger = get_logger(__name__)
 
 router = APIRouter(
     prefix="/pods/{pod_id}/channels", tags=["Channels"], responses=ERRORS
@@ -314,13 +317,28 @@ async def edit_message(
 async def delete_message(
     pod_id: UUID, channel_id: UUID, message_id: UUID, uow: UoWDep, caller: CallerDep
 ) -> None:
-    """Delete one's own line: it keeps its place, saying nothing."""
+    """Delete a line: it keeps its place, saying nothing. One's own -- or,
+    for who may change the channel, anybody's, shown as removed by them. A
+    copy already sent outside Lemma stays as sent."""
     channel = await _writable(uow, caller, channel_id)
     try:
-        await MemberLines(uow).delete(channel, message_id, user_id=caller.user_id)
+        deleted = await MemberLines(uow).delete(
+            channel,
+            message_id,
+            user_id=caller.user_id,
+            moderates=await may_manage(uow, caller, channel),
+        )
     except LineRefused as refused:
         raise _refused(refused) from refused
     await uow.commit()
+    if deleted.removed_by is not None:
+        logger.info(
+            "channels.line.removed_by_manager.observed",
+            pod_id=str(channel.pod_id),
+            channel_id=str(channel.id),
+            message_id=str(deleted.id),
+            user_id=str(caller.user_id),
+        )
 
 
 @router.post(

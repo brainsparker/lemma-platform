@@ -80,6 +80,8 @@ class VisibleMessage(ExportedMessage):
     """
 
     client_nonce: str | None = None
+    #: Written by a member of the pod, not the agent: a person answered.
+    from_person: bool = False
 
 
 class ExportedConversation(BaseModel):
@@ -263,6 +265,7 @@ async def visible_messages(
             created_at=message.created_at,
             sequence=message.sequence,
             client_nonce=_client_nonce(message),
+            from_person=_follow_up_line(message) is not None,
         )
         for message in seen
         if message.id in said

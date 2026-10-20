@@ -749,6 +749,8 @@ async def test_a_member_assigned_a_contact_is_told_when_they_write(
         line for line in timeline["items"] if line["text"] == "A person will reply."
     ]
     assert len(said) == 1
+    # Said after what it answers, as the contact's own chat shows it.
+    assert said[0]["seq"] > theirs["seq"]
 
     replied = await async_client.post(
         f"{channel}/messages", json={"text": "Hi Dana, looking now."}, headers=as_editor

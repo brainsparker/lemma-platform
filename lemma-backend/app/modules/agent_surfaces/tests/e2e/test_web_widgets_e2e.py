@@ -917,9 +917,13 @@ async def test_a_members_line_waits_in_a_web_contacts_chat(
     history = await authenticated_client.get(
         f"/public/web/{key}/history", headers=_as(visitor)
     )
-    assert ("assistant", "It's back in stock.") in [
-        (m["role"], m["text"]) for m in history.json()["messages"]
+    # A person wrote it, and the visitor's chat can say so; the bot's own
+    # answer is the bot's.
+    said = [
+        (m["role"], m["text"], m["from_person"]) for m in history.json()["messages"]
     ]
+    assert ("assistant", "It's back in stock.", True) in said
+    assert ("assistant", "I'll check.", False) in said
 
     # Forgetting the contact ends the session that named them.
     forgotten = await authenticated_client.delete(f"/pods/{pod_id}/contacts/{contact}")

@@ -45,7 +45,7 @@ from app.modules.agent_surfaces.composition import (
     build_surface_ingress,
     build_surface_turn_starter,
 )
-from app.modules.agent_surfaces.config import surface_settings
+from app.modules.contacts.config import contacts_settings
 from app.modules.agent.tools.messaging.people import call_a_person_in
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 from app.modules.agent_surfaces.domain.ingress_request import (
@@ -76,12 +76,15 @@ from app.modules.agent_surfaces.tests.e2e.test_email_contacts_e2e import (
     _email_bot,
 )
 from app.modules.contacts.contracts import IdentityKind, IdentityStrength, open_contact
+from app.modules.contacts.domain.handles import handle_hash
 from app.modules.contacts.infrastructure.models import (
     ContactIdentityModel,
+    ContactSuppressionModel,
     ContactModel,
 )
 from app.modules.datastore.contracts import contact_rows
-from app.modules.channels.infrastructure.models import ChannelModel
+from app.modules.channels.contracts import NewLine, Sender, contact_channel, post
+from app.modules.channels.infrastructure.models import ChannelCaseModel, ChannelModel
 from app.modules.usage.contracts import UsageLimitExceededError
 from app.modules.usage.contracts.contacts_cap import contacts_cap_reached
 from app.modules.usage.contracts.metering import check_run_budget
@@ -335,23 +338,24 @@ async def test_contacts_made_at_one_moment_page_without_one_lost(
     await db_session.commit()
 
     seen: list[str] = []
-    before: str | None = None
+    cursor: str | None = None
     for _ in range(5):
         params: dict[str, str | int] = {"limit": 1}
-        if before:
-            params["before"] = before
+        if cursor:
+            params["cursor"] = cursor
         page = await authenticated_client.get(f"/pods/{pod_id}/contacts", params=params)
         assert page.status_code == 200, page.text
         seen += [item["id"] for item in page.json()["items"]]
-        before = page.json().get("next_before")
-        if not before:
+        cursor = page.json().get("next_cursor")
+        if not cursor:
             break
 
     assert len(seen) == 3 and len(set(seen)) == 3
-    refused = await authenticated_client.get(
-        f"/pods/{pod_id}/contacts", params={"before": "yesterday"}
-    )
-    assert refused.status_code == 400
+    for not_ours in ("yesterday", "bm90IGEgY3Vyc29y"):
+        refused = await authenticated_client.get(
+            f"/pods/{pod_id}/contacts", params={"cursor": not_ours}
+        )
+        assert refused.status_code == 400, not_ours
 
 
 # ------------------------------------------------------------ exporting
@@ -426,6 +430,7 @@ async def test_an_export_carries_their_rows_and_pages_through_everything(
 # ------------------------------------------------------------ the contacts cap
 
 
+@pytest.mark.drives_work
 async def test_past_the_cap_no_run_starts_and_a_person_takes_over(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
@@ -490,17 +495,27 @@ async def test_past_the_cap_no_run_starts_and_a_person_takes_over(
         ).all()
     ]
     assert ("user", "Hello again?") in texts and ("user", "Anyone there?") in texts
-    # Told once that a person will reply -- in the thread and by email.
+    # Told once that a person will reply -- in the thread and by email, as the
+    # pod's line at her place carried by its delivery: her rules apply, and
+    # the email says how to stop, in its body and its headers.
     replies = [text for role, text in texts if text and "will reply here" in text]
     assert len(replies) == 1 and replies[0].startswith("A person from ")
+    assert message_store.get_all("RESEND")[sent_before:] == []
+    await send_deliveries()
     sent = message_store.get_all("RESEND")[sent_before:]
-    assert len(sent) == 1 and "will reply here" in str(sent[0])
+    [courtesy] = [mail for mail in sent if "will reply here" in str(mail)]
+    assert courtesy["to"] == [CUSTOMER]
+    assert "List-Unsubscribe" in courtesy["headers"]
     # The member was told once, in their own channel, where to look -- not
     # what she wrote: her words stay in her channel, which forgetting her takes.
+    # Pushed: nobody else is answering her.
     [note] = await direct_lines(db_session, pod_id=pod_id, user_id=owner)
     assert note.members_only
     assert "Somebody outside the space is waiting for you" in note.body
     assert "Hello again?" not in note.body and "Anyone there?" not in note.body
+    assert [push.recipient_user_id for push in await deliveries_of_line(note.id)] == [
+        owner
+    ]
     # Both are on Dana's channel, which waits on a person to answer by hand.
     conversation = await db_session.get(ConversationModel, first.conversation_id)
     assert conversation is not None and conversation.channel_id is not None
@@ -650,8 +665,8 @@ async def test_a_member_who_writes_holds_the_contact_until_they_go_quiet(
     assert window.json()["assignee"]["id"] == fixed_test_user["id"]
     # The member last wrote two hours ago: past the window.
     await db_session.execute(
-        update(ChannelModel)
-        .where(ChannelModel.id == channel_id)
+        update(ChannelCaseModel)
+        .where(ChannelCaseModel.channel_id == channel_id)
         .values(assignee_last_line_at=datetime.now(timezone.utc) - timedelta(hours=2))
     )
     await db_session.commit()
@@ -885,8 +900,10 @@ async def test_writing_to_a_contact_takes_an_editor_and_a_daily_limit(
     assert refused.status_code == 404, refused.text
 
     monkeypatch.setattr(
-        surface_settings, "surface_contact_follow_ups_per_contact_per_day", 1
+        contacts_settings, "contacts_member_lines_per_contact_per_day", 1
     )
+    # The agent's answer to her rides its own delivery: let it go first.
+    await send_deliveries()
     sent_before = len(message_store.get_all("RESEND"))
     written = await member_writes(
         authenticated_client, pod_id, channel, "Your order shipped today."
@@ -929,21 +946,26 @@ async def test_a_follow_up_the_platform_refused_is_never_shown_as_said(
         answer="anyone",
     )
     context = await _dana_writes(db_session, address, "not-sent-1")
+    assert context.audience.contact_id is not None
+    member = UUID(fixed_test_user["id"])
     uow = SqlAlchemyUnitOfWork(db_session)
-    await contact_conversations.append_follow_up(
-        uow,
-        conversation_id=context.conversation_id,
-        message="This one never left.",
-        sent_by_user_id=UUID(fixed_test_user["id"]),
-        delivered=False,
+    channel = await contact_channel(
+        uow, pod_id=UUID(pod_id), contact_id=context.audience.contact_id
     )
-    await contact_conversations.append_follow_up(
-        uow,
-        conversation_id=context.conversation_id,
-        message="This one did.",
-        sent_by_user_id=UUID(fixed_test_user["id"]),
-        delivered=True,
-    )
+    for said, delivered in (("This one never left.", False), ("This one did.", True)):
+        line = await post(
+            uow,
+            channel_id=channel.id,
+            line=NewLine(sender=Sender.member(member), text=said),
+        )
+        assert line is not None
+        await contact_conversations.append_follow_up(
+            uow,
+            conversation_id=context.conversation_id,
+            line_id=line.id,
+            sent_by_user_id=member,
+            delivered=delivered,
+        )
     await db_session.commit()
 
     shown = await contact_conversations.visible_messages(
@@ -1033,7 +1055,17 @@ async def test_stop_unsubscribes_the_address_it_came_from(
             ContactIdentityModel.contact_id == UUID(dana)
         )
     )
-    assert identity is not None and identity.unsubscribed_at is not None
+    assert identity is not None
+    assert (
+        await db_session.scalar(
+            select(ContactSuppressionModel.reason).where(
+                ContactSuppressionModel.pod_id == UUID(pod_id),
+                ContactSuppressionModel.value_hash
+                == handle_hash(IdentityKind.EMAIL, identity.value),
+            )
+        )
+        == "stop"
+    )
     # A member's line to her afterwards stays in Lemma, recorded as not sent.
     sent_before = len(message_store.get_all("RESEND"))
     channel = await contact_channel_id(authenticated_client, pod_id, dana)

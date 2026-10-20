@@ -7,6 +7,9 @@ from app.core.registry import LemmaModule
 
 
 def _routers():
+    from app.modules.agent_surfaces.api.controllers.contact_outreach_controller import (
+        router as contact_outreach,
+    )
     from app.modules.agent_surfaces.api.controllers.notice_controller import (
         router as notices,
     )
@@ -46,6 +49,7 @@ def _routers():
     )
 
     return [
+        contact_outreach,
         notices,
         surface,
         sources,

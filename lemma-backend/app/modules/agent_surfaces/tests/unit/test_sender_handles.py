@@ -49,7 +49,7 @@ def _event(
             SurfacePlatform.WHATSAPP,
             "+44 7700 900123",
             IdentityKind.PHONE,
-            "447700900123",
+            "+447700900123",
         ),
         (SurfacePlatform.TELEGRAM, None, IdentityKind.TELEGRAM, "U777"),
     ],
@@ -95,3 +95,29 @@ def test_a_private_message_on_slack_is_a_colleagues_not_a_contacts():
     )
 
     assert private_handle(event) is None
+
+
+def test_a_number_whatsapp_vouches_for_is_international_whatever_the_pods_region(
+    monkeypatch,
+):
+    """Meta sends ``4155550100`` for +41 55 555 01 00. Read in a US pod's
+    region it was +1 415 555 0100 -- a different person's contact."""
+    from app.modules.contacts.config import contacts_settings
+
+    monkeypatch.setattr(contacts_settings, "contacts_default_phone_region", "US")
+    event = _event(SurfacePlatform.WHATSAPP, is_dm=True, phone="4155550100")
+
+    handle = private_handle(event)
+
+    assert handle is not None
+    assert (handle.kind, handle.value) == (IdentityKind.PHONE, "+4155550100")
+
+
+def test_a_whatsapp_group_sender_with_no_number_is_no_phone_handle():
+    """A participant WhatsApp names only by a business-scoped user id: that id
+    is not a phone number, and read as one it named a stranger."""
+    event = _event(
+        SurfacePlatform.WHATSAPP, is_dm=False, sender="US.13491208655302741918"
+    )
+
+    assert group_handle(event) is None

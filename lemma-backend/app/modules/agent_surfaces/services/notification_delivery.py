@@ -1,7 +1,7 @@
 """Choosing where to reach a person, and what that choice is allowed to assume.
 
-Split out of :mod:`notification_service` because it is the part with real rules
-in it and no side effects — which makes it the part worth testing directly.
+Kept apart from the sending because it is the part with real rules in it and
+no side effects — which makes it the part worth testing directly.
 
 The choice belongs to the **sending agent**, not the recipient. That is the
 identity argument: a pod connects its own Telegram bot or Slack app, and a
@@ -67,6 +67,9 @@ class Outbound:
     pod_id: UUID
     recipient_user_id: UUID
     title: str
+    #: The key every try of it is sent under, where the platform dedupes on
+    #: one (a push's delivery's).
+    key: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,14 +78,25 @@ class Delivered:
 
     platform: str | None = None
     conversation_id: UUID | None = None
+    #: The platform's id for what it sent, when it named one.
+    external_message_id: str | None = None
     reason: str | None = None
     #: Nothing took it because a platform failed, not because nothing could:
     #: worth trying again.
     retryable: bool = False
+    #: Held back by the hourly budget: its lines go with the next push.
+    held: bool = False
 
     @property
     def sent(self) -> bool:
         return self.platform is not None
+
+
+@dataclass(frozen=True, slots=True)
+class PlatformSent:
+    """A platform took it; its id for the message, when it named one."""
+
+    external_message_id: str | None = None
 
 
 # The name an agent uses for "reach them by mail", whichever provider carries it.
@@ -170,6 +184,10 @@ class UndeliverableReason:
         "reply window."
     )
     NO_EMAIL_ADDRESS = "No email address is on file for this person."
+    NOT_WORTH_AN_EMAIL = (
+        "No chat app reaches them, and a group's lines that do not name them "
+        "are not emailed; it waits in Lemma."
+    )
     NO_SURFACE_FOR_AGENT = (
         "This agent has no surface it can reach people on. Connect a chat "
         "surface for it, or configure email so it gets a mailbox."

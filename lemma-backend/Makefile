@@ -630,9 +630,8 @@ benchmark-functions-e2b:
 		uv run pytest $(FUNCTION_BENCH_TEST) -q -s -o timeout=1800
 
 teams-manifest-zip:
-	python3 scripts/package_teams_manifest.py \
-		--manifest-dir "$(TEAMS_MANIFEST_DIR)" \
-		--output "$(OUTPUT)"
+	cd "$(TEAMS_MANIFEST_DIR)" && rm -f "$(abspath $(OUTPUT))" && \
+		zip -X -q "$(abspath $(OUTPUT))" manifest.json color.png outline.png
 
 # --------------------------------------------------------------------------
 # Load testing — WebSocket capacity on a simulated 2 CPU / 2 GB server

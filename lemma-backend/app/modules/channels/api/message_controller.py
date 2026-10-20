@@ -9,13 +9,13 @@ tabled in ``api.access``.
 
 from __future__ import annotations
 
-import hashlib
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 
 from app.core.api.dependencies import UoWDep, get_uow_factory
-from app.core.authorization.dependencies import require_action
+from app.core.authorization.context import ActorType
+from app.core.authorization.dependencies import PodContextDep, require_action
 from app.core.authorization.permissions import Permissions
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
@@ -28,8 +28,10 @@ from app.modules.channels.api.access import (
     may_manage,
     missing,
     require_contact_message,
+    unprocessable,
     visible,
 )
+from app.modules.channels.api.attachments import checked_parts
 from app.modules.channels.api.message_schemas import (
     ChannelAnswerRequest,
     ChannelEditRequest,
@@ -50,6 +52,7 @@ from app.modules.channels.domain.entities import (
     Principal,
     SenderKind,
 )
+from app.modules.channels.domain.idempotency import keyed_client_id
 from app.modules.channels.infrastructure.deliveries import DeliveryRepository
 from app.modules.channels.infrastructure.lines import LineRepository
 from app.modules.channels.infrastructure.names import Names
@@ -86,7 +89,7 @@ async def _line_in(
     "/{channel_id}/messages",
     operation_id="channel.message.list",
     response_model=ChannelMessagesResponse,
-    dependencies=[require_action(Permissions.CONVERSATION_READ)],
+    dependencies=[require_action(Permissions.CHANNEL_READ)],
 )
 async def list_messages(
     pod_id: UUID,
@@ -125,7 +128,7 @@ async def list_messages(
     "/{channel_id}/messages/{message_id}/thread",
     operation_id="channel.message.thread",
     response_model=ThreadResponse,
-    dependencies=[require_action(Permissions.CONVERSATION_READ)],
+    dependencies=[require_action(Permissions.CHANNEL_READ)],
 )
 async def list_thread(
     pod_id: UUID,
@@ -166,13 +169,11 @@ async def _writable(
     return channel
 
 
-def _client_id(body_id: str | None, idempotency_key: str | None) -> str | None:
+def _client_id(
+    body_id: str | None, idempotency_key: str | None, *, user_id: UUID
+) -> str | None:
     """The client's name for the line: theirs, or one made from the key."""
-    if body_id is not None or idempotency_key is None:
-        return body_id
-    if len(idempotency_key) <= 64:
-        return idempotency_key
-    return hashlib.sha256(idempotency_key.encode()).hexdigest()
+    return body_id or keyed_client_id(idempotency_key, user_id=user_id)
 
 
 @router.post(
@@ -180,7 +181,7 @@ def _client_id(body_id: str | None, idempotency_key: str | None) -> str | None:
     operation_id="channel.message.post",
     response_model=ChannelMessageResponse,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[require_action(Permissions.CONVERSATION_WRITE)],
+    dependencies=[require_action(Permissions.CHANNEL_WRITE)],
 )
 async def post_message(
     pod_id: UUID,
@@ -188,6 +189,7 @@ async def post_message(
     body: ChannelPostRequest,
     uow: UoWDep,
     caller: CallerDep,
+    ctx: PodContextDep,
     idempotency_key: str | None = Header(
         default=None, alias="Idempotency-Key", min_length=1, max_length=255
     ),
@@ -209,8 +211,12 @@ async def post_message(
                 source_id=body.source_id,
                 thread_root_id=body.thread_root_id,
                 reply_to_id=body.reply_to_id,
-                parts=tuple(body.parts),
-                client_message_id=_client_id(body.client_message_id, idempotency_key),
+                parts=await checked_parts(
+                    uow, ctx, pod_id=caller.pod_id, parts=body.parts
+                ),
+                client_message_id=_client_id(
+                    body.client_message_id, idempotency_key, user_id=caller.user_id
+                ),
             ),
         )
     except LineRefused as refused:
@@ -223,7 +229,7 @@ async def post_message(
     "/{channel_id}/messages/{message_id}",
     operation_id="channel.message.update",
     response_model=ChannelMessageResponse,
-    dependencies=[require_action(Permissions.CONVERSATION_WRITE)],
+    dependencies=[require_action(Permissions.CHANNEL_WRITE)],
 )
 async def edit_message(
     pod_id: UUID,
@@ -232,8 +238,13 @@ async def edit_message(
     body: ChannelEditRequest,
     uow: UoWDep,
     caller: CallerDep,
+    ctx: PodContextDep,
 ) -> ChannelMessageResponse:
-    """Change what one's own line says. A copy already sent outside stays as sent."""
+    """Change what one's own line says: absent is unchanged, `null` parts
+    clears them. A copy already sent outside stays as sent."""
+    named = body.model_fields_set
+    if "text" in named and body.text is None:
+        raise unprocessable("Cannot clear text: delete the line instead")
     channel = await _writable(uow, caller, channel_id)
     try:
         line = await MemberLines(uow).edit(
@@ -241,7 +252,13 @@ async def edit_message(
             message_id,
             user_id=caller.user_id,
             text=body.text,
-            parts=tuple(body.parts) if body.parts is not None else None,
+            parts=(
+                await checked_parts(
+                    uow, ctx, pod_id=caller.pod_id, parts=body.parts or ()
+                )
+                if "parts" in named
+                else None
+            ),
         )
     except LineRefused as refused:
         raise _refused(refused) from refused
@@ -253,7 +270,7 @@ async def edit_message(
     "/{channel_id}/messages/{message_id}",
     operation_id="channel.message.delete",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[require_action(Permissions.CONVERSATION_WRITE)],
+    dependencies=[require_action(Permissions.CHANNEL_WRITE)],
 )
 async def delete_message(
     pod_id: UUID, channel_id: UUID, message_id: UUID, uow: UoWDep, caller: CallerDep
@@ -271,7 +288,7 @@ async def delete_message(
     "/{channel_id}/messages/{message_id}/answer",
     operation_id="channel.message.answer",
     response_model=ChannelMessageResponse,
-    dependencies=[require_action(Permissions.CONVERSATION_READ)],
+    dependencies=[require_action(Permissions.CHANNEL_READ)],
 )
 async def answer_question(
     pod_id: UUID,
@@ -279,10 +296,13 @@ async def answer_question(
     message_id: UUID,
     body: ChannelAnswerRequest,
     caller: CallerDep,
+    ctx: PodContextDep,
     uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
 ) -> ChannelMessageResponse:
     """Answer what this line asks the reader: a question, an approval (which
-    needs a `decision`), a form. Only the person it waits on may.
+    needs a `decision`), a form. Only the person it waits on may -- and an
+    approval, or an agent's paused question, only by their own hand: an agent
+    calling with a token delegated by them is refused, as its tool is.
 
     No session is held across the answer: what asked takes it in its own -- a
     run resumed, a form submitted -- and may call out to do so.
@@ -296,6 +316,7 @@ async def answer_question(
             message_id=message_id,
             by=Principal.member(caller.user_id),
             given=body.answer,
+            through_agent=ctx.actor_type is ActorType.DELEGATED_USER_WORKLOAD,
         )
     except AnswerRefused as refused:
         raise _refused(refused) from refused
@@ -312,7 +333,7 @@ async def answer_question(
     "/{channel_id}/messages/{message_id}/deliveries",
     operation_id="channel.delivery.list",
     response_model=DeliveriesResponse,
-    dependencies=[require_action(Permissions.CONVERSATION_READ)],
+    dependencies=[require_action(Permissions.CHANNEL_READ)],
 )
 async def list_deliveries(
     pod_id: UUID, channel_id: UUID, message_id: UUID, uow: UoWDep, caller: CallerDep
@@ -343,7 +364,7 @@ async def list_deliveries(
     "/{channel_id}/messages/{message_id}/deliveries/{delivery_id}/retry",
     operation_id="channel.delivery.retry",
     response_model=DeliveryResponse,
-    dependencies=[require_action(Permissions.CONVERSATION_WRITE)],
+    dependencies=[require_action(Permissions.CHANNEL_WRITE)],
 )
 async def retry_delivery(
     pod_id: UUID,
@@ -367,12 +388,17 @@ async def retry_delivery(
         line.sender.kind is SenderKind.MEMBER and line.sender.user_id == caller.user_id
     )
     if not wrote_it and not await may_manage(uow, caller, channel):
-        raise forbidden("Only who wrote the line, or an admin, can send it again")
+        raise forbidden(
+            "Only who wrote the line, or who may change the channel, can send it again"
+        )
     retried = await deliveries.retry(delivery.id)
     if retried is None:
         raise conflict("Only a send that failed can be tried again")
     await facts.emit(
-        uow, ChannelDeliveryDue(pod_id=channel.pod_id, delivery_id=retried.id)
+        uow,
+        ChannelDeliveryDue(
+            pod_id=channel.pod_id, delivery_id=retried.id, target=retried.target_key
+        ),
     )
     await uow.commit()
     return delivery_response(retried, names={})

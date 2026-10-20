@@ -16,6 +16,7 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.channels.domain.entities import Principal
 from app.modules.contacts.contracts import contact_names
 from app.modules.identity.contracts.orm import User
+from app.modules.pod.contracts.members import pod_name
 
 #: The most people one page names.
 MAX_NAMED = 500
@@ -72,4 +73,10 @@ class Names:
             .where(_AGENTS.c.pod_id == pod_id, _AGENTS.c.id.in_(wanted))
             .limit(len(wanted))
         )
-        return dict(rows.tuples().all())
+        named: dict[UUID, str] = dict(rows.tuples().all())
+        if pod_id in named:
+            # The pod's own assistant (its row's id is the pod's) speaks under
+            # the pod's name, as it does on every platform -- never its row's
+            # system name.
+            named[pod_id] = await pod_name(self.uow.session, pod_id) or named[pod_id]
+        return named

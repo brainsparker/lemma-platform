@@ -268,8 +268,8 @@ class SurfaceTurnStarter:
                 context, message_text, metadata, uow, lines=self.channel_lines(uow)
             )
             # Their message reopened a closed reply window: what waited for it
-            # is written out now, ahead of the answer this message will get,
-            # and the destination pump sends them in that order.
+            # is written out now, before the answer this message will get is
+            # even started, and the destination pump sends it at once.
             await stage_held_replies(
                 uow,
                 conversation_id=context.conversation_id,

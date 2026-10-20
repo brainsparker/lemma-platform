@@ -1,10 +1,9 @@
 """Working out how this agent can reach this person, and minting one if it cannot.
 
-Split from ``notification_service`` because the two answer different questions.
-That service owns what a notification *means* — the row, the lifecycle, whether
-it was answered. This owns the routing: which of the agent's surfaces can carry
-a message to one recipient, in what order, and why the answer is sometimes
-nothing.
+What a push *means* -- the line, its delivery row, whether it was answered --
+is the channels module's. This owns the routing: which of the agent's surfaces
+can carry a message to one recipient, in what order, and why the answer is
+sometimes nothing.
 
 The rule is agent-scoped: candidates are the surfaces the *sending* agent speaks
 through, so a recipient hears from the bot they already know that agent as. See
@@ -99,6 +98,7 @@ class NotificationChannelResolver:
         origin_surface_id: UUID | None = None,
         agent_name: str | None = None,
         channel: str | None = None,
+        allow_email: bool = True,
     ) -> tuple[list[DeliveryChannel], str]:
         """Every way this agent can reach this person, best first.
 
@@ -106,6 +106,9 @@ class NotificationChannelResolver:
 
         ``channel`` narrows the whole thing to one channel the agent chose. It
         is a filter, not a preference: nothing outside it is tried.
+
+        ``allow_email=False`` keeps it to chat apps -- for a line not worth an
+        email (a plain line in a group) -- and so mints no mailbox either.
         """
         # ``list_by_pod`` is paginated and returns ``(items, next_cursor)``. A pod
         # with more surfaces than one page is not a real shape — they are bots a
@@ -114,8 +117,8 @@ class NotificationChannelResolver:
         active = [surface for surface in all_surfaces if surface.is_active]
         # Normalised here, once, rather than at each caller. `actor_agent_id`
         # arrives in three spellings for the same agent: the assistant's row id,
-        # `None` from a caller that has no agent at all (a workflow form, the
-        # notifications API) and used to mean "the pod's own surfaces", and the
+        # `None` from a caller that has no agent at all (a workflow form, a
+        # member's notice) and used to mean "the pod's own surfaces", and the
         # delegation sentinel from a token minted before the row existed.
         #
         # Getting this wrong is not a lookup miss: `surfaces_for_agent` would
@@ -135,6 +138,14 @@ class NotificationChannelResolver:
                 recipient_user_id=recipient_user_id,
                 actor_agent_id=actor_agent_id,
                 agent_name=agent_name,
+                origin_surface_id=origin_surface_id,
+            )
+
+        if not allow_email:
+            return await self._resolve_without_email(
+                surfaces,
+                pod_id=pod_id,
+                recipient_user_id=recipient_user_id,
                 origin_surface_id=origin_surface_id,
             )
 
@@ -228,6 +239,26 @@ class NotificationChannelResolver:
             ),
         )
 
+    async def _resolve_without_email(
+        self,
+        surfaces: list[AgentSurfaceEntity],
+        *,
+        pod_id: UUID,
+        recipient_user_id: UUID,
+        origin_surface_id: UUID | None,
+    ) -> tuple[list[DeliveryChannel], str]:
+        """The chat apps that reach them, or why none does: no mailbox, no
+        fallback to one."""
+        chats = [surface for surface in surfaces if not can_cold_open(surface)]
+        candidates, _, window_closed = await self._channels_from(
+            chats, recipient_user_id, pod_id=pod_id
+        )
+        if candidates:
+            return rank_candidates(candidates, origin_surface_id=origin_surface_id), ""
+        if window_closed:
+            return [], UndeliverableReason.REPLY_WINDOW_CLOSED
+        return [], UndeliverableReason.NOT_WORTH_AN_EMAIL
+
     @staticmethod
     def _refusal_cause(
         channel: str, *, wanted: list[AgentSurfaceEntity], window_closed: bool
@@ -297,8 +328,8 @@ class NotificationChannelResolver:
         inbound routes on the address, so a pod that had not yet sent anything
         matched no surface and mail to the obvious guess started nothing.
 
-        A failure here is never fatal. The notification row exists and the inbox
-        has it, so this degrades to an explanation rather than an exception —
+        A failure here is never fatal. The line is already in the member's
+        channel, so this degrades to an explanation rather than an exception —
         but the explanation says *which* thing went wrong, because "the pod has
         no active surface" on a deployment whose real problem was an unset mail
         domain sent us looking in the wrong place.

@@ -10,10 +10,11 @@ runs for real, over the channels module's own contracts.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import (
@@ -23,10 +24,13 @@ from app.core.infrastructure.db.uow_factory import (
 from app.core.infrastructure.work import WorkClass, WorkRegistry, facts
 from app.core.infrastructure.work.testing import make_due, run_until_idle
 from app.modules.agent.contracts.run_facts import AgentRunFinished
+from app.modules.agent.domain.pausing_tools import USER_PAUSING_TOOL_NAMES
 from app.modules.agent.domain.value_objects import (
     AgentRunApprovalDecision,
     AgentRunStatus,
     ConversationStatus,
+    MessageDraft,
+    MessageKind,
     MessageRole,
 )
 from app.modules.agent.events.channel_answer_work import (
@@ -35,17 +39,20 @@ from app.modules.agent.events.channel_answer_work import (
 from app.modules.agent.events.channel_question_work import (
     register_channel_question_work,
 )
+from app.modules.agent.events.pause_expiry_work import register_pause_expiry_work
 from app.modules.agent.infrastructure.models import AgentRunModel
 from app.modules.agent.infrastructure.repositories import ConversationRepository
 from app.modules.agent.services.channel_answers import answer_line, turn_client_id
 from app.modules.agent.services.pause_questions import (
     sync_pause_questions,
+    tell_where_asked,
     tool_ref,
 )
 from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
 from app.modules.agent.services.service_factories import build_conversation_service
 from app.modules.agent.tests.e2e.lifecycle_helpers import (
     Seeded,
+    append,
     finish,
     messages,
     owner_uow,
@@ -54,6 +61,7 @@ from app.modules.agent.tests.e2e.lifecycle_helpers import (
     runs,
     seeded_conversation,
 )
+from app.modules.agent_surfaces.contracts.egress import APPROVED_ACTION_FAILED_NOTICE
 from app.modules.channels.contracts import (
     ChannelMessage,
     NewLine,
@@ -68,7 +76,13 @@ from app.modules.channels.contracts import (
 from app.modules.channels.contracts import questions as channel_questions
 from app.modules.channels.contracts.lines import line_by_id
 from app.modules.channels.contracts.questions import AnswerRefused
-from app.modules.channels.infrastructure.models import ChannelMessageModel
+from app.modules.channels.events.sweeps import questions_expire
+from app.modules.channels.infrastructure.models import (
+    ChannelLineAnswerModel,
+    ChannelMessageDeliveryModel,
+    ChannelMessageModel,
+    ChannelQuestionModel,
+)
 
 pytestmark = [pytest.mark.e2e, pytest.mark.drives_work]
 
@@ -104,8 +118,8 @@ async def _drain(*classes: WorkClass) -> int:
 async def _answering_conversation(line_id: UUID) -> UUID:
     async with async_session_maker() as session:
         conversation_id = await session.scalar(
-            select(ChannelMessageModel.conversation_id).where(
-                ChannelMessageModel.id == line_id
+            select(ChannelLineAnswerModel.conversation_id).where(
+                ChannelLineAnswerModel.message_id == line_id
             )
         )
     assert conversation_id is not None, "no turn answers the line"
@@ -191,7 +205,10 @@ async def test_the_pods_agent_answers_a_line_once_however_often_it_is_retried(
     assert answer.sender_kind == SenderKind.AGENT.value
     assert answer.on_behalf_user_id == owner
     assert answer.conversation_id == conversation_id
-    assert answer.thread_root_id == said.id
+    # A member's own channel reads as a chat: the answer follows the line it
+    # answers rather than opening a thread under it.
+    assert answer.thread_root_id is None
+    assert answer.reply_to_id == said.id
     assert answer.channel_id == said.channel_id
 
 
@@ -378,3 +395,175 @@ async def test_a_pause_is_asked_once_however_often_its_run_ends(scenario):
             )
         )
     assert count == 1
+
+
+# -- a paused question nobody answered in time ------------------------------------
+
+
+async def _expire(seeded: Seeded, call: str) -> None:
+    """Its time ran out, and the sweeper ran: as the minute's job does."""
+    async with async_session_maker() as session:
+        await session.execute(
+            update(ChannelQuestionModel)
+            .where(
+                ChannelQuestionModel.pod_id == seeded.pod_id,
+                ChannelQuestionModel.ref == tool_ref(seeded.conversation_id, call),
+            )
+            .values(expires_at=datetime.now(UTC) - timedelta(minutes=1))
+        )
+        await session.commit()
+    await questions_expire()
+
+
+async def _drain_expiry() -> None:
+    registry = WorkRegistry()
+    register_channel_question_work(registry)
+    register_pause_expiry_work(registry)
+    await make_due(async_session_maker)
+    with suppress_agent_run_enqueue():
+        await run_until_idle(
+            async_session_maker, registry=registry, classes=[WorkClass.EVENTS]
+        )
+
+
+async def _tool_return(seeded: Seeded, call: str):
+    (returned,) = [
+        message
+        for message in await messages(seeded.conversation_id)
+        if message.kind is MessageKind.TOOL_RETURN and message.tool_call_id == call
+    ]
+    return returned
+
+
+async def test_an_ask_nobody_answered_in_time_resumes_its_run_unanswered(scenario):
+    seeded = await seeded_conversation(scenario)
+    call = await _paused(seeded, tool_name="ask_user", tool_args=TWO_QUESTIONS)
+
+    await _expire(seeded, call)
+    await _drain_expiry()
+
+    assert (await _question(seeded, call)).state is QuestionState.EXPIRED
+    returned = await _tool_return(seeded, call)
+    assert returned.tool_result["success"] is False
+    assert "expired" in returned.tool_result["message"]
+    assert len(await runs(seeded.conversation_id)) == 2, "the run did not resume"
+
+
+async def test_an_approval_nobody_decided_in_time_is_not_approved_anywhere(scenario):
+    seeded = await seeded_conversation(scenario)
+    call = await _paused(
+        seeded,
+        tool_name="request_approval",
+        tool_args={"title": "Delete the table?", "tool_name": "pod_query"},
+    )
+
+    await _expire(seeded, call)
+    await _drain_expiry()
+
+    returned = await _tool_return(seeded, call)
+    assert returned.tool_result["executed"] is False
+    assert "expired" in returned.tool_result["message"]
+    # The conversation's own card cannot approve it afterwards: the expiry is
+    # the decision on record, and a late tap adopts it.
+    with suppress_agent_run_enqueue():
+        async with owner_uow(seeded) as uow:
+            late = await build_conversation_service(uow).resolve_user_approval(
+                conversation_id=seeded.conversation_id,
+                approval_id=call,
+                user_id=seeded.user_id,
+                pod_id=seeded.pod_id,
+                decision=AgentRunApprovalDecision.APPROVE_ONCE,
+            )
+            await uow.commit()
+    assert late.decision is AgentRunApprovalDecision.DENY
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        assert (
+            await ConversationRepository(uow).pausing_calls_awaiting_a_decision(
+                conversation_id=seeded.conversation_id,
+                pausing_tool_names=USER_PAUSING_TOOL_NAMES,
+            )
+            == []
+        )
+
+
+async def test_a_cancelled_pause_question_leaves_its_run_alone(scenario):
+    """Cancelled -- its member left, say -- is not "nobody answered": a run is
+    never resumed for somebody who is no longer in the pod."""
+    seeded = await seeded_conversation(scenario)
+    call = await _paused(seeded, tool_name="ask_user", tool_args=TWO_QUESTIONS)
+    asked = await _question(seeded, call)
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        await channel_questions.close(
+            uow, message_id=asked.message_id, state=QuestionState.CANCELLED
+        )
+        await uow.commit()
+    await _drain_expiry()
+
+    assert len(await runs(seeded.conversation_id)) == 1
+
+
+# -- what a pause says around its question -----------------------------------------
+
+
+async def test_a_pauses_line_carries_what_the_agent_said_before_it(scenario):
+    seeded = await seeded_conversation(scenario)
+    run_id = await running_run(seeded)
+    await append(
+        seeded,
+        run_id,
+        MessageDraft.of_text("I found two sizes in stock.", role=MessageRole.ASSISTANT),
+    )
+    call = await pausing_call(
+        seeded, run_id, tool_name="ask_user", tool_args=TWO_QUESTIONS
+    )
+    await finish(run_id, conversation_status=ConversationStatus.WAITING)
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        await sync_pause_questions(uow, seeded.conversation_id)
+        await uow.commit()
+
+    asked = await _question(seeded, call)
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        line = await line_by_id(uow, asked.message_id)
+    assert line is not None
+    assert line.text.startswith("I found two sizes in stock.\n\n")
+    assert "Which size?" in line.text
+
+
+async def test_an_approved_action_that_failed_is_said_on_the_timeline(scenario):
+    """Where its question was asked, once however often it is said, and as a
+    note: the platform the conversation is on hears it from the surfaces."""
+    seeded = await seeded_conversation(scenario)
+    call = await _paused(
+        seeded,
+        tool_name="request_approval",
+        tool_args={"title": "Send the invoice?", "tool_name": "pod_query"},
+    )
+    asked = await _question(seeded, call)
+    for _ in range(2):
+        async with create_uow_from_session_maker(async_session_maker) as uow:
+            await tell_where_asked(
+                uow,
+                conversation_id=seeded.conversation_id,
+                text=APPROVED_ACTION_FAILED_NOTICE,
+                key=f"approval-failed:{seeded.conversation_id}:{call}",
+            )
+            await uow.commit()
+
+    async with async_session_maker() as session:
+        said = list(
+            await session.scalars(
+                select(ChannelMessageModel).where(
+                    ChannelMessageModel.channel_id == asked.channel_id,
+                    ChannelMessageModel.body == APPROVED_ACTION_FAILED_NOTICE,
+                )
+            )
+        )
+        (notice,) = said
+        deliveries = await session.scalar(
+            select(func.count()).where(
+                ChannelMessageDeliveryModel.message_id == notice.id
+            )
+        )
+    assert notice.members_only is True
+    assert notice.conversation_id == seeded.conversation_id
+    assert deliveries == 0

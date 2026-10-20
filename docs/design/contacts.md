@@ -201,8 +201,9 @@ named. That would make Lemma a relay for spam and phishing.
 keep that rule:
 
 - No contact is created and no agent run starts.
-- The message lands in the bot's inbox marked *unverified sender*, so a member
-  can read it and reply by hand if it's genuine.
+- The member who looks after contacts is told, in their own channel, that
+  mail came from an *unverified sender*, so they can read it and reply by hand
+  if it's genuine.
 - A member can add the address to a contact, for outbound mail and for later
   messages that do authenticate. Unverified mail from it is still parked.
   Someone vouching for an address doesn't make the next forged `From:` genuine.
@@ -213,10 +214,11 @@ keep that rule:
   the member who looks after the bot. All of a contact's places -- their chats,
   email threads and web chat -- are sources of that channel and feed the same
   conversation, so a WhatsApp follow-up to an email request has the history.
-- **Hand-off.** The agent can pass a conversation to a person. A member takes it
-  over, replies are sent as the bot, and the agent stays quiet until it's handed
-  back. Groups' take-over flow and private notes (`metadata.private_note`) carry
-  over unchanged.
+- **Hand-off.** The agent can pass a conversation to a person. A member steps
+  in -- the contact's channel is assigned to them (`assignee`) -- replies are
+  sent as the bot, and the agent stays quiet until it's handed back, by the
+  member or after the channel's hand-back window. Private notes
+  (`metadata.private_note`) carry over unchanged.
 
 ## Outbound
 
@@ -346,36 +348,44 @@ one:
   contact on a contact-owned table. `/public/web/widget.js` is the chat and the
   form drawer. Limits per widget,
   session, address and email, failing closed.
-- **Follow-ups.** `POST /pods/{pod_id}/contacts/{id}/messages` (`contact.message`,
-  editors and up; at most `SURFACE_CONTACT_FOLLOW_UPS_PER_CONTACT_PER_DAY` per
-  contact) writes to a contact in their most recent conversation, sent first
-  and recorded as not sent when the platform refuses it: WhatsApp within 24 hours of their
-  last message (`contact_identities.last_inbound_at`), Telegram any time, email
-  with an unsubscribe line and a signed link (`/public/contacts/unsubscribe`,
-  a confirmation page whose button does it), a web chat by leaving it for
-  their next visit. Never to a handle they unsubscribed
-  (`unsubscribed_at`); writing again opts them back in, except a message that
-  is only "STOP" or "unsubscribe", which unsubscribes the handle instead. A bot
-  for known contacts gives a stranger one short refusal a day.
-  `channel` on the request is `latest` (the default, all of the above) or
-  `email`: to the contact's most recently verified email handle (strength
-  `CHANNEL`, `HOST` or `CODE`, never `MEMBER`; refused as `unsubscribed` when
-  any email handle is, `no_verified_email` when none qualifies). When the
-  latest conversation is already an email thread it is that thread. Otherwise
-  (a web chat, or another platform) the send is a cold open from the pod's
-  oldest active email surface whose `contacts.answer` is not `off` and whose
-  `looked_after_by` is still a member (`no_email_surface` when there is none),
-  through `open_cold_email_thread` with a random `References` seed
-  (`follow_up_seed_id`). Only after the provider accepts it is the thread made a
-  place of the contact's channel, keyed by the seed and their address, and the
-  mail written into their conversation with the agent there (owned by
-  `looked_after_by`, opened if they have none), so the reply, authenticated and
-  matched to the contact by its email identity, binds to it in `ContactDoor`.
-  Same daily cap and unsubscribe line; a failed send is written as not sent
-  into the latest conversation, and no place is made. The email thread
-  becomes the contact's latest place, where the next `latest` follow-up goes.
-- **Unverified email** is parked as an inbox note to the member who looks after
-  contacts, once an hour per sender and at most
+- **Outreach policy** is `contacts`' (`contacts.contracts.outreach`), and every
+  line to a contact's place -- a member's, an agent's answer, an
+  acknowledgement -- is held to it before it goes, in this order: **opt-out
+  first** (a `contact_suppressions` row for the handle's sha256: `stop`,
+  `unsubscribe`, `bounce`; it outlives the contact being forgotten, and holds
+  with nobody looking after contacts), then a handle of the place's kind, then
+  the platform's window (WhatsApp: 24 hours from the contact's last message to
+  that number, the place's `last_inbound_at`), then, for a member's line,
+  `CONTACTS_MEMBER_LINES_PER_CONTACT_PER_DAY`, counted once per line in Redis
+  (Redis away is retried, never sent uncounted). A whole message "STOP" (or an
+  email whose subject is "unsubscribe") opts the handle out, even from a
+  machine; "START" or any message the person typed -- a vouched-for sender, no
+  automatic-mail header -- opts it back in. Email to a contact ends with a
+  signed unsubscribe link and carries `List-Unsubscribe` (the link and a
+  `mailto:` the bot receives) with `List-Unsubscribe-Post: List-Unsubscribe=One-Click`
+  (RFC 8058), whose `POST` the unsubscribe controller takes. Handles are
+  normalised: phones E.164 (`phonenumbers`, in `CONTACTS_DEFAULT_PHONE_REGION`
+  when one is set, else read as international), email trimmed and lower-cased,
+  host identities `host:{issuer}:{sub}` with the issuer a widget declares
+  (`host_issuer`, `default` unless given at creation).
+- **Writing first.** `POST /pods/{pod_id}/contacts/{id}/outreach` `{handle, text}`
+  (`contact.message`, editors and up; held to the outreach policy above; an
+  `Idempotency-Key` or `client_message_id` makes a retry the same line) posts
+  the member's line in the contact's channel at the place that handle is
+  reached through, and sends it as a delivery like any line a member writes.
+  Email any time: the pod's mailbox's place for that address, opened the first
+  time, where the send starts a new thread (`cold_email_thread`) whose reply,
+  authenticated and matched to the contact by its email identity, comes back to
+  the same place; it ends with an unsubscribe line and a signed link
+  (`/public/contacts/unsubscribe`, a confirmation page whose button does it).
+  WhatsApp only within 24 hours of their last message to that number, and
+  Telegram only where they have written to the bot. Slack, Teams, web and host
+  handles are answered where the person writes, never written to first. A
+  handle that is not theirs, opted out, is outside its window or was never
+  written from posts nothing and says why. A bot for known contacts gives a
+  stranger one short refusal a day.
+- **Unverified email** is parked as a line in the own channel of the member who
+  looks after contacts, once an hour per sender and at most
   `SURFACE_PARKED_MAIL_NOTES_PER_SURFACE_PER_HOUR` notes a bot, then one
   summary. Mail a machine sent (`Auto-Submitted`, `Precedence`, list headers,
   mailer-daemon and no-reply senders, our own addresses) is neither answered
@@ -408,8 +418,7 @@ one:
 - **Every public endpoint is under `/public/`.** The rule, its exceptions and
   the gate that holds it are in CONTRIBUTING.md.
 
-Not built yet: WhatsApp templates (follow-ups past the 24-hour window), a
-`List-Unsubscribe` header on follow-up email, newsletters to subscribers,
+Not built yet: WhatsApp templates (writing first past the 24-hour window), newsletters to subscribers,
 step-up codes for contact functions (the `requires` strength), pod bundles
 carrying `contact_owned`, `contact_columns`, `contacts_invoke` and
 `include_outside_rows`, and a hand-back control in the app for a conversation

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { insertMention, matchMentionable, mentionAt, mentionables, mentionsIn, type Mentionable } from "../src/channels/mentions.ts";
+import { channelReaders, insertMention, matchMentionable, mentionAt, mentionables, mentionsIn, type Mentionable } from "../src/channels/mentions.ts";
 
 const lem: Mentionable = { kind: "AGENT", id: "agent-lem", name: "Lem" };
 const priya: Mentionable = { kind: "MEMBER", id: "user-priya", name: "Priya Shah" };
@@ -16,8 +16,8 @@ test("an @ opens the menu at the start or after a space, never inside an address
     assert.equal(mentionAt("plain words", 5), null);
 });
 
-test("offers anyone a word of whose name starts with what was typed, agents first", () => {
-    const people = [priya, pat, tomas, lem];
+test("offers anyone a word of whose name starts with what was typed, in the order given", () => {
+    const people = [lem, priya, pat, tomas];
     assert.deepEqual(matchMentionable(people, "p").map((who) => who.id), ["user-priya", "user-pat"]);
     assert.deepEqual(matchMentionable(people, "riv").map((who) => who.id), ["contact-tomas"]);
     assert.deepEqual(matchMentionable(people, "").map((who) => who.id), ["agent-lem", "user-priya", "user-pat", "contact-tomas"]);
@@ -59,4 +59,27 @@ test("everyone who can be named: the agents, then the people in it other than th
         "user-me",
     );
     assert.deepEqual(people.map((who) => who.kind + ":" + who.id), ["AGENT:agent-lem", "MEMBER:user-priya", "CONTACT:contact-tomas"]);
+});
+
+test("after the channel's own people, the pod's other members who can read it: everyone, in a public group only", () => {
+    const pod = [
+        { userId: "user-me", name: "Me", kind: "person" },
+        { userId: "user-priya", name: "Priya Shah", kind: "person" },
+        { userId: "user-sam", name: "Sam Lee", kind: "person" },
+        { userId: "user-lem", name: "Lem", kind: "teammate" },
+        { name: "Invited, no account", kind: "person" },
+    ];
+    const readers = channelReaders({ kind: "GROUP", visibility: "PUBLIC" }, pod);
+    assert.deepEqual(readers.map((one) => one.userId), ["user-me", "user-priya", "user-sam"]);
+    assert.deepEqual(channelReaders({ kind: "GROUP", visibility: "PRIVATE" }, pod), [], "a private group's lines are its members' alone");
+    assert.deepEqual(channelReaders({ kind: "CONTACT", visibility: "PUBLIC" }, pod), []);
+    const people = mentionables(
+        [{ id: "agent-lem", label: "Lem" }],
+        [{ kind: "MEMBER", id: "user-priya", name: "Priya Shah" }],
+        "user-me",
+        readers,
+    );
+    assert.deepEqual(people.map((who) => who.kind + ":" + who.id + ":" + who.inChannel), [
+        "MEMBER:user-priya:true", "MEMBER:user-sam:false", "AGENT:agent-lem:false",
+    ], "in the channel first, then who can read it, then agents who answer once; never the reader");
 });

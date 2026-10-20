@@ -1,14 +1,21 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
 from lemma_sdk.openapi_client.api.channels import (
+    channel_list,
     channel_member_leave,
+    channel_member_list,
     channel_message_post,
     channel_read,
+    channel_search,
     channel_update,
 )
+from lemma_sdk.openapi_client.models.channel_kind import ChannelKind
+from lemma_sdk.openapi_client.models.sender_kind import SenderKind
+from lemma_sdk.openapi_client.models.visibility import Visibility
 from lemma_sdk.resources.channels import PodChannels
 
 POD = uuid4()
@@ -92,3 +99,74 @@ def test_leaving_is_one_call_about_the_caller() -> None:
     [(endpoint, path_args, _)] = transport.calls
     assert endpoint is channel_member_leave
     assert path_args == (POD, CHANNEL)
+
+
+def test_a_contact_is_assigned_to_me_and_an_edit_clears_parts() -> None:
+    transport = RecordingTransport()
+    channels = PodChannels(transport, pod_id=POD)
+
+    channels.update(CHANNEL, assignee="me")
+    channels.edit_message(CHANNEL, uuid4(), parts=None)
+
+    assert _sent(transport.calls[0]) == {"assignee": "me"}
+    assert _sent(transport.calls[1]) == {"parts": None}
+
+
+def test_a_groups_source_is_under_its_channel() -> None:
+    from lemma_sdk.openapi_client.api.channel_sources import (
+        channel_source_update,
+        channel_whatsapp_group_start,
+    )
+    from lemma_sdk.openapi_client.api.channels import channel_list
+
+    transport = RecordingTransport()
+    sources = PodChannels(transport, pod_id=POD).sources
+    source = uuid4()
+
+    sources.update(CHANNEL, source, take_over=True)
+    sources.list("acme-whatsapp")
+    sources.start_whatsapp_group("acme-whatsapp", "Order 1182", idempotency_key="k")
+
+    update, listed, started = transport.calls
+    assert (update[0], update[1]) == (channel_source_update, (POD, CHANNEL, source))
+    assert _sent(update) == {"owner": "me"}
+    assert listed[0] is channel_list
+    assert listed[2]["source_surface"] == "acme-whatsapp"
+    assert started[0] is channel_whatsapp_group_start
+    assert started[2]["idempotency_key"] == "k"
+
+
+def test_a_channels_members_are_read_a_page_at_a_time() -> None:
+    transport = RecordingTransport()
+
+    PodChannels(transport, pod_id=POD).members(CHANNEL, cursor="next", limit=2)
+
+    [(endpoint, path_args, kwargs)] = transport.calls
+    assert endpoint is channel_member_list
+    assert path_args == (POD, CHANNEL)
+    assert (kwargs["cursor"], kwargs["limit"]) == ("next", 2)
+
+
+def test_search_narrows_by_who_kind_and_when() -> None:
+    transport = RecordingTransport()
+    who, since = uuid4(), datetime(2026, 10, 1, tzinfo=timezone.utc)
+
+    PodChannels(transport, pod_id=POD).search(
+        "invoice", kind="GROUP", sender=("MEMBER", who), since=since, archived=True
+    )
+
+    [(endpoint, _, kwargs)] = transport.calls
+    assert endpoint is channel_search
+    assert kwargs["kind"] is ChannelKind.GROUP
+    assert (kwargs["sender_kind"], kwargs["sender_id"]) == (SenderKind.MEMBER, who)
+    assert (kwargs["since"], kwargs["archived"]) == (since, True)
+
+
+def test_the_channel_list_narrows_by_visibility_and_title() -> None:
+    transport = RecordingTransport()
+
+    PodChannels(transport, pod_id=POD).list(visibility="PRIVATE", q="launch")
+
+    [(endpoint, _, kwargs)] = transport.calls
+    assert endpoint is channel_list
+    assert (kwargs["visibility"], kwargs["q"]) == (Visibility.PRIVATE, "launch")

@@ -46,8 +46,12 @@ AGENT_CHANNEL_LINE: Final = "agent.channel_line"
 AGENT_CHANNEL_ANSWER: Final = "agent.channel_answer"
 #: Posts a finished run's answer to the line in Lemma it answers.
 AGENT_CHANNEL_REPLY: Final = "agent.channel_reply"
-#: Brings a conversation's pause questions in line with what it still waits on.
+#: After a run: brings a conversation's pause questions in line with what it
+#: still waits on, and seals the run's batch of questions to people.
 AGENT_PAUSE_QUESTIONS: Final = "agent.pause_questions"
+#: A paused ``ask_user`` / ``request_approval`` whose question's time ran out:
+#: the run is told nobody answered, and resumes.
+AGENT_PAUSE_EXPIRED: Final = "agent.pause_expired"
 #: A question one conversation put to a member closed: is its batch settled?
 AGENT_ASKED_QUESTION_CLOSED: Final = "agent.asked_question_closed"
 
@@ -118,6 +122,10 @@ def pause_questions_key(run_id: UUID) -> str:
     return f"pause-questions:{run_id}"
 
 
+def pause_expired_key(message_id: UUID) -> str:
+    return f"pause-expired:{message_id}"
+
+
 def asked_question_closed_key(message_id: UUID) -> str:
     return f"asked-question-closed:{message_id}"
 
@@ -128,6 +136,7 @@ __all__ = [
     "AGENT_CHANNEL_ANSWER",
     "AGENT_CHANNEL_LINE",
     "AGENT_CHANNEL_REPLY",
+    "AGENT_PAUSE_EXPIRED",
     "AGENT_PAUSE_QUESTIONS",
     "AGENT_FOLLOWUP",
     "AGENT_REPLIES_ARRIVED",
@@ -148,6 +157,7 @@ __all__ = [
     "child_wait_key",
     "conversation_key",
     "followup_key",
+    "pause_expired_key",
     "pause_questions_key",
     "pod_ask_key",
     "replies_key",

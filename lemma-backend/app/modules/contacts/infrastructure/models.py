@@ -86,11 +86,12 @@ class ContactIdentityModel(UUIDAuditBase):
     last_inbound_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    #: When the contact asked not to be written to at this handle. Never
-    #: cleared by the pod; only the contact writing again opts back in.
-    unsubscribed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    #: The product that named a host identity (``host:{issuer}:{sub}``), so
+    #: it can be read back without parsing the value. ``None`` for every other
+    #: kind.
+    issuer: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    #: The handle as it arrived, before normalising: what a member reads.
+    value_raw: Mapped[str | None] = mapped_column(String(320), nullable=True)
 
 
 class ContactSuppressionModel(Base):

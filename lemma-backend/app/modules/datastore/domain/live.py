@@ -1,19 +1,12 @@
-"""The pod's live socket: what a client may ask for and what it is sent.
+"""The ``records`` topic of the pod's live socket: what it is asked, and sent.
 
-One socket per (client, pod) carries many subscriptions. A client names each
-subscription with its own ``id`` and the server answers on that id::
+A ``records`` subscription watches a pod's tables (the socket and its frames
+are core's, ``app/core/live``)::
 
     -> {"op":"subscribe","id":"s1","topic":"records","table":"tickets",
         "ops":["insert","update"],"when":{"status":"open"},"since":"<cursor>"}
-    -> {"op":"unsubscribe","id":"s1"}
-    -> {"op":"ping"}
-    <- {"type":"ready","connection":"…","cursor":"…"}
     <- {"type":"subscribed","id":"s1","cursor":"…"}
     <- {"type":"changes","id":"s1","cursor":"…","changes":[{"op":"update",…}]}
-    <- {"type":"resync","id":"s1","cursor":"…","reason":"…"}
-    <- {"type":"error","id":"s1","code":"forbidden|not_found|invalid|limit","message":"…"}
-    <- {"type":"unsubscribed","id":"s1","reason":"…"}
-    <- {"type":"pong"}
 
 ``when`` takes the trigger grammar (``app/core/domain/record_conditions.py``)
 restricted to its value operators -- equals, not_equals, in, not_in -- because a
@@ -24,12 +17,11 @@ the row it would be tested against is gone and a client holding the record
 needs to drop it. A row updated out of the filter is not sent.
 
 Everything here is pure: parsing, the frame shapes, and the change values the
-hub moves around. The hub and the socket live in ``services/live``.
+hub moves around. The hub lives in ``services/live``.
 """
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
@@ -41,13 +33,13 @@ from app.core.domain.record_conditions import (
     evaluate_match_conditions,
     parse_match_conditions,
 )
-from pydantic import (
-    BaseModel,
-    ConfigDict,
-    Field,
-    JsonValue,
-    TypeAdapter,
-    ValidationError,
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
+
+from app.core.live.protocol import (
+    LiveRequestInvalid,
+    SubscribeRequest as CoreSubscribeRequest,
+    dumps as _dumps,
+    parse_params,
 )
 
 #: The value of a row as the client sees it: column name to JSON value.
@@ -59,49 +51,36 @@ LiveOp = Literal["insert", "update", "delete"]
 ChangePosition = tuple[int, int]
 
 
-class ResyncReason(StrEnum):
-    #: ``since`` is older than the log keeps, or is not a cursor at all.
-    CURSOR_EXPIRED = "cursor_expired"
-    #: More changes for this subscription in one batch than are worth sending.
-    TOO_MANY = "too_many"
-    #: The set of tables the subscription covers changed under it.
-    PERMISSION_CHANGED = "permission_changed"
-    #: The socket could not keep up; its queued frames were dropped.
-    OVERFLOW = "overflow"
-
-
 class UnsubscribedReason(StrEnum):
     ACCESS_REVOKED = "access_revoked"
     TABLE_DROPPED = "table_dropped"
-
-
-class LiveErrorCode(StrEnum):
-    FORBIDDEN = "forbidden"
-    NOT_FOUND = "not_found"
-    INVALID = "invalid"
-    LIMIT = "limit"
-    #: The server could not check access just now; subscribe again later.
-    UNAVAILABLE = "unavailable"
 
 
 # ---------------------------------------------------------------------------
 # Inbound
 # ---------------------------------------------------------------------------
 
-_SubscriptionId = Annotated[str, Field(min_length=1, max_length=64)]
 
+class RecordsParams(BaseModel):
+    """A ``records`` subscription's own fields, past what every topic has."""
 
-class SubscribeRequest(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
-    op: Literal["subscribe"]
-    id: _SubscriptionId
-    topic: Literal["records"] = "records"
     #: One table by name; omitted means every table the caller can read now.
     table: Annotated[str, Field(min_length=1, max_length=255)] | None = None
     ops: tuple[LiveOp, ...] | None = None
-    since: Annotated[str, Field(min_length=1, max_length=512)] | None = None
     #: Conditions over the current row; see the module docstring.
+    when: dict[str, JsonValue] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SubscribeRequest:
+    """One ``records`` subscription, as the hub takes it."""
+
+    id: str
+    table: str | None = None
+    ops: tuple[LiveOp, ...] | None = None
+    since: str | None = None
     when: dict[str, JsonValue] | None = None
 
     def conditions(self) -> LiveConditions | None:
@@ -135,61 +114,22 @@ class LiveConditions:
         )
 
 
-class UnsubscribeRequest(BaseModel):
-    model_config = ConfigDict(extra="ignore", frozen=True)
-
-    op: Literal["unsubscribe"]
-    id: _SubscriptionId
-
-
-class PingRequest(BaseModel):
-    model_config = ConfigDict(extra="ignore", frozen=True)
-
-    op: Literal["ping"]
-
-
-LiveRequest = Annotated[
-    SubscribeRequest | UnsubscribeRequest | PingRequest, Field(discriminator="op")
-]
-_REQUEST = TypeAdapter(LiveRequest)
-
-
-class LiveRequestInvalid(ValueError):
-    """An inbound frame the server cannot act on; answered, never fatal."""
-
-    def __init__(self, message: str, *, subscription_id: str | None = None) -> None:
-        super().__init__(message)
-        self.subscription_id = subscription_id
-
-
-def parse_request(raw: str) -> SubscribeRequest | UnsubscribeRequest | PingRequest:
-    """Parse one client frame, or raise ``LiveRequestInvalid`` saying why."""
+def records_request(request: CoreSubscribeRequest) -> SubscribeRequest:
+    """A socket's subscribe frame as a ``records`` subscription, or
+    ``LiveRequestInvalid`` saying what is wrong with it."""
+    params = parse_params(RecordsParams, request.params, request_id=request.id)
+    parsed = SubscribeRequest(
+        id=request.id,
+        table=params.table,
+        ops=params.ops,
+        since=request.since,
+        when=params.when,
+    )
     try:
-        decoded = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise LiveRequestInvalid("Frame is not JSON.") from exc
-    subscription_id = decoded.get("id") if isinstance(decoded, dict) else None
-    try:
-        request = _REQUEST.validate_python(decoded)
-        if isinstance(request, SubscribeRequest):
-            request.conditions()
-        return request
-    except ValidationError as exc:
-        first = exc.errors()[0] if exc.errors() else {"msg": "invalid frame"}
-        location = ".".join(str(part) for part in first.get("loc", ()))
-        raise LiveRequestInvalid(
-            f"{location}: {first['msg']}" if location else str(first["msg"]),
-            subscription_id=subscription_id
-            if isinstance(subscription_id, str)
-            else None,
-        ) from exc
+        parsed.conditions()
     except ValueError as exc:
-        raise LiveRequestInvalid(
-            f"when: {exc}",
-            subscription_id=subscription_id
-            if isinstance(subscription_id, str)
-            else None,
-        ) from exc
+        raise LiveRequestInvalid(f"when: {exc}", request_id=request.id) from exc
+    return parsed
 
 
 # ---------------------------------------------------------------------------
@@ -230,18 +170,6 @@ class LiveCursorExpired(Exception):
     """A cursor the log can no longer answer from: too old, or not a cursor."""
 
 
-class LiveHubUnavailable(Exception):
-    """The pod's hub did not start: failed unexpectedly, was stopped, or took
-    too long. The socket says so and the client retries."""
-
-
-class LiveAccessDenied(Exception):
-    def __init__(self, code: LiveErrorCode, message: str) -> None:
-        super().__init__(message)
-        self.code = code
-        self.message = message
-
-
 @dataclass(slots=True)
 class MergedChange:
     """A record's net change within one batch: one entry per record."""
@@ -267,10 +195,6 @@ def merge_change(existing: MergedChange | None, change: LiveChange) -> MergedCha
 # ---------------------------------------------------------------------------
 # Outbound
 # ---------------------------------------------------------------------------
-
-
-def _dumps(value: object) -> str:
-    return json.dumps(value, separators=(",", ":"), default=str)
 
 
 @dataclass(slots=True)
@@ -337,45 +261,5 @@ def changes_frame(subscription_id: str, cursor: str, changes: list[str]) -> str:
     )
 
 
-def ready_frame(connection_id: str, cursor: str | None) -> str:
-    return _dumps({"type": "ready", "connection": connection_id, "cursor": cursor})
-
-
-def legacy_ready_frame(cursor: str) -> str:
+def legacy_ready_frame(cursor: str | None) -> str:
     return _dumps({"type": "ready", "since": cursor, "cursor": cursor})
-
-
-def subscribed_frame(subscription_id: str, cursor: str) -> str:
-    return _dumps(
-        {
-            "type": "subscribed",
-            "id": subscription_id,
-            "cursor": cursor,
-            "stream_id": cursor,
-        }
-    )
-
-
-def resync_frame(subscription_id: str, cursor: str, reason: ResyncReason) -> str:
-    return _dumps(
-        {
-            "type": "resync",
-            "id": subscription_id,
-            "cursor": cursor,
-            "stream_id": cursor,
-            "reason": reason.value,
-        }
-    )
-
-
-def error_frame(subscription_id: str | None, code: LiveErrorCode, message: str) -> str:
-    return _dumps(
-        {"type": "error", "id": subscription_id, "code": code.value, "message": message}
-    )
-
-
-def unsubscribed_frame(subscription_id: str, reason: str) -> str:
-    return _dumps({"type": "unsubscribed", "id": subscription_id, "reason": reason})
-
-
-PONG_FRAME = '{"type":"pong"}'

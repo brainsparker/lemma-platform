@@ -256,6 +256,9 @@ class _EmptyScalarResult:
 
 
 class _EmptyExecuteResult:
+    #: An update or delete that matched nothing.
+    rowcount = 0
+
     def __iter__(self):
         return iter(())
 
@@ -336,7 +339,7 @@ class AnsweredAt:
             account_id=uuid4(),
             surface_id=self.surface_id,
             platform=self.platform,
-            kind=SourceKind.SHARED if self.is_group else SourceKind.PRIVATE,
+            kind=SourceKind.CHAT if self.is_group else SourceKind.PERSON,
             external_channel_id=(
                 self.external_channel_id
                 if self.is_group
@@ -560,7 +563,6 @@ def build_egress(
             for_surface=AsyncMock(return_value={}),
             for_platform=AsyncMock(return_value={}),
         ),
-        channel_lines=RecordingChannelLines(),
     )
     return SurfaceEgress(
         uow=doubles.uow,

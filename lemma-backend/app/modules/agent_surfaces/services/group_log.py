@@ -56,6 +56,8 @@ from app.modules.agent_surfaces.infrastructure.repositories.group_repository imp
 from app.modules.agent_surfaces.platforms.platform_capabilities import (
     PLATFORM_CAPABILITIES,
 )
+from app.modules.agent_surfaces.services.line_markup import Bot, LineMarkup
+from app.modules.agent_surfaces.services.channel_lines import reply_ref_of
 from app.modules.agent_surfaces.services.sender_handles import group_handle
 from app.modules.agent_surfaces.services.channel_places import (
     ChannelSeats,
@@ -66,6 +68,7 @@ from app.modules.agent_surfaces.services.workspace_channels import (
     note_workspace_channel,
 )
 from app.modules.channels.contracts import (
+    ChannelMessage,
     NewLine,
     Principal,
     Reader,
@@ -164,17 +167,29 @@ class GroupLog:
                 if threaded
                 else None
             )
+            said = await LineMarkup(self.uow).read(
+                parsed,
+                pod_id=group.pod_id,
+                channel_id=group.channel_id,
+                bot=Bot(surface_id=group.surface_id),
+            )
             await post(
                 self.uow,
                 channel_id=group.channel_id,
                 line=NewLine(
                     sender=await self._speaker(group, parsed),
-                    text=parsed.message_text,
+                    text=said.text,
+                    parts=said.parts,
                     source_id=group.id,
                     external_message_id=parsed.external_message_id,
                     external_thread_id=parsed.external_thread_id,
                     thread_root_id=root,
+                    # What answers this line in place -- a member replying to
+                    # it in Lemma -- goes to its thread there.
+                    reply_ref=reply_ref_of(parsed),
                 ),
+                mentions=said.mentions,
+                mentioned_agents=said.agents,
             )
         return wrote or bool(known)
 
@@ -228,6 +243,9 @@ class GroupBackground:
     #: Empty for a contact's run, which is told no more about the pod than it
     #: can already read.
     participants: tuple[SurfaceGroupParticipant, ...] = ()
+    #: The lines read, as the pod reads them: what the run keeps a reference
+    #: to, and reads again -- for this reader -- whenever its prompt is built.
+    heard: tuple[ChannelMessage, ...] = ()
 
 
 async def group_background(
@@ -312,6 +330,7 @@ async def group_background(
         withheld=withheld,
         outside_authors=tuple(outside_authors),
         participants=participants,
+        heard=tuple(lines),
     )
 
 

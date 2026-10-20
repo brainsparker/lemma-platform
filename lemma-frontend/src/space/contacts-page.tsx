@@ -1,17 +1,19 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { source, type Pod } from "@/data";
 import {
     EMPTY_WIDGET_DRAFT,
     answerChoices,
     contactName,
     contactSubline,
-    followUpRefusal,
     handleText,
+    outreachProblem,
+    outreachSaid,
     readOrigins,
     vouchedBy,
     widgetProblem,
+    writableHandles,
     type Contact,
     type ContactReach,
     type NewWebWidget,
@@ -22,15 +24,16 @@ import { channelApi } from "@/channels/api";
 import { isForbidden } from "@/session/auth-state";
 import { Modal } from "@/shell/modal";
 import { channelHref, goTo } from "@/shell/place-link";
-import { useFeature } from "@/site/analytics/flags";
 import {
     useContacts,
     useCreateWidget,
     useFollowUp,
     useForgetContact,
     useMaySeeContacts,
+    useAutoAcknowledge,
     useReach,
     useReachChange,
+    useSetAutoAcknowledge,
     useRemoveWidget,
     useRenameContact,
     useShareableColumns,
@@ -65,6 +68,7 @@ export function ContactsPage({ pod }: { pod: Pod }) {
                 <p>People outside {pod.name} who write to its bots or its website. They never sign in, and they see only what you let them.</p>
             </header>
             <People pod={pod} onOpen={setOpen} />
+            <Acknowledge pod={pod} />
             <Widgets pod={pod} />
             <Reach pod={pod} />
             {open && <ContactSheet pod={pod} contact={open} onClose={() => setOpen(null)} />}
@@ -115,6 +119,11 @@ function ContactSheet({ pod, contact, onClose }: { pod: Pod; contact: Contact; o
     const [name, setName] = useState(contact.name ?? "");
     const [message, setMessage] = useState("");
     const [said, setSaid] = useState<string | null>(null);
+    const [sentTo, setSentTo] = useState<string | null>(null);
+    const handles = writableHandles(contact);
+    const [handleAt, setHandleAt] = useState(0);
+    /* The same line however often it is retried, until the text changes. */
+    const lineId = useRef<string | null>(null);
     const [confirming, setConfirming] = useState(false);
     const [problem, setProblem] = useState<string | null>(null);
 
@@ -161,38 +170,52 @@ function ContactSheet({ pod, contact, onClose }: { pod: Pod; contact: Contact; o
                     </button>
                 </form>
 
-                <form
-                    className="csheet__write"
-                    onSubmit={(event) => {
-                        event.preventDefault();
-                        setSaid(null);
-                        followUp.mutate(
-                            { contactId: contact.id, message: message.trim() },
-                            {
-                                onSuccess: (sent) => {
-                                    setMessage("");
-                                    setSaid(
-                                        sent.platform === "WEB" || !sent.platform
-                                            ? "In their channel; it waits in their chat for their next visit."
-                                            : "In their channel, on its way to them.",
-                                    );
+                {handles.length > 0 ? (
+                    <form
+                        className="csheet__write"
+                        onSubmit={(event) => {
+                            event.preventDefault();
+                            const handle = handles[handleAt] ?? handles[0];
+                            if (!handle || !message.trim()) return;
+                            setSaid(null);
+                            followUp.mutate(
+                                { contactId: contact.id, message: message.trim(), handle, clientMessageId: (lineId.current ??= crypto.randomUUID()) },
+                                {
+                                    onSuccess: (sent) => {
+                                        lineId.current = null;
+                                        setMessage("");
+                                        setSentTo(sent.channelId);
+                                        setSaid(outreachSaid(sent));
+                                    },
+                                    onError: (error) => setSaid(outreachProblem(error)),
                                 },
-                                onError: (error) => setSaid(followUpRefusal((error as { code?: string }).code)),
-                            },
-                        );
-                    }}
-                >
-                    <label className="record-form__field">
-                        <span className="smanage__label">Write to them</span>
-                        <textarea rows={3} value={message} maxLength={4000} onChange={(event) => setMessage(event.target.value)} placeholder={"From " + pod.name + ", in their latest conversation"} />
-                    </label>
-                    <div className="csheet__actions">
-                        <button type="submit" className="pill-button" disabled={followUp.isPending || !message.trim()}>
-                            {followUp.isPending ? "Sending…" : "Send"}
-                        </button>
-                        {said && <p role="status">{said}</p>}
-                    </div>
-                </form>
+                            );
+                        }}
+                    >
+                        <label className="record-form__field">
+                            <span className="smanage__label">Write to them first</span>
+                            <textarea rows={3} value={message} maxLength={4000} onChange={(event) => { lineId.current = null; setMessage(event.target.value); }} placeholder={"From " + pod.name} />
+                        </label>
+                        {handles.length > 1 && (
+                            <label className="record-form__field">
+                                <span className="smanage__label">On</span>
+                                <select value={handleAt} onChange={(event) => { lineId.current = null; setHandleAt(Number(event.target.value)); }}>
+                                    {handles.map((handle, index) => <option key={handle.kind + handle.value} value={index}>{handleText(handle)}</option>)}
+                                </select>
+                            </label>
+                        )}
+                        <small className="csheet__fine">Email any time; WhatsApp only within a day of their last message there. It goes in their channel, where you can see whether it went.</small>
+                        <div className="csheet__actions">
+                            <button type="submit" className="pill-button" disabled={followUp.isPending || !message.trim()}>
+                                {followUp.isPending ? "Sending…" : "Send"}
+                            </button>
+                            {said && <p role="status">{said}</p>}
+                            {sentTo && <button type="button" className="linkish" onClick={() => { onClose(); goTo(channelHref(pod.id, sentTo)); }}>Open their channel</button>}
+                        </div>
+                    </form>
+                ) : (
+                    <p className="csheet__fine">There is no address or number to write to them on. They can be answered when they next write.</p>
+                )}
 
                 <OpenChannel pod={pod} contact={contact} onLeave={onClose} />
 
@@ -222,13 +245,10 @@ function ContactSheet({ pod, contact, onClose }: { pod: Pod; contact: Contact; o
  *  never written has none. */
 function OpenChannel({ pod, contact, onLeave }: { pod: Pod; contact: Contact; onLeave: () => void }) {
     const [state, setState] = useState<"idle" | "finding" | "none" | "failed">("idle");
-    /* Channels are behind the flag Groups had. */
-    const channelsOn = useFeature("groups");
-    if (!channelsOn) return null;
     const open = async () => {
         setState("finding");
         try {
-            const found = await channelApi(pod.id).list({ kind: "CONTACT", contactId: contact.id, limit: 1 });
+            const found = await channelApi(pod.id).list({ kind: "CONTACT", archived: false, contactId: contact.id, limit: 1 });
             const channel = found.items[0];
             if (!channel) { setState("none"); return; }
             setState("idle");
@@ -246,6 +266,49 @@ function OpenChannel({ pod, contact, onLeave }: { pod: Pod; contact: Contact; on
             {state === "none" && <p role="status">They have no channel yet: it starts when they first write.</p>}
             {state === "failed" && <p role="alert">Couldn’t find their channel. Try again.</p>}
         </div>
+    );
+}
+
+/* ── acknowledging ─────────────────────────────────────────────────── */
+
+/** The line said once to a contact who writes while their channel's agent
+ *  is off, so nobody waits in silence: "Thanks -- someone from {pod} will
+ *  reply." Said once per open conversation, until a member writes. */
+function Acknowledge({ pod }: { pod: Pod }) {
+    const current = useAutoAcknowledge(pod.id);
+    const set = useSetAutoAcknowledge(pod.id);
+    const [draft, setDraft] = useState<string | null>(null);
+    const value = draft ?? current.data ?? "";
+    const on = Boolean(current.data);
+    return (
+        <section className="contacts__section" aria-labelledby="contacts-ack">
+            <h2 id="contacts-ack">When nobody is answering</h2>
+            <form
+                className="csheet__write"
+                onSubmit={(event) => {
+                    event.preventDefault();
+                    set.mutate(value.trim() || null, { onSuccess: () => setDraft(null) });
+                }}
+            >
+                <label className="record-form__field">
+                    <span className="smanage__label">Say this once when a contact writes and their agent is off</span>
+                    <input
+                        value={value}
+                        maxLength={500}
+                        disabled={current.isPending}
+                        placeholder={"Thanks — someone from {pod} will reply."}
+                        onChange={(event) => setDraft(event.target.value)}
+                    />
+                    <small>{"{pod}"} becomes {pod.name}. Leave it empty to say nothing.</small>
+                </label>
+                <div className="csheet__actions">
+                    <button type="submit" className="ghost-pill" disabled={set.isPending || draft === null}>{set.isPending ? "Saving…" : "Save"}</button>
+                    {on && draft === null && <button type="button" className="linkish" disabled={set.isPending} onClick={() => set.mutate(null)}>Turn it off</button>}
+                    {set.isError && <p role="alert">{isForbidden(set.error) ? "Only an admin of " + pod.name + " can change that." : "Couldn’t save it. Try again."}</p>}
+                    {current.isError && <p role="alert">Couldn’t read it.</p>}
+                </div>
+            </form>
+        </section>
     );
 }
 

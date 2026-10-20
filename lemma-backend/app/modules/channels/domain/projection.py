@@ -13,7 +13,8 @@ cannot drift between them:
   (``withheld_from``): they may not be able to see what it was made from.
 * **A contact** -- a run answering them -- reads only what was said where they
   are: the lines from their own source, and none of those an agent wrote with
-  a member's own access. Never a private note.
+  a member's own access. Never a private note. A line is where they are when
+  it was heard there or carried there from Lemma (``place_id``).
 """
 
 from __future__ import annotations
@@ -59,7 +60,7 @@ def may_read(reader: Reader, message: ChannelMessage) -> bool:
         return True
     if message.members_only:
         return False
-    if reader.source_id is None or message.source_id != reader.source_id:
+    if reader.source_id is None or message.place_id != reader.source_id:
         return False
     return not message.sender.used_a_members_access
 

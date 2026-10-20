@@ -29,13 +29,22 @@ class MentionPart(BaseModel):
 
 
 class FilePart(BaseModel):
-    """A file of the pod's the line shares; a reader needs access to it."""
+    """A file of the pod's the line shares.
+
+    Whoever writes the line must be able to read the file; it is then read
+    through the line (``GET …/messages/{m}/files/{file_id}``), by whoever may
+    see the line, as its writer reads it -- never through the file's own
+    folder, which a private channel's readers need not share.
+    """
 
     model_config = ConfigDict(frozen=True)
 
     type: Literal["file"]
-    #: The pod file's path, or a platform attachment's id before it is saved.
+    #: The pod file's path as written (``/me/…`` is the writer's own); stored
+    #: as the file's own path.
     path: str = Field(min_length=1, max_length=1024)
+    #: The file, as the line was written: set by the server, not the client.
+    file_id: UUID | None = None
     name: str = Field(min_length=1, max_length=255)
     mime_type: str | None = Field(default=None, max_length=255)
     size: int | None = Field(default=None, ge=0)

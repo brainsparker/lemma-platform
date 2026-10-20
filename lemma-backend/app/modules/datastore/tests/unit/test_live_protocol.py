@@ -1,4 +1,8 @@
-"""Client frames, change merging, and the socket's bounded queue."""
+"""``records`` subscribe frames, change merging, and how changes are framed.
+
+The socket's own frames and queue are core's, tested in
+``app/core/tests/unit/test_live_protocol.py``.
+"""
 
 from __future__ import annotations
 
@@ -8,46 +12,50 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.datastore.api.live_socket import accept_and_authenticate
+from app.core.live.connection import FRAME_BYTES, LiveConnection
+from app.core.live.protocol import (
+    LiveRequestInvalid,
+    SubscribeRequest as CoreSubscribeRequest,
+    parse_request,
+)
 from app.modules.datastore.domain.live import (
     EncodedChange,
     LiveChange,
-    LiveRequestInvalid,
-    PingRequest,
     SubscribeRequest,
-    UnsubscribeRequest,
     merge_change,
-    parse_request,
+    records_request,
 )
-from app.modules.datastore.services.live.connection import (
-    FRAME_BYTES,
-    LiveConnection,
+from app.modules.datastore.services.live.subscription import (
     LiveSubscription,
+    offer_changes,
 )
 
 pytestmark = pytest.mark.unit
 
 
-def test_parses_the_three_client_frames() -> None:
-    subscribe = parse_request(
+def _records(raw: str) -> SubscribeRequest:
+    request = parse_request(raw)
+    assert isinstance(request, CoreSubscribeRequest)
+    return records_request(request)
+
+
+def test_parses_a_records_subscription() -> None:
+    subscribe = _records(
         '{"op":"subscribe","id":"s1","topic":"records","table":"tickets",'
         '"ops":["insert"],"since":"c1.abc"}'
     )
     assert subscribe == SubscribeRequest(
-        op="subscribe", id="s1", table="tickets", ops=("insert",), since="c1.abc"
+        id="s1", table="tickets", ops=("insert",), since="c1.abc"
     )
-    assert parse_request('{"op":"unsubscribe","id":"s1"}') == UnsubscribeRequest(
-        op="unsubscribe", id="s1"
-    )
-    assert parse_request('{"op":"ping"}') == PingRequest(op="ping")
+    # A frame without a topic is a records subscription, as it always was.
+    untopical = parse_request('{"op":"subscribe","id":"s2"}')
+    assert isinstance(untopical, CoreSubscribeRequest)
+    assert untopical.topic == "records"
 
 
 @pytest.mark.parametrize(
     ("raw", "subscription_id"),
     [
-        ("not json", None),
-        ('{"op":"subscribe"}', None),
-        ('{"op":"subscribe","id":"s1","topic":"files"}', "s1"),
         ('{"op":"subscribe","id":"s1","ops":["upsert"]}', "s1"),
         ('{"op":"subscribe","id":"s1","table":"t","when":{"s":{"eq":"open"}}}', "s1"),
         ('{"op":"subscribe","id":"s1","when":{"status":"open"}}', "s1"),
@@ -57,13 +65,12 @@ def test_parses_the_three_client_frames() -> None:
         ),
         ('{"op":"subscribe","id":"s1","table":"t","when":{"s":{"to":"x"}}}', "s1"),
         ('{"op":"subscribe","id":"s1","table":"t","when":{}}', "s1"),
-        ('{"op":"dance"}', None),
     ],
 )
 def test_refuses_what_it_cannot_act_on(raw: str, subscription_id: str | None) -> None:
     with pytest.raises(LiveRequestInvalid) as refused:
-        parse_request(raw)
-    assert refused.value.subscription_id == subscription_id
+        _records(raw)
+    assert refused.value.request_id == subscription_id
 
 
 def test_merge_keeps_one_entry_per_record_at_its_latest_state() -> None:
@@ -117,7 +124,7 @@ async def test_overflow_replaces_queued_changes_with_one_resync_each() -> None:
     row = {"pad": "x" * 500}
     for n in range(10):
         for name, sub in subs.items():
-            connection.offer_changes(
+            offer_changes(
                 sub,
                 f"c{n}",
                 [EncodedChange("insert", name, f"{name}{n}", row, None)],
@@ -137,33 +144,6 @@ async def test_overflow_replaces_queued_changes_with_one_resync_each() -> None:
 
 
 @pytest.mark.asyncio
-async def test_accept_race_and_missing_token_never_close_before_accept() -> None:
-    class _Socket:
-        def __init__(self, *, accept_fails: bool) -> None:
-            self.calls: list[tuple[str, object]] = []
-            self.accept_fails = accept_fails
-            self.headers: dict[str, str] = {}
-            self.cookies: dict[str, str] = {}
-            self.query_params: dict[str, str] = {}
-
-        async def accept(self) -> None:
-            self.calls.append(("accept", None))
-            if self.accept_fails:
-                raise RuntimeError("client went away")
-
-        async def close(self, code: int, reason: str = "") -> None:
-            self.calls.append(("close", code))
-
-    raced = _Socket(accept_fails=True)
-    assert await accept_and_authenticate(raced) is None  # type: ignore[arg-type]
-    assert raced.calls == [("accept", None)]
-
-    anonymous = _Socket(accept_fails=False)
-    assert await accept_and_authenticate(anonymous) is None  # type: ignore[arg-type]
-    assert anonymous.calls == [("accept", None), ("close", 4401)]
-
-
-@pytest.mark.asyncio
 async def test_a_large_batch_is_split_and_only_its_last_frame_moves_the_cursor() -> (
     None
 ):
@@ -175,7 +155,7 @@ async def test_a_large_batch_is_split_and_only_its_last_frame_moves_the_cursor()
     connection.subscriptions["s"] = sub
     row = {"pad": "x" * 10_000}
     batch = [EncodedChange("update", "t", f"r{n}", row, None) for n in range(100)]
-    connection.offer_changes(sub, "after", batch, previous_cursor="before")
+    offer_changes(sub, "after", batch, previous_cursor="before")
     await _drain(connection)
 
     assert len(sink.sent) > 1
@@ -187,11 +167,10 @@ async def test_a_large_batch_is_split_and_only_its_last_frame_moves_the_cursor()
 
 
 def test_when_admits_by_the_current_row_and_always_passes_a_delete() -> None:
-    request = parse_request(
+    request = _records(
         '{"op":"subscribe","id":"s1","table":"tickets",'
         '"when":{"status":{"in":["open","new"]},"owner":{"not_equals":null}}}'
     )
-    assert isinstance(request, SubscribeRequest)
     conditions = request.conditions()
     assert conditions is not None
     assert conditions.admit("insert", {"status": "open", "owner": "a"})

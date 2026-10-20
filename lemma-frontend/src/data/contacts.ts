@@ -86,7 +86,7 @@ export function readContact(wire: ContactResponse): Contact {
 }
 
 export function readContacts(wire: ContactListResponse): { items: Contact[]; next: string | null } {
-    return { items: (wire.items ?? []).map(readContact), next: wire.next_before ?? null };
+    return { items: (wire.items ?? []).map(readContact), next: wire.next_cursor ?? null };
 }
 
 /** The most pages one list follows: far past any space's contacts or tables,
@@ -176,14 +176,55 @@ export function answerChoices(space: string): { value: WidgetAnswer; label: stri
     ];
 }
 
-/** Why a follow-up was refused, from the code the API gave. */
-export function followUpRefusal(code: string | undefined): string {
-    switch (code) {
-        case "unsubscribed": return "They asked not to be written to there.";
-        case "outside_window": return "WhatsApp only allows a reply within a day of their last message.";
-        case "no_conversation": return "They haven’t written yet, so there is nowhere to write back.";
-        case "no_handle": return "There is no way to reach them on that channel.";
-        default: return "Couldn’t send it. Try again.";
+/** A line written to a contact first, and what became of its send. */
+export interface OutreachSent {
+    channelId: string;
+    lineId: string;
+    platform: string | null;
+    status: "PENDING" | "SENT" | "FAILED" | "SKIPPED" | "DEAD";
+    reason: string | null;
+}
+
+/** The handles a member can write to first: an address, a number on
+ *  WhatsApp, a Telegram account. A chat on the website or a colleague in
+ *  another company's Slack waits for them to write. */
+export function writableHandles(contact: Pick<Contact, "handles">): ContactHandle[] {
+    return contact.handles.filter((handle) => handle.kind === "EMAIL" || handle.kind === "PHONE" || handle.kind === "TELEGRAM");
+}
+
+/** What a member is told after writing to a contact first. */
+export function outreachSaid(sent: Pick<OutreachSent, "status" | "reason" | "platform">): string {
+    const where = sent.platform === "WHATSAPP" ? "WhatsApp" : sent.platform === "TELEGRAM" ? "Telegram" : "email";
+    switch (sent.status) {
+        case "SENT": return "Sent by " + where + ". It is in their channel.";
+        case "PENDING": return "In their channel, on its way by " + where + ".";
+        case "SKIPPED": return "In their channel, but not sent" + (sent.reason ? ": " + sent.reason.replace(/\.$/, "") : "") + ".";
+        default: return "In their channel, but it did not go" + (sent.reason ? ": " + sent.reason.replace(/\.$/, "") : "") + ". Retry it from there.";
+    }
+}
+
+/** Why writing to a contact first was refused, in words a member can act
+ *  on. The API's refusals of the message itself -- they asked not to be
+ *  written to there, WhatsApp's window has closed, the pod has no address to
+ *  write from -- are already sentences, and are said as given; anything
+ *  else (a server fault, no connection, a body that is not a sentence) is
+ *  said here, never shown raw. */
+export function outreachProblem(error: unknown): string {
+    const status = error && typeof error === "object" ? (error as { statusCode?: unknown }).statusCode : undefined;
+    const message = error instanceof Error ? error.message.trim() : "";
+    const sentence = message.length > 0 && message.length < 240 && /^[A-Z][^{}<>\n]*[.!?]$/.test(message) && !/^(Request failed|HTTP|Internal Server Error|Bad Request|Conflict|Unprocessable)/.test(message);
+    switch (status) {
+        case 404: return "They are not one of this pod’s contacts any more.";
+        case 403: return "Only an editor of the pod can write to contacts.";
+        case 409:
+        case 422: return sentence ? message : status === 409 ? "They can’t be written to there now." : "That can’t be sent to them there.";
+        case 429: return "Too many sent just now. Wait a minute and try again.";
+        case 503: return "Sending isn’t available right now. Try again in a few minutes.";
+        default:
+            if (typeof status === "number" && status >= 500) return "Lemma couldn’t send it just now. Try again.";
+            return status === undefined && error instanceof Error && error.name === "NetworkError"
+                ? "Couldn’t reach Lemma. Check your connection and try again."
+                : "Couldn’t send it. Try again.";
     }
 }
 

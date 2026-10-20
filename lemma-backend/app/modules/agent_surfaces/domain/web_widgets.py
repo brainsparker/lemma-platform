@@ -49,6 +49,9 @@ class WebWidget(BaseModel):
     answer: WidgetAnswer
     looked_after_by: UUID | None
     created_at: datetime
+    #: The product whose users the widget's host tokens name. Fixed when the
+    #: widget is made: changing it would make every host contact a new one.
+    host_issuer: str = "default"
 
     def allows_origin(self, origin: str | None) -> bool:
         """Whether a browser on ``origin`` may read this widget's answers.

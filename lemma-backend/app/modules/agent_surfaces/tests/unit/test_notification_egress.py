@@ -31,6 +31,7 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfaceConfig,
     SurfacePlatform,
 )
+from app.modules.agent_surfaces.domain.envelope import DeliveryReceipt, PartDelivery
 from app.modules.agent_surfaces.domain.models import ColdEmailSendResult
 from app.modules.agent_surfaces.domain.ports import (
     ColdEmailThread,
@@ -125,7 +126,7 @@ def _place_for(surface: AgentSurfaceEntity, person: str = "U123") -> Source:
         account_id=uuid4(),
         surface_id=surface.id,
         platform=surface.surface_type.value,
-        kind=SourceKind.PRIVATE,
+        kind=SourceKind.PERSON,
         external_user_id=person,
         last_inbound_at=datetime.now(timezone.utc),
         delivery_ref={"external_thread_id": "C1"},
@@ -171,7 +172,9 @@ def _egress_double() -> SurfaceEgress:
     """
     double = create_autospec(SurfaceEgress, instance=True)
     double.agent_name_for_surface.return_value = "Ops"
-    double.send_agent_message_for_conversation.return_value = True
+    double.deliver_message.return_value = DeliveryReceipt(
+        parts={"text": PartDelivery.NATIVE}, external_message_id="chat-1"
+    )
     double.open_cold_email_thread.return_value = None
     return double
 
@@ -308,11 +311,11 @@ async def test_a_cold_email_places_its_thread_where_the_reply_will_arrive():
         message="What did you ship?",
     )
 
-    assert sent is True
+    assert sent is not None
     [place] = seats.sources.values()
     assert place.surface_id == surface.id
     assert place.platform == "RESEND"
-    assert place.kind is SourceKind.PRIVATE
+    assert place.kind is SourceKind.PERSON
     # Lowercased, because that is what the inbound parser records as the sender.
     assert place.external_user_id == "bob@example.com"
     # In the recipient's own channel, where their conversation with the agent is.
@@ -390,7 +393,7 @@ async def test_a_platform_that_cannot_cold_open_is_reported_not_crashed():
         message="hello",
     )
 
-    assert sent is False
+    assert sent is None
     assert not seats.sources
 
 
@@ -441,7 +444,7 @@ async def test_redelivering_the_same_line_reuses_its_thread():
             outbound=outbound,
             message="What did you ship?",
         )
-        assert sent is True
+        assert sent is not None
 
     assert len(seats.sources) == 1
 
@@ -463,9 +466,10 @@ async def test_a_channel_with_a_live_thread_replies_into_it():
         message="What did you ship?",
     )
 
-    assert sent is True
-    egress_port.send_agent_message_for_conversation.assert_awaited_once()
-    sent_to = egress_port.send_agent_message_for_conversation.await_args.kwargs["at"]
+    assert sent is not None
+    assert sent.external_message_id == "chat-1"
+    egress_port.deliver_message.assert_awaited_once()
+    sent_to = egress_port.deliver_message.await_args.kwargs["at"]
     assert sent_to is place
     egress_port.open_cold_email_thread.assert_not_awaited()
 
@@ -1028,7 +1032,7 @@ async def test_an_unknown_agent_name_is_absent_rather_than_None():
         agent_name=None,
     )
 
-    kwargs = egress_port.send_agent_message_for_conversation.await_args.kwargs
+    kwargs = egress_port.deliver_message.await_args.kwargs
     assert "agent_display_name" not in kwargs["metadata"]
 
 
@@ -1179,8 +1183,10 @@ async def test_the_copy_is_committed_before_the_platform_send(
     conversations.append_notification_message.side_effect = lambda *_a, **_k: (
         order.append("persist")
     )
-    platform = pushes.egress.egress.send_agent_message_for_conversation
-    platform.side_effect = lambda **_k: order.append("send") or True
+    platform = pushes.egress.egress.deliver_message
+    platform.side_effect = lambda **_k: (
+        order.append("send") or DeliveryReceipt(parts={"text": PartDelivery.NATIVE})
+    )
 
     await pushes.push(_push(pod_id=chat_surface.pod_id, actor_agent_id=agent_id))
 

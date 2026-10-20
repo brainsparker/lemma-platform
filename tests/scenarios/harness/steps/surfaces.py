@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import quote
 from uuid import uuid4
 
 from harness.run import a_name_for
@@ -152,10 +153,10 @@ class SurfaceSteps:
         """A line in their own channel, from the pod's agent on this person's
         behalf -- carried on to wherever they last spoke to the pod."""
         return await self.api.post(
-            f"/pods/{in_pod['id']}/notices",
+            # The member: a pod member id, user id, or email.
+            f"/pods/{in_pod['id']}/members/{quote(person.email)}/notices",
             what=f"{self.label} telling {person.label} something",
-            # A plain string: pod member id, user id, or email.
-            json={"to": person.email, "text": text},
+            json={"text": text},
         )
 
     async def own_channel_in(self, pod: JSON) -> JSON:

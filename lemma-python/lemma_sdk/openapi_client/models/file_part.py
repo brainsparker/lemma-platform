@@ -7,6 +7,7 @@ from typing import (
     TypeVar,
     cast,
 )
+from uuid import UUID
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
@@ -18,19 +19,26 @@ T = TypeVar("T", bound="FilePart")
 
 @_attrs_define
 class FilePart:
-    """A file of the pod's the line shares; a reader needs access to it.
+    """A file of the pod's the line shares.
 
-    Attributes:
-        name (str):
-        path (str):
-        type_ (Literal['file']):
-        mime_type (None | str | Unset):
-        size (int | None | Unset):
+    Whoever writes the line must be able to read the file; it is then read
+    through the line (``GET …/messages/{m}/files/{file_id}``), by whoever may
+    see the line, as its writer reads it -- never through the file's own
+    folder, which a private channel's readers need not share.
+
+        Attributes:
+            name (str):
+            path (str):
+            type_ (Literal['file']):
+            file_id (None | Unset | UUID):
+            mime_type (None | str | Unset):
+            size (int | None | Unset):
     """
 
     name: str
     path: str
     type_: Literal["file"]
+    file_id: None | Unset | UUID = UNSET
     mime_type: None | str | Unset = UNSET
     size: int | None | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
@@ -41,6 +49,14 @@ class FilePart:
         path = self.path
 
         type_ = self.type_
+
+        file_id: None | str | Unset
+        if isinstance(self.file_id, Unset):
+            file_id = UNSET
+        elif isinstance(self.file_id, UUID):
+            file_id = str(self.file_id)
+        else:
+            file_id = self.file_id
 
         mime_type: None | str | Unset
         if isinstance(self.mime_type, Unset):
@@ -63,6 +79,8 @@ class FilePart:
                 "type": type_,
             }
         )
+        if file_id is not UNSET:
+            field_dict["file_id"] = file_id
         if mime_type is not UNSET:
             field_dict["mime_type"] = mime_type
         if size is not UNSET:
@@ -80,6 +98,23 @@ class FilePart:
         type_ = cast(Literal["file"], d.pop("type"))
         if type_ != "file":
             raise ValueError(f"type must match const 'file', got '{type_}'")
+
+        def _parse_file_id(data: object) -> None | Unset | UUID:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                file_id_type_0 = UUID(data)
+
+                return file_id_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(None | Unset | UUID, data)
+
+        file_id = _parse_file_id(d.pop("file_id", UNSET))
 
         def _parse_mime_type(data: object) -> None | str | Unset:
             if data is None:
@@ -103,6 +138,7 @@ class FilePart:
             name=name,
             path=path,
             type_=type_,
+            file_id=file_id,
             mime_type=mime_type,
             size=size,
         )

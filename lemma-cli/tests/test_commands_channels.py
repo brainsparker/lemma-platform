@@ -21,11 +21,18 @@ class Recorder:
         return call
 
 
-def _client(channels_fake: Recorder, sources_fake: Recorder | None = None):
+def _client(
+    channels_fake: Recorder,
+    sources_fake: Recorder | None = None,
+    contacts_fake: Recorder | None = None,
+):
+    channels_fake.sources = sources_fake or Recorder()
+
     class FakeClient:
         def pod(self, pod_id):
             return SimpleNamespace(
-                channels=channels_fake, sources=sources_fake or Recorder()
+                channels=channels_fake,
+                contacts=contacts_fake or Recorder(),
             )
 
     return FakeClient()
@@ -112,19 +119,32 @@ def test_an_answer_needs_something_to_say(runner, patch_run, json_state):
     assert fake.calls == [("answer", ("ch-1", "line-1", {"seats": 3}), {})]
 
 
-def test_a_source_is_switched_through_the_sources_resource(
-    runner, patch_run, json_state
-):
+def test_a_source_is_switched_under_its_channel(runner, patch_run, json_state):
     sources = Recorder()
     patch_run(channels, client=_client(Recorder(), sources), state=json_state)
 
-    result = runner.invoke(
-        app, ["channels", "source", "set", "src-1", "--no-answers-outsiders", "--json"]
+    switched = runner.invoke(
+        app,
+        ["channels", "source", "set", "ch-1", "src-1", "--no-answers-outsiders"],
     )
+    taken = runner.invoke(
+        app, ["channels", "source", "set", "ch-1", "src-1", "--take-over", "--json"]
+    )
+    nothing = runner.invoke(app, ["channels", "source", "set", "ch-1", "src-1"])
+    listed = runner.invoke(app, ["channels", "source", "list", "acme-bot", "--json"])
 
-    assert result.exit_code == 0, result.stderr
+    assert switched.exit_code == 0, switched.stderr
+    assert taken.exit_code == 0, taken.stderr
+    assert nothing.exit_code != 0
+    assert listed.exit_code == 0, listed.stderr
     assert sources.calls == [
-        ("update", ("src-1",), {"answers_outsiders": False, "take_over": False})
+        (
+            "update",
+            ("ch-1", "src-1"),
+            {"take_over": False, "answers_outsiders": False},
+        ),
+        ("update", ("ch-1", "src-1"), {"take_over": True}),
+        ("list", ("acme-bot",), {"limit": 50, "cursor": None}),
     ]
 
 
@@ -244,3 +264,38 @@ def test_leaving_needs_only_the_channel(runner, patch_run, json_state):
 
     assert result.exit_code == 0, result.stderr
     assert fake.calls == [("leave", ("ch-1",), {})]
+
+
+def test_outreach_writes_to_a_contact_on_the_named_handle(
+    runner, patch_run, json_state
+):
+    contacts_fake = Recorder()
+    patch_run(
+        channels,
+        client=_client(Recorder(), contacts_fake=contacts_fake),
+        state=json_state,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "channels",
+            "outreach",
+            "c-1",
+            "ana@example.com",
+            "Your order shipped.",
+            "--client-message-id",
+            "k1",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stderr
+    [(name, args, kwargs)] = contacts_fake.calls
+    assert (name, args) == ("outreach", ("c-1",))
+    assert kwargs == {
+        "handle": "ana@example.com",
+        "text": "Your order shipped.",
+        "kind": None,
+        "client_message_id": "k1",
+    }

@@ -28,6 +28,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.agent_surfaces.tests.e2e.background_reads import background_read
 from app.modules.agent_surfaces.tests.e2e.group_timeline import (
     a_stranger,
     bot_for,
@@ -37,6 +38,7 @@ from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.agent.domain.asked_questions import message_ref
 from app.modules.channels.contracts import (
+    Asker,
     NewLine,
     NewQuestion,
     Principal,
@@ -443,6 +445,7 @@ async def test_a_stranger_never_reads_answers_to_another_conversations_questions
             question=NewQuestion(
                 kind=QuestionKind.ASK,
                 ref=message_ref(UUID(elsewhere.json()["id"]), "payroll"),
+                asker=Asker.message(UUID(elsewhere.json()["id"]), "payroll"),
                 question={"tool": "message", "prompt": "What is payroll this month?"},
                 awaits=Principal.member(owner),
             ),
@@ -691,6 +694,9 @@ async def test_a_strangers_background_leaves_out_answers_made_with_a_members_acc
         conversation_id=str(context.conversation_id),
     )
     asked = [message for message in messages if message.get("role") == "user"][-1]
-    background = json.dumps(asked["metadata"].get("channel_context") or [])
-    assert "MEMBER-ANSWER-SECRET" not in background
-    assert asked["metadata"].get("channel_context_withheld") == 1
+    # The message keeps which lines, not what they said; read as the run
+    # reads them, the member's answer is left out, and counted.
+    assert "MEMBER-ANSWER-SECRET" not in json.dumps(asked["metadata"])
+    shown = await background_read(asked["metadata"])
+    assert "MEMBER-ANSWER-SECRET" not in " ".join(line.text for line in shown.lines)
+    assert shown.withheld == 1

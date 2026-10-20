@@ -11,10 +11,10 @@ were written, a ``Retry-After`` holds back everything behind it rather than
 letting later messages overtake it, and a burst costs one 429 per window
 instead of one per message.
 
-Every outbound message the platform must receive once goes this way: a run's
-answer or failure notice (``surface.reply_for_run``), a held WhatsApp reply, a
-reply to a stranger, a "please resend". No network here: the FAST
-``surface.reply_for_run`` stages through this module.
+What goes this way is what the platform must receive once and has no channel
+line of its own: a held WhatsApp reply, a reply to a stranger, a "please
+resend". A run's answer is a line, sent as its channel delivery
+(``channel_deliveries``). No network here.
 """
 
 from __future__ import annotations
@@ -56,10 +56,6 @@ class PumpPayload(BaseModel):
 
 def pump_key(destination_key: str) -> str:
     return f"dest:{destination_key}"
-
-
-def run_reply_idempotency_key(run_id: UUID) -> str:
-    return f"run-reply:{run_id}"
 
 
 async def conversation_destination(
@@ -264,7 +260,6 @@ __all__ = [
     "namespace_for",
     "pump_key",
     "retry_delay",
-    "run_reply_idempotency_key",
     "settle_claimed_send",
     "stage_conversation_message",
     "stage_delivery",

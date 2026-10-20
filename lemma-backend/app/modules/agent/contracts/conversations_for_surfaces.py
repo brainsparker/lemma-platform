@@ -287,12 +287,21 @@ async def append_notification_message(
     message: str,
     notification_id: UUID,
 ) -> None:
-    """Write an outbound notification into the recipient's thread.
+    """Write an outbound notification into the recipient's thread, once.
 
     Belongs to no run, which is the point: it is what makes the recipient's
     agent able to answer "yes" six hours later against a question it can
-    actually see in its own history.
+    actually see in its own history. A retried send of the same notification
+    finds it there and adds no second copy.
     """
+    from app.modules.agent.contracts.contact_conversations import (
+        notification_keyed,
+    )
+
+    if await notification_keyed(
+        uow, conversation_id, key="notification_id", value=str(notification_id)
+    ):
+        return
     await ConversationRepository(uow).append_message(
         conversation_id=conversation_id,
         agent_run_id=None,

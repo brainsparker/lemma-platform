@@ -3,6 +3,7 @@
 /* tslint:disable */
 /* eslint-disable */
 import type { FilePart } from './FilePart.js';
+import type { LineDelivery } from './LineDelivery.js';
 import type { LinkPart } from './LinkPart.js';
 import type { MentionPart } from './MentionPart.js';
 import type { PersonRef } from './PersonRef.js';
@@ -13,6 +14,10 @@ export type ChannelMessageResponse = {
     conversation_id?: (string | null);
     created_at: string;
     deleted?: boolean;
+    /**
+     * Only on the reader's own line: each place outside Lemma it went to, and what became of it. Pushes to members are not listed here (`…/deliveries` has every send).
+     */
+    delivered?: (Array<LineDelivery> | null);
     edited_at?: (string | null);
     id: string;
     last_reply_at?: (string | null);

@@ -8,7 +8,7 @@ did. Three answers, declared per tool:
 * ``SAFE`` -- reading, or bookkeeping private to the run (its todo list).
   Run it again under the recorded call id.
 * ``KEYED`` -- the effect is deduplicated downstream on the recorded call id
-  (a notification's idempotency key, a sub-agent spawn unique on the parent
+  (a channel line's client id, a sub-agent spawn unique on the parent
   run and call, a record create keyed on the call). Run it again: the second
   run returns the first one's outcome.
 * ``UNSAFE`` -- an effect nobody can deduplicate: a shell command, a browser
@@ -105,8 +105,9 @@ REPLAY_CLASS: Mapping[str, ReplayClass] = {
     "channel_list": _SAFE,
     "list_pod_members": _SAFE,
     "list_teammates": _SAFE,
-    # Answering a notification or a workflow form: the second answer is refused
-    # by the notification itself, which reports the first.
+    # Answering a question put to the member (a message, a workflow form): a
+    # question is answered once, so the replayed call is refused and the first
+    # answer is the one recorded.
     "answer_question": _KEYED,
     "ask_a_person": _KEYED,
     # Contacts and the visitor's form.

@@ -5,7 +5,9 @@ channel asking for it (``channels.contracts.post`` with a ``FORM`` question):
 in their inbox beside every other question put to them, pushed to them where
 they are, answered in place (``answer_form``) or in the workflow's own screen.
 Either way the engine validates what is submitted and closes the question
-(``form_answered``); a run that ends cancels whatever it still asks.
+(``form_answered``); a run that ends cancels whatever it still asks. A
+question whose time runs out (the channels' sweeper, at the wait's own
+ceiling) fails the run as a form nobody answered (``events.run_work``).
 
 The ref is ``wf:{run}:{node}:{wait}``: a run that comes back to a node asks
 again, as a new question, rather than finding the answered one.
@@ -21,9 +23,11 @@ from app.core.authorization.delegation import effective_agent_id
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
 from app.modules.channels.contracts import (
+    Asker,
     NewLine,
     NewQuestion,
     Principal,
+    QuestionAsker,
     QuestionKind,
     QuestionState,
     Sender,
@@ -44,8 +48,15 @@ def form_ref(run_id: UUID, node_id: str, wait_id: UUID) -> str:
     return f"{FORM_REF}:{run_id}:{node_id}:{wait_id}"
 
 
-def run_prefix(run_id: UUID) -> str:
-    return f"{FORM_REF}:{run_id}:"
+def form_wait_id(ref: str) -> UUID | None:
+    """The wait a form's question asks for, from its ref."""
+    kind, _, rest = ref.partition(":")
+    if kind != FORM_REF:
+        return None
+    try:
+        return UUID(rest.rpartition(":")[2])
+    except ValueError:
+        return None
 
 
 def describe_fields(schema: Mapping[str, object] | None) -> str:
@@ -113,6 +124,7 @@ class FormQuestions:
             question=NewQuestion(
                 kind=QuestionKind.FORM,
                 ref=ref,
+                asker=Asker.workflow(run_id, f"{node_id}:{wait_id}"),
                 question={
                     "tool": "workflow_form",
                     "prompt": title,
@@ -149,12 +161,12 @@ class FormQuestions:
         )
 
     async def run_ended(self, *, pod_id: UUID, run_id: UUID) -> None:
-        await channel_questions.cancel_under(
-            self._uow, pod_id=pod_id, prefix=run_prefix(run_id)
+        await channel_questions.cancel_asked_by(
+            self._uow, QuestionAsker.WORKFLOW, workflow_run_id=run_id
         )
 
 
-@channel_questions.answers_for(FORM_REF)
+@channel_questions.answers_for(QuestionAsker.WORKFLOW)
 async def answer_form(answering: Answering) -> Mapping[str, object] | None:
     """A form answered on its line: submitted through the engine, which checks
     it is theirs, validates it, and closes the question with what it took."""
@@ -193,5 +205,5 @@ __all__ = [
     "build_form_questions",
     "describe_fields",
     "form_ref",
-    "run_prefix",
+    "form_wait_id",
 ]

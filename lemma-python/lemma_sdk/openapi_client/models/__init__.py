@@ -114,13 +114,18 @@ _NAME_TO_MODULE = {
     'BulkUpdateRecordsRequest': 'bulk_update_records_request',
     'BulkUpdateRecordsRequestRecordsItem': 'bulk_update_records_request_records_item',
     'BundleSourceKind': 'bundle_source_kind',
+    'CaseEventResponse': 'case_event_response',
+    'CaseEventResponseValue': 'case_event_response_value',
+    'CaseResponse': 'case_response',
     'ChannelAnswerRequest': 'channel_answer_request',
     'ChannelAnswerRequestAnswer': 'channel_answer_request_answer',
+    'ChannelCasesResponse': 'channel_cases_response',
     'ChannelCreateRequest': 'channel_create_request',
     'ChannelDetailResponse': 'channel_detail_response',
     'ChannelEditRequest': 'channel_edit_request',
     'ChannelKind': 'channel_kind',
     'ChannelListResponse': 'channel_list_response',
+    'ChannelMemberListResponse': 'channel_member_list_response',
     'ChannelMemberResponse': 'channel_member_response',
     'ChannelMessageResponse': 'channel_message_response',
     'ChannelMessagesResponse': 'channel_messages_response',
@@ -337,6 +342,7 @@ _NAME_TO_MODULE = {
     'InstallationChoiceSchema': 'installation_choice_schema',
     'InstalledAppSummary': 'installed_app_summary',
     'JsonObject': 'json_object',
+    'LineDelivery': 'line_delivery',
     'LinePreview': 'line_preview',
     'LinkPart': 'link_part',
     'ListeningResponse': 'listening_response',
@@ -406,6 +412,10 @@ _NAME_TO_MODULE = {
     'OrganizationRole': 'organization_role',
     'OrganizationSlugAvailabilityResponse': 'organization_slug_availability_response',
     'OrganizationUpdateRequest': 'organization_update_request',
+    'OutreachDelivery': 'outreach_delivery',
+    'OutreachLine': 'outreach_line',
+    'OutreachRequest': 'outreach_request',
+    'OutreachResponse': 'outreach_response',
     'PartialApplyResponse': 'partial_apply_response',
     'PendingInteractionKind': 'pending_interaction_kind',
     'PendingInteractionListResponse': 'pending_interaction_list_response',
@@ -415,6 +425,7 @@ _NAME_TO_MODULE = {
     'PlanStepResponse': 'plan_step_response',
     'PlanStepResponseDetail': 'plan_step_response_detail',
     'PodConfig': 'pod_config',
+    'PodContactSettings': 'pod_contact_settings',
     'PodCreateRequest': 'pod_create_request',
     'PodEffectivePermissionsResponse': 'pod_effective_permissions_response',
     'PodJoinPolicy': 'pod_join_policy',
@@ -510,6 +521,7 @@ _NAME_TO_MODULE = {
     'ScheduledWorkflowStartOutput': 'scheduled_workflow_start_output',
     'Scope': 'scope',
     'SearchFreshness': 'search_freshness',
+    'SearchItem': 'search_item',
     'SearchMethod': 'search_method',
     'SearchResponse': 'search_response',
     'SearchResult': 'search_result',
@@ -527,7 +539,7 @@ _NAME_TO_MODULE = {
     'SignedUrlRevokeResponse': 'signed_url_revoke_response',
     'SignedUrlSummary': 'signed_url_summary',
     'SourceKind': 'source_kind',
-    'SourceListResponse': 'source_list_response',
+    'SourceSettingsDetailResponse': 'source_settings_detail_response',
     'SourceSettingsResponse': 'source_settings_response',
     'SourceSummary': 'source_summary',
     'SourceUpdateRequest': 'source_update_request',
@@ -793,13 +805,18 @@ if TYPE_CHECKING:
     from .bulk_update_records_request import BulkUpdateRecordsRequest
     from .bulk_update_records_request_records_item import BulkUpdateRecordsRequestRecordsItem
     from .bundle_source_kind import BundleSourceKind
+    from .case_event_response import CaseEventResponse
+    from .case_event_response_value import CaseEventResponseValue
+    from .case_response import CaseResponse
     from .channel_answer_request import ChannelAnswerRequest
     from .channel_answer_request_answer import ChannelAnswerRequestAnswer
+    from .channel_cases_response import ChannelCasesResponse
     from .channel_create_request import ChannelCreateRequest
     from .channel_detail_response import ChannelDetailResponse
     from .channel_edit_request import ChannelEditRequest
     from .channel_kind import ChannelKind
     from .channel_list_response import ChannelListResponse
+    from .channel_member_list_response import ChannelMemberListResponse
     from .channel_member_response import ChannelMemberResponse
     from .channel_message_response import ChannelMessageResponse
     from .channel_messages_response import ChannelMessagesResponse
@@ -1016,6 +1033,7 @@ if TYPE_CHECKING:
     from .installation_choice_schema import InstallationChoiceSchema
     from .installed_app_summary import InstalledAppSummary
     from .json_object import JsonObject
+    from .line_delivery import LineDelivery
     from .line_preview import LinePreview
     from .link_part import LinkPart
     from .listening_response import ListeningResponse
@@ -1085,6 +1103,10 @@ if TYPE_CHECKING:
     from .organization_role import OrganizationRole
     from .organization_slug_availability_response import OrganizationSlugAvailabilityResponse
     from .organization_update_request import OrganizationUpdateRequest
+    from .outreach_delivery import OutreachDelivery
+    from .outreach_line import OutreachLine
+    from .outreach_request import OutreachRequest
+    from .outreach_response import OutreachResponse
     from .partial_apply_response import PartialApplyResponse
     from .pending_interaction_kind import PendingInteractionKind
     from .pending_interaction_list_response import PendingInteractionListResponse
@@ -1094,6 +1116,7 @@ if TYPE_CHECKING:
     from .plan_step_response import PlanStepResponse
     from .plan_step_response_detail import PlanStepResponseDetail
     from .pod_config import PodConfig
+    from .pod_contact_settings import PodContactSettings
     from .pod_create_request import PodCreateRequest
     from .pod_effective_permissions_response import PodEffectivePermissionsResponse
     from .pod_join_policy import PodJoinPolicy
@@ -1189,6 +1212,7 @@ if TYPE_CHECKING:
     from .scheduled_workflow_start_output import ScheduledWorkflowStartOutput
     from .scope import Scope
     from .search_freshness import SearchFreshness
+    from .search_item import SearchItem
     from .search_method import SearchMethod
     from .search_response import SearchResponse
     from .search_result import SearchResult
@@ -1206,7 +1230,7 @@ if TYPE_CHECKING:
     from .signed_url_revoke_response import SignedUrlRevokeResponse
     from .signed_url_summary import SignedUrlSummary
     from .source_kind import SourceKind
-    from .source_list_response import SourceListResponse
+    from .source_settings_detail_response import SourceSettingsDetailResponse
     from .source_settings_response import SourceSettingsResponse
     from .source_summary import SourceSummary
     from .source_update_request import SourceUpdateRequest
@@ -1485,13 +1509,18 @@ __all__ = [
     'BulkUpdateRecordsRequest',
     'BulkUpdateRecordsRequestRecordsItem',
     'BundleSourceKind',
+    'CaseEventResponse',
+    'CaseEventResponseValue',
+    'CaseResponse',
     'ChannelAnswerRequest',
     'ChannelAnswerRequestAnswer',
+    'ChannelCasesResponse',
     'ChannelCreateRequest',
     'ChannelDetailResponse',
     'ChannelEditRequest',
     'ChannelKind',
     'ChannelListResponse',
+    'ChannelMemberListResponse',
     'ChannelMemberResponse',
     'ChannelMessageResponse',
     'ChannelMessagesResponse',
@@ -1708,6 +1737,7 @@ __all__ = [
     'InstallationChoiceSchema',
     'InstalledAppSummary',
     'JsonObject',
+    'LineDelivery',
     'LinePreview',
     'LinkPart',
     'ListeningResponse',
@@ -1777,6 +1807,10 @@ __all__ = [
     'OrganizationRole',
     'OrganizationSlugAvailabilityResponse',
     'OrganizationUpdateRequest',
+    'OutreachDelivery',
+    'OutreachLine',
+    'OutreachRequest',
+    'OutreachResponse',
     'PartialApplyResponse',
     'PendingInteractionKind',
     'PendingInteractionListResponse',
@@ -1786,6 +1820,7 @@ __all__ = [
     'PlanStepResponse',
     'PlanStepResponseDetail',
     'PodConfig',
+    'PodContactSettings',
     'PodCreateRequest',
     'PodEffectivePermissionsResponse',
     'PodJoinPolicy',
@@ -1881,6 +1916,7 @@ __all__ = [
     'ScheduledWorkflowStartOutput',
     'Scope',
     'SearchFreshness',
+    'SearchItem',
     'SearchMethod',
     'SearchResponse',
     'SearchResult',
@@ -1898,7 +1934,7 @@ __all__ = [
     'SignedUrlRevokeResponse',
     'SignedUrlSummary',
     'SourceKind',
-    'SourceListResponse',
+    'SourceSettingsDetailResponse',
     'SourceSettingsResponse',
     'SourceSummary',
     'SourceUpdateRequest',

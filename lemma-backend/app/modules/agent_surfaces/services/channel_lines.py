@@ -1,10 +1,10 @@
-"""What a surface heard and said, as lines on the channel it happened in.
+"""What a surface heard, as lines on the channel it happened in.
 
-Every message a person sends the pod, and every answer its agent delivers, is a
-line of the channel its place belongs to (``app.modules.channels``): the
-timeline the pod's members read, and the background a later run is handed.
-Written at the two moments a surface knows a line is real -- a message as it
-enters the person's conversation, an answer once the platform has taken it.
+Every message a person sends the pod is a line of the channel its place
+belongs to (``app.modules.channels``): the timeline the pod's members read,
+and the background a later run is handed. Written as the message enters the
+person's conversation. The agent's answer is a line too, posted before it is
+sent and carried by its delivery (``run_reply_lines``).
 
 A group's messages are written earlier too, by ``group_log``, as they arrive:
 most of a group is not said to the bot, and all of it is what "what did we
@@ -18,19 +18,17 @@ from collections.abc import Callable
 from typing import Protocol
 from uuid import UUID
 
-from app.core.authorization.delegation import effective_agent_id
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.contracts import channel_conversations
-from app.modules.agent.contracts import (
-    conversations_for_surfaces as agent_conversations,
-)
 from app.modules.agent.contracts.audience import Audience
+from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
-from app.modules.agent_surfaces.services.surface_route_types import (
-    SurfaceEgressTarget,
-)
+from app.modules.agent_surfaces.services.line_markup import Bot, LineMarkup
+from app.modules.channels.contracts.deliveries import deliveries_of, delivery_sent
 from app.modules.channels.contracts.lines import thread_root_at
 from app.modules.channels.contracts import (
+    AccountKey,
+    ChannelMessage,
     ContactsHome,
     NewLine,
     Place,
@@ -44,15 +42,76 @@ from app.modules.channels.contracts import (
 )
 
 
-#: Delivery metadata naming the line being delivered, which is on the timeline
-#: already: the delivery writes no second one.
-ALREADY_A_LINE = "channel_message_id"
-
 #: Platforms whose channels have threads, kept as threads on the timeline.
 THREADED = frozenset({"SLACK", "TEAMS"})
 
 #: A web chat's platform, as its channel source names it.
 WEB = "WEB"
+
+
+#: What of an event's metadata answering it in place can need: how its
+#: platform threads and routes a reply. Everything else there -- a subject,
+#: attachments, names, quoted text, a shared contact -- is what was said, which
+#: the line itself keeps.
+REPLY_METADATA = frozenset(
+    {
+        "platform",
+        # Slack and Teams: where the place is, and whether this is a thread.
+        "event_type",
+        "is_thread_reply",
+        "channel_type",
+        "channel_membership_type",
+        "place_privacy",
+        "is_ext_shared_channel",
+        "assistant_thread_present",
+        "assistant_thread_action_token",
+        "team_id",
+        "team_aad_group_id",
+        "channel_id",
+        "service_url",
+        "conversation_id",
+        "reply_to_id",
+        # Telegram: the chat and its topic.
+        "chat_id",
+        "chat_type",
+        "message_thread_id",
+        "is_topic_message",
+        # WhatsApp: the number it came to, and the group.
+        "waba_id",
+        "phone_number_id",
+        "group_id",
+        # Email: the inbox and the thread.
+        "surface_address",
+        "mailbox_email",
+        "thread_id",
+        "message_id",
+        "in_reply_to",
+        "references",
+    }
+)
+
+
+def reply_ref_of(event: ParsedInboundSurfaceEvent) -> dict[str, object]:
+    """What answers a heard line in place -- its place, its thread, the message
+    replied to, who to answer -- and nothing of what was said: no words, no
+    sender's address, number or name, none of the payload. Kept on every heard
+    line, so it holds the reply target alone; still an event a reply reads
+    (``ParsedInboundSurfaceEvent``), with its words empty."""
+    target = event.model_copy(
+        update={
+            "message_text": "",
+            "sender_email": None,
+            "sender_phone": None,
+            "sender_display_name": None,
+            "sender_authentication": None,
+            "metadata": {
+                key: value
+                for key, value in event.metadata.items()
+                if key in REPLY_METADATA
+            },
+        }
+    )
+    return target.model_dump(mode="json", exclude={"raw_payload"})
 
 
 def web_place(*, widget_id: UUID, session_id: UUID) -> Place:
@@ -61,26 +120,17 @@ def web_place(*, widget_id: UUID, session_id: UUID) -> Place:
     return Place(
         surface_id=None,
         platform=WEB,
-        account_key=f"widget:{widget_id}",
-        kind=SourceKind.PRIVATE,
+        account=AccountKey(workspace=f"widget:{widget_id}"),
+        kind=SourceKind.PERSON,
         external_channel_id=str(widget_id),
         external_user_id=str(session_id),
     )
 
 
 class ChannelLines(Protocol):
-    """Where a surface writes what it heard and said, as channel lines."""
+    """Where a surface writes what it heard, as channel lines."""
 
     async def heard(self, context: SurfaceChatContext, *, text: str) -> None: ...
-
-    async def said(
-        self,
-        *,
-        target: SurfaceEgressTarget,
-        conversation_id: UUID,
-        text: str,
-        agent_display_name: str | None = None,
-    ) -> None: ...
 
 
 class ChannelLinesInDatabase:
@@ -91,22 +141,6 @@ class ChannelLinesInDatabase:
 
     async def heard(self, context: SurfaceChatContext, *, text: str) -> None:
         await note_heard(self.uow, context, text=text)
-
-    async def said(
-        self,
-        *,
-        target: SurfaceEgressTarget,
-        conversation_id: UUID,
-        text: str,
-        agent_display_name: str | None = None,
-    ) -> None:
-        await note_said(
-            self.uow,
-            target=target,
-            conversation_id=conversation_id,
-            text=text,
-            agent_display_name=agent_display_name,
-        )
 
 
 #: The lines over one unit of work, for a writer that opens its own scopes.
@@ -133,19 +167,55 @@ async def note_heard(
         if contact_id is not None
         else Sender.member(context.message_user_id, display_name=name)
     )
+    event = context.event
+    said = await LineMarkup(uow).read(
+        event,
+        pod_id=source.pod_id,
+        channel_id=source.channel_id,
+        text=text,
+        bot=Bot(surface_id=context.surface_id, name=context.agent_display_name),
+    )
     await post(
         uow,
         channel_id=source.channel_id,
         line=NewLine(
             sender=sender,
-            text=text,
+            text=said.text,
+            parts=said.parts,
             source_id=source.id,
             conversation_id=context.conversation_id,
             external_message_id=context.message_external_message_id,
-            external_thread_id=context.event.external_thread_id,
+            external_thread_id=event.external_thread_id,
+            # A Slack or Teams thread is a thread here too.
+            thread_root_id=await _thread_root(
+                uow,
+                source,
+                external_thread_id=event.external_thread_id,
+                external_message_id=context.message_external_message_id,
+            ),
             # What answers this line in place: its thread, the message replied to.
-            reply_ref=context.event.model_dump(mode="json"),
+            reply_ref=reply_ref_of(event),
         ),
+        mentions=said.mentions,
+        mentioned_agents=said.agents,
+    )
+
+
+async def _thread_root(
+    uow: SqlAlchemyUnitOfWork,
+    source: Source,
+    *,
+    external_thread_id: str | None,
+    external_message_id: str | None = None,
+) -> UUID | None:
+    """The line a reply in a shared Slack or Teams place hangs from."""
+    if source.kind is not SourceKind.CHAT or source.platform not in THREADED:
+        return None
+    return await thread_root_at(
+        uow,
+        source_id=source.id,
+        external_thread_id=external_thread_id,
+        external_message_id=external_message_id,
     )
 
 
@@ -186,50 +256,6 @@ async def note_heard_on_web(
     )
 
 
-async def note_said(
-    uow: SqlAlchemyUnitOfWork,
-    *,
-    target: SurfaceEgressTarget,
-    conversation_id: UUID,
-    text: str,
-    agent_display_name: str | None = None,
-) -> None:
-    """What the agent delivered, as its line in the channel, said for the
-    person it answered. After the platform took it, so the timeline never
-    holds a line nobody saw."""
-    if target.conversation_user_id is None:
-        return
-    source = target.source
-    agent_id = effective_agent_id(
-        target.agent_id or target.surface.agent_id, pod_id=target.pod_id
-    )
-    thread_root_id = (
-        await thread_root_at(
-            uow, source_id=source.id, external_thread_id=target.event.external_thread_id
-        )
-        if source.kind is SourceKind.SHARED and source.platform in THREADED
-        else None
-    )
-    await post(
-        uow,
-        channel_id=source.channel_id,
-        line=NewLine(
-            sender=Sender.agent(
-                agent_id,
-                on_behalf_of=answered_for(target.audience, target.conversation_user_id),
-                display_name=agent_display_name,
-            ),
-            text=text,
-            source_id=source.id,
-            conversation_id=conversation_id,
-            # The thread it went to, so the place knows the agent is in it.
-            external_thread_id=target.event.external_thread_id,
-            # A Slack or Teams thread is a thread here too.
-            thread_root_id=thread_root_id,
-        ),
-    )
-
-
 def answered_for(audience: Audience, user_id: UUID) -> Principal:
     """Whom an answer was for, and so whose access it was made with.
 
@@ -242,24 +268,15 @@ def answered_for(audience: Audience, user_id: UUID) -> Principal:
     return Principal.member(user_id)
 
 
-async def note_answered_on(
-    uow: SqlAlchemyUnitOfWork, *, source: Source, conversation_id: UUID, text: str
+async def shown_on_web(
+    uow: SqlAlchemyUnitOfWork, line: ChannelMessage, source: Source
 ) -> None:
-    """An answer given where no platform delivers it -- the web chat -- as the
-    agent's line, said for the person the conversation answers."""
-    conversation = await agent_conversations.surface_conversation(uow, conversation_id)
-    if conversation is None:
-        return
-    await post(
-        uow,
-        channel_id=source.channel_id,
-        line=NewLine(
-            sender=Sender.agent(
-                effective_agent_id(conversation.agent_id, pod_id=conversation.pod_id),
-                on_behalf_of=answered_for(conversation.audience, conversation.user_id),
-            ),
-            text=text,
-            source_id=source.id,
-            conversation_id=conversation_id,
-        ),
-    )
+    """A line for a web chat, which shows it from the conversation: its
+    delivery there is ``SENT`` at once, and nothing is sent. Every line for a
+    place has its delivery row, so the line says where it went the same way
+    whatever the platform."""
+    for delivery in await deliveries_of(uow, [line.id]):
+        if delivery.source_id == source.id:
+            await delivery_sent(
+                uow, delivery.id, platform=source.platform, external_message_id=None
+            )

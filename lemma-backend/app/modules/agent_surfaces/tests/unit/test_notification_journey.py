@@ -57,6 +57,7 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfaceConfig,
     SurfacePlatform,
 )
+from app.modules.agent_surfaces.domain.envelope import DeliveryReceipt, PartDelivery
 from app.modules.agent_surfaces.domain.models import ColdEmailSendResult
 from app.modules.agent_surfaces.services.cold_email_thread import (
     build_cold_email_thread,
@@ -257,11 +258,13 @@ class RecordingEgress:
     async def agent_name_for_surface(self, surface):
         return self.agent_side.name_for(surface.agent_id)
 
-    async def send_agent_message_for_conversation(
+    async def deliver_message(
         self, *, conversation_id, message, metadata=None, at=None
     ):
         self.sent.append((conversation_id, message))
-        return True
+        return DeliveryReceipt(
+            parts={"text": PartDelivery.NATIVE}, external_message_id="chat-1"
+        )
 
     async def open_cold_email_thread(
         self, *, surface, recipient_email, subject, message, thread_seed_id, metadata
@@ -383,7 +386,7 @@ class World:
                 account_id=uuid4(),
                 surface_id=self.surface.id,
                 platform=self.surface.surface_type.value,
-                kind=SourceKind.PRIVATE,
+                kind=SourceKind.PERSON,
                 external_user_id=_CHAT,
                 last_inbound_at=moment,
                 updated_at=moment,
@@ -634,7 +637,7 @@ async def test_an_email_reply_to_an_agents_mailbox_stays_with_the_message(
     asked = await world.ask()
 
     assert asked.delivered.platform == "RESEND"
-    assert world.place().kind is SourceKind.PRIVATE
+    assert world.place().kind is SourceKind.PERSON
     assert world.place().channel_id == asked.line.channel_id
     bound, created_title = await world.reply("yes")
 

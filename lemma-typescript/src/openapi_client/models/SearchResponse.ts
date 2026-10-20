@@ -2,8 +2,8 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
-import type { InboxItem } from './InboxItem.js';
+import type { SearchItem } from './SearchItem.js';
 export type SearchResponse = {
-    items: Array<InboxItem>;
+    items: Array<SearchItem>;
     next_cursor?: (string | null);
 };

@@ -31,7 +31,7 @@ _NOTIFY = ("ALL", "MENTIONS", "NONE")
 _ANSWERS = ("MENTIONED", "EVERY_LINE")
 _ROLES = ("owner", "member")
 _STATUSES = ("open", "waiting_on_contact", "closed")
-_VISIBILITIES = ("public", "private")
+_VISIBILITIES = ("PUBLIC", "PRIVATE")
 
 
 def _run(ctx: typer.Context, pod: str | None, call: Callable[[Any], Any]) -> None:
@@ -161,7 +161,7 @@ def create_channel(
         lambda p: p.channels.create(
             title,
             topic=topic,
-            visibility="private" if private else "public",
+            visibility="PRIVATE" if private else "PUBLIC",
             members=member,
             agents=seats,
         ),
@@ -187,7 +187,9 @@ def update_channel(
         help="A contact's channel: open, waiting_on_contact or closed.",
     ),
     assignee: str | None = typer.Option(
-        None, "--assignee", help="A contact's channel: a member's user id, or `none`."
+        None,
+        "--assignee",
+        help="A contact's channel: `me`, a member's user id, or `none`.",
     ),
     pod: str | None = typer.Option(None, "--pod"),
 ) -> None:
@@ -255,7 +257,8 @@ def join_channel(
     channel_id: str = typer.Argument(..., help="Channel id."),
     pod: str | None = typer.Option(None, "--pod"),
 ) -> None:
-    """Join a public group, or a contact's channel."""
+    """Join a public group, or a contact's channel; an admin or editor may also
+    join a private group (it is recorded)."""
     _run(ctx, pod, lambda p: p.channels.join(channel_id))
 
 
@@ -437,22 +440,73 @@ def tell(
     _run(ctx, pod, lambda p: p.channels.notify(to, text))
 
 
+@app.command("outreach")
+def outreach(
+    ctx: typer.Context,
+    contact_id: str = typer.Argument(..., help="The contact's id."),
+    handle: str = typer.Argument(
+        ..., help="One of their handles: an email or a number."
+    ),
+    text: str = typer.Argument(..., help="What to write to them."),
+    kind: str | None = typer.Option(
+        None, "--kind", help="EMAIL, PHONE, ... when the handle could be two."
+    ),
+    client_message_id: str | None = typer.Option(
+        None, "--client-message-id", help="The same id twice is one line."
+    ),
+    pod: str | None = typer.Option(None, "--pod"),
+) -> None:
+    """Write to a contact first, in their channel: email any time, WhatsApp
+    within 24 hours of their last message, never a handle that said stop."""
+    _run(
+        ctx,
+        pod,
+        lambda p: p.contacts.outreach(
+            contact_id,
+            handle=handle,
+            text=text,
+            kind=kind,
+            client_message_id=client_message_id,
+        ),
+    )
+
+
 # -- sources -------------------------------------------------------------------------
+
+
+@source_app.command("list")
+def list_sources(
+    ctx: typer.Context,
+    surface: str = typer.Argument(..., help="The bot's surface name."),
+    limit: int = typer.Option(50, "--limit"),
+    cursor: str | None = typer.Option(
+        None, "--cursor", help="The previous page's next_cursor."
+    ),
+    pod: str | None = typer.Option(None, "--pod"),
+) -> None:
+    """The groups one bot is in, as channels, each with its source settings."""
+    _run(
+        ctx,
+        pod,
+        lambda p: p.channels.sources.list(surface, limit=limit, cursor=cursor),
+    )
 
 
 @source_app.command("get")
 def get_source(
     ctx: typer.Context,
+    channel_id: str = typer.Argument(..., help="The group's channel id."),
     source_id: str = typer.Argument(..., help="Source id, from the channel."),
     pod: str | None = typer.Option(None, "--pod"),
 ) -> None:
     """A group source's settings: who answers its outsiders, and from what."""
-    _run(ctx, pod, lambda p: p.sources.get(source_id))
+    _run(ctx, pod, lambda p: p.channels.sources.get(channel_id, source_id))
 
 
 @source_app.command("set")
 def set_source(
     ctx: typer.Context,
+    channel_id: str = typer.Argument(..., help="The group's channel id."),
     source_id: str = typer.Argument(..., help="Source id, from the channel."),
     answers_outsiders: bool | None = typer.Option(
         None,
@@ -465,12 +519,15 @@ def set_source(
     pod: str | None = typer.Option(None, "--pod"),
 ) -> None:
     """Switch outsiders on or off in one group, or take it over."""
+    changes: dict[str, Any] = {"take_over": take_over}
+    if answers_outsiders is not None:
+        changes["answers_outsiders"] = answers_outsiders
+    if answers_outsiders is None and not take_over:
+        raise typer.BadParameter("Name something to change.")
     _run(
         ctx,
         pod,
-        lambda p: p.sources.update(
-            source_id, answers_outsiders=answers_outsiders, take_over=take_over
-        ),
+        lambda p: p.channels.sources.update(channel_id, source_id, **changes),
     )
 
 
@@ -482,14 +539,22 @@ def start_whatsapp_group(
     no_outsiders: bool = typer.Option(
         False, "--no-outsiders", help="Do not answer people outside the pod."
     ),
+    idempotency_key: str | None = typer.Option(
+        None,
+        "--idempotency-key",
+        help="The same key again answers with the group it started.",
+    ),
     pod: str | None = typer.Option(None, "--pod"),
 ) -> None:
     """Start a WhatsApp group with the pod's bot in it: a new group channel."""
     _run(
         ctx,
         pod,
-        lambda p: p.sources.start_whatsapp_group(
-            surface, title, answers_outsiders=not no_outsiders
+        lambda p: p.channels.sources.start_whatsapp_group(
+            surface,
+            title,
+            answers_outsiders=not no_outsiders,
+            idempotency_key=idempotency_key,
         ),
     )
 
@@ -501,4 +566,4 @@ def telegram_link(
     pod: str | None = typer.Option(None, "--pod"),
 ) -> None:
     """A one-use, hour-long link that adds the pod's Telegram bot to a group."""
-    _run(ctx, pod, lambda p: p.sources.telegram_link(surface))
+    _run(ctx, pod, lambda p: p.channels.sources.telegram_link(surface))

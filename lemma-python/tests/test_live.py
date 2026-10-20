@@ -207,3 +207,63 @@ async def test_watch_changes_refreshes_once_then_stops_on_forbidden() -> None:
             ):
                 pass
     assert refreshes == [True]
+
+
+def test_session_keeps_an_unavailable_subscription_and_retries_it() -> None:
+    session = LiveSession(max_retries=2)
+    sub = session.add(table="t", since="c.3")
+    for _ in range(2):
+        _, events = session.handle(
+            json.dumps({"type": "error", "id": sub, "code": "unavailable"})
+        )
+        assert events == [] and session.active
+        ((frame, delay),) = session.take_retries()
+        assert json.loads(frame)["since"] == "c.3" and delay >= 0
+    _, events = session.handle(
+        json.dumps({"type": "error", "id": sub, "code": "unavailable"})
+    )
+    assert events == [LiveEnded(sub, "max retry attempts reached (unavailable)")]
+    assert not session.active
+
+
+def test_a_subscribed_resets_the_retry_count() -> None:
+    session = LiveSession(max_retries=1)
+    sub = session.add(table="t")
+    session.handle(json.dumps({"type": "error", "id": sub, "code": "unavailable"}))
+    session.handle(json.dumps({"type": "subscribed", "id": sub, "cursor": "c.1"}))
+    _, events = session.handle(
+        json.dumps({"type": "error", "id": sub, "code": "unavailable"})
+    )
+    assert events == [] and session.active
+
+
+@pytest.mark.asyncio
+async def test_watch_changes_sends_an_unavailable_subscription_again() -> None:
+    received: list[dict] = []
+
+    async def handler(ws: ServerConnection) -> None:
+        await ws.send(json.dumps({"type": "ready", "connection": "c"}))
+        received.append(json.loads(await ws.recv()))
+        await ws.send(json.dumps({"type": "error", "id": "s1", "code": "unavailable"}))
+        received.append(json.loads(await ws.recv()))
+        await ws.send(json.dumps({"type": "subscribed", "id": "s1", "cursor": "c.1"}))
+        await ws.send(
+            json.dumps({"type": "unsubscribed", "id": "s1", "reason": "access_revoked"})
+        )
+        await ws.wait_closed()
+
+    async with serve(handler, "127.0.0.1", 0) as server:
+        port = server.sockets[0].getsockname()[1]
+        events = [
+            event
+            async for event in watch_changes(
+                base_url=f"http://127.0.0.1:{port}",
+                pod_id="P",
+                token=lambda: "T",
+                table="t",
+                max_reconnects=3,
+            )
+        ]
+
+    assert [type(event).__name__ for event in events] == ["LiveReady", "LiveEnded"]
+    assert len(received) == 2 and received[0] == received[1]

@@ -8,6 +8,7 @@ deleting one -- a request to see or to forget a person -- takes a pod admin.
 
 from __future__ import annotations
 
+import base64
 from datetime import datetime
 from uuid import UUID
 
@@ -69,9 +70,9 @@ class ContactResponse(BaseModel):
 
 class ContactListResponse(BaseModel):
     items: list[ContactResponse]
-    next_before: str | None = Field(
+    next_cursor: str | None = Field(
         default=None,
-        description="Pass as `before` for the next page; absent on the last.",
+        description="Pass as `cursor` for the next page; absent on the last.",
     )
 
 
@@ -126,16 +127,23 @@ async def _found(uow: UoWDep, *, pod_id: UUID, contact_id: UUID) -> Contact:
     return contact
 
 
-def _list_cursor(before: str | None) -> ContactCursor | None:
-    """``created_at|id`` of the last contact on the previous page."""
-    if before is None:
+def _encode_cursor(contact: Contact) -> str:
+    """The last contact of a page, opaque: ``created_at|id``, base64."""
+    raw = f"{contact.created_at.isoformat()}|{contact.id}".encode()
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+def _list_cursor(cursor: str | None) -> ContactCursor | None:
+    """The page after the one a cursor of ours ended; anything else is a 400."""
+    if cursor is None:
         return None
-    at, _, contact_id = before.partition("|")
     try:
+        raw = base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)).decode()
+        at, _, contact_id = raw.partition("|")
         return ContactCursor(
             created_at=datetime.fromisoformat(at), contact_id=UUID(contact_id)
         )
-    except ValueError:
+    except ValueError:  # bad base64, text or fields alike
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST, detail="That cursor is not one we gave"
         ) from None
@@ -151,16 +159,17 @@ async def list_contacts(
     pod_id: UUID,
     uow: UoWDep,
     limit: int = Query(default=50, ge=1, le=MAX_PAGE),
-    before: str | None = Query(default=None, max_length=100),
+    cursor: str | None = Query(default=None, max_length=200),
 ) -> ContactListResponse:
-    """The pod's contacts, newest first."""
+    """The pod's contacts, newest first. Follow `next_cursor` until it is
+    absent."""
     contacts = await ContactRepository(uow.session).list(
-        pod_id=pod_id, limit=limit, before=_list_cursor(before)
+        pod_id=pod_id, limit=limit, before=_list_cursor(cursor)
     )
     last = contacts[-1] if len(contacts) == limit else None
     return ContactListResponse(
         items=[_response(contact) for contact in contacts],
-        next_before=f"{last.created_at.isoformat()}|{last.id}" if last else None,
+        next_cursor=_encode_cursor(last) if last else None,
     )
 
 
@@ -217,9 +226,11 @@ async def export_contact(
         after = ExportCursor.decode(cursor) if cursor else None
     except BadExportCursor as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from None
+    # The person a merged contact's id leads to is the one exported: what was
+    # said under the old id has moved to them.
     contact = await _found(uow, pod_id=pod_id, contact_id=contact_id)
     page = await export_page(
-        uow_factory, pod_id=pod_id, contact_id=contact_id, cursor=after
+        uow_factory, pod_id=pod_id, contact_id=contact.id, cursor=after
     )
     return ContactExportResponse(
         contact=_response(contact),

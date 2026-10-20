@@ -4,8 +4,4 @@
 /* eslint-disable */
 export type NoticeRequest = {
     text: string;
-    /**
-     * The member to tell: a pod member id, user id, or email address.
-     */
-    to: string;
 };

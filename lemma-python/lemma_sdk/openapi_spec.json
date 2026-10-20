@@ -3362,6 +3362,167 @@
         "title": "BundleSourceKind",
         "type": "string"
       },
+      "CaseEventResponse": {
+        "properties": {
+          "actor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PersonRef"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The member who made it, when one did."
+          },
+          "at": {
+            "format": "date-time",
+            "title": "At",
+            "type": "string"
+          },
+          "kind": {
+            "description": "`opened`, `assigned`, `handed_back`, `attention`, `acknowledged`, `first_response`, `status`, `closed`, `reopened` or `merged`.",
+            "title": "Kind",
+            "type": "string"
+          },
+          "value": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "description": "What it changed to: `status`, `user_id`, `reason`, `seq`, ...",
+            "title": "Value",
+            "type": "object"
+          }
+        },
+        "required": [
+          "at",
+          "kind"
+        ],
+        "title": "CaseEventResponse",
+        "type": "object"
+      },
+      "CaseResponse": {
+        "properties": {
+          "assigned_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assigned At"
+          },
+          "assignee": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PersonRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "attention": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AttentionResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "closed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Closed At"
+          },
+          "closed_by": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PersonRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "events": {
+            "description": "Oldest first; the newest 200 of a long case.",
+            "items": {
+              "$ref": "#/components/schemas/CaseEventResponse"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "first_response_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The first member line to the contact in it.",
+            "title": "First Response At"
+          },
+          "first_response_by": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PersonRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "opened_at": {
+            "format": "date-time",
+            "title": "Opened At",
+            "type": "string"
+          },
+          "opened_seq": {
+            "description": "The channel's newest line when it opened: the case is the lines after.",
+            "title": "Opened Seq",
+            "type": "integer"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ContactStatus"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "opened_at",
+          "opened_seq"
+        ],
+        "title": "CaseResponse",
+        "type": "object"
+      },
       "ChannelAnswerRequest": {
         "properties": {
           "answer": {
@@ -3375,6 +3536,33 @@
           "answer"
         ],
         "title": "ChannelAnswerRequest",
+        "type": "object"
+      },
+      "ChannelCasesResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CaseResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "ChannelCasesResponse",
         "type": "object"
       },
       "ChannelCreateRequest": {
@@ -3417,7 +3605,7 @@
           },
           "visibility": {
             "$ref": "#/components/schemas/Visibility",
-            "default": "public"
+            "default": "PUBLIC"
           }
         },
         "required": [
@@ -3465,7 +3653,7 @@
                 "type": "null"
               }
             ],
-            "description": "The channel asks for a person, and why."
+            "description": "A contact's channel: its current case asks for a person, and why. Never set on another kind of channel."
           },
           "created_at": {
             "format": "date-time",
@@ -3488,6 +3676,12 @@
             "format": "uuid",
             "title": "Id",
             "type": "string"
+          },
+          "joined": {
+            "default": false,
+            "description": "Whether the reader is in it. A pod admin listing a bot's groups (`source_surface`) is shown its private ones too, not joined and without their last line, until they join.",
+            "title": "Joined",
+            "type": "boolean"
           },
           "kind": {
             "$ref": "#/components/schemas/ChannelKind"
@@ -3539,6 +3733,17 @@
             },
             "title": "Source Places",
             "type": "array"
+          },
+          "source_settings": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SourceSettingsResponse"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Listed by `source_surface`: that bot's settings for its place here -- who answers its people outside the pod, and whether they are."
           },
           "sources": {
             "description": "The outside places feeding it.",
@@ -3599,6 +3804,7 @@
         "type": "object"
       },
       "ChannelEditRequest": {
+        "description": "Absent is unchanged; ``null`` clears the parts. The text cannot be\ncleared: delete the line instead.",
         "properties": {
           "parts": {
             "anyOf": [
@@ -3631,19 +3837,23 @@
                 "type": "null"
               }
             ],
-            "description": "Absent keeps the parts.",
+            "description": "Absent keeps the parts; `null` or `[]` clears them.",
             "title": "Parts"
           },
           "text": {
-            "maxLength": 20000,
-            "minLength": 1,
-            "title": "Text",
-            "type": "string"
+            "anyOf": [
+              {
+                "maxLength": 20000,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
           }
         },
-        "required": [
-          "text"
-        ],
         "title": "ChannelEditRequest",
         "type": "object"
       },
@@ -3682,6 +3892,34 @@
           "items"
         ],
         "title": "ChannelListResponse",
+        "type": "object"
+      },
+      "ChannelMemberListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ChannelMemberResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Pass as `cursor` for the next page.",
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "ChannelMemberListResponse",
         "type": "object"
       },
       "ChannelMemberResponse": {
@@ -3763,6 +4001,21 @@
             "default": false,
             "title": "Deleted",
             "type": "boolean"
+          },
+          "delivered": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/LineDelivery"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Only on the reader's own line: each place outside Lemma it went to, and what became of it. Pushes to members are not listed here (`\u2026/deliveries` has every send).",
+            "title": "Delivered"
           },
           "edited_at": {
             "anyOf": [
@@ -4147,7 +4400,7 @@
                 "type": "null"
               }
             ],
-            "description": "The channel asks for a person, and why."
+            "description": "A contact's channel: its current case asks for a person, and why. Never set on another kind of channel."
           },
           "created_at": {
             "format": "date-time",
@@ -4170,6 +4423,12 @@
             "format": "uuid",
             "title": "Id",
             "type": "string"
+          },
+          "joined": {
+            "default": false,
+            "description": "Whether the reader is in it. A pod admin listing a bot's groups (`source_surface`) is shown its private ones too, not joined and without their last line, until they join.",
+            "title": "Joined",
+            "type": "boolean"
           },
           "kind": {
             "$ref": "#/components/schemas/ChannelKind"
@@ -4204,6 +4463,17 @@
               }
             ],
             "description": "Whose channel it is: the member's for a DIRECT one, the contact's for a CONTACT one; absent for a GROUP."
+          },
+          "source_settings": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SourceSettingsResponse"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Listed by `source_surface`: that bot's settings for its place here -- who answers its people outside the pod, and whether they are."
           },
           "sources": {
             "description": "The outside places feeding it.",
@@ -4367,10 +4637,14 @@
                 "type": "string"
               },
               {
+                "const": "me",
+                "type": "string"
+              },
+              {
                 "type": "null"
               }
             ],
-            "description": "A member's user id; `null` unassigns.",
+            "description": "`me`, or a member's user id; `null` unassigns.",
             "title": "Assignee"
           },
           "hand_back_after_hours": {
@@ -5328,7 +5602,7 @@
             "title": "Items",
             "type": "array"
           },
-          "next_before": {
+          "next_cursor": {
             "anyOf": [
               {
                 "type": "string"
@@ -5337,8 +5611,8 @@
                 "type": "null"
               }
             ],
-            "description": "Pass as `before` for the next page; absent on the last.",
-            "title": "Next Before"
+            "description": "Pass as `cursor` for the next page; absent on the last.",
+            "title": "Next Cursor"
           }
         },
         "required": [
@@ -5598,6 +5872,18 @@
                 "type": "null"
               }
             ]
+          },
+          "channel_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Channel Id"
           },
           "created_at": {
             "format": "date-time",
@@ -8787,8 +9073,20 @@
         "type": "object"
       },
       "FilePart": {
-        "description": "A file of the pod's the line shares; a reader needs access to it.",
+        "description": "A file of the pod's the line shares.\n\nWhoever writes the line must be able to read the file; it is then read\nthrough the line (``GET \u2026/messages/{m}/files/{file_id}``), by whoever may\nsee the line, as its writer reads it -- never through the file's own\nfolder, which a private channel's readers need not share.",
         "properties": {
+          "file_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File Id"
+          },
           "mime_type": {
             "anyOf": [
               {
@@ -11800,6 +12098,61 @@
         "type": "object"
       },
       "JsonValue": {},
+      "LineDelivery": {
+        "description": "Where a line went outside Lemma, as its writer is shown on it.",
+        "properties": {
+          "id": {
+            "description": "The delivery; retry it by this id.",
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "platform": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Platform"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why it was skipped, failed or given up.",
+            "title": "Reason"
+          },
+          "source_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/DeliveryStatus"
+          }
+        },
+        "required": [
+          "id",
+          "status"
+        ],
+        "title": "LineDelivery",
+        "type": "object"
+      },
       "LinePreview": {
         "properties": {
           "created_at": {
@@ -12796,17 +13149,9 @@
             "minLength": 1,
             "title": "Text",
             "type": "string"
-          },
-          "to": {
-            "description": "The member to tell: a pod member id, user id, or email address.",
-            "maxLength": 320,
-            "minLength": 1,
-            "title": "To",
-            "type": "string"
           }
         },
         "required": [
-          "to",
           "text"
         ],
         "title": "NoticeRequest",
@@ -13935,6 +14280,171 @@
         "title": "OrganizationUpdateRequest",
         "type": "object"
       },
+      "OutreachDelivery": {
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "platform": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Platform"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "source_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/DeliveryStatus",
+            "description": "PENDING until the line is sent; SENT, SKIPPED or FAILED after."
+          }
+        },
+        "required": [
+          "id",
+          "status"
+        ],
+        "title": "OutreachDelivery",
+        "type": "object"
+      },
+      "OutreachLine": {
+        "properties": {
+          "channel_id": {
+            "format": "uuid",
+            "title": "Channel Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "seq": {
+            "title": "Seq",
+            "type": "integer"
+          },
+          "source_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Id"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "channel_id",
+          "seq",
+          "text",
+          "created_at"
+        ],
+        "title": "OutreachLine",
+        "type": "object"
+      },
+      "OutreachRequest": {
+        "properties": {
+          "client_message_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The same id twice is the same line: a retry sends nothing new.",
+            "title": "Client Message Id"
+          },
+          "handle": {
+            "description": "One of the contact's handles to write to: an email address, a phone number (WhatsApp), a Telegram user id.",
+            "maxLength": 320,
+            "minLength": 1,
+            "title": "Handle",
+            "type": "string"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IdentityKind"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Which kind of handle it is, when the value could be two."
+          },
+          "text": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "handle",
+          "text"
+        ],
+        "title": "OutreachRequest",
+        "type": "object"
+      },
+      "OutreachResponse": {
+        "properties": {
+          "delivery": {
+            "$ref": "#/components/schemas/OutreachDelivery"
+          },
+          "line": {
+            "$ref": "#/components/schemas/OutreachLine"
+          }
+        },
+        "required": [
+          "line",
+          "delivery"
+        ],
+        "title": "OutreachResponse",
+        "type": "object"
+      },
       "PartialApplyResponse": {
         "description": "What a stopped import already wrote to the pod, and how to continue it.\n\nApply is not transactional: each step commits in its own unit of work, so an\nimport that fails or is cancelled part-way leaves the pod changed and there\nis no rollback. `committed_steps` says which steps landed, but a bare list\nof integers does not tell anyone that the pod was modified at all, nor that\nre-applying resumes instead of duplicating. This does.",
         "properties": {
@@ -14223,6 +14733,16 @@
       "PodConfig": {
         "description": "Typed pod-level configuration.",
         "properties": {
+          "contacts": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PodContactSettings"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "default_profile_id": {
             "anyOf": [
               {
@@ -14268,6 +14788,27 @@
           }
         },
         "title": "PodConfig",
+        "type": "object"
+      },
+      "PodContactSettings": {
+        "description": "How the pod treats the people outside it who write to it.",
+        "properties": {
+          "auto_acknowledge": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Said once to a contact who writes while their channel's agents are off -- for example \"Thanks, someone from {pod} will reply\" -- until a member writes to them or their channel is closed. ``{pod}`` is the pod's name. Omitted means nothing is said.",
+            "title": "Auto Acknowledge"
+          }
+        },
+        "title": "PodContactSettings",
         "type": "object"
       },
       "PodCreateRequest": {
@@ -16993,6 +17534,40 @@
         "title": "SearchFreshness",
         "type": "string"
       },
+      "SearchItem": {
+        "properties": {
+          "channel": {
+            "$ref": "#/components/schemas/ChannelRef"
+          },
+          "message": {
+            "$ref": "#/components/schemas/ChannelMessageResponse"
+          },
+          "rank": {
+            "description": "How closely the line matches the words.",
+            "title": "Rank",
+            "type": "number"
+          },
+          "snippet": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The words around the match, as plain text.",
+            "title": "Snippet"
+          }
+        },
+        "required": [
+          "channel",
+          "message",
+          "rank"
+        ],
+        "title": "SearchItem",
+        "type": "object"
+      },
       "SearchMethod": {
         "enum": [
           "VECTOR",
@@ -17006,7 +17581,7 @@
         "properties": {
           "items": {
             "items": {
-              "$ref": "#/components/schemas/InboxItem"
+              "$ref": "#/components/schemas/SearchItem"
             },
             "title": "Items",
             "type": "array"
@@ -17514,29 +18089,13 @@
       },
       "SourceKind": {
         "enum": [
-          "PRIVATE",
-          "SHARED"
+          "PERSON",
+          "CHAT"
         ],
         "title": "SourceKind",
         "type": "string"
       },
-      "SourceListResponse": {
-        "properties": {
-          "items": {
-            "items": {
-              "$ref": "#/components/schemas/SourceSettingsResponse"
-            },
-            "title": "Items",
-            "type": "array"
-          }
-        },
-        "required": [
-          "items"
-        ],
-        "title": "SourceListResponse",
-        "type": "object"
-      },
-      "SourceSettingsResponse": {
+      "SourceSettingsDetailResponse": {
         "properties": {
           "answers_outsiders": {
             "description": "This group's own switch for people outside the pod.",
@@ -17650,6 +18209,112 @@
           "welcomes_outsiders",
           "updated_at"
         ],
+        "title": "SourceSettingsDetailResponse",
+        "type": "object"
+      },
+      "SourceSettingsResponse": {
+        "properties": {
+          "answers_outsiders": {
+            "description": "This group's own switch for people outside the pod.",
+            "title": "Answers Outsiders",
+            "type": "boolean"
+          },
+          "bot_answers_outsiders": {
+            "default": true,
+            "description": "The bot's own switch, over every group it is in. Off, nobody outside the pod is answered in any of them.",
+            "title": "Bot Answers Outsiders",
+            "type": "boolean"
+          },
+          "can_manage": {
+            "default": false,
+            "description": "The reader may switch outsiders here or take it over: they answer for it, nobody in the pod does, or they are an admin of the pod.",
+            "title": "Can Manage",
+            "type": "boolean"
+          },
+          "channel_id": {
+            "format": "uuid",
+            "title": "Channel Id",
+            "type": "string"
+          },
+          "id": {
+            "description": "The source's id, as the channel lists it.",
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "invite_link": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Invite Link"
+          },
+          "owner": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PersonRef"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The member who answers for its outsiders."
+          },
+          "pending": {
+            "default": false,
+            "description": "Asked of the platform and not yet confirmed (WhatsApp).",
+            "title": "Pending",
+            "type": "boolean"
+          },
+          "platform": {
+            "title": "Platform",
+            "type": "string"
+          },
+          "shared_externally": {
+            "default": false,
+            "description": "A Slack channel shared with another company.",
+            "title": "Shared Externally",
+            "type": "boolean"
+          },
+          "surface_name": {
+            "title": "Surface Name",
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "welcomes_outsiders": {
+            "description": "People outside the pod are answered here today: the group's switch is on, a member of the pod answers for them, and the bot's own switch is on.",
+            "title": "Welcomes Outsiders",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "channel_id",
+          "surface_name",
+          "platform",
+          "answers_outsiders",
+          "welcomes_outsiders",
+          "updated_at"
+        ],
         "title": "SourceSettingsResponse",
         "type": "object"
       },
@@ -17678,6 +18343,7 @@
         "type": "object"
       },
       "SourceUpdateRequest": {
+        "description": "Absent is unchanged; neither field can be cleared.",
         "properties": {
           "answers_outsiders": {
             "anyOf": [
@@ -17691,11 +18357,18 @@
             "description": "Answer people outside the pod here, or stop.",
             "title": "Answers Outsiders"
           },
-          "take_over": {
-            "default": false,
-            "description": "Answer for its outsiders yourself from now on.",
-            "title": "Take Over",
-            "type": "boolean"
+          "owner": {
+            "anyOf": [
+              {
+                "const": "me",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`me`: answer for its outsiders yourself from now on.",
+            "title": "Owner"
           }
         },
         "title": "SourceUpdateRequest",
@@ -21554,8 +22227,8 @@
       },
       "Visibility": {
         "enum": [
-          "public",
-          "private"
+          "PUBLIC",
+          "PRIVATE"
         ],
         "title": "Visibility",
         "type": "string"
@@ -21886,6 +22559,19 @@
             "default": "off",
             "description": "Whom it answers. Off until a member chooses."
           },
+          "host_issuer": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The product whose users the widget's host tokens name, such as `acme-app`: give two widgets of one product the same issuer, and widgets of two products different ones, so their user 42s are two people. Letters, digits, dots, dashes and underscores. Fixed once the widget is made; `default` if omitted.",
+            "title": "Host Issuer"
+          },
           "looked_after_by": {
             "anyOf": [
               {
@@ -21938,6 +22624,11 @@
             "title": "Embed",
             "type": "string"
           },
+          "host_issuer": {
+            "description": "The product whose users this widget's host tokens name: a host contact is known as that product's user. Widgets of one product share it.",
+            "title": "Host Issuer",
+            "type": "string"
+          },
           "id": {
             "format": "uuid",
             "title": "Id",
@@ -21983,6 +22674,7 @@
           "answer",
           "looked_after_by",
           "created_at",
+          "host_issuer",
           "embed",
           "page_url",
           "signing_secret"
@@ -22033,6 +22725,11 @@
             "title": "Embed",
             "type": "string"
           },
+          "host_issuer": {
+            "description": "The product whose users this widget's host tokens name: a host contact is known as that product's user. Widgets of one product share it.",
+            "title": "Host Issuer",
+            "type": "string"
+          },
           "id": {
             "format": "uuid",
             "title": "Id",
@@ -22073,6 +22770,7 @@
           "answer",
           "looked_after_by",
           "created_at",
+          "host_issuer",
           "embed",
           "page_url"
         ],
@@ -30581,6 +31279,44 @@
             }
           },
           {
+            "description": "Only `PUBLIC` or only `PRIVATE` channels; a member's and a contact's own channel are private.",
+            "in": "query",
+            "name": "visibility",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/Visibility"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only `PUBLIC` or only `PRIVATE` channels; a member's and a contact's own channel are private.",
+              "title": "Visibility"
+            }
+          },
+          {
+            "description": "Only channels whose title holds these words, in any case.",
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only channels whose title holds these words, in any case.",
+              "title": "Q"
+            }
+          },
+          {
             "in": "query",
             "name": "archived",
             "required": false,
@@ -30655,6 +31391,18 @@
             }
           },
           {
+            "description": "Only contacts' channels waiting on a person: open, unassigned, and the agent off or asking for one.",
+            "in": "query",
+            "name": "needs_person",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Only contacts' channels waiting on a person: open, unassigned, and the agent off or asking for one.",
+              "title": "Needs Person",
+              "type": "boolean"
+            }
+          },
+          {
             "description": "Only channels the reader is in.",
             "in": "query",
             "name": "joined",
@@ -30664,6 +31412,26 @@
               "description": "Only channels the reader is in.",
               "title": "Joined",
               "type": "boolean"
+            }
+          },
+          {
+            "description": "A bot's surface name: only the groups it is in, each with its `source_settings`. Takes reading the bot.",
+            "in": "query",
+            "name": "source_surface",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 255,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "A bot's surface name: only the groups it is in, each with its `source_settings`. Takes reading the bot.",
+              "title": "Source Surface"
             }
           },
           {
@@ -30914,6 +31682,172 @@
         }
       }
     },
+    "/pods/{pod_id}/channels/telegram-links": {
+      "post": {
+        "description": "A one-use link that adds the pod's Telegram bot to a group the caller picks.\n\nThe group becomes a GROUP channel, the caller's to answer for. Which\nTelegram account is theirs is still their profile's to say: a link is\neasily passed on, so the one that used it is never taken for them. The link\nworks for an hour.",
+        "operationId": "channel.telegram_link.create",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TelegramLinkRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TelegramLinkResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Telegram Link",
+        "tags": [
+          "Channel Sources"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "channel.telegram_link"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "channel.telegram_link",
+          "result": "entity",
+          "verb": "create"
+        }
+      }
+    },
+    "/pods/{pod_id}/channels/whatsapp-groups": {
+      "post": {
+        "description": "Start a WhatsApp group with the pod's bot in it, answered for by the caller.\n\nIt is a new GROUP channel's source: the channel is made with it, and its\nid is `channel_id`. WhatsApp confirms the group moments later: it comes\nback ``pending``, and its invite link appears once confirmed. Telegram and\nSlack cannot create groups for a bot; add the bot to one of theirs instead.\nThe same `Idempotency-Key` from the same member answers with the group it\nstarted, for a day.",
+        "operationId": "channel.whatsapp_group.start",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 255,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WhatsAppGroupRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceSettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A start with that Idempotency-Key is still running."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The member has started as many groups as a day allows."
+          }
+        },
+        "summary": "Start Whatsapp Group",
+        "tags": [
+          "Channel Sources"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "channel.whatsapp_group"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "channel.whatsapp_group",
+          "result": "entity",
+          "verb": "start"
+        }
+      }
+    },
     "/pods/{pod_id}/channels/{channel_id}": {
       "delete": {
         "description": "Delete a group made in Lemma, and its timeline: its owners' or an\nadmin's. A channel an outside place feeds is archived instead.",
@@ -31102,7 +32036,185 @@
         }
       }
     },
+    "/pods/{pod_id}/channels/{channel_id}/cases": {
+      "get": {
+        "description": "A contact's channel's cases, the most recently opened first, each with\nwhat happened in it: time to first response, reopens and time to close\nare read from here. Only a contact's channel has cases.",
+        "operationId": "channel.case.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Channel Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelCasesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Cases",
+        "tags": [
+          "Channels"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": true,
+          "resource": "channel.case",
+          "result": "collection",
+          "verb": "list"
+        }
+      }
+    },
     "/pods/{pod_id}/channels/{channel_id}/members": {
+      "get": {
+        "description": "Who is in a channel -- members, contacts and agents -- in the order\nthey joined, a page at a time.",
+        "operationId": "channel.member.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Channel Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelMemberListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Members",
+        "tags": [
+          "Channels"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": true,
+          "resource": "channel.member",
+          "result": "collection",
+          "verb": "list"
+        }
+      },
       "post": {
         "description": "Add members of the pod, and the pod's agents, to a group. An agent\nalready in it answers as now asked.",
         "operationId": "channel.member.add",
@@ -31305,7 +32417,7 @@
         }
       },
       "post": {
-        "description": "Join a channel the reader may see: a public group, or -- holding\n`contact.read` -- a contact's channel. Joining one already joined is\nnothing.",
+        "description": "Join a channel the reader may see: a public group, or -- holding\n`contact.read` -- a contact's channel. Holding `channel.manage`, a private\ngroup too, on request: how a pod admin finds and takes over a group nobody\nlet them into; it is logged. Joining one already joined is nothing.",
         "operationId": "channel.member.join",
         "parameters": [
           {
@@ -31369,7 +32481,7 @@
     },
     "/pods/{pod_id}/channels/{channel_id}/members/{kind}:{member_id}": {
       "delete": {
-        "description": "Take somebody out of a group -- its owners' or an admin's -- or leave a\nchannel oneself.",
+        "description": "Take somebody out of a group -- its owners' or an editor's -- or leave a\nchannel oneself.",
         "operationId": "channel.member.remove",
         "parameters": [
           {
@@ -31796,7 +32908,7 @@
         }
       },
       "patch": {
-        "description": "Change what one's own line says. A copy already sent outside stays as sent.",
+        "description": "Change what one's own line says: absent is unchanged, `null` parts\nclears them. A copy already sent outside stays as sent.",
         "operationId": "channel.message.update",
         "parameters": [
           {
@@ -31880,7 +32992,7 @@
     },
     "/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/answer": {
       "post": {
-        "description": "Answer what this line asks the reader: a question, an approval (which\nneeds a `decision`), a form. Only the person it waits on may.\n\nNo session is held across the answer: what asked takes it in its own -- a\nrun resumed, a form submitted -- and may call out to do so.",
+        "description": "Answer what this line asks the reader: a question, an approval (which\nneeds a `decision`), a form. Only the person it waits on may -- and an\napproval, or an agent's paused question, only by their own hand: an agent\ncalling with a token delegated by them is refused, as its tool is.\n\nNo session is held across the answer: what asked takes it in its own -- a\nrun resumed, a form submitted -- and may call out to do so.",
         "operationId": "channel.message.answer",
         "parameters": [
           {
@@ -32117,6 +33229,88 @@
         }
       }
     },
+    "/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/files/{file_id}": {
+      "get": {
+        "description": "A file a line shares, for a reader of the line: read as its writer\nreads it. Gone with the line, or once its writer can no longer read it.",
+        "operationId": "channel.message.file",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Channel Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "message_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Message Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "file_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "File Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The file's bytes"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Line File",
+        "tags": [
+          "Channels"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "channel.message",
+          "result": "entity",
+          "verb": "file"
+        }
+      }
+    },
     "/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/thread": {
       "get": {
         "description": "A thread: its first line, and its replies oldest first after `after_seq`.",
@@ -32291,9 +33485,162 @@
         }
       }
     },
+    "/pods/{pod_id}/channels/{channel_id}/sources/{source_id}": {
+      "get": {
+        "description": "A group source's settings: who answers its outsiders, and from what.",
+        "operationId": "channel.source.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Channel Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "source_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Source Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceSettingsDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Source",
+        "tags": [
+          "Channel Sources"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "channel.source",
+          "result": "entity",
+          "verb": "get"
+        }
+      },
+      "patch": {
+        "description": "Switch outsiders on or off in one group, or take it over (`owner: \"me\"`).\nAbsent is unchanged; neither can be cleared.\n\nThe member who answers for the group may; so may anybody who configures the\nbot when nobody in the pod answers for it, and an admin of the pod, whose\nchange the member is told about.",
+        "operationId": "channel.source.update",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Channel Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "source_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Source Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SourceUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceSettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Source",
+        "tags": [
+          "Channel Sources"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "channel.source"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "channel.source",
+          "result": "entity",
+          "verb": "update"
+        }
+      }
+    },
     "/pods/{pod_id}/contacts": {
       "get": {
-        "description": "The pod's contacts, newest first.",
+        "description": "The pod's contacts, newest first. Follow `next_cursor` until it is\nabsent.",
         "operationId": "contact.list",
         "parameters": [
           {
@@ -32320,19 +33667,19 @@
           },
           {
             "in": "query",
-            "name": "before",
+            "name": "cursor",
             "required": false,
             "schema": {
               "anyOf": [
                 {
-                  "maxLength": 100,
+                  "maxLength": 200,
                   "type": "string"
                 },
                 {
                   "type": "null"
                 }
               ],
-              "title": "Before"
+              "title": "Cursor"
             }
           }
         ],
@@ -32635,9 +33982,121 @@
         }
       }
     },
+    "/pods/{pod_id}/contacts/{contact_id}/outreach": {
+      "post": {
+        "description": "Write to a contact first, on one of their handles: email any time,\nWhatsApp within 24 hours of their last message there. The line goes in\ntheir channel, at that handle's place -- opened if new -- and is sent from\nthere. The same `client_message_id`, or `Idempotency-Key`, from the same\nmember is the same line: a retry sends nothing new.",
+        "operationId": "contact.outreach.send",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "contact_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Contact Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 255,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OutreachRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutreachResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such contact."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "They asked not to be written to there, or the pod has nowhere to write from."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not one of their handles, or not one that may be written to first now."
+          }
+        },
+        "summary": "Send Outreach",
+        "tags": [
+          "Contact Outreach"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "contact.outreach"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "contact.outreach",
+          "result": "entity",
+          "verb": "send"
+        }
+      }
+    },
     "/pods/{pod_id}/conversations": {
       "get": {
-        "description": "List root conversations for the current user in a pod. Omit agent_name to list conversations across the pod, pass POD_DEFAULT (or pod_default) to list default pod assistant conversations, or pass a name to list conversations for a specific pod agent. Child (sub-agent) conversations are omitted by default; pass parent_id to list the children of a specific conversation instead. Archived conversations are omitted; pass archived=true for the archive. Pass search to keep only conversations whose title contains it (case-insensitive). Ordered by last_activity_at, most recent first.",
+        "description": "List root conversations for the current user in a pod. Omit agent_name for conversations across the pod, pass POD_DEFAULT (or pod_default) for the pod assistant's, or a name for one pod agent's. Child (sub-agent) conversations are omitted by default; pass parent_id to list one conversation's children instead. Archived conversations are omitted; pass archived=true for the archive. search keeps titles containing it (case-insensitive); in_channel=false keeps conversations of no channel (the chats list), true those in one. Ordered by last_activity_at, most recent first.",
         "operationId": "agent.conversation.list",
         "parameters": [
           {
@@ -32742,6 +34201,22 @@
                 }
               ],
               "title": "Search"
+            }
+          },
+          {
+            "in": "query",
+            "name": "in_channel",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "In Channel"
             }
           },
           {
@@ -38451,6 +39926,101 @@
         }
       }
     },
+    "/pods/{pod_id}/members/{member}/notices": {
+      "post": {
+        "description": "Tell another member of the pod something, in their own channel. The\nsame `Idempotency-Key` from the same member is the same notice.",
+        "operationId": "agent.notice.send",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The member to tell: a pod member id, user id, or email address.",
+            "in": "path",
+            "name": "member",
+            "required": true,
+            "schema": {
+              "description": "The member to tell: a pod member id, user id, or email address.",
+              "maxLength": 320,
+              "minLength": 1,
+              "title": "Member",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 255,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NoticeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NoticeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Send Notice",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.notice"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.notice",
+          "result": "entity",
+          "verb": "send"
+        }
+      }
+    },
     "/pods/{pod_id}/members/{pod_member_id}": {
       "delete": {
         "description": "Remove a member from a pod",
@@ -38638,70 +40208,6 @@
           "resource": "pod.member",
           "result": "entity",
           "verb": "update_roles"
-        }
-      }
-    },
-    "/pods/{pod_id}/notices": {
-      "post": {
-        "description": "Tell another member of the pod something, in their own channel.",
-        "operationId": "agent.notice.send",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "pod_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Pod Id",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/NoticeRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/NoticeResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Send Notice",
-        "tags": [
-          "Agent Surfaces"
-        ],
-        "x-lemma": {
-          "invalidates": [
-            "agent.notice"
-          ],
-          "kind": "mutation",
-          "paginates": false,
-          "resource": "agent.notice",
-          "result": "entity",
-          "verb": "send"
         }
       }
     },
@@ -40415,7 +41921,7 @@
     },
     "/pods/{pod_id}/search": {
       "get": {
-        "description": "Lines matching every word, newest first, in the channels the reader\nsees -- or in one of them. An answer withheld from the reader is not found\nby what it said.",
+        "description": "Lines matching every word, newest first, in the channels the reader\nsees -- or in one of them -- each with its rank and the words around the\nmatch. An answer withheld from the reader is not found by what it said.",
         "operationId": "channel.search",
         "parameters": [
           {
@@ -40454,6 +41960,111 @@
                 }
               ],
               "title": "Channel Id"
+            }
+          },
+          {
+            "description": "Only channels of this kind.",
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/ChannelKind"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only channels of this kind.",
+              "title": "Kind"
+            }
+          },
+          {
+            "description": "Only lines said by this person: with `sender_id`.",
+            "in": "query",
+            "name": "sender_kind",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/SenderKind"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only lines said by this person: with `sender_id`.",
+              "title": "Sender Kind"
+            }
+          },
+          {
+            "description": "A member's user id, a contact's id or an agent's id.",
+            "in": "query",
+            "name": "sender_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "A member's user id, a contact's id or an agent's id.",
+              "title": "Sender Id"
+            }
+          },
+          {
+            "description": "Said at or after.",
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Said at or after.",
+              "title": "Since"
+            }
+          },
+          {
+            "description": "Said before.",
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Said before.",
+              "title": "Until"
+            }
+          },
+          {
+            "description": "Search archived channels too.",
+            "in": "query",
+            "name": "archived",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Search archived channels too.",
+              "title": "Archived",
+              "type": "boolean"
             }
           },
           {
@@ -40518,330 +42129,6 @@
           "resource": "channel",
           "result": "collection",
           "verb": "search"
-        }
-      }
-    },
-    "/pods/{pod_id}/sources": {
-      "get": {
-        "description": "Every group one bot is in, with each one's settings, newest first.",
-        "operationId": "agent.source.list",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "pod_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Pod Id",
-              "type": "string"
-            }
-          },
-          {
-            "description": "The bot's surface name.",
-            "in": "query",
-            "name": "surface_name",
-            "required": true,
-            "schema": {
-              "description": "The bot's surface name.",
-              "minLength": 1,
-              "title": "Surface Name",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SourceListResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "List Sources",
-        "tags": [
-          "Agent Surfaces"
-        ],
-        "x-lemma": {
-          "kind": "query",
-          "paginates": false,
-          "resource": "agent.source",
-          "result": "collection",
-          "verb": "list"
-        }
-      }
-    },
-    "/pods/{pod_id}/sources/telegram-links": {
-      "post": {
-        "description": "A one-use link that adds the pod's Telegram bot to a group the caller picks.\n\nThe group becomes a GROUP channel, the caller's to answer for. Which\nTelegram account is theirs is still their profile's to say: a link is\neasily passed on, so the one that used it is never taken for them. The link\nworks for an hour.",
-        "operationId": "agent.source.telegram_link.create",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "pod_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Pod Id",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/TelegramLinkRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TelegramLinkResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Telegram Link",
-        "tags": [
-          "Agent Surfaces"
-        ],
-        "x-lemma": {
-          "invalidates": [
-            "agent.source.telegram_link"
-          ],
-          "kind": "mutation",
-          "paginates": false,
-          "resource": "agent.source.telegram_link",
-          "result": "entity",
-          "verb": "create"
-        }
-      }
-    },
-    "/pods/{pod_id}/sources/whatsapp-groups": {
-      "post": {
-        "description": "Start a WhatsApp group with the pod's bot in it, answered for by the caller.\n\nIt is a new GROUP channel's source. WhatsApp confirms the group moments\nlater: it comes back ``pending``, and its invite link appears once\nconfirmed. Telegram and Slack cannot create groups for a bot; add the bot\nto one of theirs instead.",
-        "operationId": "agent.source.whatsapp_group.start",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "pod_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Pod Id",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/WhatsAppGroupRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SourceSettingsResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Start Whatsapp Group",
-        "tags": [
-          "Agent Surfaces"
-        ],
-        "x-lemma": {
-          "invalidates": [
-            "agent.source.whatsapp_group"
-          ],
-          "kind": "mutation",
-          "paginates": false,
-          "resource": "agent.source.whatsapp_group",
-          "result": "entity",
-          "verb": "start"
-        }
-      }
-    },
-    "/pods/{pod_id}/sources/{source_id}": {
-      "get": {
-        "description": "A group source's settings: who answers its outsiders, and from what.",
-        "operationId": "agent.source.get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "pod_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Pod Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "source_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Source Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SourceSettingsResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Get Source",
-        "tags": [
-          "Agent Surfaces"
-        ],
-        "x-lemma": {
-          "kind": "query",
-          "paginates": false,
-          "resource": "agent.source",
-          "result": "entity",
-          "verb": "get"
-        }
-      },
-      "patch": {
-        "description": "Switch outsiders on or off in one group, or take it over.\n\nThe member who answers for the group may; so may anybody who configures the\nbot when nobody in the pod answers for it, and an admin of the pod, whose\nchange the member is told about.",
-        "operationId": "agent.source.update",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "pod_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Pod Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "source_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Source Id",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SourceUpdateRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SourceSettingsResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Update Source",
-        "tags": [
-          "Agent Surfaces"
-        ],
-        "x-lemma": {
-          "invalidates": [
-            "agent.source"
-          ],
-          "kind": "mutation",
-          "paginates": false,
-          "resource": "agent.source",
-          "result": "entity",
-          "verb": "update"
         }
       }
     },
@@ -41321,7 +42608,7 @@
     },
     "/pods/{pod_id}/surfaces/{surface_name}/send": {
       "post": {
-        "description": "Proactively send a message to a pod member on this surface.\n\nPowers notifications from functions/workflows. Reuses the member's existing\nthread (bots can't cold-DM), and a 404 carries the reason it could not be\nreached, in the vocabulary the notification API uses.",
+        "description": "Proactively send a message to a pod member on this surface.\n\nFor functions and workflows that message a member on one platform. Reuses\nthe member's existing thread (bots can't cold-DM), and a 404 carries the\nreason they could not be reached.",
         "operationId": "agent.surface.send",
         "parameters": [
           {

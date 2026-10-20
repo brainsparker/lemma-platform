@@ -1,7 +1,9 @@
 import type { GeneratedClientAdapter } from "../generated.js";
+import type { OutreachRequest } from "../openapi_client/models/OutreachRequest.js";
 import type { WebWidgetCreateRequest } from "../openapi_client/models/WebWidgetCreateRequest.js";
 import type { WebWidgetUpdateRequest } from "../openapi_client/models/WebWidgetUpdateRequest.js";
 import { AgentSurfacesService } from "../openapi_client/services/AgentSurfacesService.js";
+import { ContactOutreachService } from "../openapi_client/services/ContactOutreachService.js";
 import { ContactsService } from "../openapi_client/services/ContactsService.js";
 import { UsageService } from "../openapi_client/services/UsageService.js";
 
@@ -21,11 +23,11 @@ import { UsageService } from "../openapi_client/services/UsageService.js";
 export class ContactsNamespace {
   constructor(private readonly client: GeneratedClientAdapter) {}
 
-  /** The pod's contacts, newest first. Pass the opaque `next_before` back as
-   *  `before` for the next page. */
-  list(podId: string, options: { limit?: number; before?: string } = {}) {
+  /** The pod's contacts, newest first. Pass the opaque `next_cursor` back as
+   *  `cursor` for the next page. */
+  list(podId: string, options: { limit?: number; cursor?: string } = {}) {
     return this.client.request(() =>
-      ContactsService.contactList(podId, options.limit ?? 50, options.before),
+      ContactsService.contactList(podId, options.limit ?? 50, options.cursor),
     );
   }
 
@@ -41,7 +43,20 @@ export class ContactsNamespace {
     );
   }
 
-
+  /** Write to a contact first, on one of their handles: email any time,
+   *  WhatsApp within 24 hours of their last message there, never a handle that
+   *  asked the pod to stop. Returns the line, in their channel at that handle's
+   *  place (opened if new), and its delivery -- `PENDING` until it goes. */
+  outreach(
+    podId: string,
+    contactId: string,
+    payload: OutreachRequest,
+    options: { idempotencyKey?: string } = {},
+  ) {
+    return this.client.request(() =>
+      ContactOutreachService.contactOutreachSend(podId, contactId, payload, options.idempotencyKey),
+    );
+  }
 
   /** One page of everything the pod holds about a contact: handles,
    *  conversations, then rows. Pass `next_cursor` back as `cursor` until absent. */

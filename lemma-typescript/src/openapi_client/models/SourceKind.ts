@@ -3,6 +3,6 @@
 /* tslint:disable */
 /* eslint-disable */
 export enum SourceKind {
-    PRIVATE = 'PRIVATE',
-    SHARED = 'SHARED',
+    PERSON = 'PERSON',
+    CHAT = 'CHAT',
 }

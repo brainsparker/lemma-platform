@@ -10,7 +10,7 @@ kind                                   share   expected
 =====================================  ======  =================
 chatter in a channel no group adopted  55 %    drop
 the bot's own messages echoed back     12 %    drop
-edits and deletions                     8 %    drop
+edits and deletions                     8 %    drop (unadopted channel)
 reactions                               6 %    drop
 other events (user_change, files ...)   4 %    drop
 app home opened                         3 %    platform_update

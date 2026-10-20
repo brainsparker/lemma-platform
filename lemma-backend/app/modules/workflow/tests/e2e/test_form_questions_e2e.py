@@ -4,14 +4,17 @@ Assigning a FORM puts a question in the assignee's own channel, waiting on
 them until the wait's ceiling. Answered on its line, the engine validates it
 -- a bad answer is refused and the question stays open -- and the run moves
 on; submitted in the workflow's own screen, the question closes all the same;
-a cancelled run leaves nothing waiting.
+a cancelled run leaves nothing waiting, and a question that expired ends the
+run as a form nobody answered.
 """
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import pytest
+from sqlalchemy import update
 
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import (
@@ -30,6 +33,8 @@ from app.modules.channels.contracts import (
 from app.modules.channels.contracts import questions as channel_questions
 from app.modules.channels.contracts.lines import viewer_of
 from app.modules.channels.contracts.questions import AnswerRefused
+from app.modules.channels.events.sweeps import questions_expire
+from app.modules.channels.infrastructure.models import ChannelQuestionModel
 from app.modules.workflow.events.run_work import register_run_work
 from app.modules.workflow.events.step_jobs import register_step_jobs
 
@@ -163,3 +168,27 @@ async def test_a_cancelled_run_leaves_nothing_waiting(scenario):
     async with create_uow_from_session_maker(async_session_maker) as uow:
         closed = await channel_questions.question_of(uow, asked.message_id)
     assert closed is not None and closed.state is QuestionState.CANCELLED
+
+
+async def test_a_form_whose_question_expired_ends_its_run_unanswered(scenario):
+    """The question in the inbox ran out of time: the run waiting on it is
+    told now, as a form nobody answered -- not left parked behind a question
+    nobody can answer any more."""
+    run_id = await _form_run(scenario)
+    [(asked, _)] = await _waiting(scenario)
+    async with async_session_maker() as session:
+        await session.execute(
+            update(ChannelQuestionModel)
+            .where(ChannelQuestionModel.message_id == asked.message_id)
+            .values(expires_at=datetime.now(UTC) - timedelta(minutes=1))
+        )
+        await session.commit()
+
+    await questions_expire()
+    await _run_workflow_work()
+
+    ended = await scenario.owner_client.get(
+        f"/pods/{scenario.pod_id}/workflow-runs/{run_id}"
+    )
+    assert ended.json()["status"] == "FAILED", ended.text
+    assert "Nobody answered this form" in (ended.json().get("error") or ""), ended.text

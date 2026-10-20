@@ -10,8 +10,13 @@ from sqlalchemy import ColumnElement, and_, exists, false, or_, select
 from sqlalchemy.orm import aliased
 
 from app.modules.channels.domain.access import Viewer
-from app.modules.channels.domain.entities import ChannelKind, Visibility
-from app.modules.channels.infrastructure.models import ChannelMemberModel, ChannelModel
+from app.modules.channels.domain.entities import ChannelKind, SenderKind, Visibility
+from app.modules.channels.infrastructure.models import (
+    ChannelMemberModel,
+    ChannelMessageModel,
+    ChannelModel,
+    ChannelQuestionModel,
+)
 
 
 def is_member_of(viewer: Viewer) -> ColumnElement[bool]:
@@ -47,4 +52,23 @@ def visible_to(viewer: Viewer) -> ColumnElement[bool]:
                 ),
             ),
         ),
+    )
+
+
+def shown_in_full_to(viewer: Viewer) -> ColumnElement[bool]:
+    """``domain.projection.withheld_from``, negated, as SQL: the lines
+    ``viewer`` reads in full rather than only as given. Over a query of
+    ``channel_messages`` joined to its ``channels`` row and outer-joined to its
+    ``channel_questions`` row."""
+    message, channel = ChannelMessageModel, ChannelModel
+    return or_(
+        message.sender_kind != SenderKind.AGENT.value,
+        # An agent acting for a contact used nobody's own access.
+        message.on_behalf_contact_id.is_not(None),
+        message.on_behalf_user_id == viewer.user_id,
+        and_(
+            channel.kind == ChannelKind.DIRECT.value,
+            channel.member_user_id == viewer.user_id,
+        ),
+        ChannelQuestionModel.awaits_user_id == viewer.user_id,
     )

@@ -11,6 +11,7 @@ from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
     from ..models.agent_runtime_config import AgentRuntimeConfig
+    from ..models.pod_contact_settings import PodContactSettings
     from ..models.pod_recipe import PodRecipe
     from ..models.pod_trigger_settings import PodTriggerSettings
 
@@ -23,6 +24,7 @@ class PodConfig:
     """Typed pod-level configuration.
 
     Attributes:
+        contacts (None | PodContactSettings | Unset):
         default_profile_id (None | str | Unset):
         default_runtime (AgentRuntimeConfig | None | Unset):
         join_policy (PodJoinPolicy | Unset): Who may self-join a pod, ordered from closed to open.
@@ -30,6 +32,7 @@ class PodConfig:
         triggers (None | PodTriggerSettings | Unset):
     """
 
+    contacts: None | PodContactSettings | Unset = UNSET
     default_profile_id: None | str | Unset = UNSET
     default_runtime: AgentRuntimeConfig | None | Unset = UNSET
     join_policy: PodJoinPolicy | Unset = UNSET
@@ -39,7 +42,16 @@ class PodConfig:
 
     def to_dict(self) -> dict[str, Any]:
         from ..models.agent_runtime_config import AgentRuntimeConfig
+        from ..models.pod_contact_settings import PodContactSettings
         from ..models.pod_trigger_settings import PodTriggerSettings
+
+        contacts: dict[str, Any] | None | Unset
+        if isinstance(self.contacts, Unset):
+            contacts = UNSET
+        elif isinstance(self.contacts, PodContactSettings):
+            contacts = self.contacts.to_dict()
+        else:
+            contacts = self.contacts
 
         default_profile_id: None | str | Unset
         if isinstance(self.default_profile_id, Unset):
@@ -77,6 +89,8 @@ class PodConfig:
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({})
+        if contacts is not UNSET:
+            field_dict["contacts"] = contacts
         if default_profile_id is not UNSET:
             field_dict["default_profile_id"] = default_profile_id
         if default_runtime is not UNSET:
@@ -93,10 +107,28 @@ class PodConfig:
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         from ..models.agent_runtime_config import AgentRuntimeConfig
+        from ..models.pod_contact_settings import PodContactSettings
         from ..models.pod_recipe import PodRecipe
         from ..models.pod_trigger_settings import PodTriggerSettings
 
         d = dict(src_dict)
+
+        def _parse_contacts(data: object) -> None | PodContactSettings | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, dict):
+                    raise TypeError()
+                contacts_type_0 = PodContactSettings.from_dict(data)
+
+                return contacts_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(None | PodContactSettings | Unset, data)
+
+        contacts = _parse_contacts(d.pop("contacts", UNSET))
 
         def _parse_default_profile_id(data: object) -> None | str | Unset:
             if data is None:
@@ -160,6 +192,7 @@ class PodConfig:
         triggers = _parse_triggers(d.pop("triggers", UNSET))
 
         pod_config = cls(
+            contacts=contacts,
             default_profile_id=default_profile_id,
             default_runtime=default_runtime,
             join_policy=join_policy,

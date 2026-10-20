@@ -53,6 +53,22 @@ class PodTriggerSettings(BaseModel):
     )
 
 
+class PodContactSettings(BaseModel):
+    """How the pod treats the people outside it who write to it."""
+
+    auto_acknowledge: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=500,
+        description=(
+            "Said once to a contact who writes while their channel's agents are "
+            'off -- for example "Thanks, someone from {pod} will reply" -- '
+            "until a member writes to them or their channel is closed. "
+            "``{pod}`` is the pod's name. Omitted means nothing is said."
+        ),
+    )
+
+
 class PodConfig(BaseModel):
     """Typed pod-level configuration."""
 
@@ -67,6 +83,7 @@ class PodConfig(BaseModel):
     # from the serialized config when empty so legacy config blobs are unchanged.
     recipes: list[PodRecipe] = Field(default_factory=list)
     triggers: PodTriggerSettings | None = None
+    contacts: PodContactSettings | None = None
 
     @field_validator("default_profile_id")
     @classmethod
@@ -112,6 +129,8 @@ class PodConfig(BaseModel):
             data.pop("recipes", None)
         if data.get("triggers") is None:
             data.pop("triggers", None)
+        if data.get("contacts") is None:
+            data.pop("contacts", None)
         return data
 
 

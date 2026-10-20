@@ -25,7 +25,8 @@ from app.modules.agent_surfaces.domain.entities import (
 from app.modules.agent_surfaces.infrastructure.repositories.group_repository import (
     SurfaceGroupRepository,
 )
-from app.modules.agent_surfaces.domain.external_accounts import account_key_for
+from app.modules.agent_surfaces.domain.external_accounts import account_of
+from app.modules.agent_surfaces.domain.place_privacy import PlacePrivacy, said_privacy
 from app.modules.agent_surfaces.services.channel_places import ChannelSeats, is_private
 from app.modules.channels.contracts import GroupHome, Place, SourceKind
 
@@ -63,6 +64,10 @@ async def note_workspace_channel(
         )
         if known:
             group = known[0]
+            if not group.is_private and _now_private(parsed):
+                # Converted since it was made (Slack names the new type on
+                # every message): its mirror follows, one way only.
+                wrote = await groups.became_private(group.id) or wrote
         else:
             title = workspace_channel_title(route, parsed)
             try:
@@ -71,8 +76,8 @@ async def note_workspace_channel(
                     place=Place(
                         surface_id=surface.id,
                         platform=parsed.platform.value,
-                        account_key=account_key_for(surface),
-                        kind=SourceKind.SHARED,
+                        account=account_of(surface),
+                        kind=SourceKind.CHAT,
                         external_channel_id=channel_id,
                         external_user_id=None,
                         title=title,
@@ -88,6 +93,11 @@ async def note_workspace_channel(
             await groups.set_shared_externally(group.id, shared=True)
             wrote = True
     return wrote
+
+
+def _now_private(parsed: ParsedInboundSurfaceEvent) -> bool:
+    """The platform itself said this place is private -- not merely unsaid."""
+    return said_privacy(parsed.platform, parsed.metadata) is PlacePrivacy.PRIVATE
 
 
 def workspace_channel_title(

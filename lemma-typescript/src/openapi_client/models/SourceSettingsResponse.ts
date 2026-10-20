@@ -2,7 +2,6 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
-import type { GroupPublicResponse } from './GroupPublicResponse.js';
 import type { PersonRef } from './PersonRef.js';
 export type SourceSettingsResponse = {
     /**
@@ -32,10 +31,6 @@ export type SourceSettingsResponse = {
      */
     pending?: boolean;
     platform: string;
-    /**
-     * What people outside the pod can be answered from.
-     */
-    public?: (GroupPublicResponse | null);
     /**
      * A Slack channel shared with another company.
      */

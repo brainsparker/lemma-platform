@@ -827,15 +827,21 @@ async def test_a_members_lines_are_mailed_until_the_contact_unsubscribes(
     await send_deliveries()
     [delivery] = await deliveries_of_line(sent["id"])
     assert (delivery.platform, delivery.status.value) == ("RESEND", "SENT")
-    mail = json.dumps(
-        (await wait_for_messages(message_store, "RESEND", min_count=1))[-1]
-    )
+    sent_mail = (await wait_for_messages(message_store, "RESEND", min_count=1))[-1]
+    mail = json.dumps(sent_mail)
     assert "Your order shipped today." in mail
     link = re.search(
         r"https?://\S+/public/contacts/unsubscribe\?token=[^\s\"\\\\]+", mail
     )
     assert link is not None, mail
     token = parse_qs(urlparse(link.group(0)).query)["token"][0]
+    # The mail client's own button: List-Unsubscribe, one-click (RFC 8058),
+    # naming the same link, and a mailto the bot receives.
+    headers = sent_mail["headers"]
+    assert headers["List-Unsubscribe-Post"] == "List-Unsubscribe=One-Click"
+    https, mailto = headers["List-Unsubscribe"].split(", ")
+    assert parse_qs(urlparse(https.strip("<>")).query)["token"] == [token]
+    assert mailto == f"<mailto:{address}?subject=unsubscribe>"
 
     # Opening the link only asks; the button unsubscribes.
     page = await authenticated_client.get(

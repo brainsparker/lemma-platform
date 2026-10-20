@@ -4,7 +4,6 @@ import type { Surface } from "@/data";
 import { useBotGroups } from "@/channels/queries";
 import { noGroupsYet } from "@/channels/sources";
 import { isForbidden } from "@/session/auth-state";
-import { useFeature } from "@/site/analytics/flags";
 import { ChannelIcon } from "./channels";
 import { PlaceLink, channelHref } from "./place-link";
 
@@ -13,11 +12,7 @@ import { PlaceLink, channelHref } from "./place-link";
  *  A group is where people outside the space can meet the bot, and each has a
  *  channel in the space. Its name opens that channel, where everything about
  *  it is -- who answers its people from outside, and the switch for it. */
-export function SurfaceGroups(props: Parameters<typeof GroupsOfSurface>[0]) {
-    return useFeature("groups") ? <GroupsOfSurface {...props} /> : null;
-}
-
-function GroupsOfSurface({ podId, surface, bot, space, onOpenGroup }: {
+export function SurfaceGroups({ podId, surface, bot, space, onOpenGroup }: {
     podId: string;
     surface: Surface;
     /** The bot's name, as the space calls it. */
@@ -28,7 +23,9 @@ function GroupsOfSurface({ podId, surface, bot, space, onOpenGroup }: {
     onOpenGroup?: () => void;
 }) {
     const groups = useBotGroups(podId, surface);
-    const list = groups.data ?? [];
+    /* An admin is also listed the bot's private groups they are not in;
+       those are joined from the bot's settings, not opened from here. */
+    const list = (groups.data ?? []).filter((group) => group.joined);
     return (
         <div className="sgroups">
             <h3 className="sgroups__head">Groups</h3>

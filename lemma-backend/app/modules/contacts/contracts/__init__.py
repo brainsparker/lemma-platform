@@ -4,6 +4,8 @@ Operations, not storage. A surface asks "who is this handle in this pod",
 optionally creating the contact; an agent run asks for the name to address
 somebody by. Nothing here lists a pod's contacts or deletes one -- that is a
 member's action, through this module's own API.
+What the pod may send a contact, and how they stop it, is
+``contracts.outreach``.
 
 Every outsider the pod talks to is a contact, opened on the first thing they
 *write* -- a message, a row, a function call -- and never on a read. A web
@@ -51,6 +53,7 @@ __all__ = [
     "contact_names",
     "contact_handles",
     "find_contact",
+    "find_contact_by_user",
     "is_stop_request",
     "lock_answered_contacts_count",
     "normalize_handle",
@@ -59,8 +62,6 @@ __all__ = [
     "open_anonymous_contact",
     "open_contact",
     "prove_handle",
-    "unsubscribe_by_handle",
-    "unsubscribe_handle",
 ]
 
 
@@ -100,6 +101,18 @@ async def find_contact(
     return _ref(
         await ContactRepository(uow.session).find_by_handle(
             pod_id=pod_id, kind=kind, value=value
+        )
+    )
+
+
+async def find_contact_by_user(
+    uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, kind: IdentityKind, user_id: str
+) -> ContactRef | None:
+    """The contact a platform user id belongs to, for a handle kept as
+    ``{workspace}:{user}`` (Slack), when exactly one handle has it."""
+    return _ref(
+        await ContactRepository(uow.session).find_by_user_part(
+            pod_id=pod_id, kind=kind, user_id=user_id
         )
     )
 
@@ -228,20 +241,6 @@ async def contact_handles(
         pod_id=pod_id, contact_id=contact_id
     )
     return [] if contact is None else list(contact.identities)
-
-
-async def unsubscribe_handle(uow: SqlAlchemyUnitOfWork, *, handle_id: UUID) -> None:
-    """The contact asked not to be written to at this handle."""
-    await ContactRepository(uow.session).unsubscribe(identity_id=handle_id)
-
-
-async def unsubscribe_by_handle(
-    uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, kind: IdentityKind, value: str
-) -> bool:
-    """The contact wrote "STOP" from this handle; whether the pod knew it."""
-    return await ContactRepository(uow.session).unsubscribe_handle(
-        pod_id=pod_id, kind=kind, value=value
-    )
 
 
 async def lock_answered_contacts_count(

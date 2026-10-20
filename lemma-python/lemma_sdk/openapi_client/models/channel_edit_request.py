@@ -19,21 +19,22 @@ T = TypeVar("T", bound="ChannelEditRequest")
 
 @_attrs_define
 class ChannelEditRequest:
-    """
-    Attributes:
-        text (str):
-        parts (list[FilePart | LinkPart | MentionPart] | None | Unset): Absent keeps the parts.
+    """Absent is unchanged; ``null`` clears the parts. The text cannot be
+    cleared: delete the line instead.
+
+        Attributes:
+            parts (list[FilePart | LinkPart | MentionPart] | None | Unset): Absent keeps the parts; `null` or `[]` clears
+                them.
+            text (None | str | Unset):
     """
 
-    text: str
     parts: list[FilePart | LinkPart | MentionPart] | None | Unset = UNSET
+    text: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         from ..models.file_part import FilePart
         from ..models.mention_part import MentionPart
-
-        text = self.text
 
         parts: list[dict[str, Any]] | None | Unset
         if isinstance(self.parts, Unset):
@@ -54,15 +55,19 @@ class ChannelEditRequest:
         else:
             parts = self.parts
 
+        text: None | str | Unset
+        if isinstance(self.text, Unset):
+            text = UNSET
+        else:
+            text = self.text
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
-        field_dict.update(
-            {
-                "text": text,
-            }
-        )
+        field_dict.update({})
         if parts is not UNSET:
             field_dict["parts"] = parts
+        if text is not UNSET:
+            field_dict["text"] = text
 
         return field_dict
 
@@ -73,7 +78,6 @@ class ChannelEditRequest:
         from ..models.mention_part import MentionPart
 
         d = dict(src_dict)
-        text = d.pop("text")
 
         def _parse_parts(
             data: object,
@@ -125,9 +129,18 @@ class ChannelEditRequest:
 
         parts = _parse_parts(d.pop("parts", UNSET))
 
+        def _parse_text(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        text = _parse_text(d.pop("text", UNSET))
+
         channel_edit_request = cls(
-            text=text,
             parts=parts,
+            text=text,
         )
 
         channel_edit_request.additional_properties = d

@@ -2,8 +2,8 @@ from enum import Enum
 
 
 class Visibility(str, Enum):
-    PRIVATE = "private"
-    PUBLIC = "public"
+    PRIVATE = "PRIVATE"
+    PUBLIC = "PUBLIC"
 
     def __str__(self) -> str:
         return str(self.value)

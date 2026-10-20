@@ -10,12 +10,13 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, StringConstraints
 
 from app.modules.channels.contracts.people import PersonRef
+from app.modules.channels.contracts.source_settings import SourceSettingsResponse
 from app.modules.channels.domain.entities import (
     AgentAnswers,
     Channel,
@@ -116,6 +117,14 @@ class ChannelResponse(BaseModel):
         ),
     )
     archived: bool = False
+    joined: bool = Field(
+        default=False,
+        description=(
+            "Whether the reader is in it. A pod admin listing a bot's groups "
+            "(`source_surface`) is shown its private ones too, not joined and "
+            "without their last line, until they join."
+        ),
+    )
     created_at: datetime
     last_line_at: datetime
     last_seq: int = 0
@@ -138,13 +147,24 @@ class ChannelResponse(BaseModel):
         default=None, description="A contact's channel: where it stands."
     )
     attention: AttentionResponse | None = Field(
-        default=None, description="The channel asks for a person, and why."
+        default=None,
+        description=(
+            "A contact's channel: its current case asks for a person, and why. "
+            "Never set on another kind of channel."
+        ),
     )
     sources: list[SourceSummary] = Field(
         default_factory=list, description="The outside places feeding it."
     )
     unread: UnreadResponse = Field(default_factory=UnreadResponse)
     last_line: LinePreview | None = None
+    source_settings: SourceSettingsResponse | None = Field(
+        default=None,
+        description=(
+            "Listed by `source_surface`: that bot's settings for its place here "
+            "-- who answers its people outside the pod, and whether they are."
+        ),
+    )
 
 
 class ChannelMemberResponse(BaseModel):
@@ -176,6 +196,13 @@ class ChannelDetailResponse(ChannelResponse):
     source_places: list[ChannelSourceResponse] = Field(default_factory=list)
     members: list[ChannelMemberResponse] = Field(default_factory=list)
     me: MyMembershipResponse = Field(default_factory=MyMembershipResponse)
+
+
+class ChannelMemberListResponse(BaseModel):
+    items: list[ChannelMemberResponse]
+    next_cursor: str | None = Field(
+        default=None, description="Pass as `cursor` for the next page."
+    )
 
 
 class ChannelListResponse(BaseModel):
@@ -226,8 +253,9 @@ class ChannelUpdateRequest(BaseModel):
     )
     hand_back_after_hours: int | None = Field(default=None, ge=1, le=720)
     status: ContactStatus | None = None
-    assignee: UUID | None = Field(
-        default=None, description="A member's user id; `null` unassigns."
+    assignee: UUID | Literal["me"] | None = Field(
+        default=None,
+        description="`me`, or a member's user id; `null` unassigns.",
     )
 
 
@@ -312,15 +340,14 @@ def _person(channel: Channel, names: Names) -> PersonRef | None:
 
 
 def _inbox_fields(channel: Channel, names: Names) -> dict[str, object]:
-    """A contact's inbox fields; and, on any channel, a call for a person --
-    a contact's run in a group asks for one there too."""
+    """A contact's inbox fields, read from its current case."""
+    if channel.kind is not ChannelKind.CONTACT:
+        return {}
     attention = (
         AttentionResponse(since=channel.attention_at, reason=channel.attention_reason)
         if channel.attention_at
         else None
     )
-    if channel.kind is not ChannelKind.CONTACT:
-        return {"attention": attention}
     return {
         "agents_answer": channel.agents_answer,
         "hand_back_after_hours": channel.hand_back_after_hours,
@@ -351,6 +378,7 @@ def channel_response(
         topic=channel.topic,
         person=_person(channel, names),
         archived=channel.is_archived,
+        joined=unread.joined if unread else False,
         created_at=channel.created_at,
         last_line_at=channel.last_line_at,
         last_seq=channel.last_seq,

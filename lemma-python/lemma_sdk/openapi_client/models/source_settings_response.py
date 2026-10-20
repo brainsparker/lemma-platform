@@ -12,7 +12,6 @@ from dateutil.parser import isoparse
 from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
-    from ..models.group_public_response import GroupPublicResponse
     from ..models.person_ref import PersonRef
 
 
@@ -38,7 +37,6 @@ class SourceSettingsResponse:
         invite_link (None | str | Unset):
         owner (None | PersonRef | Unset): The member who answers for its outsiders.
         pending (bool | Unset): Asked of the platform and not yet confirmed (WhatsApp). Default: False.
-        public (GroupPublicResponse | None | Unset): What people outside the pod can be answered from.
         shared_externally (bool | Unset): A Slack channel shared with another company. Default: False.
         title (None | str | Unset):
     """
@@ -55,13 +53,11 @@ class SourceSettingsResponse:
     invite_link: None | str | Unset = UNSET
     owner: None | PersonRef | Unset = UNSET
     pending: bool | Unset = False
-    public: GroupPublicResponse | None | Unset = UNSET
     shared_externally: bool | Unset = False
     title: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        from ..models.group_public_response import GroupPublicResponse
         from ..models.person_ref import PersonRef
 
         answers_outsiders = self.answers_outsiders
@@ -98,14 +94,6 @@ class SourceSettingsResponse:
 
         pending = self.pending
 
-        public: dict[str, Any] | None | Unset
-        if isinstance(self.public, Unset):
-            public = UNSET
-        elif isinstance(self.public, GroupPublicResponse):
-            public = self.public.to_dict()
-        else:
-            public = self.public
-
         shared_externally = self.shared_externally
 
         title: None | str | Unset
@@ -137,8 +125,6 @@ class SourceSettingsResponse:
             field_dict["owner"] = owner
         if pending is not UNSET:
             field_dict["pending"] = pending
-        if public is not UNSET:
-            field_dict["public"] = public
         if shared_externally is not UNSET:
             field_dict["shared_externally"] = shared_externally
         if title is not UNSET:
@@ -148,7 +134,6 @@ class SourceSettingsResponse:
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
-        from ..models.group_public_response import GroupPublicResponse
         from ..models.person_ref import PersonRef
 
         d = dict(src_dict)
@@ -198,23 +183,6 @@ class SourceSettingsResponse:
 
         pending = d.pop("pending", UNSET)
 
-        def _parse_public(data: object) -> GroupPublicResponse | None | Unset:
-            if data is None:
-                return data
-            if isinstance(data, Unset):
-                return data
-            try:
-                if not isinstance(data, dict):
-                    raise TypeError()
-                public_type_0 = GroupPublicResponse.from_dict(data)
-
-                return public_type_0
-            except TypeError, ValueError, AttributeError, KeyError:
-                pass
-            return cast(GroupPublicResponse | None | Unset, data)
-
-        public = _parse_public(d.pop("public", UNSET))
-
         shared_externally = d.pop("shared_externally", UNSET)
 
         def _parse_title(data: object) -> None | str | Unset:
@@ -239,7 +207,6 @@ class SourceSettingsResponse:
             invite_link=invite_link,
             owner=owner,
             pending=pending,
-            public=public,
             shared_externally=shared_externally,
             title=title,
         )

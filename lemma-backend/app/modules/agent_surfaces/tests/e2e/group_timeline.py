@@ -39,9 +39,15 @@ async def group_by_id(db_session: AsyncSession, group_id: UUID | str) -> Surface
 
 
 async def say(
-    db_session: AsyncSession, group: SurfaceGroup, text: str, *, sender: Sender
+    db_session: AsyncSession,
+    group: SurfaceGroup,
+    text: str,
+    *,
+    sender: Sender,
+    external_message_id: str | None = None,
 ) -> ChannelMessage:
-    """``sender`` said ``text`` in the group, heard where the bot hears it."""
+    """``sender`` said ``text`` in the group, heard where the bot hears it --
+    as the platform's message ``external_message_id``, where it matters."""
     uow = SqlAlchemyUnitOfWork(db_session)
     source = await group_source(uow, group)
     said = await post(
@@ -51,7 +57,7 @@ async def say(
             sender=sender,
             text=text,
             source_id=source.id,
-            external_message_id=uuid4().hex,
+            external_message_id=external_message_id or uuid4().hex,
         ),
     )
     assert said is not None

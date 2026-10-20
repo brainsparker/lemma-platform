@@ -3,7 +3,8 @@
 
 A question's ref is ``msg:{asking conversation}:{key}`` (``-`` for none) and
 every question one run asks shares a batch -- the run -- so the asking
-conversation is woken once, when the last of that batch closes.
+conversation is woken once: when the run has finished and the last of its
+batch has closed.
 """
 
 from __future__ import annotations
@@ -17,23 +18,6 @@ MESSAGE_REF = "msg"
 
 def message_ref(conversation_id: UUID | None, key: str) -> str:
     return f"{MESSAGE_REF}:{conversation_id or '-'}:{key}"
-
-
-def asked_by_prefix(conversation_id: UUID) -> str:
-    """Every question this conversation asked."""
-    return f"{MESSAGE_REF}:{conversation_id}:"
-
-
-def asking_conversation(ref: str) -> UUID | None:
-    """The conversation that asked, from a message question's ref."""
-    kind, _, rest = ref.partition(":")
-    conversation, _, key = rest.partition(":")
-    if kind != MESSAGE_REF or conversation in ("", "-") or not key:
-        return None
-    try:
-        return UUID(conversation)
-    except ValueError:
-        return None
 
 
 #: The longest client id a channel line takes.
@@ -50,14 +34,26 @@ def line_client_id(key: str) -> str:
 
 def batch_of(run_id: UUID | None) -> str | None:
     """The batch a run's questions share."""
-    return str(run_id) if run_id is not None else None
+    return batch_of_run(run_id) if run_id is not None else None
+
+
+def batch_of_run(run_id: UUID) -> str:
+    return str(run_id)
+
+
+def run_of_batch(batch_id: str) -> UUID | None:
+    """The run that asked a batch."""
+    try:
+        return UUID(batch_id)
+    except ValueError:
+        return None
 
 
 __all__ = [
     "MESSAGE_REF",
-    "asked_by_prefix",
-    "asking_conversation",
     "batch_of",
+    "batch_of_run",
     "line_client_id",
     "message_ref",
+    "run_of_batch",
 ]

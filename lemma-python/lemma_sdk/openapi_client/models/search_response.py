@@ -9,7 +9,7 @@ from attrs import field as _attrs_field
 from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
-    from ..models.inbox_item import InboxItem
+    from ..models.search_item import SearchItem
 
 
 T = TypeVar("T", bound="SearchResponse")
@@ -19,11 +19,11 @@ T = TypeVar("T", bound="SearchResponse")
 class SearchResponse:
     """
     Attributes:
-        items (list[InboxItem]):
+        items (list[SearchItem]):
         next_cursor (None | str | Unset):
     """
 
-    items: list[InboxItem]
+    items: list[SearchItem]
     next_cursor: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -53,13 +53,13 @@ class SearchResponse:
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
-        from ..models.inbox_item import InboxItem
+        from ..models.search_item import SearchItem
 
         d = dict(src_dict)
         items = []
         _items = d.pop("items")
         for items_item_data in _items:
-            items_item = InboxItem.from_dict(items_item_data)
+            items_item = SearchItem.from_dict(items_item_data)
 
             items.append(items_item)
 

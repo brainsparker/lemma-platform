@@ -8,17 +8,12 @@ import type { AvailableSurfaceChannelsResponse } from '../models/AvailableSurfac
 import type { AvailableSurfacesResponse } from '../models/AvailableSurfacesResponse.js';
 import type { NoticeRequest } from '../models/NoticeRequest.js';
 import type { NoticeResponse } from '../models/NoticeResponse.js';
-import type { SourceListResponse } from '../models/SourceListResponse.js';
-import type { SourceSettingsResponse } from '../models/SourceSettingsResponse.js';
-import type { SourceUpdateRequest } from '../models/SourceUpdateRequest.js';
 import type { SurfaceCreateRequest } from '../models/SurfaceCreateRequest.js';
 import type { SurfacePlatformSetupGuide } from '../models/SurfacePlatformSetupGuide.js';
 import type { SurfaceSendRequest } from '../models/SurfaceSendRequest.js';
 import type { SurfaceSendResponse } from '../models/SurfaceSendResponse.js';
 import type { SurfaceSetupResponse } from '../models/SurfaceSetupResponse.js';
 import type { SurfaceUpdateRequest } from '../models/SurfaceUpdateRequest.js';
-import type { TelegramLinkRequest } from '../models/TelegramLinkRequest.js';
-import type { TelegramLinkResponse } from '../models/TelegramLinkResponse.js';
 import type { TelegramManagedBotSetupRequest } from '../models/TelegramManagedBotSetupRequest.js';
 import type { TelegramManagedBotSetupResponse } from '../models/TelegramManagedBotSetupResponse.js';
 import type { WebWidgetCreatedResponse } from '../models/WebWidgetCreatedResponse.js';
@@ -27,7 +22,6 @@ import type { WebWidgetListResponse } from '../models/WebWidgetListResponse.js';
 import type { WebWidgetResponse } from '../models/WebWidgetResponse.js';
 import type { WebWidgetSecretResponse } from '../models/WebWidgetSecretResponse.js';
 import type { WebWidgetUpdateRequest } from '../models/WebWidgetUpdateRequest.js';
-import type { WhatsAppGroupRequest } from '../models/WhatsAppGroupRequest.js';
 import type { CancelablePromise } from '../core/CancelablePromise.js';
 import { OpenAPI } from '../core/OpenAPI.js';
 import { request as __request } from '../core/request.js';
@@ -58,163 +52,30 @@ export class AgentSurfacesService {
     }
     /**
      * Send Notice
-     * Tell another member of the pod something, in their own channel.
+     * Tell another member of the pod something, in their own channel. The
+     * same `Idempotency-Key` from the same member is the same notice.
      * @param podId
+     * @param member The member to tell: a pod member id, user id, or email address.
      * @param requestBody
+     * @param idempotencyKey
      * @returns NoticeResponse Successful Response
      * @throws ApiError
      */
     public static agentNoticeSend(
         podId: string,
+        member: string,
         requestBody: NoticeRequest,
+        idempotencyKey?: (string | null),
     ): CancelablePromise<NoticeResponse> {
         return __request(OpenAPI, {
             method: 'POST',
-            url: '/pods/{pod_id}/notices',
+            url: '/pods/{pod_id}/members/{member}/notices',
             path: {
                 'pod_id': podId,
+                'member': member,
             },
-            body: requestBody,
-            mediaType: 'application/json',
-            errors: {
-                422: `Validation Error`,
-            },
-        });
-    }
-    /**
-     * List Sources
-     * Every group one bot is in, with each one's settings, newest first.
-     * @param podId
-     * @param surfaceName The bot's surface name.
-     * @returns SourceListResponse Successful Response
-     * @throws ApiError
-     */
-    public static agentSourceList(
-        podId: string,
-        surfaceName: string,
-    ): CancelablePromise<SourceListResponse> {
-        return __request(OpenAPI, {
-            method: 'GET',
-            url: '/pods/{pod_id}/sources',
-            path: {
-                'pod_id': podId,
-            },
-            query: {
-                'surface_name': surfaceName,
-            },
-            errors: {
-                422: `Validation Error`,
-            },
-        });
-    }
-    /**
-     * Telegram Link
-     * A one-use link that adds the pod's Telegram bot to a group the caller picks.
-     *
-     * The group becomes a GROUP channel, the caller's to answer for. Which
-     * Telegram account is theirs is still their profile's to say: a link is
-     * easily passed on, so the one that used it is never taken for them. The link
-     * works for an hour.
-     * @param podId
-     * @param requestBody
-     * @returns TelegramLinkResponse Successful Response
-     * @throws ApiError
-     */
-    public static agentSourceTelegramLinkCreate(
-        podId: string,
-        requestBody: TelegramLinkRequest,
-    ): CancelablePromise<TelegramLinkResponse> {
-        return __request(OpenAPI, {
-            method: 'POST',
-            url: '/pods/{pod_id}/sources/telegram-links',
-            path: {
-                'pod_id': podId,
-            },
-            body: requestBody,
-            mediaType: 'application/json',
-            errors: {
-                422: `Validation Error`,
-            },
-        });
-    }
-    /**
-     * Start Whatsapp Group
-     * Start a WhatsApp group with the pod's bot in it, answered for by the caller.
-     *
-     * It is a new GROUP channel's source. WhatsApp confirms the group moments
-     * later: it comes back ``pending``, and its invite link appears once
-     * confirmed. Telegram and Slack cannot create groups for a bot; add the bot
-     * to one of theirs instead.
-     * @param podId
-     * @param requestBody
-     * @returns SourceSettingsResponse Successful Response
-     * @throws ApiError
-     */
-    public static agentSourceWhatsappGroupStart(
-        podId: string,
-        requestBody: WhatsAppGroupRequest,
-    ): CancelablePromise<SourceSettingsResponse> {
-        return __request(OpenAPI, {
-            method: 'POST',
-            url: '/pods/{pod_id}/sources/whatsapp-groups',
-            path: {
-                'pod_id': podId,
-            },
-            body: requestBody,
-            mediaType: 'application/json',
-            errors: {
-                422: `Validation Error`,
-            },
-        });
-    }
-    /**
-     * Get Source
-     * A group source's settings: who answers its outsiders, and from what.
-     * @param podId
-     * @param sourceId
-     * @returns SourceSettingsResponse Successful Response
-     * @throws ApiError
-     */
-    public static agentSourceGet(
-        podId: string,
-        sourceId: string,
-    ): CancelablePromise<SourceSettingsResponse> {
-        return __request(OpenAPI, {
-            method: 'GET',
-            url: '/pods/{pod_id}/sources/{source_id}',
-            path: {
-                'pod_id': podId,
-                'source_id': sourceId,
-            },
-            errors: {
-                422: `Validation Error`,
-            },
-        });
-    }
-    /**
-     * Update Source
-     * Switch outsiders on or off in one group, or take it over.
-     *
-     * The member who answers for the group may; so may anybody who configures the
-     * bot when nobody in the pod answers for it, and an admin of the pod, whose
-     * change the member is told about.
-     * @param podId
-     * @param sourceId
-     * @param requestBody
-     * @returns SourceSettingsResponse Successful Response
-     * @throws ApiError
-     */
-    public static agentSourceUpdate(
-        podId: string,
-        sourceId: string,
-        requestBody: SourceUpdateRequest,
-    ): CancelablePromise<SourceSettingsResponse> {
-        return __request(OpenAPI, {
-            method: 'PATCH',
-            url: '/pods/{pod_id}/sources/{source_id}',
-            path: {
-                'pod_id': podId,
-                'source_id': sourceId,
+            headers: {
+                'Idempotency-Key': idempotencyKey,
             },
             body: requestBody,
             mediaType: 'application/json',
@@ -423,9 +284,9 @@ export class AgentSurfacesService {
      * Send Surface Message
      * Proactively send a message to a pod member on this surface.
      *
-     * Powers notifications from functions/workflows. Reuses the member's existing
-     * thread (bots can't cold-DM), and a 404 carries the reason it could not be
-     * reached, in the vocabulary the notification API uses.
+     * For functions and workflows that message a member on one platform. Reuses
+     * the member's existing thread (bots can't cold-DM), and a 404 carries the
+     * reason they could not be reached.
      * @param podId
      * @param surfaceName
      * @param requestBody

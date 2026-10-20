@@ -21,7 +21,7 @@ from app.modules.datastore.domain.live import (
     merge_change,
 )
 from app.modules.datastore.domain.ports import LiveChangeFeedPort
-from app.modules.datastore.services.live.connection import LiveSubscription
+from app.modules.datastore.services.live.subscription import LiveSubscription
 
 meter = metrics.get_meter(__name__)
 hub_row_fetches = meter.create_counter("lemma.live.hub_row_fetches")

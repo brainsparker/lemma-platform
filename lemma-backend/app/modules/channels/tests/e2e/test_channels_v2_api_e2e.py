@@ -1,10 +1,8 @@
 """The channels API v2, as a pod's members use it -- end to end, on Postgres.
 
-Four members: the owner (admin), an editor (sees and writes to contacts, may
-change the pod), a user (writes in the pod's conversations, sees no contacts)
-and a viewer (reads). One rule decides who sees a channel, and every read --
-get, lines, search, inbox, counts -- answers by it: a channel the reader may
-not see is missing, never forbidden.
+The four members of ``channel_pod``. One rule decides who sees a channel, and
+every read -- get, lines, search, inbox, counts -- answers by it: a channel the
+reader may not see is missing, never forbidden.
 """
 
 from __future__ import annotations
@@ -16,7 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.channels.contracts import (
-    ContactsHome,
+    AccountKey,
+    DeliveryReasonCode,
     GroupHome,
     NewLine,
     NewQuestion,
@@ -32,105 +31,15 @@ from app.modules.channels.contracts import (
     source_for,
 )
 from app.modules.channels.infrastructure.deliveries import DeliveryRepository
-from app.modules.contacts.contracts import IdentityKind, IdentityStrength, open_contact
-from app.modules.test_support.e2e_authz import auth_headers
+from app.modules.channels.tests.e2e.channel_pod import Pod, an_asker, contact_place
+from app.modules.channels.tests.e2e.channel_pod import (
+    group as _group,
+)
+from app.modules.channels.tests.e2e.channel_pod import (
+    say as _say,
+)
 
 pytestmark = pytest.mark.e2e
-
-
-class Pod:
-    """The pod under test and the people in it."""
-
-    def __init__(self, scenario) -> None:
-        self.scenario = scenario
-        self.id = scenario.pod_id
-        self.owner = scenario.owner_user
-        self.base = f"/pods/{self.id}/channels"
-
-    def client(self, who: dict | None = None):
-        """A client acting as ``who`` (the owner by default)."""
-        if who is None or who is self.owner:
-            return _As(self.scenario.owner_client, {})
-        return _As(self.scenario.async_client, auth_headers(who))
-
-
-class _As:
-    def __init__(self, client, headers: dict[str, str]) -> None:
-        self._client, self._headers = client, headers
-
-    def __getattr__(self, verb: str):
-        call = getattr(self._client, verb)
-
-        async def request(url: str, **kwargs):
-            headers = {**self._headers, **kwargs.pop("headers", {})}
-            return await call(url, headers=headers, **kwargs)
-
-        return request
-
-
-@pytest.fixture
-async def pod(scenario) -> Pod:
-    await scenario.create_org_with_pod(name_prefix="Channels v2")
-    p = Pod(scenario)
-    for role, name in (
-        ("POD_EDITOR", "editor"),
-        ("POD_USER", "user"),
-        ("POD_VIEWER", "viewer"),
-    ):
-        person = await scenario.create_user(f"chv2-{name}")
-        await scenario.add_user_to_pod(user=person, role=role)
-        setattr(p, name, person)
-    return p
-
-
-async def _group(pod: Pod, *, as_user=None, **body) -> dict:
-    made = await pod.client(as_user).post(pod.base, json={"title": "launch", **body})
-    assert made.status_code == 201, made.text
-    return made.json()
-
-
-async def _say(pod: Pod, channel_id, text: str = "hi", *, as_user=None, **body) -> dict:
-    said = await pod.client(as_user).post(
-        f"{pod.base}/{channel_id}/messages", json={"text": text, **body}
-    )
-    assert said.status_code == 201, said.text
-    return said.json()
-
-
-async def _contact_place(db_session: AsyncSession, pod: Pod) -> tuple[Source, UUID]:
-    uow = SqlAlchemyUnitOfWork(db_session)
-    contact = await open_contact(
-        uow,
-        pod_id=UUID(pod.id),
-        kind=IdentityKind.TELEGRAM,
-        value="5550001",
-        strength=IdentityStrength.CHANNEL,
-        display_name="Dana",
-    )
-    source = await source_for(
-        uow,
-        pod_id=UUID(pod.id),
-        place=Place(
-            surface_id=None,
-            platform="TELEGRAM",
-            account_key="bot-1",
-            kind=SourceKind.PRIVATE,
-            external_channel_id=None,
-            external_user_id="5550001",
-        ),
-        home=ContactsHome(contact.id),
-    )
-    await post(
-        uow,
-        channel_id=source.channel_id,
-        line=NewLine(
-            sender=Sender.contact(contact.id),
-            text="Where is my order?",
-            source_id=source.id,
-        ),
-    )
-    await db_session.commit()
-    return source, contact.id
 
 
 async def _mirrored_group(db_session: AsyncSession, pod: Pod) -> Source:
@@ -142,8 +51,8 @@ async def _mirrored_group(db_session: AsyncSession, pod: Pod) -> Source:
         place=Place(
             surface_id=None,
             platform="TELEGRAM",
-            account_key="bot-1",
-            kind=SourceKind.SHARED,
+            account=AccountKey(workspace="bot-1"),
+            kind=SourceKind.CHAT,
             external_channel_id="-100",
             external_user_id=None,
             title="Launch crew",
@@ -171,7 +80,7 @@ async def _mirrored_group(db_session: AsyncSession, pod: Pod) -> Source:
 async def test_a_private_group_is_missing_to_who_is_not_in_it(pod: Pod):
     public = await _group(pod, title="Town square")
     private = await _group(
-        pod, title="Secret plans", visibility="private", members=[pod.editor["id"]]
+        pod, title="Secret plans", visibility="PRIVATE", members=[pod.editor["id"]]
     )
     await _say(pod, private["id"], "the secret plan")
     await _say(pod, public["id"], "an open plan")
@@ -228,7 +137,7 @@ async def test_a_members_own_channel_is_theirs_alone_and_no_get_makes_it(pod: Po
 async def test_a_contacts_channel_is_missing_without_contact_read(
     pod: Pod, db_session: AsyncSession
 ):
-    source, _ = await _contact_place(db_session, pod)
+    source, _ = await contact_place(db_session, pod)
     channel = f"{pod.base}/{source.channel_id}"
     # A seat does not open it: the user is in it, and still may not see it.
     found = await channel_by_id(SqlAlchemyUnitOfWork(db_session), source.channel_id)
@@ -266,7 +175,7 @@ async def test_a_contacts_channel_is_missing_without_contact_read(
 
 
 async def test_naming_somebody_who_cannot_see_the_channel_is_refused(pod: Pod):
-    private = await _group(pod, visibility="private", members=[pod.editor["id"]])
+    private = await _group(pod, visibility="PRIVATE", members=[pod.editor["id"]])
 
     def mention(person: dict) -> dict:
         return {"type": "mention", "kind": "MEMBER", "id": person["id"], "name": "P"}
@@ -427,7 +336,12 @@ async def test_a_reply_goes_where_its_thread_is(pod: Pod, db_session: AsyncSessi
     deliveries = DeliveryRepository(db_session)
     claimed = await deliveries.get(UUID(delivery["id"]))
     assert claimed is not None
-    await deliveries.failed(claimed, reason="timeout", platform="TELEGRAM")
+    await deliveries.failed(
+        claimed,
+        code=DeliveryReasonCode.TRANSIENT,
+        reason="timeout",
+        platform="TELEGRAM",
+    )
     await db_session.commit()
     assert (await pod.client(pod.user).post(retry)).status_code == 403
     retried = await pod.client().post(retry)
@@ -469,6 +383,7 @@ async def test_a_question_is_answered_by_its_person_and_an_approval_needs_a_deci
             question=NewQuestion(
                 kind=kind,
                 ref=f"e2e:{uuid4()}",
+                asker=await an_asker(UUID(pod.id), owner),
                 question={"prompt": "May I?"},
                 awaits=Principal.member(owner),
             ),
@@ -588,7 +503,7 @@ async def test_a_member_joins_a_public_group_sets_how_they_hear_and_leaves(pod: 
 async def test_a_contacts_agent_switched_on_hands_them_back(
     pod: Pod, db_session: AsyncSession
 ):
-    source, _ = await _contact_place(db_session, pod)
+    source, _ = await contact_place(db_session, pod)
     channel = f"{pod.base}/{source.channel_id}"
     editor = pod.client(pod.editor)
 

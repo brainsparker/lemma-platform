@@ -1,9 +1,9 @@
 """Everything between "we picked a channel" and "the platform has it".
 
-Split out of ``notification_service`` so that file stays under the size ceiling,
-but the seam is a real one rather than a filing convenience: this half talks to
-surfaces and conversations, the other half owns notification *state* — creation,
-response, expiry — and never needs to know how a message physically leaves.
+The seam is a real one rather than a filing convenience: this half talks to
+surfaces and conversations, while what a push *is* -- the line, its delivery
+row and what became of it -- is the channels module's, which never needs to
+know how a message physically leaves.
 
 The collaborator is held as :class:`SurfaceNotificationEgressPort`, not as an
 untyped kwarg. That is not decoration. Both of the ``AttributeError`` crashes
@@ -24,18 +24,19 @@ from app.core.log.log import get_logger
 from app.modules.agent.contracts import (
     conversations_for_surfaces as agent_conversations,
 )
+from app.modules.agent_surfaces.domain.adapter_port import IDEMPOTENCY_KEY
 from app.modules.agent_surfaces.domain.ports import (
     ColdEmailThread,
     SurfaceNotificationEgressPort,
 )
 from app.modules.agent_surfaces.services.cold_email_thread import cold_thread_seed_id
 from app.modules.agent_surfaces.services.group_names import sender_name_for
-from app.modules.agent_surfaces.domain.external_accounts import account_key_for
-from app.modules.agent_surfaces.services.channel_lines import ALREADY_A_LINE
+from app.modules.agent_surfaces.domain.external_accounts import account_of
 from app.modules.agent_surfaces.services.channel_places import ChannelSeats
 from app.modules.agent_surfaces.services.notification_delivery import (
     DeliveryChannel,
     Outbound,
+    PlatformSent,
 )
 from app.modules.channels.contracts import (
     MembersHome,
@@ -68,8 +69,8 @@ class NotificationEgress:
         outbound: Outbound,
         message: str,
         agent_name: str | None = None,
-    ) -> bool:
-        """Hand the message to the platform.
+    ) -> PlatformSent | None:
+        """Hand the message to the platform; what it took, or None.
 
         The fork is not chat-vs-email, it is *do we have a thread*. Every normal
         egress path replies to a stored inbound event; a cold open has none, so
@@ -84,26 +85,30 @@ class NotificationEgress:
         run acts for does not: ``attribute()`` puts them in the body, which is
         the only place a full name can be read whole.
         """
-        # The line is in their channel already: carrying it writes no other.
-        metadata: dict[str, Any] = {
-            "notification_id": str(outbound.id),
-            ALREADY_A_LINE: str(outbound.id),
-        }
+        metadata: dict[str, Any] = {}
         # Set only when known. ``SurfaceDelivery.egress_metadata`` fills
         # ``agent_display_name`` from the surface with ``setdefault``, and an
         # explicit None here is a present key — it would win, and every chat
         # bot would lose the name and icon it replies under.
         if agent_name:
             metadata["agent_display_name"] = agent_name
+        if outbound.key:
+            # Every try of one push is one message where the platform dedupes.
+            metadata[IDEMPOTENCY_KEY] = outbound.key
         if channel.source is not None:
-            return await self.egress.send_agent_message_for_conversation(
+            receipt = await self.egress.deliver_message(
                 conversation_id=conversation_id,
                 message=message,
                 metadata=metadata,
                 at=channel.source,
             )
+            return (
+                PlatformSent(external_message_id=receipt.external_message_id)
+                if receipt is not None
+                else None
+            )
         if not channel.email_address:
-            return False
+            return None
         # The name this mail wears in the ``From`` header. Cold-open mail is the
         # one send that never passes through ``egress_metadata``, which fills
         # the same key on the reply path — and it is not the agent's display
@@ -138,7 +143,7 @@ class NotificationEgress:
         outbound: Outbound,
         message: str,
         metadata: dict[str, Any],
-    ) -> bool:
+    ) -> PlatformSent | None:
         """First contact by email, then remember the thread it opened.
 
         The place is made *after* the send, not before, because some providers
@@ -165,7 +170,7 @@ class NotificationEgress:
                 notification_id=str(outbound.id),
                 platform=channel.surface.surface_type.value,
             )
-            return False
+            return None
         await self._remember_thread(
             thread,
             channel=channel,
@@ -173,7 +178,7 @@ class NotificationEgress:
             outbound=outbound,
             message=message,
         )
-        return True
+        return PlatformSent(external_message_id=thread.external_message_id)
 
     async def _remember_thread(
         self,
@@ -198,8 +203,8 @@ class NotificationEgress:
             place=Place(
                 surface_id=surface.id,
                 platform=surface.surface_type.value,
-                account_key=account_key_for(surface),
-                kind=SourceKind.PRIVATE,
+                account=account_of(surface),
+                kind=SourceKind.PERSON,
                 # Keyed by the person, as their reply is heard: one place per
                 # correspondent on the inbox, the thread kept on each line.
                 external_channel_id=None,

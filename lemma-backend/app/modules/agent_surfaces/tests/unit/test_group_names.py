@@ -126,7 +126,7 @@ def _email_target(
             account_id=uuid4(),
             surface_id=surface.id,
             platform=surface.surface_type.value,
-            kind=SourceKind.PRIVATE,
+            kind=SourceKind.PERSON,
             external_channel_id="thread-1",
             external_user_id="person@client.test",
         ),

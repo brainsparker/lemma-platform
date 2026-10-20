@@ -1,7 +1,8 @@
 """Driving the surfaces module's work items from a test, against real Postgres.
 
 A private ``WorkRegistry`` holds the real surfaces handlers (ingest, platform
-update, the reply pump, the run-reply backstop), so ``run_until_idle`` runs
+update, the reply pump, a run's answer line and its channel delivery), so
+``run_until_idle`` runs
 exactly those and leaves every other kind -- the ``agent.turn`` an ingest
 writes, say -- queued, where the test can count it.
 """
@@ -22,6 +23,9 @@ from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.work import RetryPolicy, WorkClass, WorkRegistry
 from app.core.infrastructure.work.testing import make_due, run_until_idle
 from app.modules.agent_surfaces.domain.deliveries import SEND_TIMEOUT, SENDING_LEASE
+from app.modules.agent_surfaces.events.channel_delivery_work import (
+    register_channel_delivery_work,
+)
 from app.modules.agent_surfaces.events.ingest_work import register_surface_ingest_work
 from app.modules.agent_surfaces.events.platform_update_work import (
     register_platform_update_work,
@@ -63,6 +67,7 @@ def surface_registry(
         send_timeout=send_timeout,
     )
     register_reply_for_run_work(registry)
+    register_channel_delivery_work(registry)
     return registry
 
 
@@ -226,15 +231,18 @@ _REPLY_REGISTRY: WorkRegistry | None = None
 async def deliver_replies() -> int:
     """Send what finished runs owe their surfaces, as the worker would.
 
-    A run's answer is the ``surface_deliveries`` row its finalize writes
-    (``surface.reply_for_run``), sent by the destination pump -- not the
-    observer. A test that drives a run in-process runs those two kinds after.
+    A run's answer is the agent's line its finalize posts
+    (``surface.reply_for_run``), carried by the line's channel delivery
+    (``surface.channel_delivery``) -- not the observer. Held and resent
+    messages still go by the destination pump. A test that drives a run
+    in-process runs those kinds after.
     """
     global _REPLY_REGISTRY
     if _REPLY_REGISTRY is None:
         _REPLY_REGISTRY = WorkRegistry()
         register_reply_for_run_work(_REPLY_REGISTRY)
         register_surface_reply_work(_REPLY_REGISTRY)
+        register_channel_delivery_work(_REPLY_REGISTRY)
     await make_due(async_session_maker)
     return await run_until_idle(
         async_session_maker, registry=_REPLY_REGISTRY, classes=[WorkClass.DELIVERY]
@@ -275,10 +283,6 @@ async def send_deliveries() -> int:
     (``ChannelDeliveryDue``); ``surface.channel_delivery`` sends one and
     records on its row what became of it.
     """
-    from app.modules.agent_surfaces.events.channel_delivery_work import (
-        register_channel_delivery_work,
-    )
-
     global _DELIVERY_REGISTRY
     if _DELIVERY_REGISTRY is None:
         _DELIVERY_REGISTRY = WorkRegistry()
@@ -292,9 +296,14 @@ async def send_deliveries() -> int:
 
 
 async def deliveries_of_line(message_id: str | UUID) -> list[Any]:
-    """What became of one line: its delivery to each place and member."""
+    """What became of one line: its delivery to each place and member. Its
+    pushes are worked out after it is committed (``channels.pushes``): that
+    work runs first, and nothing else."""
     from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
     from app.modules.channels.contracts.deliveries import deliveries_of
+    from app.modules.channels.tests.e2e.push_support import run_pushes
+
+    await run_pushes()
 
     async with async_session_maker() as session:
         return await deliveries_of(

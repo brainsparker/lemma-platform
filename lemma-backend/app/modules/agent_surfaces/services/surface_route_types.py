@@ -77,13 +77,13 @@ class SurfaceEgressTarget:
     @property
     def is_group(self) -> bool:
         """Several people read what goes out here: a group, a shared channel."""
-        return self.source.kind is SourceKind.SHARED
+        return self.source.kind is SourceKind.CHAT
 
     @property
     def person_external_id(self) -> str | None:
         """The platform id of the person this answers: the private place's
         person, or whoever said what is being answered in a group."""
-        if self.source.kind is SourceKind.PRIVATE and self.source.external_user_id:
+        if self.source.kind is SourceKind.PERSON and self.source.external_user_id:
             return self.source.external_user_id
         # As identity resolution names them: the directory id where the
         # platform gives one (Teams' AAD object id), else its own.

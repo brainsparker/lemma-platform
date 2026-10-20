@@ -33,6 +33,7 @@ from app.modules.agent_surfaces.domain.web_widgets import (
     parse_origin,
 )
 from app.modules.agent_surfaces.services.web_widget_admin import WebWidgetAdmin
+from app.modules.contacts.contracts.outreach import host_issuer
 from app.modules.pod.contracts.members import pod_member_holds
 
 router = APIRouter(prefix="/pods/{pod_id}/web-widgets", tags=["Agent Surfaces"])
@@ -50,6 +51,13 @@ class WebWidgetResponse(BaseModel):
     answer: WidgetAnswer
     looked_after_by: UUID | None
     created_at: datetime
+    host_issuer: str = Field(
+        description=(
+            "The product whose users this widget's host tokens name: a host "
+            "contact is known as that product's user. Widgets of one product "
+            "share it."
+        )
+    )
     embed: str = Field(description="The script tag that puts the chat on a page.")
     page_url: str = Field(
         description="A page Lemma hosts with the chat on it, to share as a link."
@@ -81,6 +89,17 @@ class WebWidgetCreateRequest(BaseModel):
         description="Whom it answers. Off until a member chooses.",
     )
     looked_after_by: UUID | None = None
+    host_issuer: str | None = Field(
+        default=None,
+        max_length=64,
+        description=(
+            "The product whose users the widget's host tokens name, such as "
+            "`acme-app`: give two widgets of one product the same issuer, and "
+            "widgets of two products different ones, so their user 42s are two "
+            "people. Letters, digits, dots, dashes and underscores. Fixed once "
+            "the widget is made; `default` if omitted."
+        ),
+    )
 
 
 class WebWidgetUpdateRequest(BaseModel):
@@ -114,6 +133,7 @@ def _response(widget: WebWidget) -> WebWidgetResponse:
         answer=widget.answer,
         looked_after_by=widget.looked_after_by,
         created_at=widget.created_at,
+        host_issuer=widget.host_issuer,
         embed=_embed(widget),
         page_url=f"{hosted_pages_base()}/public/web/{widget.public_key}/page",
     )
@@ -181,6 +201,12 @@ async def create_widget(
         if request.agent_name and request.agent_name != _POD_ASSISTANT
         else pod_id
     )
+    try:
+        issuer = host_issuer(request.host_issuer)
+    except ValueError as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
     created = await WebWidgetAdmin(uow).create(
         pod_id=pod_id,
         agent_id=agent_id,
@@ -188,6 +214,7 @@ async def create_widget(
         allowed_origins=_origins(request.allowed_origins),
         answer=request.answer,
         looked_after_by=looked_after_by,
+        host_issuer=issuer,
     )
     return WebWidgetCreatedResponse(
         **_response(created.widget).model_dump(),

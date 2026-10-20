@@ -140,6 +140,37 @@ class ExternalSurfaceUserRepository:
         rows = await self.session.execute(stmt)
         return {external: user for external, user in rows.all() if user is not None}
 
+    async def known_by_external_ids(
+        self,
+        *,
+        platform: str,
+        tenant_id: str | None,
+        external_user_ids: Sequence[str],
+    ) -> dict[str, tuple[UUID | None, str | None]]:
+        """Each of these platform users the surface has met: the Lemma user
+        they were resolved to, if any, and the name the platform gave them.
+
+        What a message naming them is read with -- ``<@U123>`` is a person the
+        reader should see by name, whether or not they are in the pod.
+        """
+        wanted = sorted(set(external_user_ids))
+        if not wanted:
+            return {}
+        stmt = select(
+            AgentSurfaceExternalUser.external_user_id,
+            AgentSurfaceExternalUser.resolved_user_id,
+            AgentSurfaceExternalUser.display_name,
+        ).where(
+            AgentSurfaceExternalUser.platform == platform,
+            AgentSurfaceExternalUser.external_user_id.in_(wanted),
+        )
+        if tenant_id is None:
+            stmt = stmt.where(AgentSurfaceExternalUser.tenant_id.is_(None))
+        else:
+            stmt = stmt.where(AgentSurfaceExternalUser.tenant_id == tenant_id)
+        rows = await self.session.execute(stmt.limit(len(wanted)))
+        return {external: (user, name) for external, user, name in rows.tuples()}
+
     async def upsert(
         self,
         *,

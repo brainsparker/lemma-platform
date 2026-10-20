@@ -1,99 +1,155 @@
 """Lemma's own Slack app as the manager of a workspace's teammates, end to end.
 
-It answers nobody. It binds a workspace to an organization, knows its people
-by proof rather than by profile email, shows them their teammates, hands a
-channel to the one they pick, and finishes adding a teammate once Slack's
-Allow comes back.
+Through the real shared webhook route, signed as Lemma's app, and the real
+work table: a manager delivery is answered or queued in the request and run by
+``surface.slack_manager``. It answers nobody. It binds a workspace to one
+organization, knows its people by Slack's own word (the install, or Sign in
+with Slack) rather than a profile email, shows them their teammates, hands a
+channel to the one they pick, and finishes adding a teammate once Slack's Allow
+comes back as a connectors fact.
+
+Each test has a workspace of its own: a binding is one per workspace.
 """
 
 from __future__ import annotations
 
 import json
-from urllib.parse import parse_qs, urlsplit
+import time
+from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
+from typing import Any
+from urllib.parse import parse_qs, urlencode, urlsplit
 from uuid import UUID, uuid4
 
+import jwt
 import pytest
+from cryptography.hazmat.primitives.asymmetric import rsa
 from httpx import AsyncClient
-from sqlalchemy import select
+from jwt.algorithms import RSAAlgorithm
+from pydantic import SecretStr
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.infrastructure.db.session import async_session_maker
-from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.core.infrastructure.work import facts
+from app.modules.agent_surfaces.composition import build_app_event_handler
+from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
 )
+from app.modules.agent_surfaces.events.slack_manager_work import (
+    register_slack_manager_work,
+)
+from app.modules.agent_surfaces.infrastructure.repositories.slack_manager_repository import (  # noqa: E501
+    SlackManagerRepository,
+    WorkspaceHeldElsewhereError,
+)
 from app.modules.agent_surfaces.infrastructure.slack_manager_models import (
     SlackManagerInstallModel,
+    SlackPendingAppBindingModel,
+    SlackWorkspacePersonModel,
 )
 from app.modules.agent_surfaces.platforms.slack import manager_blocks as views
-from app.modules.agent_surfaces.services.slack_manager import handle_event
-from app.modules.agent_surfaces.services.slack_manager_context import person_link_url
+from app.modules.agent_surfaces.platforms.slack.app_configuration import (
+    CreatedSlackApp,
+    RotatedConfigurationToken,
+)
+from app.modules.agent_surfaces.services import slack_manager_bots, slack_person_proof
+from app.modules.agent_surfaces.services.slack_app_provisioning import SlackAppCalls
 from app.modules.agent_surfaces.tests.e2e.helpers import (
     E2E_SLACK_APP_ID,
-    _create_agent_surface,
-    _ensure_connector_account,
+    _create_agent,
+    _ensure_connector,
 )
-from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import wait_for_messages
+from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import (
+    build_slack_signature_headers,
+)
+from app.modules.agent_surfaces.tests.e2e.surface_work_support import (
+    clean_surface_work,  # noqa: F401  (fixture)
+    drain,
+    scalar,
+    surface_registry,
+)
+from app.modules.channels.infrastructure.models import (
+    ChannelModel,
+    ChannelSourceModel,
+)
+from app.modules.connectors.contracts.facts import ConnectorAccountConnected
+from app.modules.connectors.contracts.own_apps import LemmaAppClient
+from app.modules.connectors.infrastructure.models.account import Account
+from app.modules.connectors.infrastructure.models.auth_config import AuthConfig
+from app.modules.connectors.infrastructure.models.connect_request import (
+    ConnectRequest,
+)
+from app.modules.identity.infrastructure.models.organization_models import (
+    OrganizationMember,
+)
+from app.modules.test_support.e2e_base import _create_org, _sign_up_verified_user
 
-pytestmark = pytest.mark.e2e
+pytestmark = [
+    pytest.mark.e2e,
+    pytest.mark.drives_work,
+    pytest.mark.usefixtures("clean_surface_work", "lemmas_app"),
+]
 
-TEAM = "T-MANAGER-E2E"
-MANAGER_BOT = "U-LEMMA-BOT"
-INSTALLER = "U-INSTALLER"
-STRANGER = "U-STRANGER"
-TEAMMATE_BOT = "U-TEAMMATE-BOT"
-MANAGER_TOKEN = "xoxb-manager-e2e"
-TEAMMATE_TOKEN = "xoxb-teammate-e2e"
-
-
-@pytest.fixture(autouse=True)
-def lemma_app(monkeypatch):
-    """The deployment's own Slack app is the one the e2e accounts were made by."""
-    monkeypatch.setattr(
-        "app.modules.agent_surfaces.config.surface_settings.slack_app_id",
-        E2E_SLACK_APP_ID,
-    )
-
-
-def _uow_factory():
-    return SessionUnitOfWorkFactory(async_session_maker)
+SIGNING_SECRET = "lemma-manager-secret"
+OIDC_CLIENT = "lemma-oidc-client"
+SLACK_KIND: dict[str, object] = {
+    "kind": "http",
+    "auth_scheme": "OAUTH2",
+    "supports_org_custom_oauth": True,
+    "oauth2_defaults": {
+        "authorization_url": "https://slack.com/oauth/v2/authorize",
+        "token_url": "https://slack.com/api/oauth.v2.access",
+    },
+}
 
 
-async def _separate_slack_account(
+def _id(prefix: str) -> str:
+    return f"{prefix}{uuid4().hex[:9].upper()}"
+
+
+@dataclass
+class _Workspace:
+    """One Slack workspace no other test uses."""
+
+    team: str = field(default_factory=lambda: _id("T"))
+    manager_bot: str = field(default_factory=lambda: _id("U"))
+    installer: str = field(default_factory=lambda: _id("U"))
+    channel: str = field(default_factory=lambda: _id("C"))
+
+
+@pytest.fixture
+def lemmas_app(monkeypatch):
+    """The deployment's own Slack app: the e2e accounts' app, signing with this."""
+    monkeypatch.setattr(surface_settings, "slack_app_id", E2E_SLACK_APP_ID)
+    monkeypatch.setattr(surface_settings, "slack_signing_secret", SIGNING_SECRET)
+
+
+def _registry():
+    registry = surface_registry()
+    register_slack_manager_work(registry)
+    return registry
+
+
+async def _slack_account(
     db_session: AsyncSession,
     *,
     user_id: str,
+    organization_id: UUID,
     config_source: str,
-    install_name: str,
-    credentials: dict,
-):
-    """A Slack account on an install of its own.
-
-    ``_ensure_connector_account`` keeps one account per person and connector and
-    overwrites it, which would make the manager and a teammate the same bot.
-    They never are: Lemma's app and a teammate's app are two installs, and the
-    person holds an account on each.
-    """
-    from app.modules.agent_surfaces.tests.e2e.helpers import _ensure_connector
-    from app.modules.connectors.infrastructure.models.account import Account
-    from app.modules.connectors.infrastructure.models.auth_config import AuthConfig
-    from app.modules.identity.infrastructure.models.organization_models import (
-        OrganizationMember,
-    )
-
+    raw: dict[str, Any],
+    fake_slack: Any,
+    token: str,
+) -> Account:
+    """A Slack account on an install of its own: Lemma's app and each teammate's
+    app are separate installs, and a person holds an account on each."""
     await _ensure_connector(db_session, "slack")
-    organization_id = await db_session.scalar(
-        select(OrganizationMember.organization_id)
-        .where(OrganizationMember.user_id == UUID(user_id))
-        .limit(1)
-    )
-    # Unique per call: install names are unique per organization, and a test
-    # may hold several of Lemma's or a teammate's.
-    install_name = f"{install_name}-{uuid4().hex[:6]}"
     install = AuthConfig(
         organization_id=organization_id,
         connector_id="slack",
-        name=install_name,
+        name=f"slack {uuid4().hex[:8]}",
         kind="http",
         config_source=config_source,
         status="ACTIVE",
@@ -105,8 +161,12 @@ async def _separate_slack_account(
         organization_id=organization_id,
         auth_config_id=install.id,
         connector_id="slack",
-        provider_account_id=f"e2e-slack-{install_name}",
-        credentials=credentials,
+        provider_account_id=f"e2e-slack-{uuid4().hex[:8]}",
+        credentials={
+            "access_token": token,
+            "api_base_url": fake_slack.base_url,
+            "raw_response": {**raw, "api_base_url": fake_slack.base_url},
+        },
     )
     db_session.add(account)
     await db_session.commit()
@@ -114,759 +174,1096 @@ async def _separate_slack_account(
     return account
 
 
-async def _manager_account(db_session, fixed_test_user, fake_slack):
-    return await _separate_slack_account(
-        db_session,
-        user_id=fixed_test_user["id"],
-        config_source="SYSTEM_DEFAULT",
-        install_name="lemma-manager",
-        credentials={
-            "access_token": MANAGER_TOKEN,
-            "api_base_url": fake_slack.base_url,
-            "raw_response": {
-                "app_id": E2E_SLACK_APP_ID,
-                "bot_user_id": MANAGER_BOT,
-                "team": {"id": TEAM, "name": "Acme"},
-                "authed_user": {"id": INSTALLER},
-                "api_base_url": fake_slack.base_url,
+async def _granted(
+    db_session: AsyncSession, account: Account, *, browser_bound: bool = True
+) -> None:
+    """The connect request Slack's Allow finished, as the callback records it."""
+    db_session.add(
+        ConnectRequest(
+            user_id=account.user_id,
+            organization_id=account.organization_id,
+            auth_config_id=account.auth_config_id,
+            connector_id="slack",
+            status="SUCCESS",
+            attributes={
+                "state": uuid4().hex,
+                "granted_account_id": str(account.id),
+                "browser_bound": browser_bound,
             },
-        },
+        )
     )
+    await db_session.commit()
 
 
-async def _bind(client: AsyncClient, pod_id: str, account_id: UUID) -> dict:
+async def _manager(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    *,
+    pod: dict,
+    user: dict,
+    workspace: _Workspace,
+    fake_slack: Any,
+    browser_bound: bool = True,
+):
+    account = await _slack_account(
+        db_session,
+        user_id=user["id"],
+        organization_id=UUID(pod["organization_id"]),
+        config_source="SYSTEM_DEFAULT",
+        raw={
+            "app_id": E2E_SLACK_APP_ID,
+            "bot_user_id": workspace.manager_bot,
+            "team": {"id": workspace.team, "name": "Acme"},
+            "authed_user": {"id": workspace.installer},
+        },
+        fake_slack=fake_slack,
+        token=f"xoxb-{workspace.manager_bot.lower()}",
+    )
+    await _granted(db_session, account, browser_bound=browser_bound)
     response = await client.put(
-        f"/pods/{pod_id}/surface-setup/slack/manager",
-        json={"account_id": str(account_id)},
+        f"/pods/{pod['id']}/surface-setup/slack/manager",
+        json={"account_id": str(account.id)},
+    )
+    return account, response
+
+
+async def _teammate(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    *,
+    pod: dict,
+    user: dict,
+    workspace: _Workspace,
+    fake_slack: Any,
+) -> tuple[dict, str]:
+    """A teammate with its own app already in the workspace: (surface, bot)."""
+    bot = _id("U")
+    account = await _slack_account(
+        db_session,
+        user_id=user["id"],
+        organization_id=UUID(pod["organization_id"]),
+        config_source="ORG_CUSTOM",
+        raw={"app_id": _id("A"), "bot_user_id": bot, "team": {"id": workspace.team}},
+        fake_slack=fake_slack,
+        token=f"xoxb-{bot.lower()}",
+    )
+    agent = await _create_agent(client, pod["id"])
+    response = await client.post(
+        f"/pods/{pod['id']}/surfaces",
+        json={
+            "platform": "SLACK",
+            "account_id": str(account.id),
+            "name": f"slack-{bot.lower()}",
+            "default_agent_name": agent["name"],
+        },
     )
     assert response.status_code == 200, response.text
-    return response.json()
+    return response.json(), bot
 
 
-async def _teammate_surface(client, db_session, fixed_test_user, fake_slack, pod_id):
-    account = await _teammate_account(db_session, fixed_test_user, fake_slack)
-    _, surface = await _create_agent_surface(
-        client, pod_id, config={"type": "SLACK", "account_id": str(account.id)}
-    )
-    return surface
-
-
-async def _teammate_account(db_session, fixed_test_user, fake_slack):
-    return await _separate_slack_account(
-        db_session,
-        user_id=fixed_test_user["id"],
-        config_source="ORG_CUSTOM",
-        install_name="teammate-app",
-        credentials={
-            "access_token": TEAMMATE_TOKEN,
-            "api_base_url": fake_slack.base_url,
-            "raw_response": {
-                "app_id": "A-TEAMMATE",
-                "bot_user_id": TEAMMATE_BOT,
-                "team": {"id": TEAM},
-                "api_base_url": fake_slack.base_url,
-            },
-        },
-    )
-
-
-def _event(event: dict) -> SurfacePlatformWebhookIngress:
-    return SurfacePlatformWebhookIngress(
-        source="slack",
-        payload={
+async def _say(
+    client: AsyncClient,
+    workspace: _Workspace,
+    *,
+    event: dict[str, Any] | None = None,
+    interaction: dict[str, Any] | None = None,
+) -> Any:
+    """One delivery from Lemma's app, POSTed and signed the way Slack sends it."""
+    if event is not None:
+        body = {
             "type": "event_callback",
-            "team_id": TEAM,
+            "team_id": workspace.team,
             "api_app_id": E2E_SLACK_APP_ID,
-            "authorizations": [{"user_id": MANAGER_BOT, "is_bot": True}],
+            "event_id": _id("Ev"),
+            "authorizations": [
+                {"team_id": workspace.team, "user_id": workspace.manager_bot}
+            ],
             "event": event,
-        },
-        # What verification resolves for the manager: its app, no teammate.
-        receiver_surface_ids=[],
+        }
+        raw = json.dumps(body).encode()
+        content_type = "application/json"
+    else:
+        assert interaction is not None
+        body = {
+            "team": {"id": workspace.team},
+            "api_app_id": E2E_SLACK_APP_ID,
+            **interaction,
+        }
+        raw = urlencode({"payload": json.dumps(body)}).encode()
+        content_type = "application/x-www-form-urlencoded"
+    headers = build_slack_signature_headers(raw_body=raw, signing_secret=SIGNING_SECRET)
+    headers["Content-Type"] = content_type
+    response = await client.post(
+        "/surfaces/webhooks/slack", content=raw, headers=headers
+    )
+    assert response.status_code == 200, response.text
+    return response
+
+
+async def _manager_items() -> int:
+    return int(
+        await scalar(
+            "SELECT count(*) FROM work_items WHERE kind = 'surface.slack_manager'"
+        )
     )
 
 
-def _view(message: dict) -> str:
-    return str(message.get("view"))
+async def _nothing_reached_the_inbound_pipeline() -> bool:
+    inbound = await scalar("SELECT count(*) FROM surface_inbound_messages")
+    updates = await scalar(
+        "SELECT count(*) FROM work_items WHERE kind IN "
+        "('surface.platform_update', 'surface.ingest')"
+    )
+    return inbound == 0 and updates == 0
 
 
-async def test_binding_lemmas_app_makes_the_workspace_the_organizations(
+def _views(fake_slack: Any, bucket: str = "SLACK_VIEWS_PUBLISH") -> list[str]:
+    return [json.dumps(message) for message in fake_slack._store.get_all(bucket)]
+
+
+async def _bound(
+    authenticated_client, db_session, test_pod, fixed_test_user, fake_slack
+) -> _Workspace:
+    workspace = _Workspace()
+    _, response = await _manager(
+        authenticated_client,
+        db_session,
+        pod=test_pod,
+        user=fixed_test_user,
+        workspace=workspace,
+        fake_slack=fake_slack,
+    )
+    assert response.status_code == 200, response.text
+    return workspace
+
+
+# -- binding the workspace ----------------------------------------------------
+
+
+async def test_binding_makes_the_workspace_the_organizations_and_proves_the_installer(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
     test_pod,
     fixed_test_user,
     fake_slack,
 ):
-    account = await _manager_account(db_session, fixed_test_user, fake_slack)
-    bound = await _bind(authenticated_client, test_pod["id"], account.id)
-    assert bound == {"team_id": TEAM, "team_name": "Acme"}
-
+    workspace = _Workspace()
+    _, response = await _manager(
+        authenticated_client,
+        db_session,
+        pod=test_pod,
+        user=fixed_test_user,
+        workspace=workspace,
+        fake_slack=fake_slack,
+    )
+    assert response.json() == {"team_id": workspace.team, "team_name": "Acme"}
     listed = await authenticated_client.get(
         f"/pods/{test_pod['id']}/surface-setup/slack/manager"
     )
-    assert listed.status_code == 200, listed.text
-    assert [item["team_id"] for item in listed.json()["items"]] == [TEAM]
+    assert workspace.team in [item["team_id"] for item in listed.json()["items"]]
 
-
-async def test_a_teammates_own_app_is_refused_as_the_manager(
-    authenticated_client: AsyncClient,
-    db_session: AsyncSession,
-    test_pod,
-    fixed_test_user,
-    fake_slack,
-):
-    account = await _ensure_connector_account(
-        db_session,
-        user_id=fixed_test_user["id"],
-        connector_id="slack",
-        config_source="ORG_CUSTOM",
-        credentials={
-            "access_token": TEAMMATE_TOKEN,
-            "raw_response": {
-                "app_id": "A-OTHER",
-                "bot_user_id": "U-X",
-                "team": {"id": TEAM},
-            },
-        },
+    db_session.expire_all()
+    proof = await db_session.scalar(
+        select(SlackWorkspacePersonModel).where(
+            SlackWorkspacePersonModel.team_id == workspace.team
+        )
     )
-    response = await authenticated_client.put(
-        f"/pods/{test_pod['id']}/surface-setup/slack/manager",
-        json={"account_id": str(account.id)},
+    assert proof is not None
+    assert (proof.slack_user_id, str(proof.user_id), proof.proved_by) == (
+        workspace.installer,
+        fixed_test_user["id"],
+        "INSTALL",
+    )
+    # Through to the identity cache, so every reader of it knows them too.
+    cached = await scalar(
+        "SELECT resolved_user_id FROM agent_surface_external_users "
+        "WHERE platform = 'SLACK' AND tenant_id = :team AND external_user_id = :user",
+        team=workspace.team,
+        user=workspace.installer,
+    )
+    assert str(cached) == fixed_test_user["id"]
+
+
+async def test_a_grant_finished_in_somebody_elses_browser_binds_nothing(
+    authenticated_client, db_session, test_pod, fixed_test_user, fake_slack
+):
+    """A consent link sent to someone: their Allow, the sender's account."""
+    workspace = _Workspace()
+    _, response = await _manager(
+        authenticated_client,
+        db_session,
+        pod=test_pod,
+        user=fixed_test_user,
+        workspace=workspace,
+        fake_slack=fake_slack,
+        browser_bound=False,
     )
     assert response.status_code == 422, response.text
-    assert "not Lemma's" in response.text
+    assert "browser" in response.text
+    async with async_session_maker() as session:
+        assert (
+            await SlackManagerRepository(session).install_for_team(workspace.team)
+            is None
+        )
+        assert (
+            await SlackManagerRepository(session).person(
+                workspace.team, workspace.installer
+            )
+            is None
+        )
 
 
-async def test_the_installer_sees_teammates_and_a_stranger_is_asked_to_connect(
-    authenticated_client: AsyncClient,
-    db_session: AsyncSession,
+async def test_without_an_app_of_its_own_this_lemma_manages_nothing(
+    authenticated_client, db_session, test_pod, fixed_test_user, fake_slack, monkeypatch
+):
+    monkeypatch.setattr(surface_settings, "slack_app_id", None)
+    _, response = await _manager(
+        authenticated_client,
+        db_session,
+        pod=test_pod,
+        user=fixed_test_user,
+        workspace=_Workspace(),
+        fake_slack=fake_slack,
+    )
+    assert response.status_code == 422, response.text
+
+
+async def test_a_second_organization_is_refused_not_failed_even_at_once(
+    authenticated_client,
+    async_client,
+    db_session,
     test_pod,
     fixed_test_user,
     fake_slack,
-    message_store,
 ):
-    account = await _manager_account(db_session, fixed_test_user, fake_slack)
-    await _bind(authenticated_client, test_pod["id"], account.id)
-
-    # The installer was named by Slack's own OAuth grant, so they are known.
-    assert await handle_event(
-        _uow_factory(), _event({"type": "app_home_opened", "user": INSTALLER})
+    """One organization per workspace, by a conflict-tolerant insert."""
+    workspace = _Workspace()
+    other = await _sign_up_verified_user(async_client)
+    other_org = UUID(str((await _create_org(async_client, other["token"]))["id"]))
+    ours = await _slack_account(
+        db_session,
+        user_id=fixed_test_user["id"],
+        organization_id=UUID(test_pod["organization_id"]),
+        config_source="SYSTEM_DEFAULT",
+        raw={},
+        fake_slack=fake_slack,
+        token="xoxb-a",
     )
-    published = await wait_for_messages(
-        message_store, "SLACK_VIEWS_PUBLISH", min_count=1
+    theirs = await _slack_account(
+        db_session,
+        user_id=other["id"],
+        organization_id=other_org,
+        config_source="SYSTEM_DEFAULT",
+        raw={},
+        fake_slack=fake_slack,
+        token="xoxb-b",
     )
-    roster = _view(published[-1])
-    assert "Teammates in Acme" in roster
-    assert views.ADD_ACTION_ID in roster  # the pod has no Slack app yet
-    assert MANAGER_TOKEN in published[-1].get("_authorization", "")
 
-    # Someone else has proven nothing: one way forward, signing in once.
-    await handle_event(
-        _uow_factory(), _event({"type": "app_home_opened", "user": STRANGER})
+    async def claim(organization_id: UUID, account_id: UUID) -> str:
+        async with async_session_maker() as session:
+            try:
+                await SlackManagerRepository(session).claim_install(
+                    team_id=workspace.team,
+                    team_name=None,
+                    organization_id=organization_id,
+                    account_id=account_id,
+                    bot_user_id=workspace.manager_bot,
+                    installed_by_user_id=None,
+                )
+            except WorkspaceHeldElsewhereError:
+                return "refused"
+            await session.commit()
+            return "bound"
+
+    import asyncio
+
+    outcomes = await asyncio.gather(
+        claim(UUID(test_pod["organization_id"]), ours.id), claim(other_org, theirs.id)
     )
-    published = await wait_for_messages(
-        message_store, "SLACK_VIEWS_PUBLISH", min_count=2
-    )
-    assert "Connect your Lemma account" in _view(published[-1])
-    assert "/slack/connect?" in _view(published[-1])
+    assert sorted(outcomes) == ["bound", "refused"]
 
 
-async def test_opening_the_home_link_signed_in_proves_who_the_slack_user_is(
-    authenticated_client: AsyncClient,
-    db_session: AsyncSession,
-    test_pod,
-    fixed_test_user,
-    fake_slack,
-    message_store,
+# -- its own lane ---------------------------------------------------------------
+
+
+async def test_a_home_opened_is_queued_as_ids_and_shows_a_stranger_how_to_connect(
+    authenticated_client, db_session, test_pod, fixed_test_user, fake_slack
 ):
-    account = await _manager_account(db_session, fixed_test_user, fake_slack)
-    await _bind(authenticated_client, test_pod["id"], account.id)
-    query = parse_qs(urlsplit(person_link_url(TEAM, STRANGER)).query)
+    workspace = await _bound(
+        authenticated_client, db_session, test_pod, fixed_test_user, fake_slack
+    )
+    stranger = _id("U")
+    await _say(
+        authenticated_client,
+        workspace,
+        event={"type": "app_home_opened", "user": stranger},
+    )
+    assert await _manager_items() == 1
+    assert await _nothing_reached_the_inbound_pipeline()
 
-    linked = await authenticated_client.post(
-        "/surface-setup/slack/people",
-        json={
-            "team_id": TEAM,
-            "slack_user_id": STRANGER,
-            "expires": int(query["exp"][0]),
-            "signature": query["sig"][0],
+    await drain(_registry())
+
+    home = _views(fake_slack)[-1]
+    assert "Connect" in home
+    assert f"/slack/connect?team={workspace.team}&user={stranger}" in home
+
+
+async def test_the_installers_home_is_the_roster_one_row_per_agent(
+    authenticated_client, db_session, test_pod, fixed_test_user, fake_slack
+):
+    """A pod with two agents in Slack lists both, and its own agent's Add."""
+    workspace = await _bound(
+        authenticated_client, db_session, test_pod, fixed_test_user, fake_slack
+    )
+    _, first = await _teammate(
+        authenticated_client,
+        db_session,
+        pod=test_pod,
+        user=fixed_test_user,
+        workspace=workspace,
+        fake_slack=fake_slack,
+    )
+    _, second = await _teammate(
+        authenticated_client,
+        db_session,
+        pod=test_pod,
+        user=fixed_test_user,
+        workspace=workspace,
+        fake_slack=fake_slack,
+    )
+    await _say(
+        authenticated_client,
+        workspace,
+        event={"type": "app_home_opened", "user": workspace.installer},
+    )
+    await drain(_registry())
+
+    home = _views(fake_slack)[-1]
+    assert f"<@{first}>" in home and f"<@{second}>" in home
+    assert views.teammate_value(test_pod["id"], test_pod["id"]) in home
+
+
+async def test_its_own_leaving_never_archives_a_teammates_mirror(
+    authenticated_client, db_session, test_pod, fixed_test_user, fake_slack
+):
+    """The manager's channel_left must never read as the teammate's bot leaving."""
+    workspace = await _bound(
+        authenticated_client, db_session, test_pod, fixed_test_user, fake_slack
+    )
+    surface, _ = await _teammate(
+        authenticated_client,
+        db_session,
+        pod=test_pod,
+        user=fixed_test_user,
+        workspace=workspace,
+        fake_slack=fake_slack,
+    )
+    await _hand_over(authenticated_client, workspace, surface)
+    await drain(_registry())
+    assert await _mirrors(db_session, workspace) == [(False, False)]
+
+    await _say(
+        authenticated_client,
+        workspace,
+        event={"type": "channel_left", "channel": workspace.channel},
+    )
+    assert await _nothing_reached_the_inbound_pipeline()
+    await drain(_registry())
+    assert await _mirrors(db_session, workspace) == [(False, False)]
+
+
+async def test_a_dm_to_the_manager_is_answered_and_stored_nowhere(
+    authenticated_client, db_session, test_pod, fixed_test_user, fake_slack
+):
+    workspace = await _bound(
+        authenticated_client, db_session, test_pod, fixed_test_user, fake_slack
+    )
+    await _say(
+        authenticated_client,
+        workspace,
+        event={
+            "type": "message",
+            "channel_type": "im",
+            "user": workspace.installer,
+            "channel": "D1",
+            "text": "hello?",
         },
     )
-    assert linked.status_code == 200, linked.text
-    # Their Home turns from "connect" into their teammates on the spot.
-    published = await wait_for_messages(
-        message_store, "SLACK_VIEWS_PUBLISH", min_count=1
-    )
-    assert "Teammates in Acme" in _view(published[-1])
+    assert await _nothing_reached_the_inbound_pipeline()
+    await drain(_registry())
+    sent = fake_slack._store.get_all("SLACK")
+    assert any("I don't answer questions myself" in str(m) for m in sent)
 
-    forged = await authenticated_client.post(
-        "/surface-setup/slack/people",
-        json={
-            "team_id": TEAM,
-            "slack_user_id": "U-SOMEONE-ELSE",
-            "expires": int(query["exp"][0]),
-            "signature": query["sig"][0],
+
+async def test_removing_lemma_frees_the_workspace_and_retires_its_token(
+    authenticated_client, db_session, test_pod, fixed_test_user, fake_slack
+):
+    workspace = _Workspace()
+    account, response = await _manager(
+        authenticated_client,
+        db_session,
+        pod=test_pod,
+        user=fixed_test_user,
+        workspace=workspace,
+        fake_slack=fake_slack,
+    )
+    assert response.status_code == 200
+    await _say(authenticated_client, workspace, event={"type": "app_uninstalled"})
+    assert await _nothing_reached_the_inbound_pipeline()
+    await drain(_registry())
+
+    async with async_session_maker() as session:
+        assert (
+            await SlackManagerRepository(session).install_for_team(workspace.team)
+            is None
+        )
+        status = await session.scalar(
+            select(Account.status).where(Account.id == account.id)
+        )
+    assert str(status) != "CONNECTED"
+
+
+# -- handing a channel over -------------------------------------------------------
+
+
+async def _hand_over(client: AsyncClient, workspace: _Workspace, surface: dict) -> None:
+    await _say(
+        client,
+        workspace,
+        interaction={
+            "type": "block_actions",
+            "user": {"id": workspace.installer},
+            "container": {"type": "message", "channel_id": workspace.channel},
+            "response_url": "",
+            "actions": [
+                {
+                    "action_id": f"{views.JOIN_ACTION_ID}:0",
+                    "value": json.dumps(
+                        {"channel": workspace.channel, "surface": surface["id"]}
+                    ),
+                }
+            ],
         },
     )
-    assert forged.status_code == 422, forged.text
 
 
-async def _invite_and_pick(fake_slack, message_store, surface, channel: str) -> None:
-    await handle_event(
-        _uow_factory(),
-        _event(
-            {
-                "type": "member_joined_channel",
-                "user": MANAGER_BOT,
-                "inviter": INSTALLER,
-                "channel": channel,
-            }
-        ),
+async def _mirrors(
+    db_session: AsyncSession, workspace: _Workspace
+) -> list[tuple[bool, bool]]:
+    """``(is_private, archived)`` for each mirror of the workspace's channel."""
+    db_session.expire_all()
+    rows = await db_session.execute(
+        select(ChannelModel.visibility, ChannelModel.archived_at)
+        .join(ChannelSourceModel, ChannelSourceModel.channel_id == ChannelModel.id)
+        .where(ChannelSourceModel.external_channel_id == workspace.channel)
     )
-    picker = await wait_for_messages(message_store, "SLACK_EPHEMERAL", min_count=1)
-    assert picker[-1]["user"] == INSTALLER
-    assert "Who should join" in str(picker[-1].get("text"))
-    assert surface["id"] in str(picker[-1].get("blocks"))
-
-    await handle_event(
-        _uow_factory(),
-        SurfacePlatformWebhookIngress(
-            source="slack",
-            payload={
-                "type": "block_actions",
-                "api_app_id": E2E_SLACK_APP_ID,
-                "team": {"id": TEAM},
-                "user": {"id": INSTALLER},
-                "actions": [
-                    {
-                        "action_id": f"{views.JOIN_ACTION_ID}:0",
-                        "value": json.dumps(
-                            {"channel": channel, "surface": surface["id"]}
-                        ),
-                    }
-                ],
-            },
-            receiver_surface_ids=[],
-        ),
-    )
+    return [
+        (str(visibility).lower() == "private", archived is not None)
+        for visibility, archived in rows
+    ]
 
 
-async def test_invited_to_a_public_channel_it_brings_the_teammate_and_leaves(
-    authenticated_client: AsyncClient,
-    db_session: AsyncSession,
+@pytest.mark.parametrize(
+    ("slack_says", "mirrored_private"),
+    [("public", False), ("private", True), ("nothing", True)],
+)
+async def test_a_hand_off_invites_the_teammate_with_main_hello_and_slacks_privacy(
+    authenticated_client,
+    db_session,
     test_pod,
     fixed_test_user,
     fake_slack,
-    message_store,
+    slack_says,
+    mirrored_private,
 ):
-    account = await _manager_account(db_session, fixed_test_user, fake_slack)
-    await _bind(authenticated_client, test_pod["id"], account.id)
-    surface = await _teammate_surface(
-        authenticated_client, db_session, fixed_test_user, fake_slack, test_pod["id"]
+    """Public stays public; private, or no answer, is mirrored private."""
+    workspace = await _bound(
+        authenticated_client, db_session, test_pod, fixed_test_user, fake_slack
     )
+    if slack_says == "private":
+        fake_slack.private_channels.add(workspace.channel)
+    elif slack_says == "nothing":
+        fake_slack.unknown_channels.add(workspace.channel)
+    surface, bot = await _teammate(
+        authenticated_client,
+        db_session,
+        pod=test_pod,
+        user=fixed_test_user,
+        workspace=workspace,
+        fake_slack=fake_slack,
+    )
+    await _hand_over(authenticated_client, workspace, surface)
+    await drain(_registry())
 
-    await _invite_and_pick(fake_slack, message_store, surface, "C-PUBLIC")
+    invites = fake_slack._store.get_all("SLACK_INVITE")
+    assert [(i["channel"], i["users"]) for i in invites] == [(workspace.channel, bot)]
+    # Invited by the manager, public or private: no channels:join needed.
+    assert workspace.manager_bot.lower() in invites[0]["token"]
+    assert await _mirrors(db_session, workspace) == [(mirrored_private, False)]
+    hello = [m for m in fake_slack._store.get_all("SLACK") if "keeps" in str(m)]
+    assert len(hello) == 1 and hello[0]["channel"] == workspace.channel
+    left = fake_slack._store.get_all("SLACK_LEAVE")
+    assert [leave["channel"] for leave in left] == [workspace.channel]
 
-    joins = await wait_for_messages(message_store, "SLACK_JOIN", min_count=1)
-    # The teammate joins by itself, with its own token.
-    assert joins[-1]["channel"] == "C-PUBLIC"
-    assert TEAMMATE_TOKEN in joins[-1].get("_authorization", "")
-    leaves = await wait_for_messages(message_store, "SLACK_LEAVE", min_count=1)
-    assert MANAGER_TOKEN in leaves[-1].get("_authorization", "")
-    hello = await wait_for_messages(message_store, "SLACK", min_count=1)
-    assert hello[-1]["channel"] == "C-PUBLIC" and "Mention me" in hello[-1]["text"]
 
-    # And it answers there now.
-    updated = await authenticated_client.get(
+async def test_a_refused_invite_takes_the_channel_back_and_steps_out(
+    authenticated_client, db_session, test_pod, fixed_test_user, fake_slack
+):
+    workspace = await _bound(
+        authenticated_client, db_session, test_pod, fixed_test_user, fake_slack
+    )
+    surface, _ = await _teammate(
+        authenticated_client,
+        db_session,
+        pod=test_pod,
+        user=fixed_test_user,
+        workspace=workspace,
+        fake_slack=fake_slack,
+    )
+    fake_slack.invite_error = "cant_invite"
+    await _hand_over(authenticated_client, workspace, surface)
+    await drain(_registry())
+
+    routes = await authenticated_client.get(
         f"/pods/{test_pod['id']}/surfaces/{surface['name']}"
     )
-    channels = [route["channel_id"] for route in updated.json()["config"]["channels"]]
-    assert "C-PUBLIC" in channels
+    assert workspace.channel not in routes.text
+    assert await _mirrors(db_session, workspace) == [(False, True)]
+    assert not [m for m in fake_slack._store.get_all("SLACK") if "keeps" in str(m)]
+    assert fake_slack._store.get_all("SLACK_LEAVE")
 
 
-async def test_invited_to_a_private_channel_it_invites_the_teammate_in(
-    authenticated_client: AsyncClient,
-    db_session: AsyncSession,
-    test_pod,
-    fixed_test_user,
-    fake_slack,
-    message_store,
+async def test_a_join_button_for_another_channel_is_refused(
+    authenticated_client, db_session, test_pod, fixed_test_user, fake_slack
 ):
-    account = await _manager_account(db_session, fixed_test_user, fake_slack)
-    await _bind(authenticated_client, test_pod["id"], account.id)
-    surface = await _teammate_surface(
-        authenticated_client, db_session, fixed_test_user, fake_slack, test_pod["id"]
+    workspace = await _bound(
+        authenticated_client, db_session, test_pod, fixed_test_user, fake_slack
     )
-    fake_slack.private_channels.add("G-PRIVATE")
-
-    await _invite_and_pick(fake_slack, message_store, surface, "G-PRIVATE")
-
-    invites = await wait_for_messages(message_store, "SLACK_INVITE", min_count=1)
-    # A bot cannot join a private channel; the manager, already in, invites it.
-    assert invites[-1]["users"] == TEAMMATE_BOT
-    assert MANAGER_TOKEN in invites[-1].get("_authorization", "")
-    assert not message_store.get_all("SLACK_JOIN")
-
-
-async def test_a_message_to_the_manager_is_pointed_at_the_teammates(
-    authenticated_client: AsyncClient,
-    db_session: AsyncSession,
-    test_pod,
-    fixed_test_user,
-    fake_slack,
-    message_store,
-):
-    account = await _manager_account(db_session, fixed_test_user, fake_slack)
-    await _bind(authenticated_client, test_pod["id"], account.id)
-    await _teammate_surface(
-        authenticated_client, db_session, fixed_test_user, fake_slack, test_pod["id"]
-    )
-
-    await handle_event(
-        _uow_factory(),
-        _event(
-            {
-                "type": "message",
-                "channel_type": "im",
-                "user": INSTALLER,
-                "channel": "D1",
-            }
-        ),
-    )
-    replies = await wait_for_messages(message_store, "SLACK", min_count=1)
-    assert f"<@{TEAMMATE_BOT}>" in replies[-1]["text"]
-    assert "don't answer questions" in replies[-1]["text"]
-
-
-async def test_an_allowed_app_becomes_the_teammates_surface_and_says_so(
-    authenticated_client: AsyncClient,
-    db_session: AsyncSession,
-    test_pod,
-    fixed_test_user,
-    fake_slack,
-    message_store,
-):
-    from app.modules.agent_surfaces.infrastructure.repositories.slack_manager_repository import (
-        SlackManagerRepository,
-    )
-    from app.modules.agent_surfaces.services.slack_manager_bots import bind_allowed_app
-
-    manager = await _manager_account(db_session, fixed_test_user, fake_slack)
-    await _bind(authenticated_client, test_pod["id"], manager.id)
-    allowed = await _teammate_account(db_session, fixed_test_user, fake_slack)
-    user_id = UUID(fixed_test_user["id"])
-    async with _uow_factory()() as uow:
-        await SlackManagerRepository(uow.session).add_pending_binding(
-            auth_config_id=allowed.auth_config_id,
-            pod_id=UUID(test_pod["id"]),
-            team_id=TEAM,
-            app_id="A-TEAMMATE",
-            requested_by_user_id=user_id,
-            slack_user_id=INSTALLER,
-        )
-        await uow.commit()
-
-    async with _uow_factory()() as uow:
-        assert await bind_allowed_app(
-            uow,
-            auth_config_id=allowed.auth_config_id,
-            account_id=allowed.id,
-            user_id=user_id,
-        )
-
-    surfaces = await authenticated_client.get(f"/pods/{test_pod['id']}/surfaces")
-    assert any(item["platform"] == "SLACK" for item in surfaces.json()["items"])
-    told = await wait_for_messages(message_store, "SLACK", min_count=1)
-    assert f"<@{TEAMMATE_BOT}> is in Slack now" in told[-1]["text"]
-
-    # Spent: the same Allow arriving again makes nothing.
-    async with _uow_factory()() as uow:
-        assert not await bind_allowed_app(
-            uow,
-            auth_config_id=allowed.auth_config_id,
-            account_id=allowed.id,
-            user_id=user_id,
-        )
-
-
-async def test_removing_lemma_from_the_workspace_ends_the_binding(
-    authenticated_client: AsyncClient,
-    db_session: AsyncSession,
-    test_pod,
-    fixed_test_user,
-    fake_slack,
-):
-    account = await _manager_account(db_session, fixed_test_user, fake_slack)
-    await _bind(authenticated_client, test_pod["id"], account.id)
-
-    await handle_event(_uow_factory(), _event({"type": "app_uninstalled"}))
-
-    remaining = await db_session.scalar(
-        select(SlackManagerInstallModel).where(SlackManagerInstallModel.team_id == TEAM)
-    )
-    assert remaining is None
-
-
-SIGNING_SECRET = "lemma-app-signing-secret"
-
-
-async def _signed_interaction(client: AsyncClient, payload: dict):
-    from urllib.parse import urlencode
-
-    from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import (
-        build_slack_signature_headers,
-    )
-
-    raw_body = urlencode({"payload": json.dumps(payload)}).encode()
-    headers = {
-        key: value
-        for key, value in build_slack_signature_headers(
-            raw_body=raw_body, signing_secret=SIGNING_SECRET
-        ).items()
-        if key.lower() != "content-type"
-    }
-    headers["Content-Type"] = "application/x-www-form-urlencoded"
-    return await client.post(
-        "/surfaces/webhooks/slack", content=raw_body, headers=headers
-    )
-
-
-async def test_add_to_slack_opens_its_modal_inside_the_webhook_request(
-    authenticated_client: AsyncClient,
-    db_session: AsyncSession,
-    test_pod,
-    fixed_test_user,
-    fake_slack,
-    message_store,
-    monkeypatch,
-):
-    """Signed by Lemma's own app in a workspace with no teammate on it: it
-    verifies through the manager's candidate, and the modal opens before the
-    request returns -- Slack's trigger is gone in 3 seconds."""
-    monkeypatch.setattr(
-        "app.modules.agent_surfaces.config.surface_settings.surface_webhook_security_enabled",
-        True,
-    )
-    monkeypatch.setattr(
-        "app.modules.agent_surfaces.config.surface_settings.slack_signing_secret",
-        SIGNING_SECRET,
-    )
-    account = await _manager_account(db_session, fixed_test_user, fake_slack)
-    await _bind(authenticated_client, test_pod["id"], account.id)
-
-    response = await _signed_interaction(
+    surface, _ = await _teammate(
         authenticated_client,
-        {
+        db_session,
+        pod=test_pod,
+        user=fixed_test_user,
+        workspace=workspace,
+        fake_slack=fake_slack,
+    )
+    await _say(
+        authenticated_client,
+        workspace,
+        interaction={
             "type": "block_actions",
-            "api_app_id": E2E_SLACK_APP_ID,
-            "team": {"id": TEAM},
-            "user": {"id": INSTALLER},
-            "trigger_id": "trigger-add",
-            "actions": [{"action_id": views.ADD_ACTION_ID, "value": test_pod["id"]}],
+            "user": {"id": workspace.installer},
+            "container": {"type": "message", "channel_id": _id("C")},
+            "actions": [
+                {
+                    "action_id": f"{views.JOIN_ACTION_ID}:0",
+                    "value": json.dumps(
+                        {"channel": workspace.channel, "surface": surface["id"]}
+                    ),
+                }
+            ],
         },
     )
-    assert response.status_code == 200, response.text
-
-    opened = await wait_for_messages(message_store, "SLACK_VIEWS_OPEN", min_count=1)
-    modal = _view(opened[-1])
-    # No configuration token saved yet: both ways are offered.
-    assert views.TOKEN_BLOCK_ID in modal and views.CLIENT_ID_BLOCK_ID in modal
-    assert "/surface-setup/slack/manifest/new-app?agent_name=" in modal
-    assert MANAGER_TOKEN in opened[-1].get("_authorization", "")
+    await drain(_registry())
+    assert not fake_slack._store.get_all("SLACK_INVITE")
+    assert await _mirrors(db_session, workspace) == []
 
 
-async def test_half_an_own_app_is_sent_back_to_the_modal(
-    authenticated_client: AsyncClient,
-    db_session: AsyncSession,
-    test_pod,
-    fixed_test_user,
-    fake_slack,
-    monkeypatch,
+async def test_the_teammate_invited_by_the_manager_asks_nobody_to_set_it_up(
+    authenticated_client, db_session, test_pod, fixed_test_user, fake_slack
 ):
-    monkeypatch.setattr(
-        "app.modules.agent_surfaces.config.surface_settings.surface_webhook_security_enabled",
-        True,
+    """Its own member_joined_channel names the manager as inviter: no prompt."""
+    workspace = await _bound(
+        authenticated_client, db_session, test_pod, fixed_test_user, fake_slack
     )
-    monkeypatch.setattr(
-        "app.modules.agent_surfaces.config.surface_settings.slack_signing_secret",
-        SIGNING_SECRET,
-    )
-    account = await _manager_account(db_session, fixed_test_user, fake_slack)
-    await _bind(authenticated_client, test_pod["id"], account.id)
-
-    response = await _signed_interaction(
+    surface, bot = await _teammate(
         authenticated_client,
-        {
-            "type": "view_submission",
-            "api_app_id": E2E_SLACK_APP_ID,
-            "team": {"id": TEAM},
-            "user": {"id": INSTALLER},
-            "view": {
-                "id": "V-ADD",
-                "callback_id": views.ADD_VIEW_CALLBACK_ID,
-                "private_metadata": json.dumps({"pod": test_pod["id"]}),
-                "state": {
-                    "values": {
-                        views.CLIENT_ID_BLOCK_ID: {
-                            views.INPUT_ACTION_ID: {"value": "cid"}
-                        }
-                    }
-                },
+        db_session,
+        pod=test_pod,
+        user=fixed_test_user,
+        workspace=workspace,
+        fake_slack=fake_slack,
+    )
+    joined = SurfacePlatformWebhookIngress(
+        source="slack",
+        payload={
+            "type": "event_callback",
+            "team_id": workspace.team,
+            "api_app_id": "A-TEAMMATE",
+            "authorizations": [{"team_id": workspace.team, "user_id": bot}],
+            "event": {
+                "type": "member_joined_channel",
+                "user": bot,
+                "inviter": workspace.manager_bot,
+                "channel": _id("C"),
             },
         },
+        receiver_surface_ids=[UUID(surface["id"])],
     )
-    assert response.status_code == 200, response.text
-    body = response.json()
-    assert body["response_action"] == "errors"
-    assert set(body["errors"]) == {
-        views.CLIENT_SECRET_BLOCK_ID,
-        views.SIGNING_SECRET_BLOCK_ID,
-    }
+    async with async_session_maker() as session:
+        handled = await build_app_event_handler(
+            SqlAlchemyUnitOfWork(session)
+        ).try_handle_lifecycle(joined)
+    assert handled
+    assert not fake_slack._store.get_all("SLACK_EPHEMERAL")
 
 
-async def _slack_accepts_an_orgs_own_app(db_session: AsyncSession):
-    """What the real catalog says of Slack, and the bare e2e connector does not:
-    an org may bring its own app, and here is where Slack's OAuth lives."""
-    from app.modules.connectors.infrastructure.models.connector import Connector
-
-    connector = await db_session.get(Connector, "slack")
-    original = list(connector.kinds or [])
-    connector.kinds = [
-        {
-            "kind": "http",
-            "auth_scheme": "OAUTH2",
-            "supports_org_custom_oauth": True,
-            "oauth2_defaults": {
-                "authorization_url": "https://slack.com/oauth/v2/authorize",
-                "token_url": "https://slack.com/api/oauth.v2.access",
-                "default_scopes": ["chat:write"],
-            },
-            "system_oauth": {
-                "client_id_env": "SLACK_CLIENT_ID",
-                "client_secret_env": "SLACK_CLIENT_SECRET",
-            },
-        }
-    ]
-    await db_session.commit()
-
-    async def restore() -> None:
-        row = await db_session.get(Connector, "slack")
-        row.kinds = original
-        await db_session.commit()
-
-    return restore
+# -- Add to Slack, from Slack ---------------------------------------------------
 
 
-async def test_an_app_made_by_hand_in_slack_is_registered_and_offered_for_allow(
-    authenticated_client: AsyncClient,
-    db_session: AsyncSession,
-    test_pod,
-    fixed_test_user,
-    fake_slack,
-    message_store,
-):
-    """The by-hand path never calls Slack's app API: three pasted values become
-    the org's own install, and the modal turns into its Allow."""
-    from app.modules.agent_surfaces.infrastructure.slack_manager_models import (
-        SlackPendingAppBindingModel,
-    )
+@dataclass
+class _FakeSlackApps:
+    """Slack's app configuration API: a refresh token works once."""
 
-    account = await _manager_account(db_session, fixed_test_user, fake_slack)
-    await _bind(authenticated_client, test_pod["id"], account.id)
-    restore = await _slack_accepts_an_orgs_own_app(db_session)
+    team: str
+    valid: set[str] = field(default_factory=lambda: {"xoxe-1-pasted"})
+    created: list[str] = field(default_factory=list)
 
-    submission = {
+    async def rotate(self, refresh_token: SecretStr) -> RotatedConfigurationToken:
+        value = refresh_token.get_secret_value()
+        assert value in self.valid
+        self.valid.discard(value)
+        fresh = f"xoxe-1-next-{len(self.valid)}"
+        self.valid.add(fresh)
+        return RotatedConfigurationToken(
+            access_token=SecretStr("xoxe.xoxp-access"),
+            refresh_token=SecretStr(fresh),
+            team_id=self.team,
+            slack_user_id="U0ADMIN",
+            expires_at=datetime.now(UTC) + timedelta(hours=12),
+        )
+
+    async def workspace_name(self, access_token: SecretStr) -> str | None:
+        return "Acme"
+
+    async def create_app(
+        self, access_token: SecretStr, manifest: dict[str, object]
+    ) -> CreatedSlackApp:
+        app_id = f"A0MGR{len(self.created) + 1}"
+        self.created.append(app_id)
+        return CreatedSlackApp(
+            app_id=app_id,
+            client_id=f"cid-{app_id}",
+            client_secret=SecretStr(f"csecret-{app_id}"),
+            signing_secret=SecretStr(f"ssecret-{app_id}"),
+        )
+
+    async def delete_app(self, access_token: SecretStr, app_id: str) -> bool:
+        return True
+
+    def calls(self) -> SlackAppCalls:
+        return SlackAppCalls(
+            rotate=self.rotate,
+            workspace_name=self.workspace_name,
+            create_app=self.create_app,
+            delete_app=self.delete_app,
+        )
+
+
+def _submitted(workspace: _Workspace, pod_id: str, *, nonce: str) -> dict[str, Any]:
+    return {
         "type": "view_submission",
-        "api_app_id": E2E_SLACK_APP_ID,
-        "team": {"id": TEAM},
-        "user": {"id": INSTALLER},
+        "user": {"id": workspace.installer},
         "view": {
             "id": "V-ADD",
+            # Two submissions of one modal differ in their hash.
+            "hash": nonce,
             "callback_id": views.ADD_VIEW_CALLBACK_ID,
-            "private_metadata": json.dumps({"pod": test_pod["id"]}),
+            "private_metadata": json.dumps(views.modal_metadata(pod_id, pod_id)),
             "state": {
                 "values": {
-                    block: {views.INPUT_ACTION_ID: {"value": value}}
-                    for block, value in (
-                        (views.CLIENT_ID_BLOCK_ID, "1234.5678"),
-                        (views.CLIENT_SECRET_BLOCK_ID, "client-secret"),
-                        (views.SIGNING_SECRET_BLOCK_ID, "signing-secret"),
-                    )
+                    views.TOKEN_BLOCK_ID: {
+                        views.INPUT_ACTION_ID: {"value": "xoxe-1-pasted"}
+                    }
                 }
             },
         },
     }
-    assert await handle_event(
-        _uow_factory(),
-        SurfacePlatformWebhookIngress(
-            source="slack", payload=submission, receiver_surface_ids=[]
-        ),
-    )
 
-    updated = await wait_for_messages(message_store, "SLACK_VIEWS_UPDATE", min_count=1)
-    assert updated[-1]["view_id"] == "V-ADD"
-    assert "Allow" in _view(updated[-1]) and "is ready" in _view(updated[-1])
+
+async def test_add_to_slack_from_slack_makes_one_app_and_queues_no_secret(
+    authenticated_client, db_session, test_pod, fixed_test_user, fake_slack, monkeypatch
+):
+    workspace = await _bound(
+        authenticated_client, db_session, test_pod, fixed_test_user, fake_slack
+    )
+    connector = await _ensure_connector(db_session, "slack")
+    connector.kinds = [SLACK_KIND]
+    await db_session.commit()
+    apps = _FakeSlackApps(team=workspace.team)
+    monkeypatch.setattr(slack_manager_bots, "slack_app_calls", apps.calls)
+
+    first = await _say(
+        authenticated_client,
+        workspace,
+        interaction=_submitted(workspace, test_pod["id"], nonce="h1"),
+    )
+    assert first.json()["response_action"] == "update"
+    # A double submit of the same modal, before the first is done.
+    await _say(
+        authenticated_client,
+        workspace,
+        interaction=_submitted(workspace, test_pod["id"], nonce="h2"),
+    )
+    queued = await scalar(
+        "SELECT string_agg(payload::text, ' ') FROM work_items "
+        "WHERE kind = 'surface.slack_manager'"
+    )
+    assert "xoxe-1-pasted" not in str(queued)
+    assert await _nothing_reached_the_inbound_pipeline()
+
+    await drain(_registry(), due=True)
+
+    assert apps.created == ["A0MGR1"]
+    for table, column in (
+        ("work_items", "payload::text"),
+        ("connect_requests", "attributes::text"),
+    ):
+        found = await scalar(
+            f"SELECT count(*) FROM {table} WHERE {column} LIKE '%xoxe-1-pasted%'"  # noqa: S608
+        )
+        assert found == 0, table
+    allow = _views(fake_slack, "SLACK_VIEWS_UPDATE")[-1]
+    assert "Allow" in allow
+    db_session.expire_all()
     pending = await db_session.scalar(
         select(SlackPendingAppBindingModel).where(
-            SlackPendingAppBindingModel.team_id == TEAM
+            SlackPendingAppBindingModel.team_id == workspace.team
         )
     )
-    await restore()
-    assert pending is not None and str(pending.pod_id) == test_pod["id"]
-
-
-async def test_a_teammates_own_bot_invited_by_its_editor_takes_the_channel(
-    authenticated_client: AsyncClient,
-    db_session: AsyncSession,
-    test_pod,
-    fixed_test_user,
-    fake_slack,
-    message_store,
-):
-    """The invite was the yes: no "who should answer here?" for a bot that is
-    one pod's, only the channel taken and one line said."""
-    from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-    from app.modules.agent_surfaces.composition import build_app_event_handler
-    from app.modules.agent_surfaces.tests.e2e.helpers import _seed_external_user
-
-    surface = await _teammate_surface(
-        authenticated_client, db_session, fixed_test_user, fake_slack, test_pod["id"]
+    assert pending is not None
+    assert (pending.source, pending.slack_user_id) == ("SLACK", workspace.installer)
+    purpose = await scalar(
+        "SELECT attributes->>'purpose' FROM connect_requests "
+        "WHERE auth_config_id = :install ORDER BY created_at DESC LIMIT 1",
+        install=pending.auth_config_id,
     )
-    await _seed_external_user(
+    assert purpose == "slack_teammate_app"
+
+
+async def _allowed(
+    db_session: AsyncSession,
+    *,
+    pending: SlackPendingAppBindingModel,
+    account: Account,
+    purpose: str | None,
+) -> int:
+    """Connectors announcing the grant, in a transaction of its own."""
+    async with async_session_maker() as session:
+        added = await facts.emit(
+            SqlAlchemyUnitOfWork(session),
+            ConnectorAccountConnected(
+                account_id=account.id,
+                auth_config_id=pending.auth_config_id,
+                connector_id="slack",
+                organization_id=pending.organization_id,
+                user_id=pending.requested_by_user_id,
+                purpose=purpose,
+            ),
+        )
+        await session.commit()
+    return added
+
+
+async def test_the_allow_coming_back_makes_the_surface_once_and_says_so(
+    authenticated_client, db_session, test_pod, fixed_test_user, fake_slack
+):
+    workspace = await _bound(
+        authenticated_client, db_session, test_pod, fixed_test_user, fake_slack
+    )
+    bot = _id("U")
+    account = await _slack_account(
         db_session,
-        platform="SLACK",
-        external_user_id=INSTALLER,
-        resolved_user_id=UUID(fixed_test_user["id"]),
-        tenant_id=TEAM,
+        user_id=fixed_test_user["id"],
+        organization_id=UUID(test_pod["organization_id"]),
+        config_source="ORG_CUSTOM",
+        raw={"app_id": "A0ALLOWED", "bot_user_id": bot, "team": {"id": workspace.team}},
+        fake_slack=fake_slack,
+        token=f"xoxb-{bot.lower()}",
     )
-    handler = build_app_event_handler(SqlAlchemyUnitOfWork(db_session))
-    handled = await handler.try_handle_lifecycle(
-        SurfacePlatformWebhookIngress(
-            source="slack",
-            payload={
-                "type": "event_callback",
-                "team_id": TEAM,
-                "api_app_id": "A-TEAMMATE",
-                "authorizations": [{"user_id": TEAMMATE_BOT, "is_bot": True}],
-                "event": {
-                    "type": "member_joined_channel",
-                    "user": TEAMMATE_BOT,
-                    "inviter": INSTALLER,
-                    "channel": "C-DIRECT",
-                },
+    pending = SlackPendingAppBindingModel(
+        organization_id=UUID(test_pod["organization_id"]),
+        pod_id=UUID(test_pod["id"]),
+        agent_id=UUID(test_pod["id"]),
+        auth_config_id=account.auth_config_id,
+        team_id=workspace.team,
+        app_id="A0ALLOWED",
+        requested_by_user_id=UUID(fixed_test_user["id"]),
+        slack_user_id=workspace.installer,
+        source="SLACK",
+    )
+    db_session.add(pending)
+    await db_session.commit()
+
+    # An ordinary Slack connect for tools is never this.
+    assert (
+        await _allowed(db_session, pending=pending, account=account, purpose=None) == 0
+    )
+    assert (
+        await _allowed(
+            db_session, pending=pending, account=account, purpose="slack_teammate_app"
+        )
+        == 1
+    )
+    await drain(_registry())
+    # Delivered again, after the first ran: nothing left to do.
+    await _allowed(
+        db_session, pending=pending, account=account, purpose="slack_teammate_app"
+    )
+    await drain(_registry())
+
+    surfaces = await scalar(
+        "SELECT count(*) FROM agent_surfaces WHERE account_id = :account",
+        account=account.id,
+    )
+    assert surfaces == 1
+    left = await scalar(
+        "SELECT count(*) FROM slack_pending_app_bindings WHERE id = :id", id=pending.id
+    )
+    assert left == 0
+    told = [m for m in fake_slack._store.get_all("SLACK") if f"<@{bot}>" in str(m)]
+    assert len(told) == 1
+
+
+# -- Sign in with Slack -----------------------------------------------------------
+
+
+@dataclass
+class _SlackSignIn:
+    """Slack's OpenID side: signs whatever identity the test says signed in."""
+
+    key: rsa.RSAPrivateKey = field(
+        default_factory=lambda: rsa.generate_private_key(
+            public_exponent=65537, key_size=2048
+        )
+    )
+    signed_in_as: tuple[str, str] = ("", "")
+    nonce: str = ""
+
+    async def exchange(self, client: LemmaAppClient, code: str, redirect: str) -> str:
+        team, user = self.signed_in_as
+        now = int(time.time())
+        return jwt.encode(
+            {
+                "iss": "https://slack.com",
+                "aud": client.client_id,
+                "sub": user,
+                "iat": now,
+                "exp": now + 300,
+                "nonce": self.nonce,
+                "https://slack.com/user_id": user,
+                "https://slack.com/team_id": team,
             },
-            receiver_surface_ids=[UUID(surface["id"])],
+            self.key,
+            algorithm="RS256",
+            headers={"kid": "k1"},
+        )
+
+    async def signing_keys(self) -> dict[str, Any]:
+        public = json.loads(RSAAlgorithm.to_jwk(self.key.public_key()))
+        return {"keys": [{**public, "kid": "k1"}]}
+
+
+@pytest.fixture
+def slack_sign_in(monkeypatch) -> _SlackSignIn:
+    slack = _SlackSignIn()
+
+    async def lemma_app(uow, connector_id):
+        return LemmaAppClient(client_id=OIDC_CLIENT, client_secret=SecretStr("s"))
+
+    monkeypatch.setattr(slack_person_proof, "lemma_app_client", lemma_app)
+    monkeypatch.setattr(
+        slack_person_proof,
+        "SLACK_OIDC",
+        slack_person_proof.SlackOidcCalls(
+            exchange=slack.exchange, signing_keys=slack.signing_keys
+        ),
+    )
+    return slack
+
+
+async def _start(client: AsyncClient, workspace: _Workspace, user: str, **headers):
+    return await client.post(
+        "/surface-setup/slack/people/sign-in",
+        json={"team_id": workspace.team, "slack_user_id": user},
+        headers=headers or None,
+    )
+
+
+def _state_and_nonce(url: str) -> tuple[str, str]:
+    query = parse_qs(urlsplit(url).query)
+    assert query["team"] == [query["team"][0]]
+    return query["state"][0], query["nonce"][0]
+
+
+async def _callback(client: AsyncClient, state: str, **headers) -> str:
+    response = await client.get(
+        f"{slack_person_proof.CALLBACK_PATH}?{urlencode({'state': state, 'code': 'c'})}",
+        headers=headers or None,
+    )
+    assert response.status_code == 303, response.text
+    return response.headers["location"]
+
+
+async def _member(db_session: AsyncSession, user: dict, organization_id: str) -> None:
+    db_session.add(
+        OrganizationMember(
+            organization_id=UUID(organization_id),
+            user_id=UUID(user["id"]),
+            role="ORG_MEMBER",
         )
     )
-    assert handled is True
-
-    hello = await wait_for_messages(message_store, "SLACK", min_count=1)
-    assert hello[-1]["channel"] == "C-DIRECT" and "Mention me" in hello[-1]["text"]
-    assert TEAMMATE_TOKEN in hello[-1].get("_authorization", "")
-    assert not message_store.get_all("SLACK_EPHEMERAL")
-    updated = await authenticated_client.get(
-        f"/pods/{test_pod['id']}/surfaces/{surface['name']}"
-    )
-    assert "C-DIRECT" in [r["channel_id"] for r in updated.json()["config"]["channels"]]
+    await db_session.commit()
 
 
-async def test_a_bot_token_revoked_for_another_app_leaves_lemma_installed(
-    authenticated_client: AsyncClient,
-    db_session: AsyncSession,
+async def test_signing_in_with_slack_proves_the_slack_user_the_link_was_for(
+    authenticated_client,
+    db_session,
     test_pod,
     fixed_test_user,
     fake_slack,
+    slack_sign_in,
 ):
-    account = await _manager_account(db_session, fixed_test_user, fake_slack)
-    await _bind(authenticated_client, test_pod["id"], account.id)
-
-    await handle_event(
-        _uow_factory(),
-        _event({"type": "tokens_revoked", "tokens": {"bot": ["U-SOME-OTHER-BOT"]}}),
+    workspace = await _bound(
+        authenticated_client, db_session, test_pod, fixed_test_user, fake_slack
     )
+    me = _id("U")
+    started = await _start(authenticated_client, workspace, me)
+    assert started.status_code == 200, started.text
+    url = started.json()["authorization_url"]
+    assert url.startswith("https://slack.com/openid/connect/authorize?")
+    state, slack_sign_in.nonce = _state_and_nonce(url)
+    slack_sign_in.signed_in_as = (workspace.team, me)
 
-    assert await db_session.scalar(
-        select(SlackManagerInstallModel).where(SlackManagerInstallModel.team_id == TEAM)
-    )
+    landed = await _callback(authenticated_client, state)
+
+    assert "connected=1" in landed
+    async with async_session_maker() as session:
+        proven = await SlackManagerRepository(session).person(workspace.team, me)
+    assert str(proven) == fixed_test_user["id"]
+    # One Slack user per person per workspace: the installer row gave way.
+    async with async_session_maker() as session:
+        assert (
+            await SlackManagerRepository(session).person(
+                workspace.team, workspace.installer
+            )
+            is None
+        )
+    # Spent: the same state again proves nothing.
+    again = await _callback(authenticated_client, state)
+    assert "error=expired" in again
 
 
-async def test_a_link_is_named_before_it_connects_anything(
-    authenticated_client: AsyncClient,
-    db_session: AsyncSession,
+async def test_someone_elses_link_signed_in_as_yourself_is_refused(
+    authenticated_client,
+    async_client,
+    db_session,
     test_pod,
     fixed_test_user,
     fake_slack,
+    slack_sign_in,
 ):
-    """The page asks "is this you?" first: a link somebody else sent must not
-    connect their Slack account to whoever opens it."""
-    from app.modules.agent_surfaces.infrastructure.slack_manager_models import (
-        SlackWorkspacePersonModel,
+    """The phishing case: X sends V their own link. V signs in to Slack as V."""
+    workspace = await _bound(
+        authenticated_client, db_session, test_pod, fixed_test_user, fake_slack
     )
+    victim = await _sign_up_verified_user(async_client)
+    await _member(db_session, victim, test_pod["organization_id"])
+    as_victim = {"Authorization": f"Bearer {victim['token']}"}
+    attacker_slack, victim_slack = _id("U"), _id("U")
 
-    account = await _manager_account(db_session, fixed_test_user, fake_slack)
-    await _bind(authenticated_client, test_pod["id"], account.id)
-    fake_slack.user_overrides[STRANGER] = {
-        "email": "x@elsewhere.test",
-        "display_name": "Mallory",
-    }
-    query = parse_qs(urlsplit(person_link_url(TEAM, STRANGER)).query)
-    body = {
-        "team_id": TEAM,
-        "slack_user_id": STRANGER,
-        "expires": int(query["exp"][0]),
-        "signature": query["sig"][0],
-    }
+    started = await _start(authenticated_client, workspace, attacker_slack, **as_victim)
+    assert started.status_code == 200, started.text
+    state, slack_sign_in.nonce = _state_and_nonce(started.json()["authorization_url"])
+    slack_sign_in.signed_in_as = (workspace.team, victim_slack)
 
-    preview = await authenticated_client.post(
-        "/surface-setup/slack/people/preview", json=body
-    )
+    landed = await _callback(authenticated_client, state, **as_victim)
 
-    assert preview.status_code == 200, preview.text
-    assert preview.json() == {
-        "team_id": TEAM,
-        "team_name": "Acme",
-        "slack_user_name": "Mallory",
-    }
-    assert not await db_session.scalar(
-        select(SlackWorkspacePersonModel).where(
-            SlackWorkspacePersonModel.slack_user_id == STRANGER
-        )
-    )
+    assert "error=other_slack_user" in landed
+    async with async_session_maker() as session:
+        repo = SlackManagerRepository(session)
+        assert await repo.person(workspace.team, attacker_slack) is None
+        assert await repo.person(workspace.team, victim_slack) is None
 
 
-async def test_an_allow_by_someone_else_is_explained_to_whoever_asked(
-    authenticated_client: AsyncClient,
-    db_session: AsyncSession,
+async def test_a_sign_in_finished_by_another_lemma_session_is_refused(
+    authenticated_client,
+    async_client,
+    db_session,
     test_pod,
     fixed_test_user,
     fake_slack,
-    message_store,
+    slack_sign_in,
 ):
-    from app.modules.agent_surfaces.infrastructure.repositories.slack_manager_repository import (
-        SlackManagerRepository,
+    """X starts it as themselves and sends V Slack's page: V's session comes back."""
+    workspace = await _bound(
+        authenticated_client, db_session, test_pod, fixed_test_user, fake_slack
     )
-    from app.modules.agent_surfaces.services.slack_manager_bots import bind_allowed_app
+    victim = await _sign_up_verified_user(async_client)
+    await _member(db_session, victim, test_pod["organization_id"])
+    victim_slack = _id("U")
+    started = await _start(authenticated_client, workspace, victim_slack)
+    state, slack_sign_in.nonce = _state_and_nonce(started.json()["authorization_url"])
+    slack_sign_in.signed_in_as = (workspace.team, victim_slack)
 
-    manager = await _manager_account(db_session, fixed_test_user, fake_slack)
-    await _bind(authenticated_client, test_pod["id"], manager.id)
-    allowed = await _teammate_account(db_session, fixed_test_user, fake_slack)
-    async with _uow_factory()() as uow:
-        await SlackManagerRepository(uow.session).add_pending_binding(
-            auth_config_id=allowed.auth_config_id,
-            pod_id=UUID(test_pod["id"]),
-            team_id=TEAM,
-            app_id="A-TEAMMATE",
-            requested_by_user_id=UUID(fixed_test_user["id"]),
-            slack_user_id=INSTALLER,
-        )
-        await uow.commit()
+    landed = await _callback(
+        authenticated_client,
+        state,
+        Authorization=f"Bearer {victim['token']}",
+    )
 
-    async with _uow_factory()() as uow:
-        assert not await bind_allowed_app(
-            uow,
-            auth_config_id=allowed.auth_config_id,
-            account_id=allowed.id,
-            user_id=uuid4(),
+    assert "error=session_changed" in landed
+    async with async_session_maker() as session:
+        assert (
+            await SlackManagerRepository(session).person(workspace.team, victim_slack)
+            is None
         )
 
-    told = await wait_for_messages(message_store, "SLACK", min_count=1)
-    assert "Someone else allowed" in told[-1]["text"]
+
+async def test_only_the_workspaces_organization_may_sign_in_there(
+    authenticated_client,
+    async_client,
+    db_session,
+    test_pod,
+    fixed_test_user,
+    fake_slack,
+    slack_sign_in,
+):
+    workspace = await _bound(
+        authenticated_client, db_session, test_pod, fixed_test_user, fake_slack
+    )
+    outsider = await _sign_up_verified_user(async_client)
+    refused = await _start(
+        authenticated_client,
+        workspace,
+        _id("U"),
+        Authorization=f"Bearer {outsider['token']}",
+    )
+    assert refused.status_code == 422, refused.text
+
+
+async def test_the_installer_row_is_typed_install_not_a_profile_email(
+    authenticated_client, db_session, test_pod, fixed_test_user, fake_slack
+):
+    workspace = await _bound(
+        authenticated_client, db_session, test_pod, fixed_test_user, fake_slack
+    )
+    rows = (
+        (
+            await db_session.execute(
+                text(
+                    "SELECT proved_by FROM slack_workspace_people WHERE team_id = :team"
+                ),
+                {"team": workspace.team},
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert list(rows) == ["INSTALL"]
+    install = await db_session.scalar(
+        select(SlackManagerInstallModel).where(
+            SlackManagerInstallModel.team_id == workspace.team
+        )
+    )
+    assert install is not None and install.bot_user_id == workspace.manager_bot

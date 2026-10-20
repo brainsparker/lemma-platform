@@ -10,15 +10,18 @@ from ...client import AuthenticatedClient, Client
 from ...models.error_response import ErrorResponse
 from ...models.slack_app_create_request import SlackAppCreateRequest
 from ...models.slack_app_create_response import SlackAppCreateResponse
-from ...types import Response
+from ...types import UNSET, Response, Unset
 
 
 def _get_kwargs(
     pod_id: UUID,
     *,
     body: SlackAppCreateRequest,
+    idempotency_key: None | str | Unset = UNSET,
 ) -> dict[str, Any]:
     headers: dict[str, Any] = {}
+    if not isinstance(idempotency_key, Unset):
+        headers["Idempotency-Key"] = idempotency_key
 
     _kwargs: dict[str, Any] = {
         "method": "post",
@@ -43,10 +46,20 @@ def _parse_response(
 
         return response_200
 
+    if response.status_code == 409:
+        response_409 = ErrorResponse.from_dict(response.json())
+
+        return response_409
+
     if response.status_code == 422:
         response_422 = ErrorResponse.from_dict(response.json())
 
         return response_422
+
+    if response.status_code == 429:
+        response_429 = ErrorResponse.from_dict(response.json())
+
+        return response_429
 
     if client.raise_on_unexpected_status:
         raise errors.UnexpectedStatus(response.status_code, response.content)
@@ -70,13 +83,20 @@ def sync_detailed(
     *,
     client: AuthenticatedClient | Client,
     body: SlackAppCreateRequest,
+    idempotency_key: None | str | Unset = UNSET,
 ) -> Response[ErrorResponse | SlackAppCreateResponse]:
     """Create Slack App
 
-     Create this pod's own Slack app. What is left is authorising it.
+     Create an agent's own Slack app, named after it. What is left is
+    authorising it.
+
+    One app per agent per workspace: until it is authorised, asking again
+    answers with the same app, and so does the same `Idempotency-Key` from the
+    same member for a day.
 
     Args:
         pod_id (UUID):
+        idempotency_key (None | str | Unset):
         body (SlackAppCreateRequest):
 
     Raises:
@@ -90,6 +110,7 @@ def sync_detailed(
     kwargs = _get_kwargs(
         pod_id=pod_id,
         body=body,
+        idempotency_key=idempotency_key,
     )
 
     response = client.get_httpx_client().request(
@@ -104,13 +125,20 @@ def sync(
     *,
     client: AuthenticatedClient | Client,
     body: SlackAppCreateRequest,
+    idempotency_key: None | str | Unset = UNSET,
 ) -> ErrorResponse | SlackAppCreateResponse | None:
     """Create Slack App
 
-     Create this pod's own Slack app. What is left is authorising it.
+     Create an agent's own Slack app, named after it. What is left is
+    authorising it.
+
+    One app per agent per workspace: until it is authorised, asking again
+    answers with the same app, and so does the same `Idempotency-Key` from the
+    same member for a day.
 
     Args:
         pod_id (UUID):
+        idempotency_key (None | str | Unset):
         body (SlackAppCreateRequest):
 
     Raises:
@@ -125,6 +153,7 @@ def sync(
         pod_id=pod_id,
         client=client,
         body=body,
+        idempotency_key=idempotency_key,
     ).parsed
 
 
@@ -133,13 +162,20 @@ async def asyncio_detailed(
     *,
     client: AuthenticatedClient | Client,
     body: SlackAppCreateRequest,
+    idempotency_key: None | str | Unset = UNSET,
 ) -> Response[ErrorResponse | SlackAppCreateResponse]:
     """Create Slack App
 
-     Create this pod's own Slack app. What is left is authorising it.
+     Create an agent's own Slack app, named after it. What is left is
+    authorising it.
+
+    One app per agent per workspace: until it is authorised, asking again
+    answers with the same app, and so does the same `Idempotency-Key` from the
+    same member for a day.
 
     Args:
         pod_id (UUID):
+        idempotency_key (None | str | Unset):
         body (SlackAppCreateRequest):
 
     Raises:
@@ -153,6 +189,7 @@ async def asyncio_detailed(
     kwargs = _get_kwargs(
         pod_id=pod_id,
         body=body,
+        idempotency_key=idempotency_key,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -165,13 +202,20 @@ async def asyncio(
     *,
     client: AuthenticatedClient | Client,
     body: SlackAppCreateRequest,
+    idempotency_key: None | str | Unset = UNSET,
 ) -> ErrorResponse | SlackAppCreateResponse | None:
     """Create Slack App
 
-     Create this pod's own Slack app. What is left is authorising it.
+     Create an agent's own Slack app, named after it. What is left is
+    authorising it.
+
+    One app per agent per workspace: until it is authorised, asking again
+    answers with the same app, and so does the same `Idempotency-Key` from the
+    same member for a day.
 
     Args:
         pod_id (UUID):
+        idempotency_key (None | str | Unset):
         body (SlackAppCreateRequest):
 
     Raises:
@@ -187,5 +231,6 @@ async def asyncio(
             pod_id=pod_id,
             client=client,
             body=body,
+            idempotency_key=idempotency_key,
         )
     ).parsed

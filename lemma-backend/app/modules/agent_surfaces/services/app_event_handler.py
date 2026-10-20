@@ -19,6 +19,7 @@ choose, and has no edge back into any of this.
 
 from __future__ import annotations
 
+from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
 from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
 
 from app.modules.agent_surfaces.domain.channel_setup import (
@@ -71,10 +72,10 @@ from app.modules.agent_surfaces.services.configuration_prompt import (
     prompt_for_configuration,
 )
 from app.modules.agent_surfaces.services.app_uninstall import retire_uninstalled_app
-from app.modules.agent_surfaces.services.channel_allow import (
-    allow_channel,
-    welcome_in_channel,
+from app.modules.agent_surfaces.infrastructure.repositories.slack_manager_repository import (  # noqa: E501
+    SlackManagerRepository,
 )
+from app.modules.agent_surfaces.services.channel_allow import allow_channel
 from app.modules.agent_surfaces.services.group_hello import say_hello_in_group
 from app.modules.agent_surfaces.services.group_registry import (
     adopt_joined_group,
@@ -185,7 +186,8 @@ class AppEventHandler:
                 adapter=adapter,
                 credentials=credentials,
             )
-        except SQLAlchemyError:
+        except SQLAlchemyError as exc:
+            raise_if_database_unavailable(exc)
             logger.warning(
                 "agent_surfaces.app_event_handler.channel_setup_failed.failed",
                 surface_id=str(surface.id),
@@ -407,12 +409,21 @@ class AppEventHandler:
         if parsed is None:
             return False
         if parsed.kind is SurfaceLifecycleKind.UNINSTALLED:
+            # Before the actor's authorization, which it has none of: the
+            # signature that resolved the receivers is what authorizes it.
             await retire_uninstalled_app(
                 self.uow,
                 surfaces_repo=self.surface_repository,
+                credential_resolver=self.credential_resolver,
                 request=request,
                 parsed=parsed,
             )
+            await self.uow.commit()
+            return True
+
+        if await _invited_by_the_manager(self.uow, parsed):
+            # Lemma's own app brought this bot in and has already set the
+            # channel up; there is nobody here to ask.
             return True
 
         (
@@ -448,10 +459,9 @@ class AppEventHandler:
 
         surface, ctx = selected
         try:
-            await self._handle_lifecycle_event(
-                surface=surface, parsed=parsed, ctx=ctx, sole=len(authorized) == 1
-            )
-        except SQLAlchemyError:
+            await self._handle_lifecycle_event(surface=surface, parsed=parsed, ctx=ctx)
+        except SQLAlchemyError as exc:
+            raise_if_database_unavailable(exc)
             logger.warning(
                 "agent_surfaces.app_event_handler.lifecycle_event_failed.failed",
                 surface_id=str(surface.id),
@@ -497,7 +507,6 @@ class AppEventHandler:
         surface,
         parsed: ParsedSurfaceLifecycleEvent,
         ctx,
-        sole: bool = False,
     ) -> None:
         """React to the app's own situation changing.
 
@@ -546,18 +555,6 @@ class AppEventHandler:
             channel_id=parsed.external_channel_id, channel_name=""
         ):
             return
-        # A teammate's own Slack bot, invited by someone who may set it up: the
-        # invite was the yes. Asking again is only for a bot several pods share.
-        if sole and parsed.platform is SurfacePlatform.SLACK:
-            await welcome_in_channel(
-                self.uow,
-                surfaces=self.surface_repository,
-                surface=surface,
-                credentials=credentials,
-                channel_id=parsed.external_channel_id,
-                owner_user_id=ctx.user_id,
-            )
-            return
         async with connection_released(self.uow.session):
             await setup.send_channel_setup_prompt(
                 credentials=credentials,
@@ -567,3 +564,21 @@ class AppEventHandler:
                     credentials=credentials, channel_id=parsed.external_channel_id
                 ),
             )
+
+
+async def _invited_by_the_manager(
+    uow: SqlAlchemyUnitOfWork, parsed: ParsedSurfaceLifecycleEvent
+) -> bool:
+    """A teammate's bot joining a Slack channel because Lemma's own app, the
+    workspace's manager, invited it there."""
+    if (
+        parsed.kind is not SurfaceLifecycleKind.JOINED_CHANNEL
+        or parsed.platform is not SurfacePlatform.SLACK
+        or not parsed.actor_external_user_id
+        or not parsed.tenant_id
+    ):
+        return False
+    install = await SlackManagerRepository(uow.session).install_for_team(
+        parsed.tenant_id
+    )
+    return install is not None and install.bot_user_id == parsed.actor_external_user_id

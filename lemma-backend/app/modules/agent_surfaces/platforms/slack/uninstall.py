@@ -7,9 +7,15 @@ Slack does not promise their order, so each is read as complete on its own.
 A revocation naming only user tokens is not this: the bot still has its token,
 and the surface still answers. That one is left to the connector, which finds a
 dead user token the first time a tool call is refused.
+
+An Enterprise Grid org-wide install says the same thing with
+``app_uninstalled_team``, under an enterprise rather than a workspace; it is
+not read here.
 """
 
 from __future__ import annotations
+
+from collections.abc import Mapping
 
 from app.modules.agent_surfaces.domain.entities import (
     ParsedSurfaceLifecycleEvent,
@@ -18,14 +24,23 @@ from app.modules.agent_surfaces.domain.entities import (
 )
 
 
+#: Both event types, for the request-time classifier to send to the
+#: platform-update path: anything it does not name there is dropped with a 200.
 UNINSTALL_EVENT_TYPES = frozenset({"app_uninstalled", "tokens_revoked"})
 
 
-def is_uninstall_delivery(payload: dict[str, object]) -> bool:
+def is_uninstall_delivery(payload: Mapping[str, object]) -> bool:
     """Whether a raw event callback is one of the two, read before verification
-    so a paused surface's signing secret is among the candidates."""
+    so a surface in any status has its signing secret among the candidates.
+
+    The body is unauthenticated here, so a ``type`` that is not a string -- a
+    list, say, which cannot be looked up in a set -- is simply not one.
+    """
     event = payload.get("event")
-    return isinstance(event, dict) and event.get("type") in UNINSTALL_EVENT_TYPES
+    if not isinstance(event, Mapping):
+        return False
+    event_type = event.get("type")
+    return isinstance(event_type, str) and event_type in UNINSTALL_EVENT_TYPES
 
 
 def parse_uninstall(

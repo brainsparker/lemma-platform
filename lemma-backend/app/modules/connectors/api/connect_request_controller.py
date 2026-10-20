@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import Annotated, Optional
 from urllib.parse import urlencode
 from uuid import UUID
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 
 from app.core.api.callback_page import (
@@ -39,6 +39,29 @@ from app.modules.connectors.services.followup_request import (
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
+
+
+async def _browser_user_id(request: Request) -> UUID | None:
+    """Whose Lemma session the browser coming back from the provider carries.
+
+    This route authenticates by ``state``, so nothing here requires a session;
+    it is only read, to record whether the grant was completed by the person
+    who started it. Any failure to read one is "no session".
+    """
+    from supertokens_python.exceptions import SuperTokensError
+    from supertokens_python.recipe.session.asyncio import get_session
+
+    try:
+        session = await get_session(request, session_required=False)
+    except SuperTokensError:
+        return None
+    if session is None:
+        return None
+    try:
+        return UUID(session.get_user_id())
+    except ValueError:
+        return None
+
 
 router = APIRouter(prefix="/connectors/connect-requests", tags=["Connectors"])
 org_router = APIRouter(
@@ -255,6 +278,7 @@ async def initiate_install_request(
 )
 async def oauth_callback(
     request: Request,
+    browser_user_id: Annotated[UUID | None, Depends(_browser_user_id)],
     connector_service: ConnectorServiceDep,
     error: Optional[str] = Query(default=None),
     response_format: Optional[str] = Query(
@@ -316,6 +340,7 @@ async def oauth_callback(
         account = await connector_service.handle_oauth_callback(
             redirect_uri=redirect_uri,
             state=state,
+            browser_user_id=browser_user_id,
         )
     except ConnectorDomainError as exc:
         if wants_json:

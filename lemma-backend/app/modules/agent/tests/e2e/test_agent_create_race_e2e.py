@@ -32,10 +32,17 @@ async def _blocked_behind_the_competitor() -> None:
 
     Matched on the wait rather than the statement text: a session's ``query``
     column can still show its previous statement while the next one waits.
+
+    The statistics snapshot is cleared on every read. ``pg_stat_activity`` is
+    fixed for the length of a transaction once first read, and the probe reads
+    it repeatedly in one -- so a first read made before the request connected
+    never saw it arrive, and the wait timed out with the request already parked
+    on the INSERT.
     """
     async with async_session_maker() as session:
 
         async def waiting_on_a_transaction() -> int:
+            await session.execute(text("SELECT pg_stat_clear_snapshot()"))
             return (
                 await session.scalar(
                     text(

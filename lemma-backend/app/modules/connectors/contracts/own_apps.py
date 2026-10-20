@@ -7,27 +7,29 @@ back to the server, and this is how they become that same install without
 passing through anybody's browser.
 
 Goes through ``ConnectorService.create_auth_config`` rather than writing the row,
-so the role check, the config validation and the first-install-is-default rule
-are the ones every other install gets.
+so the role check and the config validation are the ones every other install
+gets. Unlike a hand-made install it is never made the org's default: it is one
+teammate's app, and nobody chose it to answer a bare connector lookup.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from uuid import UUID
+
+from pydantic import SecretStr
 
 from app.modules.connectors.api.dependencies import get_connector_service
 from app.modules.connectors.domain.auth_config import AuthConfigSource
-from app.modules.connectors.services.connector_service import INSTALL_MANAGER_ROLES
+from app.modules.connectors.services.connect_request_lifecycle import (
+    was_browser_bound,
+)
 
 
 async def may_manage_installs(uow, *, user_id: UUID, organization_id: UUID) -> bool:
     """Whether this person may add or remove the org's connector installs."""
-    return await get_connector_service(
-        uow
-    ).organization_access.user_has_organization_role(
-        user_id=user_id,
-        organization_id=organization_id,
-        allowed_roles=INSTALL_MANAGER_ROLES,
+    return await get_connector_service(uow).may_manage_installs(
+        user_id=user_id, organization_id=organization_id
     )
 
 
@@ -38,18 +40,67 @@ async def create_own_app_install(
     organization_id: UUID,
     connector_id: str,
     name: str,
-    config: dict[str, str],
+    config: dict[str, str | SecretStr],
 ) -> UUID:
-    """Register the org's own app as an install, and return the install's id."""
+    """Register the org's own app as an install, and return the install's id.
+
+    Commits: ``create_auth_config`` commits before validating and again after
+    inserting, so a caller that fails afterwards undoes it with
+    ``delete_unauthorised_install``, not a rollback.
+    """
     install = await get_connector_service(uow).create_auth_config(
         user_id=user_id,
         organization_id=organization_id,
         connector_id=connector_id,
         config_source=AuthConfigSource.ORG_CUSTOM.value,
-        config=dict(config),
+        # Revealed here, the one place the plaintext is needed: the install's
+        # config is what the connectors module encrypts and stores.
+        config={
+            key: value.get_secret_value() if isinstance(value, SecretStr) else value
+            for key, value in config.items()
+        },
         name=name,
+        is_default=False,
     )
     return install.id
+
+
+async def install_is_authorised(uow, auth_config_id: UUID) -> bool:
+    """Whether anybody has connected an account through this install yet."""
+    accounts = await get_connector_service(uow).account_repository.list_by_auth_config(
+        auth_config_id
+    )
+    return bool(accounts)
+
+
+async def delete_unauthorised_install(
+    uow,
+    *,
+    organization_id: UUID,
+    auth_config_id: UUID | None = None,
+    name: str | None = None,
+) -> bool:
+    """Remove an install nobody authorised, which there is nothing to revoke
+    for. ``False`` when it is gone, belongs elsewhere, or has an account --
+    an install somebody connected is never removed behind their back.
+
+    By name when the id never reached the caller: ``create_own_app_install``
+    commits before it returns, so a create interrupted there leaves an install
+    its caller knows only by the name it asked for.
+    """
+    service = get_connector_service(uow)
+    repository = service.auth_config_repository
+    if auth_config_id is not None:
+        install = await repository.get(auth_config_id)
+    elif name is not None:
+        install = await repository.get_active_by_org_and_name(organization_id, name)
+    else:
+        return False
+    if install is None or install.organization_id != organization_id:
+        return False
+    if await service.account_repository.list_by_auth_config(install.id):
+        return False
+    return await repository.delete(install.id)
 
 
 async def start_authorization(
@@ -60,12 +111,15 @@ async def start_authorization(
     connector_id: str,
     auth_config_id: UUID,
     return_to: str | None = None,
+    purpose: str | None = None,
 ) -> str:
     """Begin authorising an account against this install; the consent page's URL.
 
     For a flow that starts somewhere other than Lemma's web app -- a button in
     Slack -- and so has no browser of ours to call the connect-request route.
-    The callback that ends it is the ordinary one.
+    The callback that ends it is the ordinary one. ``purpose`` is carried to
+    the ``ConnectorAccountConnected`` the grant emits, so a subscriber acts
+    only on the grants it started.
     """
     request = await get_connector_service(uow).initiate_connect_request(
         user_id=user_id,
@@ -73,29 +127,51 @@ async def start_authorization(
         connector_id=connector_id,
         auth_config_id=auth_config_id,
         return_to=return_to,
+        purpose=purpose,
     )
     return str(request.authorization_url or "")
 
 
-async def ensure_system_install(
-    uow, *, user_id: UUID, organization_id: UUID, connector_id: str
-) -> UUID:
-    """The organization's install of Lemma's own app for this connector, made if absent.
+async def grant_is_browser_bound(uow, *, account_id: UUID) -> bool:
+    """Whether this account's latest grant came back to the browser of the
+    person who started it.
 
-    What a connect started outside the web app authorises against: the web
-    app's own flow makes the same install on first use, from the browser.
+    The OAuth callback is completed by ``state`` alone, so a consent link
+    somebody was sent stores *their* grant on the sender's account. What a
+    grant says about the provider's user -- which Slack user installed an app
+    -- is proof only when this holds.
     """
     service = get_connector_service(uow)
-    held = await service.auth_config_repository.get_active_by_org_app_and_source(
-        organization_id, connector_id, AuthConfigSource.SYSTEM_DEFAULT.value
+    account = await service.account_repository.get(account_id)
+    if account is None or account.auth_config_id is None:
+        return False
+    grant = await service.connect_request_repository.latest_grant(
+        account_id=account_id,
+        user_id=account.user_id,
+        auth_config_id=account.auth_config_id,
     )
-    if held is not None:
-        return held.id
-    made = await service.create_auth_config(
-        user_id=user_id,
-        organization_id=organization_id,
-        connector_id=connector_id,
-        config_source=AuthConfigSource.SYSTEM_DEFAULT.value,
-        name=f"{connector_id} (Lemma)",
+    return grant is not None and was_browser_bound(grant)
+
+
+@dataclass(frozen=True, slots=True)
+class LemmaAppClient:
+    """Lemma's own OAuth app for a connector, as the deployment configured it."""
+
+    client_id: str
+    client_secret: SecretStr
+
+
+async def lemma_app_client(uow, connector_id: str) -> LemmaAppClient | None:
+    """The client id and secret of Lemma's own app for this connector, if the
+    deployment has one -- for a flow on that app the connect requests do not
+    cover, such as signing a person in with it."""
+    service = get_connector_service(uow)
+    connector = await service.get_connector(connector_id)
+    config = service.system_oauth_config.get_default_oauth_config(connector)
+    if config is None or not config.client_id or not config.client_secret:
+        return None
+    secret = config.client_secret
+    return LemmaAppClient(
+        client_id=config.client_id,
+        client_secret=secret if isinstance(secret, SecretStr) else SecretStr(secret),
     )
-    return made.id

@@ -3,13 +3,14 @@ from __future__ import annotations
 from typing import Any
 
 from rich import box
+from rich.markup import escape
 from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.rule import Rule
 from rich.text import Text
 
 from .io import emit
-from .sse import Reattach, StreamEvent, follow_run
+from .sse import TERMINAL_EVENTS, Reattach, StreamEvent, follow_run
 from .state import CliState, console, fail
 
 #: What a stream that carried no terminal event means. The run did not report
@@ -54,17 +55,17 @@ def emit_stream_events(
     *,
     owns_run: bool = True,
     reattach: Reattach | None = None,
-) -> None:
+) -> StreamEvent | None:
     error_text: str | None = None
-    saw_terminal = False
+    terminal: StreamEvent | None = None
     try:
         for event in follow_run(response, reattach):
             event_type = event.type.lower()
             if event_type == "error":
                 error_text = str(event.data)
-                saw_terminal = True
+                terminal = event
             elif event_type in {"completed", "stopped"}:
-                saw_terminal = True
+                terminal = event
             emit(
                 state,
                 {
@@ -87,8 +88,9 @@ def emit_stream_events(
     # the process exits -- a machine reading `--output json` has the same right
     # to the transcript as a person reading the rendered one.
     _exit_on_failed_run(
-        error_text=error_text, saw_terminal=saw_terminal, owns_run=owns_run
+        error_text=error_text, saw_terminal=terminal is not None, owns_run=owns_run
     )
+    return terminal
 
 
 def render_chat_stream(
@@ -99,16 +101,21 @@ def render_chat_stream(
     verbose: bool = False,
     owns_run: bool = True,
     reattach: Reattach | None = None,
-) -> None:
-    """Render a run's stream, ending at its terminal event (see `follow_run`)."""
+) -> StreamEvent | None:
+    """Render a run's stream, ending at its terminal event (see `follow_run`).
+
+    Returns that terminal event, so a caller can see what the run left the
+    conversation waiting on."""
     if state.output == "json":
-        emit_stream_events(state, response, owns_run=owns_run, reattach=reattach)
-        return
+        return emit_stream_events(state, response, owns_run=owns_run, reattach=reattach)
 
     renderer = ChatRenderer(agent=agent, verbose=verbose)
+    terminal: StreamEvent | None = None
     try:
         for event in follow_run(response, reattach):
             renderer.handle(event)
+            if event.type.lower() in TERMINAL_EVENTS:
+                terminal = event
     finally:
         response.close()
         renderer.finish()
@@ -117,6 +124,7 @@ def render_chat_stream(
         saw_terminal=renderer.seen_terminal,
         owns_run=owns_run,
     )
+    return terminal
 
 
 def _json_object_at(text: str, start: int) -> tuple[dict[str, Any] | None, int]:
@@ -217,7 +225,7 @@ class ChatRenderer:
             return
         if event_type == "error":
             self._end_answer_line()
-            console.print(f"[red]Error:[/red] {event.data}")
+            console.print(f"[red]Error:[/red] {escape(str(event.data))}")
             self.seen_terminal = True
             self.error_text = str(event.data)
             return
@@ -232,7 +240,7 @@ class ChatRenderer:
             self._end_answer_line()
             status = _status_text(event.data) or event_type
             style = "dim green" if event_type == "completed" else "dim yellow"
-            console.print(f"[{style}]{status}[/{style}]")
+            console.print(f"[{style}]{escape(str(status))}[/{style}]")
             return
         self._status(event.data)
 
@@ -378,7 +386,7 @@ class ChatRenderer:
         if not text:
             return
         self._end_answer_line()
-        console.print(f"[dim]{text}[/dim]")
+        console.print(f"[dim]{escape(text)}[/dim]")
 
     def _tool_call(self, message: dict[str, Any]) -> None:
         name = str(message.get("tool_name") or "tool")
@@ -389,19 +397,19 @@ class ChatRenderer:
         if not self.verbose:
             return
         self._end_answer_line()
-        console.print(f"[dim]> {name}[/dim]")
+        console.print(f"[dim]> {escape(name)}[/dim]")
 
     def _tool_return(self, message: dict[str, Any]) -> None:
         if not self.verbose:
             return
         self._end_answer_line()
         name = str(message.get("tool_name") or "tool")
-        console.print(f"[dim]< {name} returned[/dim]")
+        console.print(f"[dim]< {escape(name)} returned[/dim]")
 
     def _start_answer(self) -> None:
         if self.started_answer:
             return
-        console.print(f"\n[bold green]{self.agent}[/bold green]")
+        console.print(f"\n[bold green]{escape(str(self.agent))}[/bold green]")
         self.started_answer = True
         self.answer_line_open = True
 
@@ -442,7 +450,7 @@ def render_chat_header(
 def render_user_message(message: str) -> None:
     console.print()
     console.print("[bold cyan]You[/bold cyan]")
-    console.print(message)
+    console.print(message, markup=False)
 
 
 def read_chat_prompt() -> str:

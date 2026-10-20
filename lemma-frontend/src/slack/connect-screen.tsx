@@ -1,84 +1,85 @@
 "use client";
 
 import { useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import { Screen } from "@/auth/screens";
 import { source } from "@/data";
-import type { SlackManagedWorkspace } from "@/data";
+import type { SlackPersonLink } from "@/data";
 import { SessionGate, useSession } from "@/session/session";
 
-/** Where "Connect your Lemma account" in Slack lands.
+/** Where "Connect your Lemma account" in Slack lands, and where Sign in with
+ *  Slack comes back to.
  *
  *  Lemma's app in Slack manages teammates, and managing needs to know who is
- *  asking for certain -- a Slack profile email is editable by a workspace admin,
- *  so it never stands in for an account. The link carries a signature only that
- *  person's own App Home could have shown them; signing in here and opening it
- *  is the proof, once. */
-function readLink() {
+ *  asking for certain -- a Slack profile email is editable by a workspace
+ *  admin, so it never stands in for an account. The link only says which Slack
+ *  user it was shown to; the proof is signing in with Slack here, as that same
+ *  person, from this same Lemma session. A link somebody else sent you proves
+ *  nothing: you would sign in to Slack as yourself, and Lemma refuses. */
+function readPage(): { link: SlackPersonLink | null; connected: boolean; problem: string | null } {
     const query = new URLSearchParams(window.location.search);
-    const expires = Number(query.get("exp"));
     const teamId = query.get("team") ?? "";
     const slackUserId = query.get("user") ?? "";
-    const signature = query.get("sig") ?? "";
-    if (!teamId || !slackUserId || !signature || !Number.isFinite(expires)) return null;
-    return { teamId, slackUserId, expires, signature };
+    const error = query.get("error");
+    // Read once; a reload is not a second outcome.
+    if (query.has("connected") || error) window.history.replaceState(null, "", window.location.pathname);
+    return {
+        link: teamId && slackUserId ? { teamId, slackUserId } : null,
+        connected: query.get("connected") === "1",
+        problem: error ? REFUSALS[error] ?? REFUSALS.unavailable : null,
+    };
 }
 
-function backToSlack(teamId: string) {
-    return `https://app.slack.com/client/${encodeURIComponent(teamId)}`;
-}
+/** What each of the server's fixed refusal codes means, in words; nothing a
+ *  link carried is ever shown back. */
+const REFUSALS: Record<string, string> = {
+    expired: "That sign-in took too long or was already used. Open Lemma's Home tab in Slack and connect again.",
+    session_changed: "Finish signing in from the browser you started in, signed in to Lemma as yourself.",
+    other_slack_user: "You signed in to Slack as someone other than the person this link was for. Open Lemma's Home tab in Slack yourself, and connect from there.",
+    not_in_organization: "That Slack workspace belongs to a Lemma organization you're not in. Ask an owner to invite you, then connect again.",
+    not_installed: "Lemma isn't installed in that Slack workspace any more.",
+    cancelled: "Sign in with Slack was cancelled. Nothing was connected.",
+    unavailable: "Sign in with Slack didn't work just now. Try again shortly.",
+};
 
-function Linking() {
-    const [link] = useState(readLink);
+function Connecting() {
+    const [page] = useState(readPage);
     const { user } = useSession();
-    const preview = useQuery({
-        queryKey: ["slack-person-preview", link?.teamId, link?.slackUserId],
-        queryFn: () => {
-            if (!link) throw new Error("This link is missing a part. Open Lemma's Home tab in Slack and connect again.");
-            return source.previewSlackPerson(link);
-        },
-        retry: false,
-    });
-    const connect = useMutation({
+    const signIn = useMutation({
         mutationFn: () => {
-            if (!link) throw new Error("This link is missing a part.");
-            return source.linkSlackPerson(link);
+            if (!page.link) throw new Error("This link is missing a part. Open Lemma's Home tab in Slack and connect again.");
+            return source.startSlackSignIn(page.link);
         },
+        onSuccess: (url) => window.location.assign(url),
     });
 
-    if (preview.isError) {
-        return <Screen title="That didn't connect" lead={preview.error.message} looking={false} />;
-    }
-    if (preview.isPending) {
-        return <Screen title="Checking the link…" looking={false} />;
-    }
-    if (connect.isSuccess) {
-        const workspace: SlackManagedWorkspace = connect.data;
+    if (page.connected) {
         return (
             <Screen
                 title="You're connected"
-                lead={`Lemma knows it's you in ${workspace.teamName ?? "Slack"} now. Your teammates are on Lemma's Home tab there.`}
+                lead="Lemma knows it's you in Slack now. Your teammates are on Lemma's Home tab there."
                 looking={false}
             >
-                <a className="btn btn--primary" href={backToSlack(workspace.teamId)}>Back to Slack</a>
+                <a className="btn btn--primary" href="https://app.slack.com/client">Back to Slack</a>
             </Screen>
         );
     }
-    const who = preview.data.slackUserName ?? "this Slack account";
-    const where = preview.data.teamName ?? "Slack";
-    /* Asked, never assumed: a link somebody else sent would otherwise connect
-       their Slack account to yours, and Lemma would act on what they say. */
+    if (page.problem) {
+        return <Screen title="That didn't connect" lead={page.problem} looking={false} />;
+    }
+    if (!page.link) {
+        return <Screen title="That didn't connect" lead="This link is missing a part. Open Lemma's Home tab in Slack and connect again." looking={false} />;
+    }
     return (
         <Screen
-            title="Connect your Slack account?"
-            lead={`${who} in ${where} will be you${user?.email ? ` (${user.email})` : ""} to Lemma's teammates there. Connect only if that Slack account is yours.`}
+            title="Connect your Slack account"
+            lead={`Sign in with Slack to show Lemma that this Slack account is yours${user?.email ? ` (${user.email})` : ""}. Slack says who you are; nothing else is asked for.`}
             looking={false}
         >
-            {connect.isError && <p className="auth__problem" role="alert">{connect.error.message}</p>}
-            <button className="btn btn--primary" disabled={connect.isPending} onClick={() => connect.mutate()}>
-                {connect.isPending ? "Connecting…" : `Yes, I'm ${who}`}
+            {signIn.isError && <p className="auth__problem" role="alert">{signIn.error.message}</p>}
+            <button className="btn btn--primary" disabled={signIn.isPending || signIn.isSuccess} onClick={() => signIn.mutate()}>
+                {signIn.isPending || signIn.isSuccess ? "Opening Slack…" : "Sign in with Slack"}
             </button>
-            <a className="linkish" href="/">That isn&rsquo;t me</a>
         </Screen>
     );
 }
@@ -86,7 +87,7 @@ function Linking() {
 export function SlackConnectScreen() {
     return (
         <SessionGate>
-            <Linking />
+            <Connecting />
         </SessionGate>
     );
 }

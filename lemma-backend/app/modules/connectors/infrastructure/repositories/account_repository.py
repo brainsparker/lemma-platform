@@ -5,7 +5,6 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
-from app.core.domain.message_bus import MessageBus
 from app.core.infrastructure.db.repository import SqlAlchemyRepository
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.connectors.domain.events import ConnectorConnectedEvent
@@ -31,12 +30,9 @@ class AccountRepository(
         self,
         uow: SqlAlchemyUnitOfWork,
         encryption: SecretEncryptionPort,
-        message_bus: MessageBus | None = None,
     ):
         super().__init__(uow, Account, AccountEntity)
         self.encryption = encryption
-        if message_bus is not None:
-            self.uow.set_message_bus(message_bus)
 
     @staticmethod
     def _serialize_credentials(credentials: object | None) -> dict | None:
@@ -121,8 +117,6 @@ class AccountRepository(
                     connector_id=instance.connector_id,
                     organization_id=instance.organization_id,
                     user_id=instance.user_id,
-                    account_id=instance.id,
-                    auth_config_id=instance.auth_config_id,
                 )
             ]
         )

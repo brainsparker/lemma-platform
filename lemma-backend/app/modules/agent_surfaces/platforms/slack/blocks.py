@@ -51,7 +51,7 @@ def channel_setup_confirmation_blocks(
                 f"Done — **{agent_label}** now answers in {where}. "
                 # The bot says this, under whatever name the app has; "Lemma"
                 # was wrong for every app made from an agent's own manifest.
-                "Mention me here to ask it something."
+                "Mention me here and I'll reply."
             ),
         }
     ]

@@ -7,21 +7,25 @@ from uuid import uuid4
 
 import pytest
 
+from app.modules.agent_surfaces.domain.slack_manager import ManagerInputKind
 from app.modules.agent_surfaces.platforms.slack import manager_blocks as views
-from app.modules.agent_surfaces.platforms.slack.manager_parser import (
-    ManagerInputKind,
-    parse_manager_input,
+from app.modules.agent_surfaces.platforms.slack import (
+    manager_parser,
 )
-from app.modules.agent_surfaces.services.slack_manager import is_manager_delivery
-from app.modules.agent_surfaces.services.slack_manager_context import (
-    person_link_url,
-    teammate_name,
-    verify_person_link,
-)
+from app.modules.agent_surfaces.services.slack_manager_context import sign_in_url
+
+
+def parse_manager_input(payload: dict):
+    """The ids the manager reads; the typed form is checked on its own."""
+    return manager_parser.parse_manager_input(payload).input
+
 
 pytestmark = pytest.mark.asyncio
 
 LEMMA_APP = "A_LEMMA"
+POD = uuid4()
+AGENT = uuid4()
+SURFACE = uuid4()
 
 
 @pytest.fixture(autouse=True)
@@ -39,33 +43,6 @@ def _event(event: dict, *, app: str = LEMMA_APP) -> dict:
         "authorizations": [{"user_id": "U_MANAGER", "is_bot": True}],
         "event": event,
     }
-
-
-# -- whose delivery is it -----------------------------------------------------
-
-
-async def test_lemmas_app_with_no_teammate_receiving_is_the_manager():
-    assert is_manager_delivery(_event({"type": "app_home_opened"}), [])
-
-
-async def test_a_teammate_surface_receiving_is_not_the_manager():
-    """Where Lemma's app is still a pod's bot, that pod keeps it."""
-    assert not is_manager_delivery(_event({"type": "app_home_opened"}), [uuid4()])
-
-
-async def test_an_unverified_fan_in_is_never_the_manager():
-    assert not is_manager_delivery(_event({"type": "app_home_opened"}), None)
-
-
-async def test_a_teammates_own_app_is_not_the_manager():
-    assert not is_manager_delivery(
-        _event({"type": "app_home_opened"}, app="A_OTHER"), []
-    )
-
-
-async def test_a_button_tap_names_its_app_too():
-    payload = {"type": "block_actions", "api_app_id": LEMMA_APP, "team": {"id": "T1"}}
-    assert is_manager_delivery(payload, [])
 
 
 # -- what it receives ---------------------------------------------------------
@@ -152,12 +129,18 @@ async def test_add_to_slack_names_the_teammate_and_the_trigger():
         "team": {"id": "T1"},
         "user": {"id": "U1"},
         "trigger_id": "trig",
-        "actions": [{"action_id": views.ADD_ACTION_ID, "value": "pod-1"}],
+        "actions": [
+            {
+                "action_id": views.ADD_ACTION_ID,
+                "value": views.teammate_value(POD, AGENT),
+            }
+        ],
     }
     parsed = parse_manager_input(payload)
-    assert (parsed.kind, parsed.pod_id, parsed.trigger_id) == (
+    assert (parsed.kind, parsed.pod_id, parsed.agent_id, parsed.trigger_id) == (
         ManagerInputKind.ADD_CLICKED,
-        "pod-1",
+        POD,
+        AGENT,
         "trig",
     )
 
@@ -168,20 +151,22 @@ async def test_picking_a_teammate_carries_channel_and_surface():
         "team": {"id": "T1"},
         "user": {"id": "U1"},
         "response_url": "https://hooks.slack.test/r",
+        "container": {"type": "message", "channel_id": "C1"},
         "actions": [
             {
                 "action_id": f"{views.JOIN_ACTION_ID}:0",
-                "value": json.dumps({"channel": "C1", "surface": "s-1"}),
+                "value": json.dumps({"channel": "C1", "surface": str(SURFACE)}),
             }
         ],
     }
     parsed = parse_manager_input(payload)
     assert parsed.kind is ManagerInputKind.JOIN_CLICKED
-    assert (parsed.channel_id, parsed.surface_id, parsed.response_url) == (
-        "C1",
-        "s-1",
-        "https://hooks.slack.test/r",
-    )
+    assert (
+        parsed.channel_id,
+        parsed.container_channel_id,
+        parsed.surface_id,
+        parsed.response_url,
+    ) == ("C1", "C1", SURFACE, "https://hooks.slack.test/r")
 
 
 def _submission(values: dict) -> dict:
@@ -192,7 +177,7 @@ def _submission(values: dict) -> dict:
         "view": {
             "id": "V1",
             "callback_id": views.ADD_VIEW_CALLBACK_ID,
-            "private_metadata": json.dumps({"pod": "pod-1"}),
+            "private_metadata": json.dumps(views.modal_metadata(POD, AGENT)),
             "state": {
                 "values": {
                     block: {views.INPUT_ACTION_ID: {"value": value}}
@@ -204,7 +189,7 @@ def _submission(values: dict) -> dict:
 
 
 async def test_the_add_form_reads_whichever_way_was_chosen():
-    parsed = parse_manager_input(
+    read = manager_parser.parse_manager_input(
         _submission(
             {
                 views.CLIENT_ID_BLOCK_ID: "cid",
@@ -213,55 +198,56 @@ async def test_the_add_form_reads_whichever_way_was_chosen():
             }
         )
     )
-    assert parsed.kind is ManagerInputKind.ADD_SUBMITTED
-    assert (parsed.view_id, parsed.pod_id) == ("V1", "pod-1")
-    assert parsed.form.has_own_app and not parsed.form.refresh_token
+    assert read.input.kind is ManagerInputKind.ADD_SUBMITTED
+    assert (read.input.view_id, read.input.pod_id, read.input.agent_id) == (
+        "V1",
+        POD,
+        AGENT,
+    )
+    assert read.form is not None
+    assert read.form.has_own_app and not read.form.has_refresh_token
+
+
+async def test_what_was_typed_never_rides_on_the_input_that_is_queued():
+    """The ids are the work item; the secrets stay in the form, as SecretStr."""
+    read = manager_parser.parse_manager_input(
+        _submission(
+            {
+                views.TOKEN_BLOCK_ID: "xoxe-1-secret",
+                views.CLIENT_SECRET_BLOCK_ID: "csec-secret",
+            }
+        )
+    )
+    queued = read.input.model_dump_json()
+    assert "xoxe-1-secret" not in queued and "csec-secret" not in queued
+    assert read.form is not None
+    assert "xoxe-1-secret" not in repr(read.form)
+    assert read.form.refresh_token.get_secret_value() == "xoxe-1-secret"
 
 
 async def test_half_an_own_app_is_noticed():
-    parsed = parse_manager_input(_submission({views.CLIENT_ID_BLOCK_ID: "cid"}))
-    assert parsed.form.has_part_of_own_app and not parsed.form.has_own_app
-
-
-# -- proof of who someone is --------------------------------------------------
-
-
-def _link_parts(url: str) -> dict[str, str]:
-    from urllib.parse import parse_qs, urlsplit
-
-    return {key: values[0] for key, values in parse_qs(urlsplit(url).query).items()}
-
-
-async def test_a_person_link_verifies_for_its_own_slack_user_only():
-    parts = _link_parts(person_link_url("T1", "U1", now=1_000))
-    good = {
-        "team_id": "T1",
-        "slack_user_id": "U1",
-        "expires": int(parts["exp"]),
-        "signature": parts["sig"],
-    }
-    assert verify_person_link(**good, now=1_000)
-    assert not verify_person_link(**{**good, "slack_user_id": "U2"}, now=1_000)
-    assert not verify_person_link(**{**good, "team_id": "T2"}, now=1_000)
-
-
-async def test_a_person_link_expires():
-    parts = _link_parts(person_link_url("T1", "U1", now=1_000))
-    assert not verify_person_link(
-        team_id="T1",
-        slack_user_id="U1",
-        expires=int(parts["exp"]),
-        signature=parts["sig"],
-        now=1_000 + 60 * 60,
+    read = manager_parser.parse_manager_input(
+        _submission({views.CLIENT_ID_BLOCK_ID: "cid"})
     )
+    assert read.form is not None
+    assert read.form.has_part_of_own_app and not read.form.has_own_app
+
+
+async def test_its_own_leaving_is_read_and_dropped_not_passed_on():
+    parsed = parse_manager_input(_event({"type": "channel_left", "channel": "C1"}))
+    assert parsed.kind is ManagerInputKind.LEFT_CHANNEL
+
+
+# -- the link a Home shows ----------------------------------------------------
+
+
+async def test_the_home_link_names_whom_it_is_for_and_carries_no_proof():
+    """Sign in with Slack is the proof; the link only says which Slack user."""
+    url = sign_in_url("T1", "U1")
+    assert url.endswith("/slack/connect?team=T1&user=U1")
 
 
 # -- what it shows ------------------------------------------------------------
-
-
-async def test_teammate_names_read_as_the_web_app_shows_them():
-    assert teammate_name("support-desk") == "Support desk"
-    assert teammate_name("Ada") == "Ada"
 
 
 async def test_the_roster_offers_add_only_to_who_is_not_in_slack():
@@ -269,9 +255,10 @@ async def test_the_roster_offers_add_only_to_who_is_not_in_slack():
         team_name="Acme",
         teammates=[
             views.RosterEntry(
-                pod_id="p1", name="Ada", bot_user_id="UADA", open_url="https://x"
+                pod_id="p1", agent_id="p1", name="Ada", bot_user_id="UADA"
             ),
-            views.RosterEntry(pod_id="p2", name="Grace"),
+            views.RosterEntry(pod_id="p2", agent_id="a2", name="Grace"),
+            views.RosterEntry(pod_id="p2", agent_id="p2", name="Grace & <co>"),
         ],
         lemma_url="https://lemma.test",
     )
@@ -280,8 +267,10 @@ async def test_the_roster_offers_add_only_to_who_is_not_in_slack():
         for block in home["blocks"]
         if block.get("accessory", {}).get("action_id") == views.ADD_ACTION_ID
     ]
-    assert adds == ["p2"]
+    # One button per agent: a pod's two agents are two teammates.
+    assert adds == ["p2:a2", "p2:p2"]
     assert any("<@UADA>" in str(block) for block in home["blocks"])
+    assert "Grace &amp; &lt;co&gt;" in str(home["blocks"])
 
 
 async def test_the_channel_picker_names_each_teammate_on_its_button():
@@ -296,7 +285,7 @@ async def test_the_channel_picker_names_each_teammate_on_its_button():
 async def test_a_roster_that_leaves_teammates_off_says_how_many():
     home = views.roster_home(
         team_name="Acme",
-        teammates=[views.RosterEntry(pod_id="p1", name="Ada")],
+        teammates=[views.RosterEntry(pod_id="p1", agent_id="p1", name="Ada")],
         lemma_url="https://lemma.test",
         more=3,
     )

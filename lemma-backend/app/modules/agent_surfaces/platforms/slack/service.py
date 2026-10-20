@@ -216,7 +216,9 @@ class SlackPlatformService(SlackChannelReadsMixin, SlackFilesMixin):
         event: ParsedInboundSurfaceEvent,
         message: str,
         metadata: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> str | None:
+        """Post the message; the ``ts`` of its first part (None for an
+        ephemeral), which a reply in its thread names."""
         token = slack_access_token(self.credentials)
         channel = reply_target_as(event, SlackReplyTarget).channel
         if not token or not channel:
@@ -242,6 +244,7 @@ class SlackPlatformService(SlackChannelReadsMixin, SlackFilesMixin):
         # Empty for a normal channel post; `_post_message` decides on it.
         ephemeral_user = _ephemeral_target(metadata)
         index = 0
+        first: str | None = None
         try:
             for index, chunk in enumerate(chunks):
                 blocks = reply_blocks(
@@ -259,7 +262,8 @@ class SlackPlatformService(SlackChannelReadsMixin, SlackFilesMixin):
                     payload["thread_ts"] = thread_ts
                 payload.update(identity_kwargs)
                 payload["ephemeral_user"] = ephemeral_user
-                await self._post_message(client, payload)
+                ts = await self._post_message(client, payload)
+                first = first or ts
         except Exception:
             if index:
                 note_partial_delivery()
@@ -270,6 +274,7 @@ class SlackPlatformService(SlackChannelReadsMixin, SlackFilesMixin):
             raise
         if not ephemeral_user:
             await remove_processing_reaction(self.credentials, event)
+        return first
 
     async def acknowledge_interaction(
         self,

@@ -6,6 +6,7 @@ from uuid import UUID
 from sqlalchemy import event, text
 from sqlalchemy.pool import NullPool
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+from app.core.infrastructure.db.connect_errors import translate_connect_errors
 from app.core.config import settings
 from app.core.log.log import get_logger
 from app.core.observability.connection_scope import attach_connection_scope_monitor
@@ -161,9 +162,53 @@ def get_engine():
         # monitor works under NullPool too (checkout/checkin still fire), which
         # is what lets the ordinary test suite catch a held connection without
         # needing a real pool.
+        translate_connect_errors(engine)
         attach_connection_scope_monitor(engine)
         watch_compiled_cache("primary", engine)
     return engine
+
+
+def create_dedicated_engine(url: str, *, pool_size: int, logging_name: str):
+    """A pooled engine of its own on the main database, for a component whose
+    connections must not compete with the rest of the process.
+
+    The work runtime bounds every connection it takes and sizes this pool to
+    that bound, which is a guarantee only while nothing else draws from the
+    same pool. Same serializer, server-side timeouts and instrumentation as the
+    primary engine, and the same pooling rule: never overflowing, and unpooled
+    under test unless DB_POOL_IN_TESTING asks for a pool.
+    """
+    pooling: dict[str, object] = {
+        "pool_size": pool_size,
+        "max_overflow": 0,
+        "pool_timeout": settings.db_pool_timeout_seconds,
+        "pool_recycle": settings.db_pool_recycle_seconds,
+        "pool_use_lifo": True,
+    }
+    if settings.environment == "testing" and not settings.db_pool_in_testing:
+        # As the primary engine does under test: parallel e2e workers each run
+        # a worker process, and idle pooled connections from every one of them
+        # add up past the test server's connection limit. The runtime's own
+        # semaphores still bound how many it opens at once.
+        pooling = {"poolclass": NullPool}
+    dedicated = create_async_engine(
+        url,
+        json_serializer=lambda obj: json.dumps(obj, default=json_serial),
+        pool_pre_ping=True,
+        connect_args=_build_connect_args(),
+        pool_logging_name=logging_name,
+        # SQLAlchemy's default, stated: the work runtime's own statements are a
+        # fixed set, and handler queries are the same shapes the primary sees.
+        query_cache_size=500,
+        **pooling,
+    )
+    if "pool_size" in pooling:
+        pool = dedicated.sync_engine.pool
+        event.listen(pool, "checkout", _pool_utilization_listener(pool))
+    translate_connect_errors(dedicated)
+    attach_connection_scope_monitor(dedicated)
+    watch_compiled_cache(logging_name, dedicated)
+    return dedicated
 
 
 def get_session_maker():

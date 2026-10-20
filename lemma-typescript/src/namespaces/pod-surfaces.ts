@@ -6,7 +6,7 @@ import type { TelegramManagedBotSetupRequest } from "../openapi_client/models/Te
 import type { SlackAppCreateRequest } from "../openapi_client/models/SlackAppCreateRequest.js";
 import type { SlackConfigurationTokenRequest } from "../openapi_client/models/SlackConfigurationTokenRequest.js";
 import type { SlackManagerBindRequest } from "../openapi_client/models/SlackManagerBindRequest.js";
-import type { SlackPersonLinkRequest } from "../openapi_client/models/SlackPersonLinkRequest.js";
+import type { SlackSignInRequest } from "../openapi_client/models/SlackSignInRequest.js";
 import { AgentSurfacesService } from "../openapi_client/services/AgentSurfacesService.js";
 
 /**
@@ -146,7 +146,9 @@ export class PodSurfacesNamespace {
 
   /**
    * The Slack workspaces this pod's organization lets Lemma create apps in --
-   * one per saved app configuration token. Carries no token.
+   * one per saved app configuration token. Carries no token. `can_manage` says
+   * whether the caller may save tokens and create apps (an organization owner
+   * or editor); others are shown no workspace.
    */
   slackAppWorkspaces(podId: string) {
     return this.client.request(() =>
@@ -158,7 +160,7 @@ export class PodSurfacesNamespace {
    * Let Lemma create Slack apps in a workspace, from the refresh token of an
    * app configuration token (api.slack.com/apps → Your App Configuration
    * Tokens). Lemma rotates it at once, which proves it works and names the
-   * workspace. Needs the right to add the org's connector installs.
+   * workspace. Needs the right to manage the org's connector installs.
    */
   saveSlackConfigurationToken(podId: string, request: SlackConfigurationTokenRequest) {
     return this.client.request(() =>
@@ -166,7 +168,10 @@ export class PodSurfacesNamespace {
     );
   }
 
-  /** Stop Lemma creating apps in that workspace. Apps it made are untouched. */
+  /**
+   * Stop Lemma creating apps in that workspace. Apps it made are untouched,
+   * and the token stays valid at Slack until revoked there.
+   */
   forgetSlackConfigurationToken(podId: string, teamId: string) {
     return this.client.request(() =>
       AgentSurfacesService.agentSurfaceSlackAppCreationForget(podId, teamId),
@@ -174,13 +179,15 @@ export class PodSurfacesNamespace {
   }
 
   /**
-   * Create this pod's own Slack app and register its credentials as the org's
-   * own install. Authorise that install (`auth_config_id`) to finish: the one
-   * step only a person can take.
+   * Create an agent's own Slack app (the pod's own agent unless `agent_id` is
+   * given), named after it, and register its credentials as the org's own
+   * install. Authorise that install (`auth_config_id`) to finish. Asking again
+   * for the same agent and workspace answers with the same app until it is
+   * authorised, and so does the same `idempotencyKey` for a day.
    */
-  createSlackApp(podId: string, request: SlackAppCreateRequest) {
+  createSlackApp(podId: string, request: SlackAppCreateRequest, idempotencyKey?: string) {
     return this.client.request(() =>
-      AgentSurfacesService.agentSurfaceSlackAppCreate(podId, request),
+      AgentSurfacesService.agentSurfaceSlackAppCreate(podId, request, idempotencyKey),
     );
   }
 
@@ -198,7 +205,8 @@ export class PodSurfacesNamespace {
   /**
    * Make Lemma's own app the manager of the workspace an account authorised it
    * in. The workspace becomes the organization's, and the person who
-   * authorised it is known in Slack from then on.
+   * authorised it is known in Slack from then on. Only for a grant this
+   * browser finished signed in as the caller.
    */
   bindSlackManager(podId: string, request: SlackManagerBindRequest) {
     return this.client.request(() =>
@@ -207,22 +215,14 @@ export class PodSurfacesNamespace {
   }
 
   /**
-   * Prove the signed-in person is the Slack user whose App Home showed the
-   * "Connect your Lemma account" link these values came from.
+   * Start Sign in with Slack for the signed-in person, to prove they are the
+   * Slack user their App Home's "Connect your Lemma account" link was for.
+   * Returns Slack's sign-in page; the callback connects only when it sees this
+   * same Lemma session and Slack names that same Slack user and workspace.
    */
-  /**
-   * Whose Slack account a "Connect your Lemma account" link would connect,
-   * checked and named without connecting anything -- so the page can ask first.
-   */
-  previewSlackPerson(request: SlackPersonLinkRequest) {
+  startSlackSignIn(request: SlackSignInRequest) {
     return this.client.request(() =>
-      AgentSurfacesService.agentSurfaceSlackPersonPreview(request),
-    );
-  }
-
-  linkSlackPerson(request: SlackPersonLinkRequest) {
-    return this.client.request(() =>
-      AgentSurfacesService.agentSurfaceSlackPersonLink(request),
+      AgentSurfacesService.agentSurfaceSlackPersonSignIn(request),
     );
   }
 

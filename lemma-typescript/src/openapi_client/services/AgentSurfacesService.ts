@@ -8,6 +8,11 @@ import type { AvailableSurfaceChannelsResponse } from '../models/AvailableSurfac
 import type { AvailableSurfacesResponse } from '../models/AvailableSurfacesResponse.js';
 import type { NoticeRequest } from '../models/NoticeRequest.js';
 import type { NoticeResponse } from '../models/NoticeResponse.js';
+import type { SlackAppCreateRequest } from '../models/SlackAppCreateRequest.js';
+import type { SlackAppCreateResponse } from '../models/SlackAppCreateResponse.js';
+import type { SlackAppWorkspaceListResponse } from '../models/SlackAppWorkspaceListResponse.js';
+import type { SlackAppWorkspaceResponse } from '../models/SlackAppWorkspaceResponse.js';
+import type { SlackConfigurationTokenRequest } from '../models/SlackConfigurationTokenRequest.js';
 import type { SurfaceCreateRequest } from '../models/SurfaceCreateRequest.js';
 import type { SurfacePlatformSetupGuide } from '../models/SurfacePlatformSetupGuide.js';
 import type { SurfaceSendRequest } from '../models/SurfaceSendRequest.js';
@@ -85,6 +90,116 @@ export class AgentSurfacesService {
                 404: `Nobody in this pod is that member.`,
                 422: `Validation Error`,
                 429: `Too many notices this minute; see Retry-After.`,
+            },
+        });
+    }
+    /**
+     * List Slack App Workspaces
+     * The Slack workspaces this pod's organization lets Lemma create apps in.
+     * @param podId
+     * @returns SlackAppWorkspaceListResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentSurfaceSlackAppCreationList(
+        podId: string,
+    ): CancelablePromise<SlackAppWorkspaceListResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/surface-setup/slack/app-creation',
+            path: {
+                'pod_id': podId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Save Slack Configuration Token
+     * Let Lemma create Slack apps in the workspace this token is for.
+     * @param podId
+     * @param requestBody
+     * @returns SlackAppWorkspaceResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentSurfaceSlackAppCreationSave(
+        podId: string,
+        requestBody: SlackConfigurationTokenRequest,
+    ): CancelablePromise<SlackAppWorkspaceResponse> {
+        return __request(OpenAPI, {
+            method: 'PUT',
+            url: '/pods/{pod_id}/surface-setup/slack/app-creation',
+            path: {
+                'pod_id': podId,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Forget Slack Configuration Token
+     * Stop Lemma creating apps there. Apps it already made are not touched.
+     *
+     * Slack offers no way to revoke a configuration token, so it stays valid at
+     * Slack: revoke it on api.slack.com/apps as well.
+     * @param podId
+     * @param teamId
+     * @returns void
+     * @throws ApiError
+     */
+    public static agentSurfaceSlackAppCreationForget(
+        podId: string,
+        teamId: string,
+    ): CancelablePromise<void> {
+        return __request(OpenAPI, {
+            method: 'DELETE',
+            url: '/pods/{pod_id}/surface-setup/slack/app-creation/{team_id}',
+            path: {
+                'pod_id': podId,
+                'team_id': teamId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Create Slack App
+     * Create an agent's own Slack app, named after it. What is left is
+     * authorising it.
+     *
+     * One app per agent per workspace: until it is authorised, asking again
+     * answers with the same app, and so does the same `Idempotency-Key` from the
+     * same member for a day.
+     * @param podId
+     * @param requestBody
+     * @param idempotencyKey
+     * @returns SlackAppCreateResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentSurfaceSlackAppCreate(
+        podId: string,
+        requestBody: SlackAppCreateRequest,
+        idempotencyKey?: (string | null),
+    ): CancelablePromise<SlackAppCreateResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/pods/{pod_id}/surface-setup/slack/apps',
+            path: {
+                'pod_id': podId,
+            },
+            headers: {
+                'Idempotency-Key': idempotencyKey,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                409: `Not set up, the token needs replacing, or busy.`,
+                422: `Validation Error`,
+                429: `Slack is rate-limiting app creation.`,
             },
         });
     }

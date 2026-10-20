@@ -11,6 +11,7 @@ it is told so (``can_manage``) and shown no workspace.
 from __future__ import annotations
 
 from datetime import datetime
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header
@@ -23,19 +24,39 @@ from app.modules.agent_surfaces.api.surface_config_resolver import (
     require_surface_agent_action,
 )
 from app.modules.agent_surfaces.domain.errors import AgentSurfaceValidationError
-from app.modules.agent_surfaces.services.slack_app_provisioning import (
-    SlackAppCalls,
-    SlackAppProvisioner,
-    SlackAppWorkspace,
-)
 from app.modules.pod.contracts.agent_access import pod_organization_id
+
+if TYPE_CHECKING:
+    from app.modules.agent_surfaces.services.slack_app_provisioning import (
+        SlackAppProvisioner,
+        SlackAppWorkspace,
+    )
 
 router = APIRouter(prefix="/pods/{pod_id}/surface-setup/slack", tags=["Agent Surfaces"])
 
 
-def get_slack_app_calls() -> SlackAppCalls:
-    """Slack's side, as a dependency so a test can stand in for Slack."""
+def get_slack_app_calls() -> object:
+    """Slack's side, as a dependency so a test can stand in for Slack.
+
+    ``object`` and imported here rather than at module scope: serving the API
+    must not load what only these four routes use.
+    """
+    from app.modules.agent_surfaces.services.slack_app_provisioning import (
+        SlackAppCalls,
+    )
+
     return SlackAppCalls()
+
+
+def _provisioner(uow, calls: object = None) -> SlackAppProvisioner:
+    from app.modules.agent_surfaces.services.slack_app_provisioning import (
+        SlackAppCalls,
+        SlackAppProvisioner,
+    )
+
+    return SlackAppProvisioner(
+        uow, calls=calls if isinstance(calls, SlackAppCalls) else None
+    )
 
 
 class SlackAppWorkspaceResponse(BaseModel):
@@ -135,7 +156,7 @@ async def list_slack_app_workspaces(
     pod_id: UUID, user: CurrentUser, uow: UoWDep, ctx: PodContextDep
 ) -> SlackAppWorkspaceListResponse:
     """The Slack workspaces this pod's organization lets Lemma create apps in."""
-    listed = await SlackAppProvisioner(uow).workspaces(
+    listed = await _provisioner(uow).workspaces(
         organization_id=await _organization(uow, pod_id), user_id=user.id
     )
     return SlackAppWorkspaceListResponse(
@@ -155,10 +176,10 @@ async def save_slack_configuration_token(
     user: CurrentUser,
     uow: UoWDep,
     ctx: PodContextDep,
-    calls: SlackAppCalls = Depends(get_slack_app_calls),
+    calls: object = Depends(get_slack_app_calls),
 ) -> SlackAppWorkspaceResponse:
     """Let Lemma create Slack apps in the workspace this token is for."""
-    saved = await SlackAppProvisioner(uow, calls=calls).save_token(
+    saved = await _provisioner(uow, calls).save_token(
         organization_id=await _organization(uow, pod_id),
         user_id=user.id,
         refresh_token=request.refresh_token,
@@ -180,7 +201,7 @@ async def forget_slack_configuration_token(
     Slack offers no way to revoke a configuration token, so it stays valid at
     Slack: revoke it on api.slack.com/apps as well.
     """
-    await SlackAppProvisioner(uow).forget(
+    await _provisioner(uow).forget(
         organization_id=await _organization(uow, pod_id),
         user_id=user.id,
         team_id=team_id,
@@ -202,7 +223,7 @@ async def create_slack_app(
     user: CurrentUser,
     uow: UoWDep,
     ctx: PodContextDep,
-    calls: SlackAppCalls = Depends(get_slack_app_calls),
+    calls: object = Depends(get_slack_app_calls),
     idempotency_key: str | None = Header(
         default=None, alias="Idempotency-Key", min_length=1, max_length=255
     ),
@@ -219,7 +240,7 @@ async def create_slack_app(
     await require_surface_agent_action(
         ctx=ctx, pod_id=pod_id, agent_id=agent_id, action=Permissions.AGENT_UPDATE
     )
-    created = await SlackAppProvisioner(uow, calls=calls).create_app(
+    created = await _provisioner(uow, calls).create_app(
         organization_id=await _organization(uow, pod_id),
         pod_id=pod_id,
         agent_id=agent_id,

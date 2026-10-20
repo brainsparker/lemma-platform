@@ -2994,14 +2994,14 @@ export const fixtureSource: PodSource = {
     },
     async slackAppWorkspaces() {
         await wait(200);
-        return slackAppWorkspaces.slice();
+        return { canManage: true, workspaces: slackAppWorkspaces.slice() };
     },
     async saveSlackConfigurationToken(_podId: string, refreshToken: string) {
         await wait(500);
         if (!refreshToken.trim().startsWith("xoxe-")) {
             throw new Error("Slack did not accept that refresh token (invalid_refresh_token). Generate a new configuration token on api.slack.com/apps and paste its refresh token.");
         }
-        const saved = { teamId: "T0SAMPLE", teamName: "Sample workspace" };
+        const saved = { teamId: "T0SAMPLE", teamName: "Sample workspace", needsNewToken: false };
         slackAppWorkspaces = [saved];
         return saved;
     },

@@ -354,9 +354,7 @@ class ConnectorService:
         name: str | None = None,
         is_default: bool | None = None,
     ) -> AuthConfigEntity:
-        """Add an install. ``is_default`` left ``None`` makes an org's first
-        install of a connector its default; a caller making an install nobody
-        chose as the org's (a teammate's own app) passes ``False``."""
+        # `is_default=None`: the first install of a connector is the default.
         await self._require_org_member(
             user_id=user_id,
             organization_id=organization_id,

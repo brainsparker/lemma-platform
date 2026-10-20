@@ -4,8 +4,8 @@
 /* eslint-disable */
 export type SlackAppCreateRequest = {
     /**
-     * What the app and its bot are called: the teammate's name.
+     * The agent the app answers as; the pod's own agent when omitted. The app is named after it.
      */
-    app_name: string;
+    agent_id?: (string | null);
     team_id: string;
 };

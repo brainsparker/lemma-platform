@@ -58,6 +58,7 @@ import type {
     AccountConnect,
     AskablePod,
     SlackAppWorkspace,
+    SlackAppWorkspaces,
     LinkShare,
     PodLink,
     Conversation,
@@ -1084,18 +1085,25 @@ export const liveSource: PodSource = {
         return (await lemma().podSurfaces.slackManifest(agentName)) as Record<string, unknown>;
     },
 
-    async slackAppWorkspaces(podId: string): Promise<SlackAppWorkspace[]> {
+    async slackAppWorkspaces(podId: string): Promise<SlackAppWorkspaces> {
         const listed = await lemma().podSurfaces.slackAppWorkspaces(podId);
-        return (listed.items ?? []).map((item) => ({ teamId: item.team_id, teamName: item.team_name ?? null }));
+        return {
+            canManage: listed.can_manage,
+            workspaces: (listed.items ?? []).map((item) => ({
+                teamId: item.team_id,
+                teamName: item.team_name ?? null,
+                needsNewToken: Boolean(item.needs_new_token),
+            })),
+        };
     },
 
     async saveSlackConfigurationToken(podId: string, refreshToken: string): Promise<SlackAppWorkspace> {
         const saved = await lemma().podSurfaces.saveSlackConfigurationToken(podId, { refresh_token: refreshToken.trim() });
-        return { teamId: saved.team_id, teamName: saved.team_name ?? null };
+        return { teamId: saved.team_id, teamName: saved.team_name ?? null, needsNewToken: Boolean(saved.needs_new_token) };
     },
 
-    async createSlackApp(podId: string, teamId: string, appName: string): Promise<{ appId: string; authConfigId: string }> {
-        const made = await lemma().podSurfaces.createSlackApp(podId, { team_id: teamId, app_name: appName });
+    async createSlackApp(podId: string, teamId: string, idempotencyKey: string): Promise<{ appId: string; authConfigId: string }> {
+        const made = await lemma().podSurfaces.createSlackApp(podId, { team_id: teamId }, idempotencyKey);
         return { appId: made.app_id, authConfigId: String(made.auth_config_id) };
     },
 

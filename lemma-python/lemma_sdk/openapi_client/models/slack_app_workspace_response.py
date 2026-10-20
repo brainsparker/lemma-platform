@@ -20,11 +20,17 @@ class SlackAppWorkspaceResponse:
     Attributes:
         saved_at (datetime.datetime):
         team_id (str):
+        needs_new_token (bool | Unset): Slack no longer accepts the saved token, or Lemma can no longer read it: paste a
+            new one before Lemma can create apps here. Default: False.
+        slack_user_id (None | str | Unset): The Slack user whose configuration token this is. Slack creates every app as
+            them, and the token can change every app they collaborate on.
         team_name (None | str | Unset):
     """
 
     saved_at: datetime.datetime
     team_id: str
+    needs_new_token: bool | Unset = False
+    slack_user_id: None | str | Unset = UNSET
     team_name: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -32,6 +38,14 @@ class SlackAppWorkspaceResponse:
         saved_at = self.saved_at.isoformat()
 
         team_id = self.team_id
+
+        needs_new_token = self.needs_new_token
+
+        slack_user_id: None | str | Unset
+        if isinstance(self.slack_user_id, Unset):
+            slack_user_id = UNSET
+        else:
+            slack_user_id = self.slack_user_id
 
         team_name: None | str | Unset
         if isinstance(self.team_name, Unset):
@@ -47,6 +61,10 @@ class SlackAppWorkspaceResponse:
                 "team_id": team_id,
             }
         )
+        if needs_new_token is not UNSET:
+            field_dict["needs_new_token"] = needs_new_token
+        if slack_user_id is not UNSET:
+            field_dict["slack_user_id"] = slack_user_id
         if team_name is not UNSET:
             field_dict["team_name"] = team_name
 
@@ -58,6 +76,17 @@ class SlackAppWorkspaceResponse:
         saved_at = isoparse(d.pop("saved_at"))
 
         team_id = d.pop("team_id")
+
+        needs_new_token = d.pop("needs_new_token", UNSET)
+
+        def _parse_slack_user_id(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        slack_user_id = _parse_slack_user_id(d.pop("slack_user_id", UNSET))
 
         def _parse_team_name(data: object) -> None | str | Unset:
             if data is None:
@@ -71,6 +100,8 @@ class SlackAppWorkspaceResponse:
         slack_app_workspace_response = cls(
             saved_at=saved_at,
             team_id=team_id,
+            needs_new_token=needs_new_token,
+            slack_user_id=slack_user_id,
             team_name=team_name,
         )
 

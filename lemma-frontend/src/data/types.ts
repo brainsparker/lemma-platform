@@ -690,14 +690,17 @@ export interface PodSource {
     slackManifest(agentName: string): Promise<Record<string, unknown>>;
     /** Slack workspaces where Lemma may create a teammate's app itself, one
      *  per configuration token the organization saved. Empty until someone
-     *  saves one. */
-    slackAppWorkspaces(podId: string): Promise<SlackAppWorkspace[]>;
+     *  saves one, and always empty for someone who may not manage the
+     *  organization's connectors (`canManage` false). */
+    slackAppWorkspaces(podId: string): Promise<SlackAppWorkspaces>;
     /** Save the refresh token of a Slack app configuration token. Lemma
      *  rotates it at once, so a wrong paste fails here, not later. */
     saveSlackConfigurationToken(podId: string, refreshToken: string): Promise<SlackAppWorkspace>;
-    /** Create this teammate's own Slack app. Returns the install to authorise,
-     *  which is the one step left. */
-    createSlackApp(podId: string, teamId: string, appName: string): Promise<{ appId: string; authConfigId: string }>;
+    /** Create this teammate's own Slack app; the server names it. Returns the
+     *  install to authorise, which is the one step left. The same key, or the
+     *  same teammate and workspace before it is authorised, answers with the
+     *  same app rather than making another. */
+    createSlackApp(podId: string, teamId: string, idempotencyKey: string): Promise<{ appId: string; authConfigId: string }>;
     /** Register an app the organization made itself, so its credentials are
      *  what the authorisation runs against. Returns the auth config to
      *  authorise. */
@@ -812,4 +815,12 @@ export interface PodSource {
 export interface SlackAppWorkspace {
     teamId: string;
     teamName: string | null;
+    /** Slack refused the saved token, or Lemma can no longer read it. */
+    needsNewToken: boolean;
+}
+
+/** What the reader may do about Slack apps here, and where. */
+export interface SlackAppWorkspaces {
+    canManage: boolean;
+    workspaces: SlackAppWorkspace[];
 }

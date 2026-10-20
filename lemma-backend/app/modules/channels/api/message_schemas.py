@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 from app.modules.channels.api.schemas import (
     AgentNames,
+    ChannelResponse,
     Names,
     PersonRef,
     agent_ref,
@@ -43,7 +44,7 @@ JsonObject = dict[str, object]
 
 
 class LineDelivery(BaseModel):
-    """Where a line went outside Lemma, as its writer is shown on it."""
+    """Where a line went outside Lemma, as everybody who reads it is shown."""
 
     id: UUID = Field(description="The delivery; retry it by this id.")
     source_id: UUID | None = None
@@ -113,9 +114,9 @@ class ChannelMessageResponse(BaseModel):
     delivered: list[LineDelivery] | None = Field(
         default=None,
         description=(
-            "Only on the reader's own line: each place outside Lemma it went "
-            "to, and what became of it. Pushes to members are not listed here "
-            "(`…/deliveries` has every send)."
+            "Each place outside Lemma the line went to, and what became of it "
+            "-- on every line the reader may read. Pushes to members are not "
+            "listed here (`…/deliveries` has the writer's every send)."
         ),
     )
     created_at: datetime
@@ -239,6 +240,13 @@ class InboxTotals(BaseModel):
     channels: int = Field(description="Channels with something new.")
     mentions: int = Field(description="Unread lines naming the reader.")
     waiting: int = Field(description="Questions waiting on the reader's answer.")
+    contacts: int = Field(
+        default=0,
+        description=(
+            "Contacts waiting on a reply: asking for a person, or assigned to "
+            "the reader and written to last by the contact."
+        ),
+    )
 
 
 class InboxResponse(BaseModel):
@@ -250,6 +258,14 @@ class InboxResponse(BaseModel):
     mentions: list[InboxItem] = Field(
         default_factory=list,
         description="Unread lines naming the reader, newest first.",
+    )
+    contacts: list[ChannelResponse] = Field(
+        default_factory=list,
+        description=(
+            "Contacts waiting on a reply, most recently active first: those "
+            "asking for a person, and those assigned to the reader the contact "
+            "wrote to last. Only for a reader who may see contacts."
+        ),
     )
 
 
@@ -376,7 +392,8 @@ def message_response(
     deliveries: Sequence[Delivery] | None = None,
 ) -> ChannelMessageResponse:
     """One line as the member ``reader_id`` reads it. ``deliveries``: the
-    line's, when it was read with them -- shown to its writer only."""
+    line's, when it was read with them -- where it went outside Lemma is shown
+    to everybody who may read it; a push to a member is that member's."""
     names = names or {}
     behalf = message.sender.on_behalf_of
     hidden = hidden_from(message, channel, reader_id)
@@ -412,7 +429,7 @@ def message_response(
                 for delivery in deliveries
                 if delivery.source_id is not None
             ]
-            if deliveries is not None and wrote(message, reader_id)
+            if deliveries is not None and not hidden
             else None
         ),
         created_at=message.created_at,

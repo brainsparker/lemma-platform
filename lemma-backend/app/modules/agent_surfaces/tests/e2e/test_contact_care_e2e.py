@@ -85,6 +85,7 @@ from app.modules.contacts.infrastructure.models import (
 from app.modules.datastore.contracts import contact_rows
 from app.modules.channels.contracts import NewLine, Sender, contact_channel, post
 from app.modules.channels.infrastructure.models import ChannelCaseModel, ChannelModel
+from app.modules.channels.tests.e2e.push_support import pushed
 from app.modules.usage.contracts import UsageLimitExceededError
 from app.modules.usage.contracts.contacts_cap import contacts_cap_reached
 from app.modules.usage.contracts.metering import check_run_budget
@@ -679,6 +680,100 @@ async def test_a_member_who_writes_holds_the_contact_until_they_go_quiet(
         db_session, pod_id=test_pod["id"], user_id=fixed_test_user["id"]
     )
     assert any("the agent answers them again" in line.body for line in told)
+
+
+async def test_a_member_assigned_a_contact_is_told_when_they_write(
+    authenticated_client: AsyncClient,
+    async_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_org,
+    fixed_test_user,
+    fake_resend,
+    monkeypatch,
+):
+    """Handed a contact, an editor hears from them as soon as they write --
+    pushed, unread in their channel, and in their inbox as waiting on a
+    reply -- while the agent stays quiet; the contact is told once that a
+    person will reply. The editor writing back ends the wait."""
+    pod_id = test_pod["id"]
+    channel_id, write, runs = await _contact_writes_on(
+        authenticated_client,
+        db_session,
+        test_pod=test_pod,
+        fixed_test_user=fixed_test_user,
+        fake_resend=fake_resend,
+        monkeypatch=monkeypatch,
+    )
+    acknowledging = await authenticated_client.put(
+        f"/pods/{pod_id}",
+        json={"config": {"contacts": {"auto_acknowledge": "A person will reply."}}},
+    )
+    assert acknowledging.status_code == 200, acknowledging.text
+    editor = await _member(
+        authenticated_client,
+        async_client,
+        org_id=fixed_test_org["id"],
+        pod_id=pod_id,
+        role="POD_EDITOR",
+        prefix="assignee",
+    )
+    as_editor = auth_headers(editor)
+    channel = f"/pods/{pod_id}/channels/{channel_id}"
+    assigned = await authenticated_client.patch(
+        channel, json={"assignee": editor["id"]}
+    )
+    assert assigned.status_code == 200, assigned.text
+    before = await runs()
+
+    await write("step-2", "Is anybody looking at this?")
+
+    assert await runs() == before
+    seen = (await async_client.get(channel, headers=as_editor)).json()
+    assert seen["joined"] is True
+    assert seen["unread"]["lines"] >= 1
+    assert seen["attention"]["reason"] == (
+        "Waiting on a reply from the member answering them"
+    )
+    inbox = (await async_client.get(f"/pods/{pod_id}/inbox", headers=as_editor)).json()
+    assert inbox["totals"]["contacts"] == 1
+    assert [each["id"] for each in inbox["contacts"]] == [str(channel_id)]
+    timeline = (await async_client.get(f"{channel}/messages", headers=as_editor)).json()
+    [theirs] = [
+        line
+        for line in timeline["items"]
+        if line["text"] == "Is anybody looking at this?"
+    ]
+    assert editor["id"] in await pushed(theirs["id"])
+    said = [
+        line for line in timeline["items"] if line["text"] == "A person will reply."
+    ]
+    assert len(said) == 1
+
+    replied = await async_client.post(
+        f"{channel}/messages", json={"text": "Hi Dana, looking now."}, headers=as_editor
+    )
+    assert replied.status_code == 201, replied.text
+    await write("step-3", "Thanks!")
+
+    shown = (await async_client.get(channel, headers=as_editor)).json()
+    # Waiting on a reply again, but the editor is in the conversation: the
+    # contact is not told a person will reply on every line.
+    assert shown["attention"] is not None
+    timeline = (await async_client.get(f"{channel}/messages", headers=as_editor)).json()
+    assert [
+        line["text"]
+        for line in timeline["items"]
+        if line["text"] == "A person will reply."
+    ] == ["A person will reply."]
+    await async_client.post(
+        f"{channel}/messages", json={"text": "You're welcome."}, headers=as_editor
+    )
+    assert (await async_client.get(channel, headers=as_editor)).json()[
+        "attention"
+    ] is None
+    inbox = (await async_client.get(f"/pods/{pod_id}/inbox", headers=as_editor)).json()
+    assert inbox["totals"]["contacts"] == 0
 
 
 async def test_a_contacts_run_calls_a_person_in_and_the_keeper_is_told_where(

@@ -445,7 +445,10 @@ class DeliveryRepository:
         )
 
     async def retry(self, delivery_id: UUID) -> Delivery | None:
-        """A member asked to try a failed or given-up delivery again, now."""
+        """A member asked to try a failed or given-up delivery again, now: one
+        more try, counted with the others (its tries are its attempt rows), so
+        failing again on the last gives it up. Why it failed is cleared until
+        this try says."""
         row = await self.session.scalar(
             update(_D)
             .where(
@@ -455,7 +458,7 @@ class DeliveryRepository:
             .values(
                 status=DeliveryStatus.PENDING.value,
                 reason_code=None,
-                attempts=0,
+                reason=None,
                 claimed_at=None,
                 next_attempt_at=func.now(),
                 updated_at=func.now(),
@@ -562,6 +565,20 @@ class DeliveryRepository:
             await touch_line(self.session, next(iter(lines)))
         else:
             await touch_lines(self.session, lines)
+
+    async def to_places_of(self, message_ids: Sequence[UUID]) -> list[Delivery]:
+        """These lines' sends to places outside Lemma -- not pushes to members."""
+        if not message_ids:
+            return []
+        rows = await self.session.scalars(
+            select(_D)
+            .where(
+                _D.message_id.in_(list(message_ids)[:MAX_LINES]),
+                _D.source_id.is_not(None),
+            )
+            .order_by(_D.created_at)
+        )
+        return [delivery_entity(row) for row in rows]
 
     async def of_messages(self, message_ids: Sequence[UUID]) -> list[Delivery]:
         if not message_ids:

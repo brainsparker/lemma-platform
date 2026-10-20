@@ -17,7 +17,6 @@ from app.modules.channels.api.message_schemas import (
     message_agents,
     message_people,
     message_response,
-    wrote,
 )
 from app.modules.channels.api.schemas import (
     AgentNames,
@@ -201,17 +200,15 @@ async def lines_response(
     channel: Channel,
     lines: Sequence[ChannelMessage],
 ) -> list[ChannelMessageResponse]:
-    """Lines of one channel, as the caller reads them -- their own with where
-    each went outside Lemma."""
+    """Lines of one channel, as the caller reads them -- each with where it
+    went outside Lemma."""
     names, agents = await _named(
         uow,
         caller.pod_id,
         people=[person for line in lines for person in message_people(line)],
         agents=[agent for line in lines for agent in message_agents(line)],
     )
-    sent = await deliveries_of(
-        uow, [line.id for line in lines if wrote(line, caller.user_id)]
-    )
+    sent = await deliveries_of(uow, [line.id for line in lines])
     return [
         message_response(
             line,
@@ -228,9 +225,10 @@ async def lines_response(
 async def deliveries_of(
     uow: SqlAlchemyUnitOfWork, message_ids: Sequence[UUID]
 ) -> dict[UUID, list[Delivery]]:
-    """The sends of these lines, by line: one read for a page."""
+    """Where these lines went outside Lemma, by line: one read for a page.
+    Pushes to members are not among them."""
     by_line: dict[UUID, list[Delivery]] = {}
-    for delivery in await DeliveryRepository(uow.session).of_messages(message_ids):
+    for delivery in await DeliveryRepository(uow.session).to_places_of(message_ids):
         by_line.setdefault(delivery.message_id, []).append(delivery)
     return by_line
 

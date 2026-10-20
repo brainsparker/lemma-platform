@@ -374,23 +374,31 @@ async def retry_delivery(
     uow: UoWDep,
     caller: CallerDep,
 ) -> DeliveryResponse:
-    """Try a failed or given-up send again, now: for who wrote the line, or
-    may change the channel."""
-    channel = await _writable(uow, caller, channel_id)
+    """Try a failed or given-up send again, now. A send to a place: for who
+    wrote the line, or may change the channel -- anybody else who reads the
+    line is refused. A push to a member: theirs alone, as only they see it.
+    It is one more try: a send that fails again on its last is given up."""
+    channel = await visible(uow, caller, channel_id)
     line = await _line_in(uow, channel, message_id)
     deliveries = DeliveryRepository(uow.session)
     delivery = await deliveries.get(delivery_id)
     if delivery is None or delivery.message_id != line.id:
         raise missing("Delivery")
-    if delivery.recipient_user_id not in (None, caller.user_id):
-        raise missing("Delivery")
-    wrote_it = (
-        line.sender.kind is SenderKind.MEMBER and line.sender.user_id == caller.user_id
-    )
-    if not wrote_it and not await may_manage(uow, caller, channel):
-        raise forbidden(
-            "Only who wrote the line, or who may change the channel, can send it again"
+    if delivery.recipient_user_id is not None:
+        if delivery.recipient_user_id != caller.user_id:
+            raise missing("Delivery")
+    else:
+        if channel.kind is ChannelKind.CONTACT:
+            require_contact_message(caller)
+        wrote_it = (
+            line.sender.kind is SenderKind.MEMBER
+            and line.sender.user_id == caller.user_id
         )
+        if not wrote_it and not await may_manage(uow, caller, channel):
+            raise forbidden(
+                "Only who wrote the line, or who may change the channel, "
+                "can send it again"
+            )
     retried = await deliveries.retry(delivery.id)
     if retried is None:
         raise conflict("Only a send that failed can be tried again")

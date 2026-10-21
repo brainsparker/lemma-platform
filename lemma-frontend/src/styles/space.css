@@ -8043,3 +8043,70 @@ samp,
 .modelchoice__foot .linkish {
     font-size: 13px;
 }
+
+/* ── the conversation box: what you type on top, its tools under it ──── */
+/* One row held the model's name, the paperclip, the words, the voice and
+   the send button side by side, so a long model name pushed the words into
+   the middle of the box. Two rows instead, the way a chat box is laid out:
+   the words across the whole width, then the paperclip and the model on
+   the left and voice and send on the right. Markup unchanged; the floating
+   chat already worked this way. */
+.composer .composer__box {
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    padding: 12px 10px 8px 10px;
+}
+.composer .composer__input {
+    order: -1;
+    flex: 1 0 100%;
+    min-height: 26px;
+    padding: 2px 8px 8px;
+}
+.composer .composer__attach {
+    order: 1;
+    margin: 0;
+}
+.composer .modelpick {
+    order: 2;
+    margin: 0;
+}
+.composer .composer__wave {
+    order: 3;
+    margin: 0 0 0 auto;
+}
+.composer .composer__stop {
+    order: 4;
+}
+.composer .composer__send {
+    order: 5;
+    width: 36px;
+    height: 36px;
+}
+
+/* ── the ask box: the same two rows as a conversation's box ───────────── */
+/* Home starts the conversation the composer then carries, so it reads the
+   same: the words across the top, the paperclip and the model on the left,
+   send on the right. */
+.askbox {
+    padding: 12px 10px 8px 10px;
+}
+.askbox__row {
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+}
+.askbox textarea {
+    order: -1;
+    flex: 1 0 100%;
+    min-height: 26px;
+    margin: 0;
+    padding: 2px 8px 8px;
+}
+.askbox__attach,
+.askbox__row .modelpick {
+    margin: 0;
+}
+.askbox__send {
+    margin: 0 0 0 auto;
+}

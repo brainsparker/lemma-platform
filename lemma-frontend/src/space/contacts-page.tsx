@@ -21,6 +21,7 @@ import {
     type WidgetDraft,
 } from "@/data/contacts";
 import { channelApi } from "@/channels/api";
+import { ContactQueue } from "@/channels/contact-queue";
 import { isForbidden } from "@/session/auth-state";
 import { Modal } from "@/shell/modal";
 import { channelHref, goTo } from "@/shell/place-link";
@@ -67,6 +68,7 @@ export function ContactsPage({ pod }: { pod: Pod }) {
                 <h1>Contacts</h1>
                 <p>People outside {pod.name} who write to its bots or its website. They never sign in, and they see only what you let them.</p>
             </header>
+            <ContactQueue pod={pod} />
             <People pod={pod} onOpen={setOpen} />
             <Acknowledge pod={pod} />
             <Widgets pod={pod} />

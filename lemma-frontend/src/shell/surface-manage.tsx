@@ -234,7 +234,7 @@ function GroupsHere({ pod, surface, bot, onLeave }: { pod: Pod; surface: Surface
         <section className="smanage__groups" aria-label={heading}>
             <div className="smanage__groups-head">
                 <h4>{heading}</h4>
-                <PlaceLink href={allChannels} className="smanage__all" onGo={onLeave}>See all channels</PlaceLink>
+                <PlaceLink href={allChannels} className="smanage__all" onGo={onLeave}>See all shared chats</PlaceLink>
             </div>
             {groups.isPending && <p className="smanage__quiet" role="status">Reading the groups…</p>}
             {groups.isError && <p className="smanage__quiet" role="alert">Couldn’t read the groups. <button type="button" className="linkish" onClick={() => void groups.refetch()}>Try again</button></p>}

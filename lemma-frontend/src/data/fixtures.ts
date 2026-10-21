@@ -3134,7 +3134,7 @@ export const fixtureSource: PodSource = {
             { id: "c7", title: WHATSAPP_DM.title, at: "18 Jul", kind: "CHAT", meta: WHATSAPP_DM.metadata ?? {} },
             { id: "c8", title: "hey", at: "Fri 17 Jul", kind: "CHAT", meta: {} },
             { id: "c9", title: ASKS.title, at: "Thu 16 Jul", kind: "CHAT", meta: {} },
-        ].map(({ meta, ...row }) => ({ ...row, origin: originOf(meta, row.kind) }));
+        ].map(({ meta, ...row }, index) => ({ ...row, activityAt: new Date(Date.now() - (index * 9 + 1) * 3_600_000).toISOString(), origin: originOf(meta, row.kind) }));
         const needle = search?.toLowerCase();
         const found = needle ? all.filter((entry) => entry.title.toLowerCase().includes(needle)) : all;
         return cursor === "2" ? { items: found.slice(6), next: null } : { items: found.slice(0, 6), next: found.length > 6 ? "2" : null };

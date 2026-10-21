@@ -78,7 +78,7 @@ export interface ChannelApi {
     /** The reader has seen the channel up to line `seq`. */
     /** Read the timeline to `seq` -- or, with `threadRootId`, that thread. */
     markRead(channelId: string, seq: number, threadRootId?: string | null): Promise<void>;
-    create(body: { title: string; topic: string | null; members: string[]; visibility: Visibility }): Promise<ChannelDetail>;
+    create(body: { title: string; topic: string | null; members: string[]; visibility: Visibility; agents?: { id: string; answers: AgentAnswers }[] }): Promise<ChannelDetail>;
     update(channelId: string, change: ChannelChange): Promise<ChannelDetail>;
     /** Delete a group made in Lemma, and its timeline. */
     destroy(channelId: string): Promise<void>;

@@ -148,12 +148,11 @@ export function ConversationPane({
                 podId={pod.id}
                 orgId={pod.orgId}
                 conversationId={open}
-                locked={all.length > 0}
                 picked={pickedModel}
                 onPicked={setPickedModel}
             />
         )),
-        [bot?.pinnedRuntime, pod.id, pod.orgId, open, all.length, pickedModel],
+        [bot?.pinnedRuntime, pod.id, pod.orgId, open, pickedModel],
     );
 
     return (

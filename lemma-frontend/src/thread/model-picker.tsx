@@ -26,15 +26,14 @@ export function useSavingModel(): boolean {
  *
  *  The choice is the conversation's, not the teammate's: a long thread about
  *  one hard question can want the bigger model without moving every other
- *  conversation in the pod onto it. Once the conversation has been answered,
- *  the row is a label rather than a picker — the runs it started already ran
- *  on the model they ran on, and the control would only offer to change the
- *  history it cannot. */
+ *  conversation in the pod onto it. It stays a picker after the conversation
+ *  has answered: what was said already ran on the model it ran on, and a
+ *  change applies from the next message on -- each run copies the
+ *  conversation's choice when it starts. */
 export function ModelPicker({
     podId,
     orgId,
     conversationId,
-    locked,
     picked,
     onPicked,
 }: {
@@ -43,8 +42,6 @@ export function ModelPicker({
     /** Null while the conversation is still only a draft: the choice is then
      *  held by the pane and sent with the conversation it creates. */
     conversationId: string | null;
-    /** A message has been sent: show what it runs on, offer no change. */
-    locked: boolean;
     /** The choice made before the conversation existed. */
     picked: Choice | null;
     onPicked: (choice: Choice | null) => void;
@@ -93,21 +90,15 @@ export function ModelPicker({
         ? models.find((model) => model.name === chosen.model)?.label ?? chosen.model
         : "";
 
-    /* Answered: a label, not a control. Shown for a saved pin even when the
-       teammate's runtime no longer offers a choice, because that pin is still
-       what every later turn of this conversation copies. */
-    if (locked && (chosen || models.length >= 2)) {
-        return (
-            <span className="modelpick modelpick--set" title={chosen ? "This conversation runs on " + chosenLabel : defaultLabel}>
-                {chosen ? chosenLabel : defaultLabel}
-            </span>
-        );
+    /* Nothing to choose between: one model, or none at all. A saved pin is
+       still named, because it is what every later turn of this conversation
+       copies; otherwise the row would be a control that changes nothing, and
+       the missing-model case is already said, louder, by the run that fails. */
+    if (models.length < 2) {
+        return chosen ? (
+            <span className="modelpick modelpick--set" title={"This conversation runs on " + chosenLabel}>{chosenLabel}</span>
+        ) : null;
     }
-
-    /* Nothing to choose between: one model, or none at all. The row would be a
-       control that cannot change anything, and the missing-model case is
-       already said, louder, by the run that fails. */
-    if (locked || models.length < 2) return null;
 
     const choose = (model: string) => {
         const next = model ? { runtimeId: runtime?.id ?? "", model } : null;

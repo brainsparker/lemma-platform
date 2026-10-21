@@ -204,7 +204,7 @@ test("a thread opened to reply in puts the caret in its reply box; one opened fr
         await view.draw(createElement("p", null, "closed"));
         await view.draw(panel(1));
         const focused = view.dom.window.document.activeElement as HTMLTextAreaElement | null;
-        assert.equal(focused?.getAttribute("placeholder"), "Reply in the thread");
+        assert.equal(focused?.getAttribute("placeholder"), "Reply…");
     } finally {
         delete api.thread;
         await view.close();
@@ -510,7 +510,7 @@ test("an answer only its asker can see says so, and is shared with the channel a
         assert.match(view.body(), /Only you can see this — it used your access/);
         await act(async () => { buttons().find((button) => button.textContent === "Share with channel")!.click(); });
         assert.equal(shared.length, 0, "shared before it was confirmed");
-        assert.match(view.body(), /Everyone in this channel will read it/);
+        assert.match(view.body(), /Everyone in this chat will read it/);
         await act(async () => { buttons().find((button) => button.textContent === "Keep private")!.click(); });
         assert.equal(buttons().some((button) => button.textContent === "Share"), false);
 
@@ -561,7 +561,7 @@ test("who may change a channel removes somebody else's line, after asking; the l
         await view.draw(createElement("ol", null, createElement(LineView, { podId: "pod", channel: channel as never, line: line(7) as never })));
         assert.ok(!buttons().includes("Edit"), "nobody edits another's line");
         await press("Delete");
-        assert.match(view.body(), /Remove Priya’s line for everyone\?/);
+        assert.match(view.body(), /Remove Priya’s message for everyone\?/);
         assert.equal(removed.length, 0, "it asks first");
         await press("Delete");
         assert.deepEqual(removed, [["c1", "l7"]]);
@@ -578,7 +578,7 @@ test("who may change a channel removes somebody else's line, after asking; the l
         assert.match(view.body(), /Removed by you\./);
         const own = readLine({ id: "l8", seq: 8, sender: priya, deleted: true, created_at: "" })!;
         await view.draw(createElement("ol", null, createElement(LineView, { podId: "pod", channel: channel as never, line: own })));
-        assert.match(view.body(), /This line was deleted\./);
+        assert.match(view.body(), /This message was deleted\./);
     } finally {
         delete api.remove;
         await view.close();

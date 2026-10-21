@@ -140,3 +140,16 @@ export function useBotGroups(podId: string, surface: { id: string; name: string 
         queryFn: () => channelApi(podId).sources(surface.name),
     });
 }
+
+/** Whether any contact has a chat with the space yet: the Contacts place
+ *  shows itself once one has, to whoever may look after them. */
+export function useHasContacts(podId: string, enabled = true) {
+    const found = useQuery({
+        queryKey: ["channel", podId, "has-contacts"] as const,
+        enabled,
+        staleTime: 60_000,
+        queryFn: async () => (await channelApi(podId).list({ kind: "CONTACT", archived: false, limit: 1 })).items.length > 0,
+        retry: settled,
+    });
+    return found.data === true;
+}

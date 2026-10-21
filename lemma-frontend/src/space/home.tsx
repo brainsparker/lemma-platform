@@ -4,6 +4,8 @@ import { useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { source, type ConversationRef, type Pod } from "@/data";
 import { AskBox } from "@/chat/ask-box";
+import { ModelPicker } from "@/thread/model-picker";
+import type { Choice } from "@/data/runtimes";
 import { gather } from "@/workflow/waiting-inbox";
 import { byAge, CONVERSATION_ASKS, sayAsked, type AskedRow } from "@/thread/waiting-on-you";
 import { useConversationAsks } from "@/thread/use-conversation-asks";
@@ -44,11 +46,16 @@ export function Home({ pod, pods, onNewPage, onOpenRun, onOpenConversation, onAb
     onOpenConversation: (id: string) => void;
     /** The teammate's own page. */
     onAbout: () => void;
-    /** Start a conversation with these words and files, in the Chat tab. */
-    onAsk: (text: string, files: File[]) => void;
+    /** Start a conversation with these words and files, in the Chat tab --
+     *  on the model picked here, when one was. */
+    onAsk: (text: string, files: File[], model: Choice | null) => void;
 }) {
     const mate = pod.teammate?.name || pod.name;
     const [fill, setFill] = useState<{ text: string; id: number } | null>(null);
+    /* The model the next conversation starts on: held here until it exists,
+       then the conversation's own, and set back to the default for the one
+       after. */
+    const [model, setModel] = useState<Choice | null>(null);
     const asks = useRef(0);
 
     const cache = useQueryClient();
@@ -197,7 +204,13 @@ export function Home({ pod, pods, onNewPage, onOpenRun, onOpenConversation, onAb
             </div>
 
             <div className="home__chat" data-tour="ask">
-                <AskBox placeholder={"Ask " + mate + "…"} fill={fill} onFilled={() => setFill(null)} onAsk={onAsk} />
+                <AskBox
+                    placeholder={"Ask " + mate + "…"}
+                    fill={fill}
+                    onFilled={() => setFill(null)}
+                    onAsk={(text, files) => { onAsk(text, files, model); setModel(null); }}
+                    model={<ModelPicker podId={pod.id} orgId={pod.orgId} conversationId={null} picked={model} onPicked={setModel} />}
+                />
             </div>
         </div>
     );

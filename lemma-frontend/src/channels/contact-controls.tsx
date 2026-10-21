@@ -32,7 +32,7 @@ export function ContactControls({ pod, channel, compact = false }: { pod: Pod; c
     return (
         <div className={"ccontact" + (compact ? " ccontact--compact" : "")}>
             <label className="ccontact__field">
-                <span className={compact ? "sr-only" : "gside__label"}>Assigned to</span>
+                <span className={compact ? "ccontact__k" : "gside__label"}>Assigned to</span>
                 <select
                     value={assignee ?? ""}
                     disabled={change.isPending}
@@ -50,7 +50,7 @@ export function ContactControls({ pod, channel, compact = false }: { pod: Pod; c
                 </select>
             </label>
             <label className="ccontact__field">
-                <span className={compact ? "sr-only" : "gside__label"}>Status</span>
+                <span className={compact ? "ccontact__k" : "gside__label"}>Status</span>
                 <select value={status} disabled={change.isPending} onChange={(event) => change.mutate({ status: event.target.value as ContactStatus })}>
                     {(Object.keys(STATUS_LABELS) as ContactStatus[]).map((one) => <option key={one} value={one}>{STATUS_LABELS[one]}</option>)}
                 </select>

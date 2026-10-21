@@ -1,73 +1,179 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import { source, type Pod } from "@/data";
 import { isForbidden, isMissing } from "@/session/auth-state";
 import { useMe } from "@/session/use-me";
 import { ChannelIcon } from "@/shell/channels";
-import { InfoIcon } from "@/ui/icons";
+import { ChevronDownIcon, PeopleIcon } from "@/ui/icons";
+import { Avatar, ChatFaces } from "./avatar";
+import { AgentMark } from "@/space/agent-mark";
+import type { PersonRef } from "./waiting";
+import { ChannelMark } from "./chat-mark";
 import { channelAbilities } from "./abilities";
 import { AgentSwitch } from "./agent-switch";
-import { ChannelPanel } from "./channel-panel";
+import { channelApi } from "./api";
+import { ChatDetails, type DetailsTab } from "./chat-details";
 import { Composer } from "./composer";
 import { ContactControls } from "./contact-controls";
 import { onFocusAsked, takeFocus, type LineFocus } from "./focus";
 import { answeringNews, sayTyping, typingIn, upsertTimeline } from "./live";
 import { channelReaders, mentionables } from "./mentions";
-import { channelTitle, newestSeq, personName, platformsOf, whoAnswers, type ChannelDetail, type Line, type LinePage } from "./model";
-import { linesKey, refreshLists, useChannel, useLines } from "./queries";
+import { channelTitle, newestSeq, personName, sayList, sinceShort, type ChannelDetail, type Line, type LinePage, type Member } from "./model";
+import { answersHint, placeName, sharedWith } from "./chat-copy";
+import { keepChannel, linesKey, refreshLists, useChannel, useLines } from "./queries";
 import { readTarget, unseenThreadMention, usePageShown } from "./read-state";
-import { platformName } from "./sources";
 import { MentionablesContext } from "./mention-picker";
 import { ThreadPanel } from "./thread-panel";
 import { Timeline } from "./timeline";
 import { useAbilities } from "./use-abilities";
 import { useChannelLive } from "./use-channel-live";
+import { useOnline } from "./use-presence";
+import { STATUS_LABELS } from "./views";
 import { useInbox } from "./waiting-panel";
 
-/** One channel, in one place: everything said there, oldest at the top, the
- *  box to say something, and -- beside it -- either a thread or what is true
- *  about the channel. Kept live by the pod's socket while it is on screen,
- *  and marked read as far as the newest line the reader has seen. */
-export function ChannelPage({ pod, channelId, visible, onNamed, onOpenChannels }: {
+/** One chat that lives on a channel -- the reader's default chat, a chat
+ *  shared in Lemma, a group mirrored from a platform, or a contact's -- full
+ *  width, like any chat: everything said in it, oldest at the top, the box
+ *  to say something, and beside it a thread or the chat's details. Kept live
+ *  by the pod's socket while on screen, and marked read as far as the newest
+ *  message the reader has seen. */
+export function ChannelPage({ pod, channelId, visible, onNamed, onLeft }: {
     pod: Pod;
     channelId: string;
     visible: boolean;
-    /** The page knows the channel's name before the tab does. */
+    /** The page knows the chat's name before the tab does. */
     onNamed: (title: string) => void;
-    onOpenChannels: () => void;
+    /** The reader left the chat, or deleted it. */
+    onLeft: () => void;
 }) {
     const detail = useChannel(pod.id, channelId, visible);
     const channel = detail.data ?? null;
     const title = channel ? channelTitle(channel, pod.name) : null;
     useEffect(() => { if (title) onNamed(title); }, [title, onNamed]);
 
-    if (detail.isPending) return <div className="cpage"><p className="cpage__quiet" role="status">Loading the channel…</p></div>;
+    if (detail.isPending) return <div className="cpage"><p className="cpage__quiet" role="status">Loading…</p></div>;
     /* A read that fails after one worked keeps the page it had. */
     if (!channel) {
         const gone = isMissing(detail.error);
         return (
             <div className="cpage">
                 <div className="cpage__gone" role="alert">
-                    <p>{gone ? "This channel is not here any more, or you are not in it." : isForbidden(detail.error) ? "You may not open this channel." : "Couldn’t load this channel."}</p>
+                    <p>{gone ? "This chat is not here any more, or you are not in it." : isForbidden(detail.error) ? "You may not open this chat." : "Couldn’t load this chat."}</p>
                     <div className="cpage__gone-acts">
                         {!gone && !isForbidden(detail.error) && <button type="button" className="ghost-pill" onClick={() => void detail.refetch()}>Try again</button>}
-                        <button type="button" className="ghost-pill" onClick={onOpenChannels}>All channels</button>
                     </div>
                 </div>
             </div>
         );
     }
-    return <ChannelView key={channel.id} pod={pod} channel={channel} title={title ?? ""} visible={visible} onOpenChannels={onOpenChannels} />;
+    return <ChannelView key={channel.id} pod={pod} channel={channel} title={title ?? ""} visible={visible} onLeft={onLeft} />;
 }
 
-function ChannelView({ pod, channel, title, visible, onOpenChannels }: {
+/** The people and agents in a channel as a row of faces: a few of them,
+ *  and how many there are. One click opens the full list. */
+function Faces({ members, me, online, open, onOpen }: { members: Member[]; me: string | null; online: ReadonlySet<string>; open: boolean; onOpen: () => void }) {
+    const people = members.filter((one) => one.person.kind !== "AGENT");
+    const agents = members.filter((one) => one.person.kind === "AGENT");
+    const shown = [...people.slice(0, 3), ...agents.slice(0, 1)];
+    const count = members.length;
+    const said = count === 1 ? "1 in it" : count + " in it";
+    return (
+        <button type="button" className="cpage__faces" aria-label={"Who is in it: " + said} title={said} aria-expanded={open} onClick={onOpen}>
+            <span className="cpage__face-stack">
+                {shown.map((one) => {
+                    const name = personName(one.person, me);
+                    const here = one.person.kind === "MEMBER" && one.person.id ? online.has(one.person.id) : false;
+                    return (
+                        <span key={one.person.kind + (one.person.id ?? name)} className="cpage__face" data-online={here || undefined} title={name}>
+                            <Avatar person={one.person} size={24} />
+                        </span>
+                    );
+                })}
+            </span>
+            <span className="cpage__faces-count">{count}</span>
+        </button>
+    );
+}
+
+/** The top of a chat's history: what it is, who answers in it and how to
+ *  ask -- the one place that says so, the way a chat app opens a channel
+ *  with where it began. */
+function ChatIntro({ pod, channel, title, me, onPeople }: { pod: Pod; channel: ChannelDetail; title: string; me: string | null; onPeople?: () => void }) {
+    const teammate = pod.teammate?.name || pod.name;
+    const places = channel.places.filter((place) => !place.pending);
+    let said: string;
+    if (channel.kind === "DIRECT") {
+        said = "Your private line with " + teammate + ". " + answersHint(channel, teammate) + " Nobody else reads it.";
+    } else if (channel.kind === "CONTACT") {
+        said = (channel.person?.name ?? "They") + " is outside " + pod.name + ". What they send comes in here, and your replies go back the same way.";
+    } else if (places.length) {
+        said = "This chat mirrors " + sayList(places.map(placeName)) + ". Messages there show up here, and what you send here goes back. " + answersHint(channel, teammate);
+    } else {
+        const who = sharedWith(channel.members, me);
+        said = who === "Just you"
+            ? "Just you so far. Add people to talk here together; anyone in it can type @ to ask " + teammate + "."
+            : who + ", since " + new Date(channel.createdAt).toLocaleDateString([], { day: "numeric", month: "long" }) + ". " + answersHint(channel, teammate);
+    }
+    return (
+        <div className="cintro" aria-label={"About " + title}>
+            <p className="cintro__said">{said}</p>
+            {onPeople && channel.kind === "GROUP" && (
+                <div className="cintro__acts">
+                    <button type="button" className="ghost-pill" onClick={onPeople}><PeopleIcon size={15} aria-hidden="true" /> Add people</button>
+                </div>
+            )}
+        </div>
+    );
+}
+
+/** A contact's channel, where it stands: open, waiting on them, closed, or
+ *  asking for a person -- and the ways to move it: take it, assign it, set
+ *  its status, switch its agent. */
+function ContactStrip({ pod, channel, may }: { pod: Pod; channel: ChannelDetail; may: { contactOps: boolean; write: boolean } }) {
+    const me = useMe();
+    const cache = useQueryClient();
+    const take = useMutation({
+        mutationFn: () => channelApi(pod.id).update(channel.id, { assignee: "me" }),
+        onSuccess: (saved) => keepChannel(cache, pod.id, saved),
+    });
+    const asks = channel.attention && !channel.assignee;
+    const teammate = pod.teammate?.name || pod.name;
+    const state = asks
+        ? "Needs a person" + (channel.attention?.reason ? ": " + channel.attention.reason : "") + " · " + sinceShort(channel.attention?.since)
+        : channel.assignee
+            ? (channel.assignee.id === me ? "You are answering." : (channel.assignee.name ?? "A member") + " is answering.")
+                + (channel.agentsAnswer ? " " + teammate + " takes over again after " + channel.handBackAfterHours + " quiet hours." : "")
+            : !channel.agentsAnswer
+                ? teammate + " is off here. Only people answer."
+                : channel.status === "waiting_on_contact" ? "Waiting on their reply. " + teammate + " answers when they write."
+                    : channel.status === "closed" ? "Closed." : teammate + " answers them.";
+    return (
+        <div className="cpage__strip" data-asks={asks || undefined}>
+            <span className="cpage__strip-state">{state}</span>
+            {may.contactOps && (
+                <span className="cpage__strip-acts">
+                    {!channel.assignee && channel.status !== "closed" && (
+                        <button type="button" className="pill-button cpage__take" disabled={take.isPending} onClick={() => take.mutate()}>{take.isPending ? "Taking…" : "I’ll answer"}</button>
+                    )}
+                    <ContactControls pod={pod} channel={channel} compact />
+                    <AgentSwitch podId={pod.id} channel={channel} />
+                </span>
+            )}
+            {!may.contactOps && channel.status && <span className="cpage__chip">{STATUS_LABELS[channel.status]}</span>}
+            {take.isError && <span className="gside__problem" role="alert">Couldn’t take it.</span>}
+        </div>
+    );
+}
+
+function ChannelView({ pod, channel, title, visible, onLeft }: {
     pod: Pod;
     channel: ChannelDetail;
     title: string;
     visible: boolean;
-    onOpenChannels: () => void;
+    /** The reader left the channel, or deleted it. */
+    onLeft: () => void;
 }) {
     const me = useMe();
     const cache = useQueryClient();
@@ -75,7 +181,9 @@ function ChannelView({ pod, channel, title, visible, onOpenChannels }: {
     const live = useChannelLive(pod.id, channel, visible, me);
     const may = channelAbilities(useAbilities(pod.id), channel, pod.name);
     const agents = useQuery({ queryKey: ["agents", pod.id], queryFn: () => source.listAgents(pod.id), staleTime: 5 * 60_000 });
-    const [side, setSide] = useState<"about" | "thread" | null>(null);
+    const online = useOnline(pod.id, visible);
+    const [side, setSide] = useState<"thread" | null>(null);
+    const [details, setDetails] = useState<DetailsTab | null>(null);
     const [threadRoot, setThreadRoot] = useState<string | null>(null);
     /* Asked each time the reader opens a thread to reply in it: their next
        words go there, not into the channel's box. */
@@ -87,6 +195,10 @@ function ChannelView({ pod, channel, title, visible, onOpenChannels }: {
     const [unreadFrom] = useState(channel.me.readSeq);
     const shown = usePageShown();
     const inbox = useInbox(pod.id, visible);
+
+    /* The header's buttons open the details at their section; the same
+       button again closes them. */
+    const showSide = (at: DetailsTab) => setDetails(at);
 
     /* Opened at one line, now or while already open. */
     useEffect(() => {
@@ -159,16 +271,18 @@ function ChannelView({ pod, channel, title, visible, onOpenChannels }: {
         return member?.person.name ?? agents.data?.find((agent) => agent.id === agentId)?.label ?? pod.teammate?.name ?? "An agent";
     }, [channel.members, agents.data, pod.teammate]);
     const root = threadRoot ? timeline.lines.find((line) => line.id === threadRoot) ?? null : null;
-    const platforms = platformsOf(channel);
     const posted = (line: Line) => {
         cache.setQueryData<InfiniteData<LinePage>>(linesKey(pod.id, channel.id), (was) => was ? { ...was, pages: upsertTimeline(was.pages, line).pages } : was);
         setPin((count) => count + 1);
         setHighlight(null);
         refreshLists(cache, pod.id);
     };
-    const placeholder = channel.kind === "DIRECT" ? "Write to " + pod.name
-        : channel.kind === "CONTACT" ? "Write to " + (channel.person?.name ?? "them")
-        : "Write in " + title;
+    const teammate = pod.teammate?.name || pod.name;
+    /* Not the chat's name again -- the header says it -- but what the box
+       does: in a shared chat, how to ask the teammate. */
+    const placeholder = channel.kind === "DIRECT" ? "Message " + teammate
+        : channel.kind === "CONTACT" ? "Write a reply"
+        : "Message everyone, or type @ to ask " + teammate;
     const typingNames = typingIn(live.typing, null).map((one) => personName(one.who, me));
     const threadTyping = root ? typingIn(live.typing, root.id).map((one) => personName(one.who, me)) : [];
 
@@ -183,50 +297,47 @@ function ChannelView({ pod, channel, title, visible, onOpenChannels }: {
         if (started.length) setSaid(started.map((one) => agentName(one.agentId)).join(", ") + (started.length === 1 ? " is answering" : " are answering"));
     }, [live.answering, agentName]);
 
+    const detailsOpen = details !== null;
+    /* The teammate is in every shared chat, seated or not: its face is in
+       the header's stack whichever. */
+    const frontAgent = agents.data?.find((agent) => agent.front && agent.id) ?? null;
+    const facesOf: Member[] = channel.kind === "GROUP" && frontAgent && !channel.members.some((one) => one.person.kind === "AGENT" && one.person.id === frontAgent.id)
+        ? [...channel.members, { person: { kind: "AGENT", id: frontAgent.id, name: frontAgent.label }, role: "member", answers: "MENTIONED" }]
+        : channel.members;
+    const panelAt = details;
+    const faces = useMemo(() => ({
+        agentFace: (person: PersonRef, size: number) => {
+            const agent = agents.data?.find((one) => one.id === person.id);
+            return <AgentMark pod={pod} agent={agent ?? { name: person.id ?? "agent", label: person.name ?? "Agent", front: !person.id }} size={size} />;
+        },
+    }), [pod, agents.data]);
     return (
         /* Who the box a line is changed in can name: as the composer's. */
         <MentionablesContext.Provider value={people}>
+        <ChatFaces.Provider value={faces}>
         <div className="cpage" data-side={side ?? undefined}>
             <div className="cpage__main">
                 <header className="cpage__head">
-                    <div className="cpage__who">
+                    <button type="button" className="cpage__name" aria-expanded={detailsOpen && panelAt === "about"} title="About this chat" onClick={() => showSide("about")}>
+                        <span className="cpage__glyph" aria-hidden="true"><ChannelMark channel={channel} size={17} /></span>
                         <h1>{title}</h1>
-                        <p>
-                            {channel.kind === "GROUP" && channel.visibility === "PRIVATE" && <span className="chrow__chip">Private</span>}
-                            {platforms.length > 0 && (
-                                <span className="cpage__places">
-                                    {platforms.map((platform) => (
-                                        <span key={platform} className="chrow__chip"><ChannelIcon platform={platform} size={13} /> {platformName(platform)}</span>
-                                    ))}
-                                </span>
-                            )}
-                            <span>{channel.topic ?? whoAnswers(channel, pod.name, me)}</span>
-                        </p>
-                    </div>
-                    {channel.kind === "CONTACT" && may.contactOps && (
-                        <div className="cpage__contact">
-                            <ContactControls pod={pod} channel={channel} compact />
-                            <AgentSwitch podId={pod.id} channel={channel} />
-                        </div>
-                    )}
-                    <button
-                        type="button"
-                        className="icon-button"
-                        aria-label="About this channel"
-                        title="About this channel"
-                        aria-expanded={side === "about"}
-                        onClick={() => setSide((was) => (was === "about" ? null : "about"))}
-                    >
-                        <InfoIcon size={19} />
+                        <ChevronDownIcon size={14} aria-hidden="true" />
                     </button>
+                    {channel.places.length > 0 && channel.kind !== "DIRECT" && (
+                        <span className="cpage__places">
+                            {channel.places.map((place) => (
+                                <button key={place.id} type="button" className="cpage__chip" title={placeName(place) + (place.pending ? ", being created" : "")} aria-expanded={detailsOpen && panelAt === "connected"} onClick={() => showSide("connected")}>
+                                    <ChannelIcon platform={place.platform} size={13} /> {place.title ?? placeName(place)}
+                                </button>
+                            ))}
+                        </span>
+                    )}
+                    {channel.topic && <span className="cpage__topic" title={channel.topic}>{channel.topic}</span>}
+                    <span className="cpage__spacer" />
+                    {channel.kind !== "DIRECT" && <Faces members={facesOf} me={me} online={online} open={detailsOpen && panelAt === "members"} onOpen={() => showSide("members")} />}
                 </header>
-                {channel.archived && <p className="cpage__note" role="status">This channel is archived. Bring it back from About to write in it and list it again.</p>}
-                {channel.kind === "CONTACT" && channel.attention && !channel.assignee && (
-                    <p className="cpage__note cpage__note--ask" role="status">
-                        {channel.person?.name ?? "This contact"} is waiting on a person{channel.attention.reason ? ": " + channel.attention.reason : "."}{" "}
-                        {may.write ? "Write below to answer them." : ""}
-                    </p>
-                )}
+                {channel.kind === "CONTACT" && <ContactStrip pod={pod} channel={channel} may={may} />}
+                {channel.archived && <p className="cpage__note" role="status">This chat is archived. Bring it back from Settings to write in it again.</p>}
                 <Timeline
                     podId={pod.id}
                     channel={channel}
@@ -248,6 +359,7 @@ function ChannelView({ pod, channel, title, visible, onOpenChannels }: {
                     onProgress={onProgress}
                     unreadFrom={unreadFrom}
                     me={me}
+                    intro={<ChatIntro pod={pod} channel={channel} title={title} me={me} onPeople={may.manage ? () => showSide("members") : undefined} />}
                 />
                 <p className="cpage__typing" aria-hidden={typingNames.length === 0}>{sayTyping(typingNames)}</p>
                 <Composer
@@ -255,7 +367,7 @@ function ChannelView({ pod, channel, title, visible, onOpenChannels }: {
                     channel={channel}
                     people={people}
                     placeholder={placeholder}
-                    disabledReason={channel.archived ? "This channel is archived. Bring it back to write in it." : may.writeRefused}
+                    disabledReason={channel.archived ? "This chat is archived. Bring it back to write in it." : may.writeRefused}
                     onPosted={posted}
                     onTyping={() => live.typed(null)}
                 />
@@ -279,8 +391,9 @@ function ChannelView({ pod, channel, title, visible, onOpenChannels }: {
                     onClose={() => { setSide(null); setThreadRoot(null); }}
                 />
             )}
-            {side === "about" && <ChannelPanel pod={pod} channel={channel} may={may} onClose={() => setSide(null)} onLeft={onOpenChannels} />}
+            {details && <ChatDetails pod={pod} channel={channel} may={may} at={details} onAt={setDetails} onClose={() => setDetails(null)} onLeft={onLeft} />}
         </div>
+        </ChatFaces.Provider>
         </MentionablesContext.Provider>
     );
 }

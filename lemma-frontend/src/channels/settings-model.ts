@@ -40,6 +40,6 @@ export function mutedSaid(until: string | null, now = new Date()): string | null
 /** What making a private group public means, asked before it is done: the
  *  whole pod can read it from then on, what was said before included. */
 export function publicWarning(title: string | null, space: string): string {
-    return "Everyone in " + space + " will be able to find " + (title ?? "this channel")
+    return "Everyone in " + space + " will be able to find " + (title ?? "this chat")
         + " and read everything said in it, including what was said before it was public. Make it public?";
 }

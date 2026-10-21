@@ -162,14 +162,14 @@ export function bellCount(inbox: Pick<Inbox, "waiting" | "mentions"> | null, dir
     const parts: string[] = [];
     if (waiting) parts.push(waiting === 1 ? "1 question waiting on you" : waiting + " questions waiting on you");
     if (mentions) parts.push(mentions === 1 ? "1 mention of you" : mentions + " mentions of you");
-    if (directLines) parts.push(directLines === 1 ? "1 new line in your channel" : directLines + " new lines in your channel");
+    if (directLines) parts.push(directLines === 1 ? "1 new message for you" : directLines + " new messages for you");
     return { badge: badgeCount(waiting + mentions + directLines), said: parts.length ? parts.join(", ") : "Nothing new for you" };
 }
 
 /** Where it was asked, said plainly. */
 export function whereAsked(question: WaitingQuestion): string {
-    if (question.channelKind === "DIRECT") return "In your channel";
-    return question.channelTitle ? "In " + question.channelTitle : "In a channel";
+    if (question.channelKind === "DIRECT") return "Sent to you";
+    return question.channelTitle ? "In " + question.channelTitle : "In a shared chat";
 }
 
 /** A run carrying a wait, as much of it as the form readers need. */

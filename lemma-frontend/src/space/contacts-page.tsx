@@ -6,7 +6,6 @@ import {
     EMPTY_WIDGET_DRAFT,
     answerChoices,
     contactName,
-    contactSubline,
     handleText,
     outreachProblem,
     outreachSaid,
@@ -21,7 +20,9 @@ import {
     type WidgetDraft,
 } from "@/data/contacts";
 import { channelApi } from "@/channels/api";
+import { SearchIcon } from "@/ui/icons";
 import { ContactQueue } from "@/channels/contact-queue";
+import { ContactBots } from "./contact-bots";
 import { isForbidden } from "@/session/auth-state";
 import { Modal } from "@/shell/modal";
 import { channelHref, goTo } from "@/shell/place-link";
@@ -43,38 +44,69 @@ import {
 } from "./contact-queries";
 import { SecretSheet, WidgetPlaces } from "./widget-places";
 
+type ContactsTab = "inbox" | "people" | "setup";
+
 /** A space's contacts: the people its bots answer who are not in it.
  *
- *  Three parts, each a thing a member does here: see who has written and
- *  write back; put a chat or a form on a website; and choose what contacts
- *  can reach beyond what is Public — their own rows of a table, and the
- *  functions opened to them. */
-export function ContactsPage({ pod }: { pod: Pod }) {
+ *  Three tabs, each a thing a member does here: answer who is waiting
+ *  (Inbox), find somebody (People), and decide where they can write and what
+ *  they can reach (Setup). With nobody yet, it opens on Setup. */
+export function ContactsPage({ pod, onConnect }: { pod: Pod; onConnect?: () => void }) {
     const [open, setOpen] = useState<Contact | null>(null);
     const maySee = useMaySeeContacts(pod.id);
+    const contacts = useContacts(pod.id);
+    const count = contacts.data?.length ?? null;
+    const [picked, setPicked] = useState<ContactsTab | null>(null);
+    const tab: ContactsTab = picked ?? (count === 0 ? "setup" : "inbox");
     if (!maySee) {
         return (
             <div className="all contacts">
-                <header className="contacts__head">
-                    <h1>Contacts</h1>
-                    <p>{pod.name}’s contacts, and what they said to it, are for its editors and admins.</p>
-                </header>
+                <header className="contacts__head"><h1>Contacts</h1></header>
+                <p className="contacts__quiet">Only {pod.name}’s editors and admins see its contacts.</p>
             </div>
         );
     }
+    const tabs: { at: ContactsTab; label: string; count?: number | null }[] = [
+        { at: "inbox", label: "Inbox" },
+        { at: "people", label: "People", count },
+        { at: "setup", label: "Setup" },
+    ];
     return (
         <div className="all contacts">
             <header className="contacts__head">
                 <h1>Contacts</h1>
-                <p>People outside {pod.name} who write to its bots or its website. They never sign in, and they see only what you let them.</p>
             </header>
-            <ContactQueue pod={pod} />
-            <People pod={pod} onOpen={setOpen} />
-            <Acknowledge pod={pod} />
-            <Widgets pod={pod} />
-            <Reach pod={pod} />
+            <div className="ctabs" role="tablist" aria-label="Contacts">
+                {tabs.map((one) => (
+                    <button key={one.at} type="button" role="tab" className="ctabs__tab" aria-selected={tab === one.at} onClick={() => setPicked(one.at)}>
+                        {one.label}{one.count ? <span className="ctabs__count">{one.count}</span> : null}
+                    </button>
+                ))}
+            </div>
+            {tab === "inbox" && (count === 0
+                ? <Nobody pod={pod} onSetup={() => setPicked("setup")} />
+                : <ContactQueue pod={pod} bare />)}
+            {tab === "people" && (count === 0
+                ? <Nobody pod={pod} onSetup={() => setPicked("setup")} />
+                : <People pod={pod} onOpen={setOpen} />)}
+            {tab === "setup" && (
+                <div className="csetup">
+                    <ContactBots pod={pod} onConnect={onConnect} />
+                    <Widgets pod={pod} />
+                    <Acknowledge pod={pod} />
+                    <Reach pod={pod} />
+                </div>
+            )}
             {open && <ContactSheet pod={pod} contact={open} onClose={() => setOpen(null)} />}
         </div>
+    );
+}
+
+function Nobody({ pod, onSetup }: { pod: Pod; onSetup: () => void }) {
+    return (
+        <p className="contacts__quiet">
+            Nobody outside {pod.name} has written yet. <button type="button" className="gsheet__inline" onClick={onSetup}>Set up where they can write</button>
+        </p>
     );
 }
 
@@ -82,34 +114,43 @@ export function ContactsPage({ pod }: { pod: Pod }) {
 
 function People({ pod, onOpen }: { pod: Pod; onOpen: (contact: Contact) => void }) {
     const contacts = useContacts(pod.id);
+    const [query, setQuery] = useState("");
+    const needle = query.trim().toLowerCase();
+    const shown = (contacts.data ?? []).filter((contact) => !needle || (contactName(contact) + " " + contact.handles.map(handleText).join(" ")).toLowerCase().includes(needle));
+    if (contacts.isPending) return <p className="all__empty" role="status">Loading…</p>;
+    if (!contacts.data) {
+        return (
+            <div className="contacts__trouble" role="alert">
+                <p>{isForbidden(contacts.error) ? "You may not see " + pod.name + "’s contacts." : "Couldn’t load the contacts."}</p>
+                {!isForbidden(contacts.error) && <button type="button" className="ghost-pill" onClick={() => void contacts.refetch()}>Try again</button>}
+            </div>
+        );
+    }
     return (
-        <section className="contacts__section" aria-labelledby="contacts-people">
-            <h2 id="contacts-people">People</h2>
-            {contacts.isPending ? (
-                <p className="all__empty" role="status">Loading contacts…</p>
-            ) : !contacts.data ? (
-                <div className="contacts__trouble" role="alert">
-                    <p>{isForbidden(contacts.error) ? "You may not see " + pod.name + "’s contacts." : "Couldn’t load the contacts."}</p>
-                    {!isForbidden(contacts.error) && <button type="button" className="ghost-pill" onClick={() => void contacts.refetch()}>Try again</button>}
+        <section aria-label={pod.name + "’s contacts"}>
+            <label className="cfind">
+                <SearchIcon size={15} aria-hidden="true" />
+                <span className="sr-only">Find a contact</span>
+                <input type="search" value={query} placeholder="Find by name, email or phone" onChange={(event) => setQuery(event.target.value)} />
+            </label>
+            <div className="cpeople" role="table" aria-label="Contacts">
+                <div className="cpeople__row cpeople__row--head" role="row">
+                    <span role="columnheader">Name</span>
+                    <span role="columnheader">Reached on</span>
+                    <span role="columnheader">Added</span>
                 </div>
-            ) : contacts.data.length === 0 ? (
-                <p className="contacts__quiet">
-                    Nobody yet. When someone outside {pod.name} writes to a bot that answers contacts, or to a chat on your website, they appear here.
-                    Turn it on in a bot’s settings, or add a chat below.
-                </p>
-            ) : (
-                <ul className="crows" aria-label={pod.name + "’s contacts"}>
-                    {contacts.data.map((contact) => (
-                        <li key={contact.id} className="crow">
-                            <button type="button" className="crow__open" onClick={() => onOpen(contact)}>
-                                <span className="crow__name">{contactName(contact)}</span>
-                                <span className="crow__sub">{contactSubline(contact)}</span>
-                            </button>
-                            <span className="crow__when">{new Date(contact.createdAt).toLocaleDateString(undefined, { day: "numeric", month: "short" })}</span>
-                        </li>
-                    ))}
-                </ul>
-            )}
+                {shown.map((contact) => (
+                    <button key={contact.id} type="button" className="cpeople__row" role="row" onClick={() => onOpen(contact)}>
+                        <span role="cell" className="cpeople__name">
+                            <span className="cpeople__face" aria-hidden="true">{(contactName(contact).trim()[0] ?? "?").toUpperCase()}</span>
+                            <span>{contactName(contact)}</span>
+                        </span>
+                        <span role="cell" className="cpeople__muted">{contact.anonymous ? "Not confirmed yet" : contact.handles.map(handleText).join(" · ") || "No handle"}</span>
+                        <span role="cell" className="cpeople__muted">{new Date(contact.createdAt).toLocaleDateString(undefined, { day: "numeric", month: "short" })}</span>
+                    </button>
+                ))}
+                {shown.length === 0 && <p className="contacts__quiet">Nobody matches.</p>}
+            </div>
         </section>
     );
 }
@@ -283,8 +324,9 @@ function Acknowledge({ pod }: { pod: Pod }) {
     const value = draft ?? current.data ?? "";
     const on = Boolean(current.data);
     return (
-        <section className="contacts__section" aria-labelledby="contacts-ack">
-            <h2 id="contacts-ack">When nobody is answering</h2>
+        <section className="ccard" aria-labelledby="contacts-ack">
+            <div className="ccard__head"><h2 id="contacts-ack">Auto-reply</h2></div>
+            <p className="ccard__sub">Sent once when someone writes and nobody is answering.</p>
             <form
                 className="csheet__write"
                 onSubmit={(event) => {
@@ -293,15 +335,13 @@ function Acknowledge({ pod }: { pod: Pod }) {
                 }}
             >
                 <label className="record-form__field">
-                    <span className="smanage__label">Say this once when a contact writes and their agent is off</span>
                     <input
                         value={value}
                         maxLength={500}
                         disabled={current.isPending}
-                        placeholder={"Thanks — someone from {pod} will reply."}
+                        placeholder={"Thanks — someone from " + pod.name + " will reply."}
                         onChange={(event) => setDraft(event.target.value)}
                     />
-                    <small>{"{pod}"} becomes {pod.name}. Leave it empty to say nothing.</small>
                 </label>
                 <div className="csheet__actions">
                     <button type="submit" className="ghost-pill" disabled={set.isPending || draft === null}>{set.isPending ? "Saving…" : "Save"}</button>
@@ -350,17 +390,17 @@ function Widgets({ pod }: { pod: Pod }) {
     };
 
     return (
-        <section className="contacts__section" aria-labelledby="contacts-widgets">
-            <div className="contacts__sectionhead">
-                <h2 id="contacts-widgets">On your website</h2>
-                <button type="button" className="ghost-pill" onClick={() => setMaking(true)}>New chat</button>
+        <section className="ccard" aria-labelledby="contacts-widgets">
+            <div className="ccard__head">
+                <h2 id="contacts-widgets">Web chat</h2>
+                <button type="button" className="ghost-pill" onClick={() => setMaking(true)}>Add</button>
             </div>
             {widgets.isPending ? (
                 <p className="all__empty" role="status">Loading…</p>
             ) : !widgets.data ? (
                 <p role="alert">Couldn’t load them. <button type="button" className="linkish" onClick={() => void widgets.refetch()}>Try again</button></p>
             ) : widgets.data.length === 0 ? (
-                <p className="contacts__quiet">Put {pod.name}’s chat on any website, or share it as a link. Visitors are answered from what {pod.name} made Public until they prove who they are.</p>
+                <p className="ccard__sub">A chat for your website, or a link to share.</p>
             ) : (
                 <ul className="cwidgets">
                     {widgets.data.map((widget) => (
@@ -510,9 +550,9 @@ function Reach({ pod }: { pod: Pod }) {
     };
 
     return (
-        <section className="contacts__section" aria-labelledby="contacts-reach">
-            <h2 id="contacts-reach">What contacts can use</h2>
-            <p className="contacts__quiet">Beyond what is Public. A contact only ever sees their own rows, and a function is told which contact asked.</p>
+        <section className="ccard ccard--wide" aria-labelledby="contacts-reach">
+            <div className="ccard__head"><h2 id="contacts-reach">Shared with contacts</h2></div>
+            <p className="ccard__sub">Beyond what is Public. Each contact sees only their own rows.</p>
             {reach.isPending ? (
                 <p className="all__empty" role="status">Loading…</p>
             ) : !reach.data ? (
@@ -520,8 +560,8 @@ function Reach({ pod }: { pod: Pod }) {
             ) : (
                 <div className="creach">
                     <div>
-                        <h3>Their own rows</h3>
-                        {reach.data.tables.length === 0 ? <p className="contacts__quiet">No tables yet.</p> : reach.data.tables.map((table) => (
+                        <h3>Tables</h3>
+                        {reach.data.tables.length === 0 ? <p className="ccard__sub">No tables yet.</p> : reach.data.tables.map((table) => (
                             <div key={table.name}>
                                 <label className="smanage__check">
                                     <input
@@ -533,7 +573,7 @@ function Reach({ pod }: { pod: Pod }) {
                                     />
                                     <span>
                                         <span className="smanage__label">{table.name}</span>
-                                        <small>{reachNote(table)}</small>
+                                        {reachNote(table) && <small>{reachNote(table)}</small>}
                                     </span>
                                 </label>
                                 {picking === table.name && (
@@ -549,8 +589,8 @@ function Reach({ pod }: { pod: Pod }) {
                         ))}
                     </div>
                     <div>
-                        <h3>Functions they can ask for</h3>
-                        {reach.data.functions.length === 0 ? <p className="contacts__quiet">No functions yet.</p> : reach.data.functions.map((fn) => (
+                        <h3>Functions</h3>
+                        {reach.data.functions.length === 0 ? <p className="ccard__sub">No functions yet.</p> : reach.data.functions.map((fn) => (
                             <label key={fn.name} className="smanage__check">
                                 <input
                                     type="checkbox"
@@ -561,7 +601,7 @@ function Reach({ pod }: { pod: Pod }) {
                                 />
                                 <span>
                                     <span className="smanage__label">{fn.name}</span>
-                                    <small>{fn.description || (fn.contactsInvoke ? "Contacts can ask for it." : "Not offered to contacts.")}</small>
+                                    {fn.description && <small className="ccard__clip">{fn.description}</small>}
                                 </span>
                             </label>
                         ))}
@@ -574,9 +614,9 @@ function Reach({ pod }: { pod: Pod }) {
 }
 
 function reachNote(table: ContactReach["tables"][number]): string {
-    if (table.perPerson) return "Each member sees their own rows, so contacts can’t.";
-    if (!table.contactOwned) return "Not shown to contacts.";
-    return "A contact sees " + table.contactColumns.join(", ") + " of the rows with their contact_id.";
+    if (table.perPerson) return "Per member: can’t be shared";
+    if (!table.contactOwned) return "";
+    return "Shows " + table.contactColumns.join(", ");
 }
 
 /** The columns a contact may read of their own rows. The member's explicit

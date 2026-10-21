@@ -8,9 +8,8 @@ import { AppsIcon, ContactsIcon, FileIcon, FolderIcon, PlusIcon, TableIcon, Work
 import { badge, sayUnread } from "@/channels/model";
 import { chatRows } from "@/channels/chat-list";
 import { ChannelMark, StartChat } from "@/channels/chat-starter";
-import { allChannels, useChannelList, useHasContacts } from "@/channels/queries";
+import { allChannels, useChannelList } from "@/channels/queries";
 import { useMaySeeContacts } from "./contact-queries";
-import { useFeature } from "@/site/analytics/flags";
 
 const VIEWS: { view: SpaceView; label: string; icon: React.ReactNode }[] = [
     { view: "pages", label: "Pages", icon: <FileIcon size={18} /> },
@@ -29,13 +28,11 @@ function RecentGlyph({ tab }: { tab: Tab }) {
     return <FileIcon size={17} />;
 }
 
-/** Whether the Contacts place is shown: when it is switched on, or once a
- *  contact has written -- to whoever may look after contacts. */
+/** Whether the Contacts place is shown: always, to whoever may look after
+ *  contacts -- a pod's editors and admins. Empty, it is where they learn how
+ *  people outside come to write, and switch it on. */
 export function useContactsPlace(podId: string): boolean {
-    const flag = useFeature("contacts");
-    const maySee = useMaySeeContacts(podId);
-    const has = useHasContacts(podId, maySee);
-    return maySee && (flag || has);
+    return useMaySeeContacts(podId);
 }
 
 /** The sidebar of one teammate's space, in Space's order: its places, every

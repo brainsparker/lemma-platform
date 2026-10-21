@@ -8,7 +8,6 @@ import { useBotGroups } from "@/channels/queries";
 import { GroupSheets, type GroupSheet } from "@/channels/source-sheets";
 import { BotGroupRow } from "@/channels/bot-groups";
 import { isGroupPlatform } from "@/channels/sources";
-import { useFeature } from "@/site/analytics/flags";
 import { SetupActions } from "./surface-setup";
 import { ChannelIcon, channelName } from "./channels";
 import { PlaceLink, channelHref, goTo } from "./place-link";
@@ -110,7 +109,6 @@ function SurfaceForm({ pod, surface, listed, bot, onSaved, onLeave }: {
 }) {
     const [draft, setDraft] = useState(() => surfaceDraft(surface));
     const [dropping, setDropping] = useState(false);
-    const contactsOn = useFeature("contacts");
     const cache = useQueryClient();
     const change = (patch: Partial<SurfaceDraft>) => setDraft(current => ({ ...current, ...patch }));
     const agents = useQuery({ queryKey: ["surface-agents", pod.id], queryFn: () => source.listAgents(pod.id) });
@@ -190,7 +188,7 @@ function SurfaceForm({ pod, surface, listed, bot, onSaved, onLeave }: {
                     </span>
                 </label>
             )}
-            {contactsOn && contactsSupported(surface.platform) && (
+            {contactsSupported(surface.platform) && (
                 <label className="record-form__field smanage__field">
                     <span className="smanage__label">Private messages from people outside {pod.name}</span>
                     <select value={draft.contactsAnswer} disabled={!isOwnBot(surface)} onChange={event => change({ contactsAnswer: event.target.value as SurfaceDraft["contactsAnswer"] })}>

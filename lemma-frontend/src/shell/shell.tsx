@@ -162,10 +162,10 @@ function NotSwitchedOn({ what }: { what: string }) {
     );
 }
 
-/** Contacts, when the space shows it: switched on, or once a contact has
- *  written. Reached by its address otherwise, it says it is not on. */
-function ContactsPlace({ pod }: { pod: Pod }) {
-    return useContactsPlace(pod.id) ? <ContactsPage pod={pod} /> : <NotSwitchedOn what="Contacts" />;
+/** Contacts, for whoever may look after contacts: a pod's editors and
+ *  admins. Reached by its address by anyone else, it says it is not on. */
+function ContactsPlace({ pod, onConnect }: { pod: Pod; onConnect: () => void }) {
+    return useContactsPlace(pod.id) ? <ContactsPage pod={pod} onConnect={onConnect} /> : <NotSwitchedOn what="Contacts" />;
 }
 
 const SPACE_TABS: Tab[] = ([["home", "Home"], ["pages", "Pages"], ["apps", "Apps"], ["tables", "Tables"], ["files", "Files"], ["chats", "Chats"], ["workflows", "Workflows"], ["channels", "Shared chats"], ["contacts", "Contacts"], ["about", "About"]] as [SpaceView, string][])
@@ -1964,7 +1964,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                     ) : tab.view === "workflows" ? (
                                         <WorkflowsPage pod={pod} pods={pods.data ?? []} onOpenWorkflow={openWorkflow} onOpenRun={openRun} onAsk={chat.prompt} onLearn={() => setGuideOpen(true)} />
                                     ) : tab.view === "contacts" ? (
-                                        <ContactsPlace pod={pod} />
+                                        <ContactsPlace pod={pod} onConnect={() => setReaching(true)} />
                                     ) : <AllView
                                         podId={pod.id}
                                         spaceName={pod.name}

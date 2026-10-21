@@ -12,7 +12,7 @@ import { CONTACT_VIEWS, STATUS_LABELS, emptyView, filterFor, needsPerson, type C
 /** The conversations with contacts, as a queue: who needs a person, who is
  *  yours, who nobody has taken, and all of them -- each row opening that
  *  contact's chat, where it is answered. */
-export function ContactQueue({ pod }: { pod: Pod }) {
+export function ContactQueue({ pod, bare = false }: { pod: Pod; bare?: boolean }) {
     const me = useMe();
     const [view, setView] = useState<ChannelView>("needs");
     const [status, setStatus] = useState<ContactStatus | null>("open");
@@ -21,7 +21,7 @@ export function ContactQueue({ pod }: { pod: Pod }) {
     return (
         <section className="contacts__section cqueue" aria-labelledby="contacts-queue">
             <div className="cqueue__head">
-                <h2 id="contacts-queue">Conversations</h2>
+                {bare ? <h2 id="contacts-queue" className="sr-only">Conversations</h2> : <h2 id="contacts-queue">Conversations</h2>}
                 <div className="cqueue__views" role="group" aria-label="Which conversations">
                     {CONTACT_VIEWS.map((one) => (
                         <button key={one.view} type="button" className="cqueue__view" aria-pressed={view === one.view} onClick={() => setView(one.view)}>

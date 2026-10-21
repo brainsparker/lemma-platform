@@ -168,7 +168,7 @@ def test_export_boundary_span_sanitizer_drops_adversarial_content() -> None:
     assert exporter.export([_adversarial_span()]) is SpanExportResult.SUCCESS
     assert len(capture.spans) == 1
     safe = capture.spans[0]
-    assert safe.name == "http.server"
+    assert safe.name == "GET /pods/{pod_id}"
     assert safe.attributes == {
         "http.request.method": "GET",
         "http.route": "/pods/{pod_id}",
@@ -721,3 +721,109 @@ def test_a_kept_description_is_still_redacted_and_bounded() -> None:
     assert "hunter2" not in description
     assert "\n" not in description
     assert len(description) <= 256
+
+
+def _app_span(
+    name: str, *, scope_name: str, kind: SpanKind, attributes
+) -> ReadableSpan:
+    context = SpanContext(
+        trace_id=1, span_id=2, is_remote=False, trace_flags=TraceFlags.SAMPLED
+    )
+    return ReadableSpan(
+        name=name,
+        context=context,
+        resource=Resource({"service.name": "lemma-test"}),
+        attributes=attributes,
+        kind=kind,
+        instrumentation_scope=InstrumentationScope(scope_name),
+        start_time=1,
+        end_time=2,
+    )
+
+
+def _exported(span: ReadableSpan) -> ReadableSpan:
+    capture = _CaptureExporter()
+    SanitizingSpanExporter(capture).export([span])
+    [safe] = capture.spans
+    return safe
+
+
+@pytest.mark.parametrize(
+    ("attributes", "expected"),
+    [
+        ({"http.request.method": "post", "http.route": "/pods/{pod_id}"},
+         "POST /pods/{pod_id}"),
+        # Refused before routing, and nothing matched: named, not raw path.
+        ({"http.request.method": "GET", "http.route": "unmatched"}, "GET unmatched"),
+        ({"http.method": "DELETE"}, "DELETE unmatched"),
+        # A concrete path is not a route and never becomes a name.
+        ({"http.request.method": "GET", "http.route": "/users/12345"},
+         "GET unmatched"),
+        ({"http.request.method": "BREW", "http.route": "/pots"}, "HTTP /pots"),
+    ],
+)  # fmt: skip
+def test_server_spans_are_named_method_and_route(attributes, expected) -> None:
+    safe = _exported(
+        _app_span(
+            "GET /users/12345?token=CANARY",
+            scope_name="opentelemetry.instrumentation.asgi",
+            kind=SpanKind.SERVER,
+            attributes=attributes,
+        )
+    )
+    assert safe.name == expected
+
+
+def test_an_unmatched_route_survives_export_as_an_attribute() -> None:
+    assert sanitize_http_route("unmatched") == "unmatched"
+
+
+def test_a_work_item_span_keeps_its_job_kind_name() -> None:
+    safe = _exported(
+        _app_span(
+            "job agent.turn",
+            scope_name="app.core.infrastructure.work",
+            kind=SpanKind.CONSUMER,
+            attributes={"lemma.work_kind": "agent.turn", "lemma.job_id": "j"},
+        )
+    )
+    assert safe.name == "job agent.turn"
+    assert safe.attributes == {"lemma.work_kind": "agent.turn", "lemma.job_id": "j"}
+    assert (
+        _exported(
+            _app_span(
+                "job Agent Turn 019f99c1",
+                scope_name="app.core.infrastructure.work",
+                kind=SpanKind.CONSUMER,
+                attributes={},
+            )
+        ).name
+        == "dependency.operation"
+    )
+
+
+def test_the_agent_run_root_span_keeps_who_ran_where() -> None:
+    attributes = {
+        "lemma.pod_id": "pod",
+        "lemma.agent_id": "agent",
+        "lemma.agent_name": "researcher",
+        "lemma.conversation_id": "conversation",
+        "lemma.run_kind": "chat",
+    }
+    safe = _exported(
+        _app_span(
+            "agent.run",
+            scope_name="app.modules.agent.services.agent_runner_service",
+            kind=SpanKind.INTERNAL,
+            attributes=attributes,
+        )
+    )
+    assert safe.name == "agent.run"
+    assert safe.attributes == attributes
+
+
+@pytest.mark.parametrize("key", ["kind", "model", "tool_kind", "outcome"])
+def test_agent_run_metric_labels_survive_the_metric_view(key) -> None:
+    from app.core.observability.span_sanitizer import METRIC_ATTRIBUTE_KEYS
+
+    assert key in METRIC_ATTRIBUTE_KEYS

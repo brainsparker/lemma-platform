@@ -31,6 +31,17 @@ from app.core.redaction import redact_text
 
 
 _SAFE_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
+#: ``job {kind}`` -- a work item's span. The kind is a handler name registered
+#: in code (``agent.turn``), so it is bounded the way a route template is.
+_JOB_SPAN_NAME_RE = re.compile(r"^job [a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*$")
+#: The methods a server span may be named after; anything else is ``HTTP``,
+#: the OTel semconv spelling for "a method we do not recognise".
+_HTTP_METHODS = frozenset(
+    {"GET", "HEAD", "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", "TRACE", "PATCH"}
+)
+#: The ``http.route`` of a request no route template matched -- the same word
+#: the request log and the request counter use for it.
+UNMATCHED_ROUTE = "unmatched"
 _SAFE_ROUTE_SEGMENT_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{0,63}$")
 _SAFE_ROUTE_PARAMETER_RE = re.compile(
     r"^\{[A-Za-z_][A-Za-z0-9_]*(?::[A-Za-z_][A-Za-z0-9_]*)?\}$"
@@ -108,6 +119,14 @@ GENERAL_SPAN_ATTRIBUTE_KEYS = frozenset(
         "lemma.pod_id",
         "lemma.conversation_id",
         "lemma.agent_run_id",
+        # Which agent ran. The id is the identity; the name is what a person
+        # reading the trace recognises, and is a span attribute rather than
+        # part of the span name because agents are named per pod, so the set
+        # of names grows with the customer count.
+        "lemma.agent_id",
+        "lemma.agent_name",
+        "lemma.run_kind",
+        "lemma.work_kind",
         "lemma.task_name",
         "lemma.consumer",
         "lemma.event_type",
@@ -191,6 +210,13 @@ METRIC_ATTRIBUTE_KEYS = frozenset(
         # Which worker queue a depth reading belongs to. Bounded by the Lane
         # enum.
         "lane",
+        # Agent run metrics (``app.modules.agent.services.run_metrics``):
+        # what started the run (bounded by ``RunOriginName``), which model it
+        # used (bounded by the configured catalog), and which family of tool a
+        # call went to (bounded by ``ToolKind``).
+        "kind",
+        "model",
+        "tool_kind",
         # The work runtime's class (bounded by the WorkClass enum), kind
         # (bounded by the handlers registered in the code) and why an item went
         # dead (bounded by the runtime's own reasons). Never the namespace: a
@@ -240,6 +266,8 @@ def sanitize_http_route(value: Any) -> str | None:
     are labels, so UUID, ULID, numeric, digest, token-like, URL, and malformed
     segments are omitted at the final export boundary.
     """
+    if value == UNMATCHED_ROUTE:
+        return value
     if not isinstance(value, str) or not value.startswith("/"):
         return None
     if len(value) > _MAX_STRING or any(
@@ -293,16 +321,36 @@ def _safe_span_name(span: ReadableSpan, *, llm: bool) -> str:
         kind = str((span.attributes or {}).get("openinference.span.kind", "")).lower()
         return f"gen_ai.{kind}" if kind.isidentifier() else "gen_ai.operation"
     if "fastapi" in scope_name or "asgi" in scope_name:
-        return "http.server"
+        return _http_server_span_name(span)
     if "aiohttp" in scope_name or "httpx" in scope_name or "urllib" in scope_name:
         return "http.client"
     if "sqlalchemy" in scope_name:
         return "db.operation"
     if "redis" in scope_name:
         return "redis.operation"
-    if scope_name.startswith("app.") and _SAFE_NAME_RE.fullmatch(span.name):
+    if scope_name.startswith("app.") and (
+        _SAFE_NAME_RE.fullmatch(span.name) or _JOB_SPAN_NAME_RE.fullmatch(span.name)
+    ):
         return span.name[:128]
     return "dependency.operation"
+
+
+def _http_server_span_name(span: ReadableSpan) -> str:
+    """``{METHOD} {route}``, the OTel HTTP semconv name for a server span.
+
+    Built here from the two attributes that survive sanitization, rather than
+    trusting the instrumentation's own name, which falls back to the raw path
+    when it has no route. A request no route matched -- one refused by a
+    middleware before routing, or a 404 -- is named for ``unmatched``.
+    """
+    attributes = span.attributes or {}
+    method = str(
+        attributes.get("http.request.method") or attributes.get("http.method") or ""
+    ).upper()
+    if method not in _HTTP_METHODS:
+        method = "HTTP"
+    route = sanitize_http_route(attributes.get("http.route")) or UNMATCHED_ROUTE
+    return f"{method} {route}"
 
 
 def _safe_event(event: Event, *, llm: bool) -> Event:

@@ -185,9 +185,15 @@ answer that would still not fit in a frame is answered `too_large` instead.
 A host released before transfers reports no `transfers` in `host_execution`.
 Its link session does the host's half for it: a write's chunk is put inline as
 `data`, and a read asks for at most `INLINE_DATA_BYTES` and its inline answer
-is delivered into the slot. That host ignores `max_bytes`, so a command that
-prints more than about 750 KB between two reads closes its link with 1009;
-updating Desktop is the fix.
+is delivered into the slot. That host ignores `process.read`'s `max_bytes`
+and answers with whatever its process kept since the last read, one JSON
+object per chunk with its data base64'd. Its ring is bounded in raw bytes
+only, so its `process.start` is sent `output_limit_bytes` of at most
+`OLD_HOST_OUTPUT_LIMIT_BYTES` (about 14 KiB, `old_host_params`): small enough
+that even a process flushing one byte per chunk answers inside the ceiling. A
+command that prints more than that between two reads keeps its newest output
+and reports the rest as truncated (`truncated_before_sequence`); the command's
+output then says where something was dropped (`process_output`).
 
 | `method` | `params` | `result` |
 |---|---|---|

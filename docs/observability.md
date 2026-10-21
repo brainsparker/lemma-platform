@@ -62,8 +62,8 @@ Root traces use `parentbased_traceidratio` sampling at 5% by default. Configure
 the standard `OTEL_TRACES_SAMPLER` and `OTEL_TRACES_SAMPLER_ARG` variables to
 change it. Metrics export every 60 seconds by default via
 `OTEL_METRIC_EXPORT_INTERVAL`. Metric identifiers, URLs, SQL, Redis keys, and
-other high-cardinality attributes are removed before export. Exemplars are
-disabled so filtered attributes cannot survive inside exemplar payloads.
+other high-cardinality attributes are removed before export. Histograms carry
+trace-only exemplars — see [Exemplars](#exemplars-click-the-spike-see-the-request).
 
 The general pipeline's export boundary (`app/core/observability/span_sanitizer.py`)
 is default-deny: only a fixed allowlist of attribute keys crosses it (route
@@ -145,6 +145,73 @@ the code only supplies a default.
 Flipping to plain `http` and dropping the old series is a deliberate follow-up —
 do it once the dashboards read the new names, not as a side effect of this. A
 deployment can set the variable itself to pin either behaviour.
+
+## Exemplars: click the spike, see the request
+
+Every explicit-bucket histogram keeps, per bucket and per export interval, the
+last measurement that was recorded inside a **sampled** span, as an exemplar
+carrying `trace_id`, `span_id`, the value and the time. A slow bucket therefore
+links to one real trace that landed in it.
+
+| Histogram (Prometheus name) | Recorded inside |
+|---|---|
+| `lemma_http_server_duration_ms` | the FastAPI server span (the OTel ASGI middleware is outermost, so `RequestObserverMiddleware` records inside it) |
+| `lemma_work_handler_duration_seconds` (`lemma.work.handler.duration`) | the `work.execute` root span the dispatcher opens per claimed item |
+| `http_server_duration_milliseconds` and other instrumentation histograms | their own instrumentation span, when one is current |
+
+`lemma.work.claim_latency` is recorded in the claim loop, outside any span, so
+it carries none. Counters and gauges deliberately keep none.
+
+How it is configured (`app/core/observability/exemplars.py`, its `metric_view()` is the
+meter provider's only View, set in `telemetry.py`):
+
+- **Filter: `TraceBasedExemplarFilter`.** No current span, or an unsampled one,
+  means no exemplar. At the default 5% `parentbased_traceidratio` sampling,
+  roughly one request in twenty is eligible; that is enough for every bucket
+  that sees real traffic, and every exemplar points at a trace that was exported.
+- **No attributes.** The SDK would otherwise copy every measurement attribute
+  the allowlist View dropped (identifiers, ids) into the exemplar's
+  `filtered_attributes` — the reason exemplars used to be off. The reservoir is
+  offered the measurement without attributes, so nothing but the trace link
+  leaves the process. A unit test asserts this.
+
+Using one: in Cloud Monitoring / Managed Prometheus, chart a `histogram_quantile`
+over `lemma_http_server_duration_ms_bucket`; exemplars render as dots on the
+chart. Click one, take its trace id, and open the trace in Cloud Trace (or
+search the trace id in ClickStack/HyperDX). In PromQL terms, the exemplar on the
+bucket that moved *is* the request that moved it.
+
+To record a new histogram with exemplars, record it while the span that
+represents the work is current — inside `with tracer.start_as_current_span(...)`,
+before it closes. A measurement recorded after the span ends gets no exemplar.
+
+### What the collector and GMP must do (infra verification)
+
+The OTLP metric exporter sends exemplars on histogram data points as-is; no
+SDK setting beyond the filter is needed. Downstream:
+
+- **Collector:** pass metrics through without a processor that rebuilds data
+  points. `batch`, `memory_limiter`, `resource`, `resourcedetection` and
+  `attributes` keep exemplars. `transform`/`metricstransform` rules that
+  aggregate or re-bucket histograms, and any OTLP→Prometheus *scrape* hop
+  (`prometheus` exporter + scrape) drop them unless OpenMetrics exemplars are
+  enabled end to end — prefer pushing with `googlemanagedprometheus`.
+- **`googlemanagedprometheus` exporter:** writes histogram exemplars as Cloud
+  Monitoring exemplars, attaching the span as
+  `projects/<PROJECT>/traces/<TRACE_ID>/spans/<SPAN_ID>`. The project in that
+  link is the exporter's project; the trace must be in **Cloud Trace in that
+  project** for the click-through to resolve. If traces go elsewhere (ClickStack),
+  the exemplar still carries the trace id — copy it — but the console link will
+  not open.
+- Cloud Monitoring stores exemplars on distribution (histogram) values; we
+  emit none on counters, so nothing depends on how a hop treats those.
+- Verify: after a deploy, run in Metrics Explorer (PromQL)
+  `histogram_quantile(0.99, sum by (le) (rate(lemma_http_server_duration_ms_bucket[5m])))`
+  and confirm exemplar dots appear; or read the time series via the Monitoring
+  API and check `distributionValue.exemplars[].attachments` contains a
+  `SpanContext`. No dots after 10 minutes of traffic means a hop dropped them —
+  start by checking the collector's `debug` exporter at `verbosity: detailed`
+  for `Exemplars:` on `lemma.http.server.duration_ms`.
 
 ## LLM observability
 

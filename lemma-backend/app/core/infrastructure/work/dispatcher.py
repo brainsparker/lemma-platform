@@ -11,7 +11,7 @@ import asyncio
 import time
 from datetime import timedelta
 
-from opentelemetry import metrics
+from opentelemetry import metrics, trace
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -40,6 +40,7 @@ from app.core.request_context import create_background_task
 
 logger = get_logger(__name__)
 meter = metrics.get_meter(__name__)
+tracer = trace.get_tracer(__name__)
 #: Seconds, from a fast handler's milliseconds to an agent turn's hours: the
 #: SDK's default buckets are sized for milliseconds and would put every job in
 #: one bucket.
@@ -167,34 +168,43 @@ class Dispatcher:
     async def execute(self, item: ClaimedItem) -> str:
         """Run one claimed item to an outcome; never raises for a handler's failure."""
         spec = self.env.registry.get(item.kind)
-        started = time.monotonic()
-        outcome = "error"
-        try:
-            with waking_locally(self.env.local_wake):
-                if spec.mode is WorkMode.FAST:
-                    outcome = await run_fast(self.env, spec, item)
-                else:
-                    outcome = await run_job(self.env, spec, item)
-        except SQLAlchemyError, OSError:
-            # Settling itself failed -- the database went away mid-transition.
-            # The item stays running under our lease, which will expire and be
-            # reaped; nothing is lost, only delayed.
-            logger.error(
-                "work.item.settle_failed",
-                item_id=str(item.id),
-                kind=item.kind,
-                ns=item.ns,
-                exc_info=True,
-            )
-        finally:
-            handler_duration.record(
-                time.monotonic() - started,
-                {
-                    "work_class": self.cls.value,
-                    "work_kind": item.kind,
-                    "outcome": outcome,
-                },
-            )
+        # A root span per item, so the duration below is recorded inside a
+        # sampled trace and its histogram bucket can carry an exemplar
+        # (trace_id/span_id) pointing at a real run. Record before the span
+        # ends: outside it the trace-based exemplar filter offers nothing.
+        with tracer.start_as_current_span(
+            "work.execute",
+            context=trace.set_span_in_context(trace.INVALID_SPAN),
+            attributes={"work_class": self.cls.value, "work_kind": item.kind},
+        ):
+            started = time.monotonic()
+            outcome = "error"
+            try:
+                with waking_locally(self.env.local_wake):
+                    if spec.mode is WorkMode.FAST:
+                        outcome = await run_fast(self.env, spec, item)
+                    else:
+                        outcome = await run_job(self.env, spec, item)
+            except SQLAlchemyError, OSError:
+                # Settling itself failed -- the database went away mid-transition.
+                # The item stays running under our lease, which will expire and be
+                # reaped; nothing is lost, only delayed.
+                logger.error(
+                    "work.item.settle_failed",
+                    item_id=str(item.id),
+                    kind=item.kind,
+                    ns=item.ns,
+                    exc_info=True,
+                )
+            finally:
+                handler_duration.record(
+                    time.monotonic() - started,
+                    {
+                        "work_class": self.cls.value,
+                        "work_kind": item.kind,
+                        "outcome": outcome,
+                    },
+                )
         return outcome
 
     async def _reap_if_due(self) -> None:

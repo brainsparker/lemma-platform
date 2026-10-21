@@ -27,12 +27,8 @@ from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
     OTLPSpanExporter as HttpOTLPSpanExporter,
 )
 from opentelemetry.metrics import NoOpMeterProvider
-from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics import MeterProvider, TraceBasedExemplarFilter
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
-from opentelemetry.sdk.metrics._internal.exemplar.exemplar_filter import (
-    AlwaysOffExemplarFilter,
-)
-from opentelemetry.sdk.metrics.view import View
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor, TracerProvider
@@ -54,6 +50,7 @@ from openinference.instrumentation.pydantic_ai import OpenInferenceSpanProcessor
 from openinference.semconv.trace import OpenInferenceSpanKindValues, SpanAttributes
 
 from app.core.log.log import get_logger
+from app.core.observability.exemplars import metric_view
 from app.core.observability.otel_logging import (
     quiet_otlp_export_logs,
     setup_otel_logs,
@@ -64,7 +61,6 @@ from app.core.observability.span_limits import (
     general_span_processor,
 )
 from app.core.observability.span_sanitizer import (
-    METRIC_ATTRIBUTE_KEYS,
     SanitizingSpanExporter,
     sanitize_http_route,
 )
@@ -726,8 +722,8 @@ def _setup_metrics(service_name: str) -> MeterProvider | None:
     provider = MeterProvider(
         resource=_build_resource(service_name),
         metric_readers=readers,
-        exemplar_filter=AlwaysOffExemplarFilter(),
-        views=[View(instrument_name="*", attribute_keys=set(METRIC_ATTRIBUTE_KEYS))],
+        exemplar_filter=TraceBasedExemplarFilter(),
+        views=[metric_view()],
     )
     metrics.set_meter_provider(provider)
     return provider

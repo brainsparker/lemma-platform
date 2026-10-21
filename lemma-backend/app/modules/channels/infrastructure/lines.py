@@ -10,6 +10,8 @@ A line is heard at a place (``source_id``: a person said it on a platform) or
 written in Lemma -- and then perhaps carried to one (``target_source_id``).
 Only a person heard at a place says the place is alive (``last_inbound_at``):
 a member's line sent there from Lemma opens no platform's window.
+An agent's answer in a group showing its answers to everybody is written
+shared, here, whoever posts it (``projection.shared_when_posted``).
 """
 
 from __future__ import annotations
@@ -27,12 +29,14 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.channels.domain.entities import (
+    ChannelKind,
     ChannelMessage,
     QuestionState,
     Sender,
     SenderKind,
 )
 from app.modules.channels.domain.parts import Part, dump_parts
+from app.modules.channels.domain.projection import shared_when_posted
 from app.modules.channels.infrastructure.change_models import (
     ChannelChangeModel,
     ChannelThreadModel,
@@ -160,6 +164,10 @@ class LineRepository:
         earlier = await self._written_before(channel_id, line)
         if earlier is not None:
             return earlier, False
+        # An answer asked for in front of a group is the group's to read.
+        shared = shared_when_posted(
+            line.sender, kind=ChannelKind(head.kind), answers_shared=head.answers_shared
+        )
         row = ChannelMessageModel(
             channel_id=channel_id,
             pod_id=head.pod_id,
@@ -179,6 +187,7 @@ class LineRepository:
             reply_ref=dict(line.reply_ref) if line.reply_ref is not None else None,
             reply_to_id=line.reply_to_id,
             thread_root_id=line.thread_root_id,
+            shared_at=now() if shared else None,
             **sender_values(line.sender),
         )
         self.session.add(row)

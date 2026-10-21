@@ -247,8 +247,10 @@ export class ChannelsService {
      * Update Channel
      * Change exactly the fields named; `null` clears.
      *
-     * A group: `title`, `topic`, `visibility`, `archived` -- its owners' or an
-     * admin's. A contact's channel: `agents_answer`, `hand_back_after_hours`,
+     * A group: `title`, `topic`, `visibility`, `archived`, `answers_shared`
+     * (whether agents' answers made with the asker's access are read by
+     * everybody here, or kept to the asker until they share one) -- its
+     * owners' or an admin's. A contact's channel: `agents_answer`, `hand_back_after_hours`,
      * `status`, `assignee` -- for who may write to contacts. Switching the agent
      * on hands the contact back to it now: nobody is assigned.
      * @param podId

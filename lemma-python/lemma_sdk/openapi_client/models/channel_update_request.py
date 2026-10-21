@@ -23,13 +23,15 @@ T = TypeVar("T", bound="ChannelUpdateRequest")
 class ChannelUpdateRequest:
     """Absent is unchanged; ``null`` clears where clearing means something.
 
-    A group takes ``title``, ``topic``, ``visibility``, ``archived``. A
-    contact's channel takes ``agents_answer``, ``hand_back_after_hours``,
+    A group takes ``title``, ``topic``, ``visibility``, ``archived``,
+    ``answers_shared``. A contact's channel takes ``agents_answer``, ``hand_back_after_hours``,
     ``status``, ``assignee`` (and needs ``contact.message``). Anything else
     for the kind is 409.
 
         Attributes:
             agents_answer (bool | None | Unset): On also hands the contact back now: nobody is assigned.
+            answers_shared (bool | None | Unset): A group's: on, agents' answers made with the asker's access are read by
+                everybody here; off, by the asker alone until they share one. Applies to answers posted from then on.
             archived (bool | None | Unset):
             assignee (Literal['me'] | None | Unset | UUID): `me`, or a member's user id; `null` unassigns.
             hand_back_after_hours (int | None | Unset):
@@ -40,6 +42,7 @@ class ChannelUpdateRequest:
     """
 
     agents_answer: bool | None | Unset = UNSET
+    answers_shared: bool | None | Unset = UNSET
     archived: bool | None | Unset = UNSET
     assignee: Literal["me"] | None | Unset | UUID = UNSET
     hand_back_after_hours: int | None | Unset = UNSET
@@ -55,6 +58,12 @@ class ChannelUpdateRequest:
             agents_answer = UNSET
         else:
             agents_answer = self.agents_answer
+
+        answers_shared: bool | None | Unset
+        if isinstance(self.answers_shared, Unset):
+            answers_shared = UNSET
+        else:
+            answers_shared = self.answers_shared
 
         archived: bool | None | Unset
         if isinstance(self.archived, Unset):
@@ -109,6 +118,8 @@ class ChannelUpdateRequest:
         field_dict.update({})
         if agents_answer is not UNSET:
             field_dict["agents_answer"] = agents_answer
+        if answers_shared is not UNSET:
+            field_dict["answers_shared"] = answers_shared
         if archived is not UNSET:
             field_dict["archived"] = archived
         if assignee is not UNSET:
@@ -138,6 +149,15 @@ class ChannelUpdateRequest:
             return cast(bool | None | Unset, data)
 
         agents_answer = _parse_agents_answer(d.pop("agents_answer", UNSET))
+
+        def _parse_answers_shared(data: object) -> bool | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(bool | None | Unset, data)
+
+        answers_shared = _parse_answers_shared(d.pop("answers_shared", UNSET))
 
         def _parse_archived(data: object) -> bool | None | Unset:
             if data is None:
@@ -236,6 +256,7 @@ class ChannelUpdateRequest:
 
         channel_update_request = cls(
             agents_answer=agents_answer,
+            answers_shared=answers_shared,
             archived=archived,
             assignee=assignee,
             hand_back_after_hours=hand_back_after_hours,

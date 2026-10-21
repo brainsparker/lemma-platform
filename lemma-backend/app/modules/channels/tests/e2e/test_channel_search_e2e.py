@@ -25,6 +25,7 @@ from app.modules.channels.tests.e2e.channel_pod import (
     Pod,
     contact_place,
     group,
+    keep_answers_to_the_asker,
     say,
 )
 
@@ -87,6 +88,7 @@ async def test_a_withheld_answer_never_leaves_a_search_page_short(pod: Pod):
     """The newest match is an answer made with the owner's own access: the
     editor's first page of one is the line they may read, not an empty page."""
     crew = await group(pod, members=[pod.editor["id"]])
+    await keep_answers_to_the_asker(pod, crew["id"])
     await say(pod, crew["id"], "plan A: rent the hall")
     async with create_uow_from_session_maker(async_session_maker) as uow:
         await post(

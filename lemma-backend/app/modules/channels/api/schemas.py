@@ -110,8 +110,9 @@ class UnreadResponse(BaseModel):
     lines: int = Field(
         default=0,
         description=(
-            f"New lines since the reader last read it, in channels they joined; "
-            f"stops at {UNREAD_CAP}."
+            f"New lines since the reader last read it, in channels they joined "
+            f"-- and, in one they are not in, while a line naming them is "
+            f"unread, from that line; stops at {UNREAD_CAP}."
         ),
     )
     mentions: int = Field(default=0, description="Unread lines naming the reader.")
@@ -163,6 +164,14 @@ class ChannelResponse(BaseModel):
     created_at: datetime
     last_line_at: datetime
     last_seq: int = 0
+    answers_shared: bool | None = Field(
+        default=None,
+        description=(
+            "A group's: whether an answer an agent gives a member here with "
+            "their own access is read by everybody in it (the default), or by "
+            "that member alone until they share it. Absent for another kind."
+        ),
+    )
     # -- a contact's channel: the inbox -------------------------------------
     agents_answer: bool | None = Field(
         default=None,
@@ -173,6 +182,13 @@ class ChannelResponse(BaseModel):
         description=(
             "A contact's channel: how long the assignee holds the contact after "
             "their last line before the agent answers again."
+        ),
+    )
+    case_id: UUID | None = Field(
+        default=None,
+        description=(
+            "A contact's channel: its current case, the one `status`, "
+            "`assignee` and `attention` are read from (`/cases` lists them all)."
         ),
     )
     assignee: PersonRef | None = Field(
@@ -280,8 +296,8 @@ class ChannelCreateRequest(BaseModel):
 class ChannelUpdateRequest(BaseModel):
     """Absent is unchanged; ``null`` clears where clearing means something.
 
-    A group takes ``title``, ``topic``, ``visibility``, ``archived``. A
-    contact's channel takes ``agents_answer``, ``hand_back_after_hours``,
+    A group takes ``title``, ``topic``, ``visibility``, ``archived``,
+    ``answers_shared``. A contact's channel takes ``agents_answer``, ``hand_back_after_hours``,
     ``status``, ``assignee`` (and needs ``contact.message``). Anything else
     for the kind is 409.
     """
@@ -290,6 +306,14 @@ class ChannelUpdateRequest(BaseModel):
     topic: Topic | None = None
     visibility: Visibility | None = None
     archived: bool | None = None
+    answers_shared: bool | None = Field(
+        default=None,
+        description=(
+            "A group's: on, agents' answers made with the asker's access are "
+            "read by everybody here; off, by the asker alone until they share "
+            "one. Applies to answers posted from then on."
+        ),
+    )
     agents_answer: bool | None = Field(
         default=None,
         description="On also hands the contact back now: nobody is assigned.",
@@ -303,7 +327,7 @@ class ChannelUpdateRequest(BaseModel):
 
 
 #: The fields of a PATCH each kind of channel takes.
-GROUP_FIELDS = frozenset({"title", "topic", "visibility", "archived"})
+GROUP_FIELDS = frozenset({"title", "topic", "visibility", "archived", "answers_shared"})
 CONTACT_FIELDS = frozenset(
     {"agents_answer", "hand_back_after_hours", "status", "assignee"}
 )
@@ -313,6 +337,7 @@ NOT_CLEARABLE = frozenset(
         "title",
         "visibility",
         "archived",
+        "answers_shared",
         "agents_answer",
         "hand_back_after_hours",
         "status",
@@ -405,6 +430,7 @@ def _inbox_fields(channel: Channel, names: Names) -> dict[str, object]:
     return {
         "agents_answer": channel.agents_answer,
         "hand_back_after_hours": channel.hand_back_after_hours,
+        "case_id": channel.case_id,
         "assignee": (
             ref(Principal.member(channel.assignee_user_id), names)
             if channel.assignee_user_id
@@ -436,6 +462,9 @@ def channel_response(
         created_at=channel.created_at,
         last_line_at=channel.last_line_at,
         last_seq=channel.last_seq,
+        answers_shared=(
+            channel.answers_shared if channel.kind is ChannelKind.GROUP else None
+        ),
         sources=[
             SourceSummary(platform=source.platform, title=source.title)
             for source in sources or []

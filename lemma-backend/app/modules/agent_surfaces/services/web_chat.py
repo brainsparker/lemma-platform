@@ -244,7 +244,7 @@ class WebChat:
             uow,
             pod_id=widget.pod_id,
             place=web_place(widget_id=widget.id, session_id=session.id),
-            home=ContactsHome(contact_id=contact_id),
+            home=ContactsHome(contact_id=contact_id, keeper_user_id=owner),
         )
         found = await self._contacts_conversation(
             uow, widget, place, owner=owner, contact_id=contact_id

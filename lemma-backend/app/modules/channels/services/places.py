@@ -36,6 +36,7 @@ from app.modules.channels.infrastructure.accounts import AccountRepository
 from app.modules.channels.infrastructure.members import MemberRepository
 from app.modules.channels.infrastructure.repository import ChannelRepository
 from app.modules.channels.infrastructure.source_repository import SourceRepository
+from app.modules.channels.services.viewers import member_sees
 
 
 class _LostTheRace(Exception):
@@ -51,9 +52,13 @@ class MembersHome:
 
 @dataclass(frozen=True, slots=True)
 class ContactsHome:
-    """A contact's private chat, web chat or email: their CONTACT channel."""
+    """A contact's private chat, web chat or email: their CONTACT channel.
+    ``keeper_user_id``: the member who looks after the bot's or widget's
+    contacts, who follows the channel from the place's first word -- what the
+    contact says is new to them without their joining."""
 
     contact_id: UUID
+    keeper_user_id: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,6 +96,7 @@ class Place:
 
 class ChannelPlaces:
     def __init__(self, uow: SqlAlchemyUnitOfWork) -> None:
+        self.uow = uow
         self.session = uow.session
         self.channels = ChannelRepository(uow.session)
         self.sources = SourceRepository(uow.session)
@@ -112,7 +118,11 @@ class ChannelPlaces:
             return await self._group_source(pod_id, account.id, place, home)
         channel = await self._home(pod_id, home)
         added = await self.attach(channel, account.id, place)
-        return added or await self._winner(account.id, place)
+        if added is None:
+            return await self._winner(account.id, place)
+        if isinstance(home, ContactsHome) and home.keeper_user_id is not None:
+            await self._keeper_follows(channel, home.keeper_user_id)
+        return added
 
     async def _group_source(
         self, pod_id: UUID, account_id: UUID, place: Place, home: GroupHome
@@ -176,6 +186,16 @@ class ChannelPlaces:
         return await self.channels.for_contact(
             pod_id=pod_id, contact_id=home.contact_id
         )
+
+    async def _keeper_follows(self, channel: Channel, keeper_user_id: UUID) -> None:
+        """The member looking after the place's contacts is in the contact's
+        channel from its first word, when they may open it: its lines are
+        counted as new for them. Only a new place seats them, so a keeper who
+        left the channel is not put back by the contact's next line."""
+        if await member_sees(self.uow, channel, keeper_user_id):
+            await self.members.add_person(
+                channel, Principal.member(keeper_user_id), seated_by=SeatedBy.ADDED
+            )
 
     async def attach(
         self, channel: Channel, account_id: UUID, place: Place

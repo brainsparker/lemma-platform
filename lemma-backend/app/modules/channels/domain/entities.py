@@ -230,6 +230,10 @@ class Channel(BaseModel):
     created_by_user_id: UUID | None = None
     created_at: datetime
     archived_at: datetime | None = None
+    #: A group's: an agent's answer made with the asker's own access is read
+    #: by everybody in it, posted shared (``LineRepository.append``) -- or,
+    #: off, by the asker alone until they share it.
+    answers_shared: bool = True
     # -- a contact's channel ---------------------------------------------------
     agents_answer: bool = True
     hand_back_after_hours: int = 12

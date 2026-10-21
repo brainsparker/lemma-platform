@@ -133,10 +133,14 @@ class AgentSurfaceAlreadyExistsError(AgentSurfaceError):
 
     def __init__(self, name: str):
         super().__init__(
-            message=f"Surface '{name}' already exists in this pod",
+            message=(
+                f"Surface '{name}' already exists in this pod. Update it by that "
+                f"name (PATCH /surfaces/{name}) rather than creating it again."
+            ),
             code="AGENT_SURFACE_ALREADY_EXISTS",
             status_code=409,
         )
+        self.details = {"existing_surface": {"name": name}}
 
 
 class AgentSurfaceAgentPlatformConflictError(AgentSurfaceError):
@@ -159,9 +163,10 @@ class AgentSurfaceAgentPlatformConflictError(AgentSurfaceError):
         # needs to know is the name to use. See `DEV-SURF-003`.
         advice = (
             f"Every agent is given a mailbox when it is created, named "
-            f"'{surface_name}'. Use that name to refer to it -- in a pod bundle, "
-            "name the surface '" + surface_name + "' -- or connect email without "
-            "a name to be handed the address it already has."
+            f"'{surface_name}'. Change that surface rather than creating another "
+            f"(PATCH /surfaces/{surface_name}; in a pod bundle, name the surface "
+            f"'{surface_name}'), or connect email without a name to be handed the "
+            "address it already has."
             if platform.upper() == "RESEND"
             else (
                 "An agent reaches a platform in one place: one Slack app, one "

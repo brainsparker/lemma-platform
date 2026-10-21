@@ -154,7 +154,9 @@ so a resume from a cursor is exact however long the client was away (up to
 
 Every line is the **REST line** (`ChannelMessageResponse`, as
 `GET …/messages` returns it) for this reader: an answer an agent made with
-another member's own access is `withheld: true` with no `text` or `parts`.
+another member's own access, and not shared, is `withheld: true` with no
+`text` or `parts` (in a group that shows agents' answers to everybody, such
+an answer is shared as it is posted).
 Thread replies are sent too (they carry `thread_root_id`), and each one sends
 its root again (`line.edited`) with the new `reply_count`. A line is sent
 again too when a platform message heard nameless is heard again with who said

@@ -301,11 +301,12 @@ def place_of(
 
 
 def home_of(place: Place, *, user_id: UUID, contact_id: UUID | None) -> Home:
-    """The channel a place heard for the first time belongs to."""
+    """The channel a place heard for the first time belongs to. For a
+    contact, ``user_id`` is the member who looks after them, who follows it."""
     if place.kind is SourceKind.CHAT:
         return GroupHome(title=place.title)
     if contact_id is not None:
-        return ContactsHome(contact_id=contact_id)
+        return ContactsHome(contact_id=contact_id, keeper_user_id=user_id)
     return MembersHome(user_id=user_id)
 
 

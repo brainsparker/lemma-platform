@@ -181,3 +181,88 @@ async def test_a_bug_reading_the_profile_is_not_hidden_as_a_stranger():
             parsed=_slack_event(),
             credentials={},
         )
+
+
+# ------------------------------------------- a turn refused before its run
+
+
+def _not_shareable():
+    from app.modules.agent.contracts import RuntimeUnavailableError
+
+    return RuntimeUnavailableError(
+        "This teammate runs on Ada's own Claude Code, which only they can use.",
+        code="runtime_profile_not_shareable",
+    )
+
+
+def _refusing_starter(monkeypatch, told: list[str], noted: list[dict], heard):
+    from app.modules.agent_surfaces.services import refused_turns
+
+    async def refuse(*_args, **_kwargs):
+        raise _not_shareable()
+
+    async def tell_member(_uow, **kwargs):
+        noted.append(kwargs)
+
+    async def background(*_args, **_kwargs):
+        return SimpleNamespace(to_metadata=dict)
+
+    monkeypatch.setattr(turn_starter, "write_inbound_message", refuse)
+    monkeypatch.setattr(turn_starter, "run_background", background)
+    monkeypatch.setattr(
+        turn_starter, "reply_all_audience", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(refused_turns, "tell_member", tell_member)
+    starter = _starter(
+        channel_lines=lambda _uow: SimpleNamespace(heard=heard),
+    )
+
+    async def tell(_context, message: str) -> None:
+        told.append(message)
+
+    starter.tell_sender = tell  # type: ignore[method-assign]
+    starter._credentials_for = AsyncMock(return_value={})  # type: ignore[method-assign]
+    starter._ingest_files = AsyncMock(  # type: ignore[method-assign]
+        return_value=turn_starter.AttachmentIngest()
+    )
+    starter._name_new_thread = AsyncMock()  # type: ignore[method-assign]
+    return starter
+
+
+async def test_a_turn_refused_in_a_group_tells_the_member_once_and_not_the_group(
+    monkeypatch,
+):
+    """Before, the refusal was retried until the message went dead, and a
+    group was told nothing: the agent never answered and nobody knew why."""
+    told: list[str] = []
+    noted: list[dict] = []
+    heard = AsyncMock()
+    starter = _refusing_starter(monkeypatch, told, noted, heard)
+    in_group = _context("@helper what's on today?", agent_display_name="Helper")
+    in_group = in_group.model_copy(
+        update={"event": in_group.event.model_copy(update={"is_dm": False})}
+    )
+
+    await starter.start_agent_chat(in_group)
+    await starter.start_agent_chat(in_group)
+
+    assert told == [], "a shared place is not told one person's refusal"
+    assert heard.await_count == 2, "what they said still lands on the timeline"
+    first, again = noted
+    assert first["user_id"] == in_group.user_id
+    assert "Ada's own Claude Code" in first["text"]
+    assert first["text"].startswith("Helper didn't answer your message on Slack.")
+    # The same key both times: the note is said once, not once per message.
+    assert first["key"] == again["key"]
+
+
+async def test_a_turn_refused_in_a_direct_message_says_why_there_too(monkeypatch):
+    told: list[str] = []
+    noted: list[dict] = []
+    starter = _refusing_starter(monkeypatch, told, noted, AsyncMock())
+
+    await starter.start_agent_chat(_context("hello"))
+
+    [said] = told
+    assert "Ada's own Claude Code" in said
+    assert len(noted) == 1

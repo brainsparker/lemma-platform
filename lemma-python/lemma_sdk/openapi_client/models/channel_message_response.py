@@ -57,7 +57,8 @@ class ChannelMessageResponse:
             it -- somebody who may change the channel.
         reply_count (int | Unset): On a thread's first line. Default: 0.
         reply_to_id (None | Unset | UUID):
-        shared_at (datetime.datetime | None | Unset): When the member it was made for shared it with the channel.
+        shared_at (datetime.datetime | None | Unset): When it was shared with the channel: by the member it was made
+            for, or as it was posted, in a group that shows agents' answers to everybody (`answers_shared`).
         source_id (None | Unset | UUID): Where it was said or sent; absent for a line only in Lemma.
         text (None | str | Unset): Absent where the line is withheld from the reader, or deleted.
         thread_root_id (None | Unset | UUID): The line this one is a reply in the thread of.

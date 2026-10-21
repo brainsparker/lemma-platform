@@ -12,6 +12,7 @@ import { usePanelFocus } from "@/ui/focus-trap";
 import { CloseIcon } from "@/ui/icons";
 import type { ChannelAbilities } from "./abilities";
 import { AgentSwitch } from "./agent-switch";
+import { AnswersSwitch } from "./answers-switch";
 import { channelApi, type ChannelChange, type MineChange } from "./api";
 import { ContactControls } from "./contact-controls";
 import { problemOf } from "./problem";
@@ -152,6 +153,7 @@ function About({ pod, channel, may, onGone }: { pod: Pod; channel: ChannelDetail
                             : "Public: everyone in " + pod.name + " can find it and read it."}{" "}
                         {whoAnswers(channel, pod.name, me)}
                     </p>
+                    <AnswersSwitch podId={pod.id} channel={channel} manage={may.manage} />
                     {may.manage && (
                         <div className="cside__acts">
                             <button type="button" className="gsheet__inline" onClick={() => { setTitle(channel.title ?? ""); setTopic(channel.topic ?? ""); setEditing(true); }}>Rename or describe</button>

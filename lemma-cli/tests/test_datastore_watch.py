@@ -399,3 +399,96 @@ async def test_watch_connects_to_a_wss_server_with_verification_off(
         with pytest.raises(ssl.SSLCertVerificationError):
             async with connect(url, ssl=_ssl_option(url, verify_ssl=True)):
                 pass
+
+
+def test_each_json_line_is_flushed_as_it_is_written(monkeypatch):
+    """QA #7: piped stdout is block-buffered, and a watch never ends on its own.
+
+    Unflushed, the NDJSON lines sat in the buffer, so a pipeline saw nothing
+    until 8 KiB had piled up, and a watch that was stopped lost them all. Each
+    line has to reach the file descriptor when it is printed.
+    """
+    import io
+    import sys
+
+    sink = io.BytesIO()
+    monkeypatch.setattr(sys, "stdout", io.TextIOWrapper(sink, encoding="utf-8"))
+    session = LiveSession()
+    session.add(table="notes")
+
+    _handle_message(
+        _state(output="json"),
+        session,
+        json.dumps(
+            {
+                "type": "changes",
+                "id": "s1",
+                "cursor": "c.1",
+                "changes": [{"op": "insert", "table": "notes", "record_id": "a"}],
+            }
+        ),
+    )
+
+    written = sink.getvalue().decode()
+    assert written.endswith("\n"), f"the line is still in the buffer: {written!r}"
+    assert json.loads(written)["record_id"] == "a"
+
+
+def test_sigterm_stops_the_watch_and_flushes_what_it_printed():
+    """`timeout 60 lemma datastore watch --output json > changes.ndjson`.
+
+    Python dies on SIGTERM without flushing stdout, so the file came out empty.
+    It stops the way Ctrl-C does: cleanly, with whatever was printed written.
+    A subprocess, because the old behaviour this pins is the process dying.
+    """
+    import subprocess
+    import sys
+    import textwrap
+
+    script = textwrap.dedent(
+        """
+        import asyncio, os, signal
+        from lemma_cli.cli_core import watch
+
+        async def run(state, pod_id, table, since):
+            print('{"type": "ready"}')  # buffered: stdout is a pipe
+            os.kill(os.getpid(), signal.SIGTERM)
+            await asyncio.sleep(30)
+
+        watch._run = run
+        watch.watch_datastore_changes(None, "POD", None, None)
+        """
+    )
+
+    finished = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, timeout=30
+    )
+
+    assert finished.returncode == 0, (finished.returncode, finished.stderr)
+    assert finished.stdout == '{"type": "ready"}\n'
+    assert "Stopped." in finished.stderr
+
+
+def test_a_reader_that_leaves_stops_the_watch_rather_than_reconnecting(monkeypatch):
+    """Flushing per line means `| head -1` breaks the pipe on the next line.
+
+    `BrokenPipeError` is an `OSError`, which the watch loop reads as a dropped
+    socket and reconnects on -- forever, writing to nobody. It has to arrive as
+    something the loop does not catch.
+    """
+    import sys
+
+    from lemma_cli.cli_core import watch as watch_module
+
+    class _ClosedPipe:
+        def write(self, _text):
+            raise BrokenPipeError
+
+        def flush(self):
+            raise BrokenPipeError
+
+    monkeypatch.setattr(sys, "stdout", _ClosedPipe())
+
+    with pytest.raises(watch_module._StdoutClosed) as stopped:
+        watch_module._emit({"type": "ready"})
+    assert not isinstance(stopped.value, OSError)

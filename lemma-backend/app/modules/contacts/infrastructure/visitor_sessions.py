@@ -258,6 +258,28 @@ class VisitorSessionRepository:
             .values(contact_id=contact_id)
         )
 
+    async def live_for_contact(
+        self,
+        contact_id: UUID,
+        *,
+        strength: VisitorStrength,
+        now: datetime,
+        limit: int,
+    ) -> list[VisitorSession]:
+        """The contact's live sessions of this strength, last seen first."""
+        rows = await self.session.scalars(
+            select(VisitorSessionModel)
+            .where(
+                VisitorSessionModel.contact_id == contact_id,
+                VisitorSessionModel.strength == strength.value,
+                VisitorSessionModel.revoked_at.is_(None),
+                VisitorSessionModel.expires_at > now,
+            )
+            .order_by(VisitorSessionModel.last_seen_at.desc())
+            .limit(limit)
+        )
+        return [_session(row) for row in rows]
+
     async def latest_for_contact(
         self, contact_id: UUID
     ) -> tuple[UUID, datetime] | None:

@@ -40,6 +40,10 @@ from app.modules.agent.infrastructure.models import ConversationModel
 from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
 from app.modules.agent_surfaces.events.visitor_retention import sweep_web_visitors
 from app.modules.agent_surfaces.services.channel_deliveries import WAITS_IN_WEB_CHAT
+from app.modules.agent_surfaces.services.channel_lines import web_place
+from app.modules.channels.contracts import ContactsHome, source_for
+from app.modules.channels.infrastructure.models import ChannelSourceModel
+from app.modules.channels.infrastructure.source_repository import MAX_PLACES
 from app.modules.agent_surfaces.tests.e2e.helpers import _messages_for_conversation
 from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
     run_scripted_agent_run,
@@ -1066,6 +1070,27 @@ async def test_a_member_writes_first_to_a_visitor_who_left_no_address(
         f"/pods/{pod_id}/channels/{gone_channel}/messages"
     )
     assert "Still there?" not in [item["text"] for item in unwritten.json()["items"]]
+    # Opt-out is read before any chat is looked for: an ended chat whose
+    # browser asked not to be written to is refused as opted out.
+    async with async_session_maker() as session:
+        uow = SqlAlchemyUnitOfWork(session)
+        await opt_out(
+            uow,
+            pod_id=UUID(pod_id),
+            kind=IdentityKind.WEB,
+            value=str(_session_id(other)),
+            reason=SuppressionReason.STOP,
+        )
+        await uow.commit()
+    refused = await _write_first(
+        authenticated_client,
+        pod_id,
+        gone,
+        str(_session_id(other)),
+        "WEB",
+        "Still there?",
+    )
+    assert refused.status_code == 409, refused.text
 
 
 @pytest.mark.drives_work
@@ -1095,6 +1120,26 @@ async def test_a_member_writes_first_to_a_customer_the_site_signed_in(
     )
     contact = await _contact_of(db_session, conversation_id)
     assert contact is not None
+    # More chats than a channel's places are read at once, all heard from
+    # since and all ended: none of them hides the one that is still live.
+    async with async_session_maker() as session:
+        uow = SqlAlchemyUnitOfWork(session)
+        for _ in range(MAX_PLACES + 5):
+            await source_for(
+                uow,
+                pod_id=UUID(pod_id),
+                place=web_place(widget_id=UUID(widget["id"]), session_id=uuid4()),
+                home=ContactsHome(contact_id=contact),
+            )
+        await session.execute(
+            update(ChannelSourceModel)
+            .where(
+                ChannelSourceModel.platform == "WEB",
+                ChannelSourceModel.external_user_id != str(_session_id(visitor)),
+            )
+            .values(last_inbound_at=datetime.now(timezone.utc) + timedelta(minutes=5))
+        )
+        await uow.commit()
 
     reached = await _write_first(
         authenticated_client,

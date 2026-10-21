@@ -194,14 +194,15 @@ class MemberLines:
             if post.source_id not in (None, root.place_id):
                 raise LineRefused("A reply goes where its thread is", status_code=422)
             return root.place_id
-        sources = await self.sources.of_channel(channel.id)
         if post.source_id is not None:
-            if all(source.id != post.source_id for source in sources):
+            # Asked of the place itself: a channel's places are read a page
+            # at a time, and a contact's web chats alone can fill one.
+            if not await self.sources.in_channel(channel.id, {post.source_id}):
                 raise LineRefused(
                     "That place does not feed this channel", status_code=404
                 )
             return post.source_id
-        return carried_to(channel, sources)
+        return carried_to(channel, await self.sources.of_channel(channel.id))
 
     async def edit(
         self,

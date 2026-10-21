@@ -131,8 +131,9 @@ test("a visitor who left no address is written to in their chat on the website",
     const host = { kind: "HOST" as const, value: "host:default:cust-42", strength: "HOST" };
     const email = { kind: "EMAIL" as const, value: "ana@shop.example", strength: "CODE" };
     assert.deepEqual(writableHandles({ handles: [web] }), [web]);
-    // The chat their site signed them in to, over a browser's.
-    assert.deepEqual(writableHandles({ handles: [web, host] }), [host]);
+    // The chat their site signed them in to first, and the browser's too:
+    // either may be the one that has ended.
+    assert.deepEqual(writableHandles({ handles: [web, host] }), [host, web]);
     // An address they confirmed is how they are written to; the chat is not offered.
     assert.deepEqual(writableHandles({ handles: [web, email] }), [email]);
     assert.deepEqual(writableHandles({ handles: [{ kind: "SLACK", value: "T9:U7", strength: "CHANNEL" }] }), []);

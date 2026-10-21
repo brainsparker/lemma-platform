@@ -64,6 +64,7 @@ from app.modules.channels.contracts import (
     sources_of,
     write_as_member,
 )
+from app.modules.channels.contracts.places import person_places
 from app.modules.channels.contracts.deliveries import deliveries_of
 from app.modules.contacts.contracts import (
     ContactHandle,
@@ -81,6 +82,7 @@ from app.modules.contacts.contracts.outreach import (
 )
 from app.modules.contacts.contracts.visitor_sessions import (
     VisitorStrength,
+    live_visitor_sessions,
     visitor_session,
 )
 
@@ -156,10 +158,18 @@ class ContactOutreach:
             self.uow, pod_id=outreach.pod_id, contact_id=contact.id
         )
         now = now or datetime.now(timezone.utc)
-        source = await self._place(
-            channel.id, outreach.pod_id, contact.id, handle, now=now
-        )
-        await self._allowed(outreach.pod_id, contact.id, handle, source, now=now)
+        if handle.kind in _ON_THE_WEB:
+            # Opt-out first, before any chat is looked for: a web chat has no
+            # window, so nothing about the place changes the verdict.
+            await self._allowed(outreach.pod_id, contact.id, handle, None, now=now)
+            source = await self._web_chat(
+                channel.id, outreach.pod_id, contact.id, handle, now=now
+            )
+        else:
+            source = await self._place(
+                channel.id, outreach.pod_id, contact.id, handle, now=now
+            )
+            await self._allowed(outreach.pod_id, contact.id, handle, source, now=now)
         try:
             line = await write_as_member(
                 self.uow,
@@ -199,11 +209,8 @@ class ContactOutreach:
         *,
         now: datetime,
     ) -> Source:
-        """The place this handle is reached at: for a web chat, one they can
-        still come back to; otherwise the one the contact was heard from last,
-        else -- email only -- the pod's mailbox's, opened now."""
-        if handle.kind in _ON_THE_WEB:
-            return await self._web_chat(channel_id, pod_id, handle, now=now)
+        """The place this handle is reached at: the one the contact was heard
+        from last, else -- email only -- the pod's mailbox's, opened now."""
         platforms = {platform.value for platform in _PLATFORMS.get(handle.kind, ())}
         if not platforms:
             raise OutreachRefused(
@@ -247,41 +254,52 @@ class ContactOutreach:
         )
 
     async def _web_chat(
-        self, channel_id: UUID, pod_id: UUID, handle: ContactHandle, *, now: datetime
+        self,
+        channel_id: UUID,
+        pod_id: UUID,
+        contact_id: UUID,
+        handle: ContactHandle,
+        *,
+        now: datetime,
     ) -> Source:
-        """Their chat on the pod's website that they can still come back to,
-        most recently heard first: never opened here, since only a visitor
-        writing opens one."""
-        for source in await sources_of(self.uow, channel_id):
-            if source.platform == WEB and await self._comes_back_to(
-                pod_id, source, handle, now=now
-            ):
-                return source
+        """Their chat on the pod's website that they can still come back to:
+        found from the sessions that have not ended, the one last seen first,
+        so however many chats have ended none hides one that has not. Never
+        opened here, since only a visitor writing opens one."""
+        for session_id in await self._live_sessions(
+            pod_id, contact_id, handle, now=now
+        ):
+            places = await person_places(
+                self.uow, platform=WEB, external_user_id=str(session_id), pod_id=pod_id
+            )
+            place = next((p for p in places if p.channel_id == channel_id), None)
+            if place is not None:
+                return place
         raise OutreachRefused(NO_CHAT_TO_COME_BACK_TO)
 
-    async def _comes_back_to(
-        self, pod_id: UUID, source: Source, handle: ContactHandle, *, now: datetime
-    ) -> bool:
-        """Whether this web chat is the handle's, and still live. A browser's
-        handle is its session; a signed-in customer's chat is one their site
-        vouched for, on a widget speaking for the product that named them."""
-        try:
-            session_id = UUID(source.external_user_id or "")
-        except ValueError:
-            return False
-        if handle.kind is IdentityKind.WEB and str(session_id) != handle.value:
-            return False
-        session = await visitor_session(self.uow, session_id)
-        if session is None or not session.is_live(now):
-            return False
+    async def _live_sessions(
+        self, pod_id: UUID, contact_id: UUID, handle: ContactHandle, *, now: datetime
+    ) -> list[UUID]:
+        """The live sessions this handle is: a browser's handle is its own
+        session; a signed-in customer's are those their site vouched for, on
+        a widget speaking for the product that named them."""
         if handle.kind is IdentityKind.WEB:
-            return True
-        if session.strength is not VisitorStrength.HOST:
-            return False
-        widget = await WebWidgetRepository(self.uow.session).get(
-            pod_id=pod_id, widget_id=session.widget_id
+            try:
+                session_id = UUID(handle.value)
+            except ValueError:
+                return []
+            session = await visitor_session(self.uow, session_id)
+            return [session_id] if session is not None and session.is_live(now) else []
+        sessions = await live_visitor_sessions(
+            self.uow, contact_id=contact_id, strength=VisitorStrength.HOST, now=now
         )
-        return widget is not None and widget.host_issuer == handle.issuer
+        widgets = WebWidgetRepository(self.uow.session)
+        speaking: list[UUID] = []
+        for session in sessions:
+            widget = await widgets.get(pod_id=pod_id, widget_id=session.widget_id)
+            if widget is not None and widget.host_issuer == handle.issuer:
+                speaking.append(session.id)
+        return speaking
 
     async def _mailbox(self, pod_id: UUID) -> AgentSurfaceEntity | None:
         surfaces, _ = await SurfaceRepository(self.uow).list_by_pod(
@@ -303,14 +321,16 @@ class ContactOutreach:
         pod_id: UUID,
         contact_id: UUID,
         handle: ContactHandle,
-        source: Source,
+        source: Source | None,
         *,
         now: datetime,
     ) -> None:
+        """Whether this may be sent: ``source`` is the place it goes, or
+        ``None`` for a web chat, which has no window -- the line waits for
+        their next visit."""
         reach: tuple[Address, SendWindow | None] | None = (
-            # A web chat has no window: the line waits for their next visit.
             (Address(kind=handle.kind, value=handle.value), None)
-            if source.platform == WEB
+            if source is None
             else reach_for(
                 source.platform,
                 address=handle.value,

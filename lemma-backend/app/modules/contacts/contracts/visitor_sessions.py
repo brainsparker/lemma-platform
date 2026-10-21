@@ -47,6 +47,7 @@ __all__ = [
     "forget_session_liveness",
     "identify_visitor_session",
     "latest_visitor_conversation",
+    "live_visitor_sessions",
     "open_visitor_session",
     "renew_visitor_session",
     "revoke_visitor_sessions",
@@ -126,6 +127,21 @@ async def visitor_session(
     uow: SqlAlchemyUnitOfWork, session_id: UUID
 ) -> VisitorSession | None:
     return await VisitorSessionRepository(uow.session).get(session_id)
+
+
+async def live_visitor_sessions(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    contact_id: UUID,
+    strength: VisitorStrength,
+    now: datetime,
+    limit: int = 20,
+) -> list[VisitorSession]:
+    """The contact's sessions of this strength that have not ended, the one
+    last seen first: the chats on the site they can still come back to."""
+    return await VisitorSessionRepository(uow.session).live_for_contact(
+        contact_id, strength=strength, now=now, limit=limit
+    )
 
 
 async def visitor_session_by_secret(

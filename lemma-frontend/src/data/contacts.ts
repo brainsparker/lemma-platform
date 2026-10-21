@@ -202,14 +202,17 @@ export interface OutreachSent {
 
 /** The handles a member can write to first: an address, a number on
  *  WhatsApp, a Telegram account -- or, when they left none of those, their
- *  chat on the website, where the line waits for their next visit (the one
- *  their site signed them in to, if it did). A colleague in another
- *  company's Slack or Teams waits for them to write. */
+ *  chats on the website, where the line waits for their next visit: the
+ *  ones their site signed them in to first, then each browser's. Every one
+ *  is offered, since any of them may be the chat that has ended. A
+ *  colleague in another company's Slack or Teams waits for them to write. */
 export function writableHandles(contact: Pick<Contact, "handles">): ContactHandle[] {
     const reached = contact.handles.filter((handle) => handle.kind === "EMAIL" || handle.kind === "PHONE" || handle.kind === "TELEGRAM");
     if (reached.length > 0) return reached;
-    const onTheSite = contact.handles.find((handle) => handle.kind === "HOST") ?? contact.handles.find((handle) => handle.kind === "WEB");
-    return onTheSite ? [onTheSite] : [];
+    return [
+        ...contact.handles.filter((handle) => handle.kind === "HOST"),
+        ...contact.handles.filter((handle) => handle.kind === "WEB"),
+    ];
 }
 
 /** Whether a line to this handle waits in their chat on the website. */

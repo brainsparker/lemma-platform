@@ -57,7 +57,9 @@ export function installedNote(outcome: ConnectOutcome | null): InstalledNote {
     if (outcome?.connect === "connected") {
         return {
             title: "Lemma is joining your workspace",
-            lead: "It will message you in Slack in a moment, with the teammate to add first. If it can't stay — say the workspace already belongs to another Lemma organization — it tells you there.",
+            // Only what every path does: a re-add, or a grant finished in another
+            // browser, sends no message, but the Home tab is always there.
+            lead: "Open Lemma's Home tab in Slack to add your first teammate. If the workspace already belongs to another Lemma organization, Lemma says so in Slack when it can.",
             ok: true,
         };
     }

@@ -22,6 +22,7 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.work import facts
@@ -52,15 +53,14 @@ from app.modules.agent_surfaces.tests.e2e.test_slack_manager_e2e import (
     lemmas_app,  # noqa: F401  (fixture)
 )
 from app.modules.connectors.contracts.facts import ConnectorAccountConnected
-from app.modules.connectors.domain.account import OAuthCredentials
+from app.modules.connectors.domain.account import AccountStatus
 from app.modules.connectors.infrastructure.models.auth_config import AuthConfig
+from app.modules.connectors.infrastructure.repositories.account_repository import (
+    AccountRepository,
+)
 from app.modules.connectors.infrastructure.models.connect_request import (
     ConnectRequest,
 )
-from app.modules.connectors.services.auth.lemma_auth_provider import (
-    LemmaAuthProvider,
-)
-from app.modules.connectors.tests.support.fake_auth_provider import FakeAuthProvider
 from app.modules.test_support.e2e_base import _create_org, _sign_up_verified_user
 
 pytestmark = [
@@ -91,42 +91,39 @@ INSTALLABLE_SLACK: dict[str, object] = {
 
 
 @pytest.fixture
-async def slack_set_up(db_session: AsyncSession, monkeypatch):
+async def slack_set_up(db_session: AsyncSession, monkeypatch, fake_slack):
     """This server has Lemma's own Slack app: a client id and secret to send
-    people to Slack's consent with. Restored after, for the next test."""
+    people to Slack's consent with, and Slack's token endpoint (the fake's).
+    Restored after, for the next test."""
     monkeypatch.setenv("SLACK_CLIENT_ID", "1234.lemma")
     monkeypatch.setenv("SLACK_CLIENT_SECRET", "lemma-secret")
     connector = await _ensure_connector(db_session, "slack")
     before = connector.kinds
-    connector.kinds = [INSTALLABLE_SLACK]
+    defaults = {
+        **INSTALLABLE_SLACK["oauth2_defaults"],  # type: ignore[dict-item]
+        "token_url": f"{fake_slack.base_url}oauth.v2.access",
+    }
+    connector.kinds = [{**INSTALLABLE_SLACK, "oauth2_defaults": defaults}]
+    fake_slack.oauth_access = None
     await db_session.commit()
     yield
+    fake_slack.oauth_access = None
     connector.kinds = before
     await db_session.commit()
 
 
-def _slack_answers(monkeypatch, fake_slack: Any, workspace: _Workspace) -> None:
+def _slack_answers(fake_slack: Any, workspace: _Workspace) -> None:
     """Slack's answer to the token exchange: Lemma's app installed in this
-    workspace, by this Slack user. Everything else is the real callback."""
-    answer = OAuthCredentials.model_validate(
-        {
-            "access_token": f"xoxb-{workspace.manager_bot.lower()}",
-            "api_base_url": fake_slack.base_url,
-            "raw_response": {
-                "app_id": E2E_SLACK_APP_ID,
-                "bot_user_id": workspace.manager_bot,
-                "team": {"id": workspace.team, "name": "Acme"},
-                "authed_user": {"id": workspace.installer},
-                "api_base_url": fake_slack.base_url,
-            },
-        }
-    )
-    fake = FakeAuthProvider(on_exchange=lambda *_: answer)
-
-    async def exchange(self, *args, **kwargs):
-        return await fake.exchange_code_for_credentials(*args, **kwargs)
-
-    monkeypatch.setattr(LemmaAuthProvider, "exchange_code_for_credentials", exchange)
+    workspace, by this Slack user. The exchange itself is the real one."""
+    fake_slack.oauth_access = {
+        "access_token": f"xoxb-{workspace.manager_bot.lower()}",
+        "token_type": "bot",
+        "app_id": E2E_SLACK_APP_ID,
+        "bot_user_id": workspace.manager_bot,
+        "team": {"id": workspace.team, "name": "Acme"},
+        "authed_user": {"id": workspace.installer},
+        "api_base_url": fake_slack.base_url,
+    }
 
 
 async def _add_to_slack(client: AsyncClient, organization_id: str, **headers) -> Any:
@@ -260,10 +257,9 @@ async def test_the_grant_coming_back_adopts_the_workspace_and_welcomes_once(
     fixed_test_user,
     fake_slack,
     slack_set_up,
-    monkeypatch,
 ):
     workspace = _Workspace()
-    _slack_answers(monkeypatch, fake_slack, workspace)
+    _slack_answers(fake_slack, workspace)
     org_id = test_pod["organization_id"]
 
     started = await _add_to_slack(authenticated_client, org_id)
@@ -301,6 +297,48 @@ async def test_the_grant_coming_back_adopts_the_workspace_and_welcomes_once(
     assert len(_welcomes(fake_slack)) == 1
 
 
+async def test_adding_lemma_keeps_the_persons_own_slack_token(
+    authenticated_client,
+    db_session,
+    test_pod,
+    fixed_test_user,
+    fake_slack,
+    slack_set_up,
+):
+    """Their own Slack connect holds a user token; "Add to Slack" asks for the
+    bot alone, so its grant has none. Renewing the account must not erase it."""
+    workspace = _Workspace()
+    org_id = test_pod["organization_id"]
+    _slack_answers(fake_slack, workspace)
+    fake_slack.oauth_access["authed_user"] = {
+        "id": workspace.installer,
+        "scope": "im:history,search:read",
+        "access_token": "xoxp-their-own",
+        "token_type": "user",
+    }
+    first = await _add_to_slack(authenticated_client, org_id)
+    await _slack_comes_back(authenticated_client, first.json()["authorization_url"])
+
+    _slack_answers(fake_slack, workspace)  # bot only: authed_user is just an id
+    again = await _add_to_slack(authenticated_client, org_id)
+    landed = await _slack_comes_back(
+        authenticated_client, again.json()["authorization_url"]
+    )
+    assert parse_qs(urlsplit(landed).query)["connect"] == ["connected"]
+
+    (install,) = await _installs_of(db_session, org_id)
+    async with async_session_maker() as session:
+        account = await AccountRepository(
+            SqlAlchemyUnitOfWork(session), get_secret_cipher()
+        ).get_by_user_and_auth_config(UUID(fixed_test_user["id"]), install.id)
+    assert account is not None
+    assert account.status == AccountStatus.CONNECTED
+    raw = account.credentials.raw_response
+    assert raw["authed_user"]["access_token"] == "xoxp-their-own"
+    assert raw["authed_user"]["scope"] == "im:history,search:read"
+    assert account.credentials.access_token == f"xoxb-{workspace.manager_bot.lower()}"
+
+
 async def test_cancelling_on_slack_comes_back_to_the_install_page(
     authenticated_client, fixed_test_org, slack_set_up
 ):
@@ -326,12 +364,11 @@ async def test_an_ordinary_slack_connect_adopts_nothing_and_says_nothing(
     test_pod,
     fake_slack,
     slack_set_up,
-    monkeypatch,
 ):
     """Lemma's app is also the ordinary Slack connector: connecting it for an
     agent's tools, even by an owner, is never "Add to Slack"."""
     workspace = _Workspace()
-    _slack_answers(monkeypatch, fake_slack, workspace)
+    _slack_answers(fake_slack, workspace)
     org_id = test_pod["organization_id"]
     install = await authenticated_client.post(
         f"/organizations/{org_id}/connectors/auth-configs",
@@ -387,13 +424,12 @@ async def test_a_consent_link_finished_in_another_session_adopts_nothing(
     test_pod,
     fake_slack,
     slack_set_up,
-    monkeypatch,
 ):
     """The attacker starts "Add to Slack" and sends the consent link to a Slack
     admin, who approves it in their own browser: the grant lands on the
     attacker's account, and adopts nothing and links nobody."""
     workspace = _Workspace()
-    _slack_answers(monkeypatch, fake_slack, workspace)
+    _slack_answers(fake_slack, workspace)
     started = await _add_to_slack(authenticated_client, test_pod["organization_id"])
     victim = await _sign_up_verified_user(async_client)
 

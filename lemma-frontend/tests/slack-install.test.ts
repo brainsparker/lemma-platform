@@ -48,7 +48,12 @@ test("the page Slack sends people back to says only our own words", () => {
         code,
         reason: "Your account is suspended, call +1 555 0100",
     });
-    assert.equal(installedNote(outcome("connected")).ok, true);
+    const connected = installedNote(outcome("connected"));
+    assert.equal(connected.ok, true);
+    // Not every path sends a message (a re-add, a grant finished in another
+    // browser): the note points at what is always there.
+    assert.match(connected.lead, /Home tab/);
+    assert.doesNotMatch(connected.lead, /in a moment|will message you/);
     const cancelled = installedNote(outcome("error", "OAUTH_PROVIDER_ERROR"));
     assert.equal(cancelled.ok, false);
     assert.match(cancelled.lead, /Slack didn't add Lemma/);

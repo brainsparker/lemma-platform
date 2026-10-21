@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { allowedRefusal } from "@/slack/allowed-outcome";
 
 /** Where Slack's Allow for a teammate's app lands, when it was started in Slack.
  *
@@ -10,10 +11,7 @@ import { useEffect, useState } from "react";
 export default function SlackAllowedPage() {
     const [refused, setRefused] = useState<string | null>(null);
     useEffect(() => {
-        const query = new URLSearchParams(window.location.search);
-        if (query.get("connect") === "error") {
-            setRefused(query.get("reason") || "Slack didn't allow the app.");
-        }
+        setRefused(allowedRefusal(window.location.search));
     }, []);
     return (
         <main className="portal">

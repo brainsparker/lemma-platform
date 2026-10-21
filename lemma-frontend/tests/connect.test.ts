@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { REDACTED, blank, fields, isSecretName, payload, problems, unchangedSecret } from "../src/connect/schema.ts";
 import {
-    canBringOwnApp, canInstallWithDefaults, connectRoute, connectSchema, discoveryNote, freshInstallName,
+    canBringOwnApp, canInstallWithDefaults, connectRoute, connectSchema, discoveryNote, freshInstallName, heldInstall,
     connectorProblem, installSchema, installTarget, isBringYourOwn, isStaleDefault, isTenantConfigured, kindFor, kindNamed, needsOwnApp, oauthAppMissing,
     ownAppKinds, ownKinds, primaryKind, registersLemmaRedirect, urlRefusal,
     type CatalogEntry, type ConnectorKind,
@@ -289,6 +289,34 @@ test("a second install of a connector is not given the first one's name", () => 
     assert.equal(freshInstallName("gmail", []), "gmail");
     assert.equal(freshInstallName("gmail", ["gmail"]), "gmail-2");
     assert.equal(freshInstallName("gmail", ["gmail", "gmail-2"]), "gmail-3");
+});
+
+test("an account is authorised against the default install, else the first active one", () => {
+    const installs = [
+        { id: "off", connector_id: "slack", kind: "http", name: "slack-old", status: "DISABLED", is_default: true },
+        { id: "first", connector_id: "slack", kind: "http", name: "slack", status: "ACTIVE" },
+        { id: "default", connector_id: "slack", kind: "http", name: "slack-2", status: "ACTIVE", is_default: true },
+        { id: "gh", connector_id: "github", kind: "http", name: "github", status: "ACTIVE", is_default: true },
+    ];
+    assert.equal(heldInstall(installs, "slack")?.id, "default");
+    assert.equal(heldInstall(installs.slice(0, 2), "slack")?.id, "first");
+    assert.equal(heldInstall(installs, "gmail"), null);
+});
+
+test("Lemma's own Slack app is never authorised on a teammate's own app install", () => {
+    // A teammate's own Slack app is an ORG_CUSTOM install of the same
+    // connector. Picked for the manager, it made an account the manager refused.
+    const teammates = [
+        { id: "mate", connector_id: "slack", kind: "http", name: "Ada (1.2)", status: "ACTIVE", config_source: "ORG_CUSTOM" },
+    ];
+    assert.equal(heldInstall(teammates, "slack", "SYSTEM_DEFAULT"), null);
+    const both = [
+        ...teammates,
+        { id: "lemma", connector_id: "slack", kind: "http", name: "slack", status: "ACTIVE", config_source: "SYSTEM_DEFAULT" },
+    ];
+    assert.equal(heldInstall(both, "slack", "SYSTEM_DEFAULT")?.id, "lemma");
+    // Unasked, the order is what it always was.
+    assert.equal(heldInstall(teammates, "slack")?.id, "mate");
 });
 
 test("a kind is only chosen when the choice is unambiguous", () => {

@@ -36,6 +36,7 @@ from app.modules.agent.domain.agent_host_transfer import (
 from app.modules.agent.infrastructure.agent_host.transfers import (
     AgentHostTransferStore,
 )
+from app.modules.agent.services.agent_host_link_ops import OLD_HOST_OUTPUT_LIMIT_BYTES
 from app.modules.agent.tests.e2e.agent_host_helpers import (
     app_of,
     connected_host,
@@ -203,6 +204,46 @@ async def test_a_host_released_before_transfers_still_reads_and_writes(
         assert result["eof"] is True and "data" not in result
     finally:
         await link.aclose()
+
+
+@pytest.mark.asyncio
+async def test_an_old_hosts_process_keeps_no_more_output_than_one_message_holds(
+    authenticated_client, async_client
+):
+    """A host released before transfers ignores ``process.read``'s
+    ``max_bytes`` and answers with what its process kept since the last read.
+    Started with no more than ``OLD_HOST_OUTPUT_LIMIT_BYTES`` kept, no read of
+    it can pass the message ceiling; a current host is started as asked."""
+    for name, host_execution, kept in (
+        ("old", _OLD, OLD_HOST_OUTPUT_LIMIT_BYTES),
+        ("current", _ON, 1024 * 1024),
+    ):
+        machine = await pair(authenticated_client, async_client, display_name=name)
+        link = await connected_host(
+            app_of(async_client), machine, host_execution=host_execution
+        )
+        try:
+            starting = asyncio.ensure_future(
+                AgentHostOpClient().request(
+                    host_id=UUID(machine["host_id"]),
+                    workspace=uuid4(),
+                    method="process.start",
+                    params={
+                        "operation_id": "build",
+                        "shell_command": "make",
+                        "output_limit_bytes": 1024 * 1024,
+                    },
+                    deadline_at=_deadline(),
+                )
+            )
+            frame = await _next_op(link)
+            assert frame["body"]["params"]["output_limit_bytes"] == kept, name
+            link.reply("op_ok", frame["id"], {"result": {"process_id": "build"}})
+            assert await asyncio.wait_for(starting, timeout=10) == {
+                "process_id": "build"
+            }
+        finally:
+            await link.aclose()
 
 
 @pytest.mark.asyncio

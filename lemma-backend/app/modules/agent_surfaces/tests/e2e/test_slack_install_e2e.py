@@ -22,6 +22,7 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.work import facts
@@ -52,7 +53,11 @@ from app.modules.agent_surfaces.tests.e2e.test_slack_manager_e2e import (
     lemmas_app,  # noqa: F401  (fixture)
 )
 from app.modules.connectors.contracts.facts import ConnectorAccountConnected
+from app.modules.connectors.domain.account import AccountStatus
 from app.modules.connectors.infrastructure.models.auth_config import AuthConfig
+from app.modules.connectors.infrastructure.repositories.account_repository import (
+    AccountRepository,
+)
 from app.modules.connectors.infrastructure.models.connect_request import (
     ConnectRequest,
 )
@@ -290,6 +295,48 @@ async def test_the_grant_coming_back_adopts_the_workspace_and_welcomes_once(
     await drain(_registry())
     assert str(await _bound_to(workspace.team)) == org_id
     assert len(_welcomes(fake_slack)) == 1
+
+
+async def test_adding_lemma_keeps_the_persons_own_slack_token(
+    authenticated_client,
+    db_session,
+    test_pod,
+    fixed_test_user,
+    fake_slack,
+    slack_set_up,
+):
+    """Their own Slack connect holds a user token; "Add to Slack" asks for the
+    bot alone, so its grant has none. Renewing the account must not erase it."""
+    workspace = _Workspace()
+    org_id = test_pod["organization_id"]
+    _slack_answers(fake_slack, workspace)
+    fake_slack.oauth_access["authed_user"] = {
+        "id": workspace.installer,
+        "scope": "im:history,search:read",
+        "access_token": "xoxp-their-own",
+        "token_type": "user",
+    }
+    first = await _add_to_slack(authenticated_client, org_id)
+    await _slack_comes_back(authenticated_client, first.json()["authorization_url"])
+
+    _slack_answers(fake_slack, workspace)  # bot only: authed_user is just an id
+    again = await _add_to_slack(authenticated_client, org_id)
+    landed = await _slack_comes_back(
+        authenticated_client, again.json()["authorization_url"]
+    )
+    assert parse_qs(urlsplit(landed).query)["connect"] == ["connected"]
+
+    (install,) = await _installs_of(db_session, org_id)
+    async with async_session_maker() as session:
+        account = await AccountRepository(
+            SqlAlchemyUnitOfWork(session), get_secret_cipher()
+        ).get_by_user_and_auth_config(UUID(fixed_test_user["id"]), install.id)
+    assert account is not None
+    assert account.status == AccountStatus.CONNECTED
+    raw = account.credentials.raw_response
+    assert raw["authed_user"]["access_token"] == "xoxp-their-own"
+    assert raw["authed_user"]["scope"] == "im:history,search:read"
+    assert account.credentials.access_token == f"xoxb-{workspace.manager_bot.lower()}"
 
 
 async def test_cancelling_on_slack_comes_back_to_the_install_page(

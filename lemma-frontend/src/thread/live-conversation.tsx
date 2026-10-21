@@ -470,12 +470,11 @@ export function LiveConversation({
                 podId={pod.id}
                 orgId={pod.orgId}
                 conversationId={session.conversationId}
-                locked={turns.length > 0}
                 picked={pickedModel}
                 onPicked={setPickedModel}
             />
         )),
-        [bot?.pinnedRuntime, pod.id, pod.orgId, session.conversationId, turns.length, pickedModel],
+        [bot?.pinnedRuntime, pod.id, pod.orgId, session.conversationId, pickedModel],
     );
 
     /* What the run is blocked on, read straight out of the transcript.

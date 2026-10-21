@@ -147,9 +147,9 @@ test("what is typed in a thread stays with that thread, and a reader who may not
         assert.equal(view.dom.window.document.querySelector("textarea")!.value, "", "another thread starts empty");
         await draw("root-1");
         assert.equal(view.dom.window.document.querySelector("textarea")!.value, "half a reply");
-        await draw(undefined, "You can read this channel. Writing here takes a role in Acme that can use it.");
+        await draw(undefined, "You can read this chat. Writing here takes a role in Acme that can use it.");
         assert.equal(view.dom.window.document.querySelector("textarea"), null);
-        assert.match(view.dom.window.document.body.textContent ?? "", /You can read this channel/);
+        assert.match(view.dom.window.document.body.textContent ?? "", /You can read this chat/);
     } finally {
         await view.close();
     }

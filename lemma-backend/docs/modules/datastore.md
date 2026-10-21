@@ -61,7 +61,12 @@ memory, so database work grows with watched pods and writes, not with sockets.
 A lost wake costs latency only: the hub also reads on an idle poll.
 
 - **Visibility**: table read permission is checked at subscribe. RLS rows reach
-  only their owner (the change row carries `owner_user_id`). When the pod's
+  only their owner (the change row carries `owner_user_id`), as the record API
+  scopes them by default. The hub fetches current rows naming a principal
+  every row policy admits (`RowPrincipal.every_row`) and applies that rule
+  itself: per-user tables are `FORCE ROW LEVEL SECURITY`, so a fetch that named
+  nobody would match no per-user row wherever the API's database role is not a
+  superuser or `BYPASSRLS`, and no per-user change would be sent. When the pod's
   grants epoch moves (file writes do not move it), and every
   `LIVE_AUTHZ_RECHECK_SECONDS` regardless, the hub re-checks every
   subscription and ends the ones that lost their table with `unsubscribed`. A

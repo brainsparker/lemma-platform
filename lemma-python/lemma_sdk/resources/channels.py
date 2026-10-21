@@ -244,6 +244,7 @@ class PodChannels(BoundResource):
         topic: str | None | _Keep = KEEP,
         visibility: Literal["PUBLIC", "PRIVATE"] | None | _Keep = KEEP,
         archived: bool | None | _Keep = KEEP,
+        answers_shared: bool | None | _Keep = KEEP,
         agents_answer: bool | None | _Keep = KEEP,
         hand_back_after_hours: int | None | _Keep = KEEP,
         assignee: str | UUID | None | _Keep = KEEP,
@@ -251,8 +252,11 @@ class PodChannels(BoundResource):
     ) -> ChannelDetailResponse:
         """Change exactly the fields named; ``None`` clears one.
 
-        A group: ``title``, ``topic``, ``visibility``, ``archived`` -- its
-        owners' or an admin's. A contact's channel: ``agents_answer``,
+        A group: ``title``, ``topic``, ``visibility``, ``archived``,
+        ``answers_shared`` (on, the default: an agent's answer made with the
+        asker's own access is read by everybody in it; off, by the asker
+        alone until they share it) -- its owners' or an admin's. A
+        contact's channel: ``agents_answer``,
         ``hand_back_after_hours``, ``status``, ``assignee`` (``"me"`` or a
         user id).
         """
@@ -262,6 +266,7 @@ class PodChannels(BoundResource):
                 "topic": topic,
                 "visibility": visibility,
                 "archived": archived,
+                "answers_shared": answers_shared,
                 "agents_answer": agents_answer,
                 "hand_back_after_hours": hand_back_after_hours,
                 "assignee": (

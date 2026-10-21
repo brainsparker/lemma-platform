@@ -419,7 +419,6 @@
     }
 }
 
-
 /* ── The rail and the teammate's space, on a phone ──────────────────────
    One drawer holding both columns: the faces, and the open teammate's
    places beside them. Collapsing is a desk idea; in the drawer the column
@@ -527,24 +526,19 @@
     }
 }
 
-
 /* A space's channels on a phone: rows keep their marks to the side, the
    panel beside a channel covers it, and every control is a thumb high. */
 @media (max-width: 767px), (pointer: coarse) {
     .gpeople__invite,
-    .gsheet__copy,
-    .gsheet__acts .ghost-pill,
-    .gsheet__foot .pill-button,
-    .gsheet__foot .ghost-pill,
-    .smanage__foot .pill-button,
-    .smanage__foot .ghost-pill,
-    .smanage .smanage__recheck,
-    .gway__go,
-    .gnew__button,
-    .channels__new,
-    .channels__tab,
-    .ctimeline__older,
-    .cside__add .ghost-pill {
+.gsheet__copy,
+.gsheet__acts .ghost-pill,
+.gsheet__foot .pill-button,
+.gsheet__foot .ghost-pill,
+.smanage__foot .pill-button,
+.smanage__foot .ghost-pill,
+.smanage .smanage__recheck,
+.ctimeline__older,
+.cside__add .ghost-pill {
         min-height: 44px;
     }
     .cline__replies,
@@ -557,9 +551,7 @@
         width: 44px;
         height: 44px;
     }
-    .chcompose__note {
-        min-height: 44px;
-    }
+
     .gsheet__inline,
     .gswitch,
     .gowner,
@@ -582,41 +574,7 @@
 }
 
 @media (max-width: 767px) {
-    .channels__head {
-        align-items: flex-start;
-    }
-    .channels__title h1 {
-        font-size: 26px;
-    }
-    .gnew__menu {
-        position: fixed;
-        top: auto;
-        left: 16px;
-        right: 16px;
-        bottom: 16px;
-        width: auto;
-        max-width: none;
-    }
-    .gnew__item {
-        min-height: 56px;
-    }
-    .gfirst {
-        padding-top: 16px;
-    }
-    .gfirst__head h2 {
-        font-size: 20px;
-    }
-    .gway {
-        display: grid;
-        grid-template-columns: 40px minmax(0, 1fr);
-    }
-    .gway__go {
-        grid-column: 1 / -1;
-        justify-content: center;
-    }
-    .gfirst__how {
-        grid-template-columns: minmax(0, 1fr);
-    }
+
     .cpage__head {
         padding: 14px 16px 10px;
     }
@@ -646,10 +604,7 @@
     .cside__body {
         padding: 16px 16px 80px;
     }
-    .crow.chrow {
-        gap: 10px;
-        padding: 12px 4px;
-    }
+
     .gsheet__facts div {
         flex-direction: column;
         gap: 2px;
@@ -671,5 +626,62 @@
     .smanage__group-list small {
         max-width: none;
         text-align: left;
+    }
+}
+
+/* A chat that lives on a channel, on a phone: the start menu rises from
+   the bottom, and the composer's controls are a thumb high. */
+@media (max-width: 767px) {
+    .chatstart__menu {
+        top: auto !important;
+        left: 16px !important;
+        right: 16px !important;
+        bottom: 16px;
+        width: auto;
+    }
+    .cpage__strip {
+        padding: 8px 16px;
+    }
+    .cpage__faces-count {
+        display: none;
+    }
+    .chcompose__only {
+        height: 36px;
+    }
+    .chcompose__where select {
+        height: 32px;
+        max-width: 160px;
+    }
+    .cside__tab {
+        height: 36px;
+    }
+    .cline {
+        padding: 8px 12px;
+    }
+    .cline__tools {
+        right: 12px;
+    }
+    .cpage__head {
+        padding: 0 8px;
+    }
+    .cpage__topic,
+    .cpage__places {
+        display: none;
+    }
+    .chthread {
+        width: 100% !important;
+    }
+    .chthread__grip {
+        display: none;
+    }
+    .chcompose__where > span {
+        display: none;
+    }
+    .chcompose__dest {
+        flex-wrap: nowrap;
+        min-width: 0;
+    }
+    .ctimeline__jump {
+        right: 12px;
     }
 }

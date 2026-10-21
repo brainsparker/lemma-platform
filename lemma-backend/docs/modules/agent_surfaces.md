@@ -344,8 +344,10 @@ is answered *for the pod*, in a group the pod has opened to them.
   whether its outsiders are answered and who answers for them -- is the
   source's settings (`GET`/`PATCH /pods/{pod_id}/channels/{c}/sources/{s}`,
   `services/source_settings.py`). Each of the bot's lines records whom it
-  answered and whether that was from what is Public, and an answer made with
-  one member's own access shows its words to that member alone.
+  answered and whether that was from what is Public. An answer made with one
+  member's own access shows its words to everybody in the group, unless the
+  group keeps such answers to whoever asked (`answers_shared`, see
+  [channels](channels.md#answers-made-with-a-members-access)).
 - **A Telegram group can be added from Lemma.** `POST /pods/{pod_id}/channels/telegram-links`
   mints a one-use, hour-long code in Redis and returns
   `t.me/<bot>?startgroup=<code>` (`services/telegram_group_links.py`); Telegram
@@ -600,6 +602,15 @@ is answered *for the pod*, in a group the pod has opened to them.
   either keeps its kind. `surface_send_message` from a note's run is refused.
   In a contact's conversation a note is the keeper's alone: no later turn of
   the contact's reads it.
+- **A turn its model cannot run is said, once, not retried.** A teammate on a
+  member's own runtime runs only for them; anybody else's message to it is
+  refused before a run exists (`RuntimeUnavailableError`,
+  `runtime_profile_not_shareable`, or a model that is gone). The message is
+  still written as its line, and the member it was for gets one note in their
+  own channel per place, agent and reason (`services/refused_turns.py`, through
+  `tell_member` with a key): members-only, never pushed, nothing said in a
+  shared place. A direct message is answered in place too. It used to be
+  retried until the inbound went dead, and a group was told nothing.
 
 ### Lemma's own Slack app manages a workspace
 

@@ -298,7 +298,10 @@ async def test_an_agent_answer_to_a_carried_group_line_follows_it_to_the_place(
             )
         )
     assert answer.body == "On the 4th."
-    assert answer.thread_root_id == UUID(said.json()["id"])
+    # A Telegram group reads as a chat: the answer follows the line in the
+    # main timeline, pointing at it, rather than opening a thread under it.
+    assert answer.thread_root_id is None
+    assert answer.reply_to_id == UUID(said.json()["id"])
     assert (answer.source_id, answer.target_source_id) == (None, place.id)
     assert await _place_rows(answer.id) == {place.id}
 

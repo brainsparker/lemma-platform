@@ -87,18 +87,22 @@ class ReadState:
             )
         ).first()
         if moved is None:
-            # Not moved: what it reached was read when it got there.
-            read_seq = await self.read_seq(channel_id=channel_id, user_id=user_id)
+            # Not moved -- they were already there, or past it. A line that
+            # named them before their number got there (they joined after it,
+            # or were named by an edit) is still read by reading to it.
+            read_seq, unread = await self._read_seq_and_unread(
+                pod_id=pod_id, channel_id=channel_id, user_id=user_id, upto=seq
+            )
         else:
-            read_seq = int(moved[0])
-            if moved[1]:
-                await self._read_mentions(
-                    pod_id=pod_id,
-                    channel_id=channel_id,
-                    user_id=user_id,
-                    upto=read_seq,
-                    where=line.thread_root_id.is_(None),
-                )
+            read_seq, unread = int(moved[0]), bool(moved[1])
+        if unread:
+            await self._read_mentions(
+                pod_id=pod_id,
+                channel_id=channel_id,
+                user_id=user_id,
+                upto=min(seq, read_seq),
+                where=line.thread_root_id.is_(None),
+            )
         signal_after_commit(self.session, pod_id, read_signal(channel_id, user_id))
         return read_seq
 
@@ -158,6 +162,30 @@ class ReadState:
             .execution_options(synchronize_session=False)
         )
         return int(getattr(result, "rowcount", 0) or 0)
+
+    async def _read_seq_and_unread(
+        self, *, pod_id: UUID, channel_id: UUID, user_id: UUID, upto: int
+    ) -> tuple[int, bool]:
+        """Where they have read to, and whether anything up to ``upto`` naming
+        them there is unread: their row by key and one probe of the mention
+        index."""
+        state = ChannelReadStateModel
+        found = (
+            await self.session.execute(
+                select(
+                    state.last_read_seq,
+                    _unread_mentions(
+                        pod_id,
+                        channel_id,
+                        user_id,
+                        upto=func.least(literal(upto), state.last_read_seq),
+                    ),
+                ).where(state.channel_id == channel_id, state.user_id == user_id)
+            )
+        ).first()
+        if found is None:
+            return 0, False
+        return int(found[0]), bool(found[1])
 
     async def read_seq(self, *, channel_id: UUID, user_id: UUID) -> int:
         found = await self.session.scalar(

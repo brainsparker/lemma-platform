@@ -1,8 +1,9 @@
 """Who sees and changes a pod's groups, with two members in the pod -- end to end.
 
 A group is a GROUP channel every member may read; what the bot told one member
-with that member's own access stays that member's -- the others see that it
-was answered, and for whom, not what was said. Its settings are its source's
+there with that member's own access the others in it read too -- unless the
+group keeps such answers to whoever asked (``answers_shared`` off): then they
+see that it was answered, and for whom, not what was said. Its settings are its source's
 (``/pods/{pod}/channels/{c}/sources/{s}``). A group's people outside the pod are
 answered for by one member: only they, or an admin of the pod, may switch that
 off or take it over, and an admin who does tells them. A member who has left
@@ -119,11 +120,22 @@ async def _pod_with_a_group(scenario, message_store) -> tuple[dict, dict, dict]:
     return surface, started.json(), editor
 
 
-async def test_what_the_bot_told_one_member_is_withheld_from_the_others(
-    scenario, db_session: AsyncSession, fake_whatsapp, message_store, monkeypatch
+@pytest.mark.parametrize("answers_shared", [True, False])
+async def test_what_the_bot_told_one_member_the_others_read_unless_kept_to_them(
+    scenario,
+    db_session: AsyncSession,
+    fake_whatsapp,
+    message_store,
+    monkeypatch,
+    answers_shared: bool,
 ):
     _wire_whatsapp(monkeypatch, fake_whatsapp)
     _surface, group, editor = await _pod_with_a_group(scenario, message_store)
+    changed = await scenario.owner_client.patch(
+        f"/pods/{scenario.pod_id}/channels/{group['channel_id']}",
+        json={"answers_shared": answers_shared},
+    )
+    assert changed.status_code == 200, changed.text
     owner = Principal.member(UUID(scenario.owner_user["id"]))
     the_group = await group_by_id(db_session, group["id"])
     tiago = await a_stranger(db_session, the_group, telegram_id="555", name="Tiago")
@@ -164,10 +176,12 @@ async def test_what_the_bot_told_one_member_is_withheld_from_the_others(
         "Salaries total 1.2M this quarter.",
         "Lead times are two weeks.",
     ]
-    private, public = from_bot(as_editor)
-    assert private["withheld"] is True
-    assert private["text"] is None
-    assert private["on_behalf_of"]["id"] == scenario.owner_user["id"]
+    owners, public = from_bot(as_editor)
+    assert owners["withheld"] is not answers_shared
+    assert owners["text"] == (
+        "Salaries total 1.2M this quarter." if answers_shared else None
+    )
+    assert owners["on_behalf_of"]["id"] == scenario.owner_user["id"]
     assert public["withheld"] is False
     assert public["text"] == "Lead times are two weeks."
     assert public["on_behalf_of"]["kind"] == "CONTACT"

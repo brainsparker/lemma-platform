@@ -145,5 +145,8 @@ def test_a_new_private_place_belongs_to_its_person_and_a_shared_one_to_itself():
     )
 
     assert home_of(private, user_id=member, contact_id=None) == MembersHome(member)
-    assert home_of(private, user_id=member, contact_id=contact) == ContactsHome(contact)
+    # A contact's: kept by the member looking after them, who follows it.
+    assert home_of(private, user_id=member, contact_id=contact) == ContactsHome(
+        contact, keeper_user_id=member
+    )
     assert isinstance(home_of(group, user_id=member, contact_id=contact), GroupHome)

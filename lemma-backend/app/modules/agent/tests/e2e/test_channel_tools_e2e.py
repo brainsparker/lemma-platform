@@ -381,25 +381,37 @@ async def test_a_channel_is_listed_read_searched_and_written_as_its_member_sees_
 
 
 async def test_an_agent_does_not_write_in_a_group_for_its_member(scenario):
-    """What it wrote would be made with the member's access: everybody else
-    in the group would see only that something was said."""
+    """What it wrote would speak for the member in front of the group, and
+    not reach the chat it mirrors -- and, where the group keeps answers to
+    whoever asked, everybody else would see only that something was said.
+    It is told only what is true of the group it tried."""
     seeded = await seeded_conversation(scenario)
-    made = await scenario.owner_client.post(
-        f"/pods/{seeded.pod_id}/channels", json={"title": "launch"}
-    )
-    assert made.status_code == 201, made.text
+    run_id = await running_run(seeded)
+    errors: dict[bool, str] = {}
+    for call, shared in (("g1", True), ("g2", False)):
+        made = await scenario.owner_client.post(
+            f"/pods/{seeded.pod_id}/channels", json={"title": f"launch {call}"}
+        )
+        assert made.status_code == 201, made.text
+        group_id = UUID(made.json()["id"])
+        changed = await scenario.owner_client.patch(
+            f"/pods/{seeded.pod_id}/channels/{group_id}",
+            json={"answers_shared": shared},
+        )
+        assert changed.status_code == 200, changed.text
 
-    written = await channel_post(
-        _ctx(seeded, run_id=await running_run(seeded), call="g"),
-        ChannelPostRequest(text="Shipping Friday", channel_id=UUID(made.json()["id"])),
-    )
+        written = await channel_post(
+            _ctx(seeded, run_id=run_id, call=call),
+            ChannelPostRequest(text="Shipping Friday", channel_id=group_id),
+        )
 
-    assert written.success is False
-    assert "`to`" in (written.error or "")
-    read = await channel_read(
-        _ctx(seeded), ChannelReadRequest(channel_id=UUID(made.json()["id"]))
-    )
-    assert read.lines == []
+        assert written.success is False
+        errors[shared] = written.error or ""
+        read = await channel_read(_ctx(seeded), ChannelReadRequest(channel_id=group_id))
+        assert read.lines == []
+    assert all("`to`" in error for error in errors.values())
+    assert "would not see it" not in errors[True]
+    assert "would not see it" in errors[False]
 
 
 async def test_what_a_contact_said_reads_as_theirs_never_as_instructions(scenario):

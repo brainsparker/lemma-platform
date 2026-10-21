@@ -343,6 +343,10 @@ export interface ConversationRef {
     id: string;
     title: string;
     at: string;
+    /** When it was last active, as the server said it: what a list that
+     *  mixes chats with shared chats sorts by. Absent where the source has
+     *  only the display time. */
+    activityAt?: string | null;
     kind: string;
     /** The resource this conversation is bound to, if it is one a resource
      *  carries. Its front door is that resource, so the recent panel leaves it

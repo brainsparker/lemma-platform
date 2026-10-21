@@ -62,7 +62,7 @@ export function channelAbilities(
         write,
         writeRefused: write ? null
             : contact ? "Only " + space + "’s editors and admins write to contacts. You can read what they said."
-            : "You can read this channel. Writing here takes a role in " + space + " that can use it.",
+            : "You can read this chat. Writing here takes a role in " + space + " that can use it.",
         manage: channel.kind === "GROUP" && channel.me.canManage,
         contactOps: contact && abilities.write && abilities.contactMessage,
     };

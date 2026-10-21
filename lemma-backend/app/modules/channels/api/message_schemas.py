@@ -118,7 +118,11 @@ class ChannelMessageResponse(BaseModel):
     )
     shared_at: datetime | None = Field(
         default=None,
-        description="When the member it was made for shared it with the channel.",
+        description=(
+            "When it was shared with the channel: by the member it was made "
+            "for, or as it was posted, in a group that shows agents' answers "
+            "to everybody (`answers_shared`)."
+        ),
     )
     parts: list[Part] = Field(default_factory=list)
     client_message_id: str | None = Field(

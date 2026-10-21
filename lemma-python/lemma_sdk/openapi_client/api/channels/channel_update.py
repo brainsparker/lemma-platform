@@ -98,8 +98,10 @@ def sync_detailed(
 
      Change exactly the fields named; `null` clears.
 
-    A group: `title`, `topic`, `visibility`, `archived` -- its owners' or an
-    admin's. A contact's channel: `agents_answer`, `hand_back_after_hours`,
+    A group: `title`, `topic`, `visibility`, `archived`, `answers_shared`
+    (whether agents' answers made with the asker's access are read by
+    everybody here, or kept to the asker until they share one) -- its
+    owners' or an admin's. A contact's channel: `agents_answer`, `hand_back_after_hours`,
     `status`, `assignee` -- for who may write to contacts. Switching the agent
     on hands the contact back to it now: nobody is assigned.
 
@@ -109,8 +111,9 @@ def sync_detailed(
         body (ChannelUpdateRequest): Absent is unchanged; ``null`` clears where clearing means
             something.
 
-            A group takes ``title``, ``topic``, ``visibility``, ``archived``. A
-            contact's channel takes ``agents_answer``, ``hand_back_after_hours``,
+            A group takes ``title``, ``topic``, ``visibility``, ``archived``,
+            ``answers_shared``. A contact's channel takes ``agents_answer``,
+            ``hand_back_after_hours``,
             ``status``, ``assignee`` (and needs ``contact.message``). Anything else
             for the kind is 409.
 
@@ -146,8 +149,10 @@ def sync(
 
      Change exactly the fields named; `null` clears.
 
-    A group: `title`, `topic`, `visibility`, `archived` -- its owners' or an
-    admin's. A contact's channel: `agents_answer`, `hand_back_after_hours`,
+    A group: `title`, `topic`, `visibility`, `archived`, `answers_shared`
+    (whether agents' answers made with the asker's access are read by
+    everybody here, or kept to the asker until they share one) -- its
+    owners' or an admin's. A contact's channel: `agents_answer`, `hand_back_after_hours`,
     `status`, `assignee` -- for who may write to contacts. Switching the agent
     on hands the contact back to it now: nobody is assigned.
 
@@ -157,8 +162,9 @@ def sync(
         body (ChannelUpdateRequest): Absent is unchanged; ``null`` clears where clearing means
             something.
 
-            A group takes ``title``, ``topic``, ``visibility``, ``archived``. A
-            contact's channel takes ``agents_answer``, ``hand_back_after_hours``,
+            A group takes ``title``, ``topic``, ``visibility``, ``archived``,
+            ``answers_shared``. A contact's channel takes ``agents_answer``,
+            ``hand_back_after_hours``,
             ``status``, ``assignee`` (and needs ``contact.message``). Anything else
             for the kind is 409.
 
@@ -189,8 +195,10 @@ async def asyncio_detailed(
 
      Change exactly the fields named; `null` clears.
 
-    A group: `title`, `topic`, `visibility`, `archived` -- its owners' or an
-    admin's. A contact's channel: `agents_answer`, `hand_back_after_hours`,
+    A group: `title`, `topic`, `visibility`, `archived`, `answers_shared`
+    (whether agents' answers made with the asker's access are read by
+    everybody here, or kept to the asker until they share one) -- its
+    owners' or an admin's. A contact's channel: `agents_answer`, `hand_back_after_hours`,
     `status`, `assignee` -- for who may write to contacts. Switching the agent
     on hands the contact back to it now: nobody is assigned.
 
@@ -200,8 +208,9 @@ async def asyncio_detailed(
         body (ChannelUpdateRequest): Absent is unchanged; ``null`` clears where clearing means
             something.
 
-            A group takes ``title``, ``topic``, ``visibility``, ``archived``. A
-            contact's channel takes ``agents_answer``, ``hand_back_after_hours``,
+            A group takes ``title``, ``topic``, ``visibility``, ``archived``,
+            ``answers_shared``. A contact's channel takes ``agents_answer``,
+            ``hand_back_after_hours``,
             ``status``, ``assignee`` (and needs ``contact.message``). Anything else
             for the kind is 409.
 
@@ -235,8 +244,10 @@ async def asyncio(
 
      Change exactly the fields named; `null` clears.
 
-    A group: `title`, `topic`, `visibility`, `archived` -- its owners' or an
-    admin's. A contact's channel: `agents_answer`, `hand_back_after_hours`,
+    A group: `title`, `topic`, `visibility`, `archived`, `answers_shared`
+    (whether agents' answers made with the asker's access are read by
+    everybody here, or kept to the asker until they share one) -- its
+    owners' or an admin's. A contact's channel: `agents_answer`, `hand_back_after_hours`,
     `status`, `assignee` -- for who may write to contacts. Switching the agent
     on hands the contact back to it now: nobody is assigned.
 
@@ -246,8 +257,9 @@ async def asyncio(
         body (ChannelUpdateRequest): Absent is unchanged; ``null`` clears where clearing means
             something.
 
-            A group takes ``title``, ``topic``, ``visibility``, ``archived``. A
-            contact's channel takes ``agents_answer``, ``hand_back_after_hours``,
+            A group takes ``title``, ``topic``, ``visibility``, ``archived``,
+            ``answers_shared``. A contact's channel takes ``agents_answer``,
+            ``hand_back_after_hours``,
             ``status``, ``assignee`` (and needs ``contact.message``). Anything else
             for the kind is 409.
 

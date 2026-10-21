@@ -1462,7 +1462,9 @@ async def db_manager(e2e_settings, request) -> AsyncGenerator[DatabaseManager, N
             if "lock timeout" in str(exc).lower():
                 # A wait that later succeeds still costs the test its duration
                 # budget; the warnings summary names the holder either way.
-                warn_lock_holders(await describe_lock_holders(e2e_settings.database_url))
+                warn_lock_holders(
+                    await describe_lock_holders(e2e_settings.database_url)
+                )
             await _asyncio.sleep(0.3 * (_attempt + 1))
     else:
         assert last_exc is not None

@@ -360,6 +360,17 @@ class SurfaceSettings(BaseSettings):
             "the matched surface account."
         ),
     )
+    surface_send_backoff_scale: float = Field(
+        default=1.0,
+        gt=0,
+        description=(
+            "Multiplies the exponential wait between inline retries of a "
+            "platform send (0.5s doubling to 8s). Attempt counts and a "
+            "platform's Retry-After are unchanged. Tests that make a fake "
+            "platform fail on purpose shrink it. Env: "
+            "``SURFACE_SEND_BACKOFF_SCALE``."
+        ),
+    )
     enable_resend_polling_mode: bool = Field(
         default=False,
         description=(

@@ -84,7 +84,7 @@ way a scenario says, do not edit the scenario.
 
 The real-LLM lane is worth one paragraph, because its absence used to be
 invisible. Every `@pytest.mark.real_llm` test ran in **no** lane at all: the
-pull-request lane uses the deterministic model, and the weekly protected lane
+pull-request lane uses the deterministic model, and the nightly protected lane
 sets `E2E_REAL=1` *together with* `E2E_LLM_MODE=mock` — and `conftest.py` reads
 the explicit mode first, so they skipped there too. A test that runs nowhere
 still looks like coverage in a listing.

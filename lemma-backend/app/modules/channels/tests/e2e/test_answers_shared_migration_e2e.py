@@ -21,7 +21,11 @@ import pytest
 
 from app.core.test_utils import get_postgres_container, get_postgres_url
 
-pytestmark = pytest.mark.e2e
+# Walks the Alembic chain from the base on its own Postgres: real upgrade,
+# downgrade and upgrade again, which cannot be faked and costs 15-30s on a CI
+# runner. Like the other chain walks it runs in the nightly protected lane; the
+# pull-request lane keeps one round trip, `test_work_migration_e2e.py`.
+pytestmark = [pytest.mark.e2e, pytest.mark.slow]
 
 BACKEND = Path(__file__).resolve().parents[5]
 BEFORE = "0060_slack_apps"

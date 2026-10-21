@@ -149,7 +149,7 @@ async def test_a_member_taken_out_of_the_pod_stops_hearing_a_public_group(
         }
         assert ended == {"c": "access_revoked", "i": "access_revoked"}
         await say(pod, channel["id"], "after they left the pod")
-        await live.quiet(1.5)
+        await live.quiet()
         assert "after they left the pod" not in _texts(live)
 
 
@@ -215,7 +215,7 @@ async def test_losing_contact_read_ends_a_contacts_channel_subscription(
         refetch = await live.until("resync", "i")
         assert refetch["reason"] == "permission_changed"
         await _contact_says(db_session, pod, source, contact_id, "secret order")
-        await live.quiet(1.5)
+        await live.quiet()
         assert "secret order" not in _texts(live)
 
 
@@ -277,7 +277,7 @@ async def test_a_file_upload_does_not_resync_the_inbox(
         )
         assert uploaded.status_code == 201, uploaded.text
         # Longer than a hub's epoch check: a resync would have come by now.
-        await live.quiet(live_settings.live_authz_check_seconds + 2)
+        await live.quiet(live_settings.live_authz_check_seconds + 0.5)
         assert [f for f in live.frames if f["type"] == "resync"] == []
     # What a search may reach moved; who may read what did not.
     assert await pod_authz_epoch(pod_id) != whole

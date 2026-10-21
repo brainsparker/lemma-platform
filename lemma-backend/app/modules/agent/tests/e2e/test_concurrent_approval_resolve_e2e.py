@@ -46,7 +46,10 @@ from app.modules.test_support.e2e.builders import E2EScenario
 from app.modules.test_support.e2e.function_helpers import create_table
 from app.modules.test_support.e2e.waiters import eventually
 
-pytestmark = [pytest.mark.e2e]
+# Each decision resumes the run inline, in this process. The session worker
+# must not take the same queued resume -- it raced the inline path and, once
+# it pooled its connections, sometimes won -- so it is held for each test.
+pytestmark = [pytest.mark.e2e, pytest.mark.drives_work]
 
 _TABLE = "chores"
 

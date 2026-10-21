@@ -147,7 +147,16 @@ async def _insert_on_first_free_address(
                     pod_id=pod_id,
                     platform=SurfacePlatform.RESEND,
                     agent_id=agent_id,
-                    name=_name_for_attempt(name, address=address, attempt=attempt),
+                    # A chosen name holds on every attempt, the IntegrityError
+                    # retry included: only the address is a candidate then.
+                    # Varying it there created `support-p7k3` for a caller who
+                    # asked for `support`, which the bundle applier -- keyed on
+                    # the name -- could not find again on its next apply.
+                    name=(
+                        name
+                        if name_is_chosen
+                        else _name_for_attempt(name, address=address, attempt=attempt)
+                    ),
                     config=config,
                     credential_mode=credential_mode,
                     account_id=account_id,

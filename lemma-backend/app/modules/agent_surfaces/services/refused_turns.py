@@ -40,6 +40,11 @@ logger = get_logger(__name__)
 
 _PLATFORM_NAMES = {"WHATSAPP": "WhatsApp"}
 
+#: What was left unanswered, where "your message on <Platform>" would not read
+#: as the person knows it. An email surface is RESEND, the provider's name --
+#: not a word anybody who sent an email would recognise.
+_UNANSWERED = {"RESEND": "your email"}
+
 #: How the member is told: ``tell_member`` (looked up per call), unless a caller
 #: passes another.
 TellMember = Callable[..., Awaitable[object]]
@@ -87,7 +92,8 @@ def refusal_text(context: SurfaceChatContext, refused: DomainError) -> str:
     agent = context.agent_display_name or "The agent"
     platform = str(context.platform.value)
     where = _PLATFORM_NAMES.get(platform, platform.capitalize())
-    return f"{agent} didn't answer your message on {where}. {refused.message}"
+    what = _UNANSWERED.get(platform, f"your message on {where}")
+    return f"{agent} didn't answer {what}. {refused.message}"
 
 
 def refusal_key(context: SurfaceChatContext, refused: DomainError) -> str:

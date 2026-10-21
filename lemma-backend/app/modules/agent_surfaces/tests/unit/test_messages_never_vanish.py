@@ -18,6 +18,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
@@ -264,3 +265,23 @@ async def test_a_turn_refused_in_a_direct_message_says_why_there_too():
     [said] = starter.told
     assert "Ada's own Claude Code" in said
     assert len(noted) == 1
+
+
+async def test_an_email_refusal_names_the_email_not_the_mail_provider():
+    """An email surface's platform is RESEND, which rendered as "your message
+    on Resend": the provider's name, in a reply to somebody who sent an email."""
+    noted: list[dict] = []
+    starter = _RefusalStarter(AsyncMock())
+    emailed = _context("hello", agent_display_name="Helper").model_copy(
+        update={"platform": SurfacePlatform.RESEND}
+    )
+
+    await say_turn_refused(
+        starter, emailed, "hello", _not_shareable(), tell=_noting(noted)
+    )
+
+    [said] = starter.told
+    [note] = noted
+    for text in (said, note["text"]):
+        assert text.startswith("Helper didn't answer your email."), text
+        assert "Resend" not in text

@@ -461,7 +461,11 @@ threads are read where they are.
   line naming them there is unread, counted from the line that named them
   (the read number they were given then). Read, it stops being new to them
   until they are named again. A public group nobody named them in counts
-  nothing.
+  nothing. Before this, the read number such a member was given was zero,
+  which counted nothing while only a seat counted lines; migration
+  `0061_answers_shared` moves each one still at zero, with something naming
+  them unread, to just before the earliest such line, so it does not count
+  the channel's whole history.
 - **A mention is read where it was said.** `POST /read {seq}` reads the
   timeline to `seq`: mentions in its top-level lines up to there are read,
   mentions in thread replies are not. `POST /read {seq, thread_root_id}`

@@ -631,6 +631,8 @@ remember where the bot is, who is in there, or what is waiting on them.
   was given and for whom, until that member shares it.
 - The system shall let only a member who may change a group choose whether it
   keeps answers to whoever asked.
+- If a member who may not change a group asks to change whether it keeps
+  answers to whoever asked, then the system shall refuse the request.
 - The system shall keep its record of a group, and the bot shall say so in the
   group when it arrives.
 - The system shall never show a member's private conversation with the bot, or

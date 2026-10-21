@@ -15,6 +15,11 @@ cannot drift between them:
   are: the lines from their own source, and none of those an agent wrote with
   a member's own access. Never a private note. A line is where they are when
   it was heard there or carried there from Lemma (``place_id``).
+
+Whether a member's answer is kept to them is the group's choice
+(``channels.answers_shared``): asked in front of the group, it is the
+group's to read -- posted shared (``shared_when_posted``) -- unless the group
+keeps answers to whoever asked until they share them.
 """
 
 from __future__ import annotations
@@ -25,8 +30,10 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict
 
 from app.modules.channels.domain.entities import (
+    ChannelKind,
     ChannelMessage,
     Principal,
+    Sender,
     SenderKind,
 )
 
@@ -97,6 +104,26 @@ def withheld_from(
         return False
     behalf = sender.on_behalf_of
     return behalf is None or behalf.user_id != user_id
+
+
+def shared_when_posted(
+    sender: Sender, *, kind: ChannelKind, answers_shared: bool
+) -> bool:
+    """Whether a line is shared with the channel as it is written: an
+    agent's answer made with the asking member's own access, in a group that
+    shows its agents' answers to everybody (``answers_shared``). Who asked in
+    front of the group asked the group; who wanted it private would have
+    asked in their own channel. A DIRECT channel has one reader anyway, and a
+    CONTACT one keeps today's rule; an answer nobody can say was for whom is
+    never shared (``withheld_from`` fails closed)."""
+    behalf = sender.on_behalf_of
+    return (
+        kind is ChannelKind.GROUP
+        and answers_shared
+        and sender.kind is SenderKind.AGENT
+        and behalf is not None
+        and behalf.user_id is not None
+    )
 
 
 def asker_only(message: ChannelMessage, *, in_a_direct: bool = False) -> bool:

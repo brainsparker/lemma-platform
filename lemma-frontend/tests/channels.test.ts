@@ -303,3 +303,9 @@ test("offers to add the space's people not in the channel yet, never a teammate"
     ];
     assert.deepEqual(addable(members, detail.members).map((member) => member.name), ["Jo"]);
 });
+
+test("a group shows its agents' answers to everyone unless the API says it keeps them to the asker", () => {
+    assert.equal(readChannelDetail({ id: "c", kind: "GROUP", created_at: "" })!.answersShared, true);
+    assert.equal(readChannelDetail({ id: "c", kind: "GROUP", created_at: "", answers_shared: true })!.answersShared, true);
+    assert.equal(readChannelDetail({ id: "c", kind: "GROUP", created_at: "", answers_shared: false })!.answersShared, false);
+});

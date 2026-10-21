@@ -37,6 +37,18 @@ export function mutedSaid(until: string | null, now = new Date()): string | null
         : at.toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" }));
 }
 
+/** Whether a group shows its agents' answers to everybody in it: the
+ *  switch's label, and what each way means. Asked in front of the group, an
+ *  answer is the group's to read; a group can keep one to whoever asked
+ *  instead, until they share it (the "Share with channel" on the line). */
+export const ANSWERS_SHARED_LABEL = "Show agents’ answers to everyone here";
+
+export function answersSharedNote(shared: boolean): string {
+    return shared
+        ? "Everyone here reads what an agent answers, even when it used the asker’s own access."
+        : "Keep an answer to whoever asked until they share it. Everyone else sees that it was answered, not what it said.";
+}
+
 /** What making a private group public means, asked before it is done: the
  *  whole pod can read it from then on, what was said before included. */
 export function publicWarning(title: string | null, space: string): string {

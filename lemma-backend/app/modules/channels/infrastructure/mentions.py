@@ -8,10 +8,12 @@ stops counting), and a deleted or emptied line loses them (``drop_mentions``).
 A mention's channel and number are its line's, held there by a cascading
 foreign key, so a fold moving and renumbering the line moves them too.
 
-Somebody named where they have no seat is given a read number in the channel
--- zero, which is what having none means -- so their unread mentions are
-counted from their own places (``inbox``) without reading every mention they
-were ever given.
+Somebody named where they have no read number is given one, at the
+channel's head as it stands before the line naming them, so their unread
+mentions are counted from their own places (``inbox``) without reading every
+mention they were ever given -- and, while one is unread, the channel is new
+to them from the line that named them, not from its first: what was said
+before is history, as it is for somebody joining.
 """
 
 from __future__ import annotations
@@ -20,13 +22,14 @@ from collections.abc import Collection, Sequence
 from dataclasses import dataclass, field
 from uuid import UUID
 
-from sqlalchemy import delete, select
+from sqlalchemy import Uuid, column, delete, literal, select, true, values
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.channels.domain.entities import ChannelMessage, Principal
 from app.modules.channels.infrastructure.models import (
     ChannelMentionModel,
+    ChannelModel,
     ChannelReadStateModel,
 )
 
@@ -103,21 +106,31 @@ async def sync_mentions(
 async def _give_a_place(
     session: AsyncSession, message: ChannelMessage, user_ids: list[UUID]
 ) -> None:
-    """A read number for each member named, where they have none: read up to
-    nothing, as having none already meant."""
+    """A read number for each member named, where they have none: at the
+    channel's head as written. A post names people before its head is written
+    (``revisions.holding`` writes it once, at the end), so that is the line
+    before this one; an edit naming somebody new starts them at the newest
+    line, as joining does, and the line naming them stays unread."""
     state = ChannelReadStateModel
+    head = (
+        select(ChannelModel.last_seq, ChannelModel.replies)
+        .where(ChannelModel.id == message.channel_id)
+        .subquery()
+    )
+    named = values(column("user_id", Uuid), name="named").data(
+        [(user_id,) for user_id in sorted(set(user_ids))]
+    )
     await session.execute(
         insert(state)
-        .values(
-            [
-                {
-                    "user_id": user_id,
-                    "channel_id": message.channel_id,
-                    "pod_id": message.pod_id,
-                    "last_read_seq": 0,
-                }
-                for user_id in sorted(set(user_ids))
-            ]
+        .from_select(
+            ["user_id", "channel_id", "pod_id", "last_read_seq", "read_replies"],
+            select(
+                named.c.user_id,
+                literal(message.channel_id),
+                literal(message.pod_id),
+                head.c.last_seq,
+                head.c.replies,
+            ).select_from(named.join(head, true())),
         )
         .on_conflict_do_nothing(index_elements=[state.user_id, state.channel_id])
     )

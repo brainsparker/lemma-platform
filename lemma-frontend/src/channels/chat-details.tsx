@@ -12,6 +12,7 @@ import { PlaceLink } from "@/shell/place-link";
 import { BellIcon, CheckIcon, ChevronDownIcon, PlusIcon, SearchIcon } from "@/ui/icons";
 import type { ChannelAbilities } from "./abilities";
 import { AgentSwitch } from "./agent-switch";
+import { AnswersSwitch } from "./answers-switch";
 import { channelApi, type ChannelChange, type MineChange } from "./api";
 import { Avatar } from "./avatar";
 import { answersHint, placeName } from "./chat-copy";
@@ -257,6 +258,7 @@ function About({ pod, channel, may, onLeft, onSettings }: { pod: Pod; channel: C
                 <Row label="Chat name" action={edit("title")}>{editing === "title" ? editor("title") : channelTitle(channel, pod.name)}</Row>
                 <Row label="Topic" action={edit("topic")}>{editing === "topic" ? editor("topic") : channel.topic ?? <span className="cdet__muted">{may.manage ? "Add a topic" : "No topic"}</span>}</Row>
                 <Row label="Who answers">{answersHint(channel, teammate)}</Row>
+                <div className="cdet__row"><AnswersSwitch podId={pod.id} channel={channel} manage={may.manage} /></div>
                 <Row label="Who can find it" action={may.manage ? <button type="button" className="cdet__link" onClick={onSettings}>Change</button> : null}>
                     {channel.visibility === "PRIVATE" ? "Only the people in it." : "Anyone in " + pod.name + " can find it and join."}
                 </Row>

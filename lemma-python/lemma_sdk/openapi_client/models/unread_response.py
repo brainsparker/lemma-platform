@@ -15,7 +15,8 @@ T = TypeVar("T", bound="UnreadResponse")
 class UnreadResponse:
     """
     Attributes:
-        lines (int | Unset): New lines since the reader last read it, in channels they joined; stops at 100. Default: 0.
+        lines (int | Unset): New lines since the reader last read it, in channels they joined -- and, in one they are
+            not in, while a line naming them is unread, from that line; stops at 100. Default: 0.
         mentions (int | Unset): Unread lines naming the reader. Default: 0.
         read_seq (int | Unset): The last line the reader read. Default: 0.
         waiting (int | Unset): Questions here waiting on the reader's answer. Default: 0.

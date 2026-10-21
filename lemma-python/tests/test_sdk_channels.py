@@ -54,6 +54,15 @@ def test_an_update_sends_only_the_fields_named_and_none_clears() -> None:
     assert _sent(call) == {"topic": None, "archived": True}
 
 
+def test_a_group_keeping_answers_to_the_asker_is_a_patch_of_answers_shared() -> None:
+    transport = RecordingTransport()
+
+    PodChannels(transport, pod_id=POD).update(CHANNEL, answers_shared=False)
+
+    [call] = transport.calls
+    assert _sent(call) == {"answers_shared": False}
+
+
 def test_switching_a_contacts_agent_is_a_patch_of_agents_answer() -> None:
     transport = RecordingTransport()
     channels = PodChannels(transport, pod_id=POD)

@@ -78,6 +78,7 @@ def channel_entity(row: ChannelModel) -> Channel:
         created_by_user_id=row.created_by_user_id,
         created_at=row.created_at,
         archived_at=row.archived_at,
+        answers_shared=row.answers_shared,
         agents_answer=row.agents_answer,
         hand_back_after_hours=row.hand_back_after_hours,
         last_seq=row.last_seq,

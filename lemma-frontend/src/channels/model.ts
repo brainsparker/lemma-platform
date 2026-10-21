@@ -42,6 +42,10 @@ export interface Channel {
     person: PersonRef | null;
     /** A group's: every member sees a public one, its members a private one. */
     visibility: Visibility;
+    /** A group's: an agent's answer made with the asker's own access is read
+     *  by everybody in it (the default) -- or, off, kept to whoever asked
+     *  until they share it. */
+    answersShared: boolean;
     sources: SourceSummary[];
     /** A contact's channel: the member answering them -- by writing to them,
      *  or assigned. Its agent waits until they have been quiet
@@ -253,6 +257,7 @@ export function readChannel(raw: unknown): Channel | null {
         topic: words(row.topic),
         person: readPerson(row.person),
         visibility: row.visibility === "PRIVATE" ? "PRIVATE" : "PUBLIC",
+        answersShared: row.answers_shared !== false,
         sources: rows(row.sources).flatMap((entry) => {
             const source = record(entry);
             const platform = words(source.platform);

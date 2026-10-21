@@ -191,6 +191,7 @@ export function sampleChannelApi(_podId: string): ChannelApi {
             if (body.topic !== undefined) change.topic = body.topic;
             if (body.archived !== undefined) change.archived = body.archived;
             if (body.visibility !== undefined) change.visibility = body.visibility;
+            if (body.answersShared !== undefined) change.answers_shared = body.answersShared;
             if (body.agentsAnswer !== undefined) change.agents_answer = body.agentsAnswer;
             if (body.handBackAfterHours !== undefined) change.hand_back_after_hours = body.handBackAfterHours;
             if (body.status !== undefined) change.status = body.status;

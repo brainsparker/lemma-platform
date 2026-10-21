@@ -3639,6 +3639,18 @@
             "description": "A contact's channel: whether its agents answer the contact.",
             "title": "Agents Answer"
           },
+          "answers_shared": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A group's: whether an answer an agent gives a member here with their own access is read by everybody in it (the default), or by that member alone until they share it. Absent for another kind.",
+            "title": "Answers Shared"
+          },
           "archived": {
             "default": false,
             "title": "Archived",
@@ -3665,6 +3677,19 @@
               }
             ],
             "description": "A contact's channel: its current case asks for a person, and why. Never set on another kind of channel."
+          },
+          "case_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A contact's channel: its current case, the one `status`, `assignee` and `attention` are read from (`/cases` lists them all).",
+            "title": "Case Id"
           },
           "created_at": {
             "format": "date-time",
@@ -4174,7 +4199,7 @@
                 "type": "null"
               }
             ],
-            "description": "When the member it was made for shared it with the channel.",
+            "description": "When it was shared with the channel: by the member it was made for, or as it was posted, in a group that shows agents' answers to everybody (`answers_shared`).",
             "title": "Shared At"
           },
           "source_id": {
@@ -4439,6 +4464,18 @@
             "description": "A contact's channel: whether its agents answer the contact.",
             "title": "Agents Answer"
           },
+          "answers_shared": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A group's: whether an answer an agent gives a member here with their own access is read by everybody in it (the default), or by that member alone until they share it. Absent for another kind.",
+            "title": "Answers Shared"
+          },
           "archived": {
             "default": false,
             "title": "Archived",
@@ -4465,6 +4502,19 @@
               }
             ],
             "description": "A contact's channel: its current case asks for a person, and why. Never set on another kind of channel."
+          },
+          "case_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A contact's channel: its current case, the one `status`, `assignee` and `attention` are read from (`/cases` lists them all).",
+            "title": "Case Id"
           },
           "created_at": {
             "format": "date-time",
@@ -4669,7 +4719,7 @@
         "type": "object"
       },
       "ChannelUpdateRequest": {
-        "description": "Absent is unchanged; ``null`` clears where clearing means something.\n\nA group takes ``title``, ``topic``, ``visibility``, ``archived``. A\ncontact's channel takes ``agents_answer``, ``hand_back_after_hours``,\n``status``, ``assignee`` (and needs ``contact.message``). Anything else\nfor the kind is 409.",
+        "description": "Absent is unchanged; ``null`` clears where clearing means something.\n\nA group takes ``title``, ``topic``, ``visibility``, ``archived``,\n``answers_shared``. A contact's channel takes ``agents_answer``, ``hand_back_after_hours``,\n``status``, ``assignee`` (and needs ``contact.message``). Anything else\nfor the kind is 409.",
         "properties": {
           "agents_answer": {
             "anyOf": [
@@ -4682,6 +4732,18 @@
             ],
             "description": "On also hands the contact back now: nobody is assigned.",
             "title": "Agents Answer"
+          },
+          "answers_shared": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A group's: on, agents' answers made with the asker's access are read by everybody here; off, by the asker alone until they share one. Applies to answers posted from then on.",
+            "title": "Answers Shared"
           },
           "archived": {
             "anyOf": [
@@ -20584,7 +20646,7 @@
         "properties": {
           "lines": {
             "default": 0,
-            "description": "New lines since the reader last read it, in channels they joined; stops at 100.",
+            "description": "New lines since the reader last read it, in channels they joined -- and, in one they are not in, while a line naming them is unread, from that line; stops at 100.",
             "title": "Lines",
             "type": "integer"
           },
@@ -32620,7 +32682,7 @@
         }
       },
       "patch": {
-        "description": "Change exactly the fields named; `null` clears.\n\nA group: `title`, `topic`, `visibility`, `archived` -- its owners' or an\nadmin's. A contact's channel: `agents_answer`, `hand_back_after_hours`,\n`status`, `assignee` -- for who may write to contacts. Switching the agent\non hands the contact back to it now: nobody is assigned.",
+        "description": "Change exactly the fields named; `null` clears.\n\nA group: `title`, `topic`, `visibility`, `archived`, `answers_shared`\n(whether agents' answers made with the asker's access are read by\neverybody here, or kept to the asker until they share one) -- its\nowners' or an admin's. A contact's channel: `agents_answer`, `hand_back_after_hours`,\n`status`, `assignee` -- for who may write to contacts. Switching the agent\non hands the contact back to it now: nobody is assigned.",
         "operationId": "channel.update",
         "parameters": [
           {

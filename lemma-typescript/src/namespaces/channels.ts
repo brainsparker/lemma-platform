@@ -155,7 +155,10 @@ export class ChannelsNamespace {
   }
 
   /** Change exactly the fields present; `null` clears. A group: `title`,
-   *  `topic`, `visibility`, `archived`. A contact's channel: `agents_answer`,
+   *  `topic`, `visibility`, `archived`, `answers_shared` (on, the default:
+   *  an agent's answer made with the asker's own access is read by everybody
+   *  in it; off, by the asker alone until they share it). A contact's
+   *  channel: `agents_answer`,
    *  `hand_back_after_hours`, `status`, `assignee` (`me` or a user id). */
   update(podId: string, channelId: string, body: ChannelUpdateRequest) {
     return this.client.request(() => ChannelsService.channelUpdate(podId, channelId, body));

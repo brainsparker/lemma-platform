@@ -621,6 +621,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent_surfaces.telegram_manager.webhook_secret_missing': EventSpec('warning', frozenset()),
     'agent_surfaces.turn_starter.failure_reply_not_sent.degraded': EventSpec('warning', frozenset({'platform'})),
     'agent_surfaces.turn_starter.personal_route_gone.rerouted': EventSpec('info', frozenset({'platform', 'reason'})),
+    'agent_surfaces.turn_starter.turn_refused.observed': EventSpec('warning', frozenset({'conversation_id', 'platform', 'reason'})),
     'agent_surfaces.web_limits.exceeded.observed': EventSpec('info', frozenset({'window'})),
     'agent_surfaces.web_limits.unavailable.degraded': EventSpec('warning', frozenset({'error_type'})),
     'agent_surfaces.webhook_controller.whatsapp_number_mismatch.denied': EventSpec('warning', frozenset({'addressed_phone_number_ids', 'phone_number_id'})),

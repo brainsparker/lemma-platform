@@ -170,3 +170,42 @@ test("an answered question says what was answered", async () => {
         await view.close();
     }
 });
+
+test("who may change a group switches whether agents' answers are shown to everyone there", async () => {
+    const { ChatDetails } = await import("../src/channels/chat-details.tsx");
+    const view = await page();
+    const asked: unknown[] = [];
+    api.update = ((channelId: string, body: unknown) => {
+        asked.push({ channelId, body });
+        return Promise.resolve({ ...detail, answersShared: false });
+    }) as never;
+    try {
+        await view.draw(createElement(ChatDetails, { pod: pod as never, channel: { ...detail, answersShared: true } as never, may: may as never, at: "about", onAt: () => {}, onClose: () => {}, onLeft: () => {} }));
+        await view.flush();
+        const doc = view.dom.window.document;
+        const toggle = doc.querySelector<HTMLInputElement>("input[role=switch]");
+        assert.ok(toggle, "a switch is offered");
+        assert.equal(toggle.checked, true, "on by default: everyone reads the answers");
+        assert.match(nameOf(toggle), /^Show agents’ answers to everyone here/);
+        assert.match(view.body(), /Everyone here reads what an agent answers/);
+        await act(async () => { toggle.click(); });
+        await view.flush();
+        assert.deepEqual(asked, [{ channelId: "c1", body: { answersShared: false } }]);
+    } finally {
+        delete api.update;
+        await view.close();
+    }
+});
+
+test("somebody who may not change a group is told it keeps answers to the asker, not offered a switch", async () => {
+    const { ChatDetails } = await import("../src/channels/chat-details.tsx");
+    const view = await page();
+    try {
+        await view.draw(createElement(ChatDetails, { pod: pod as never, channel: { ...detail, answersShared: false } as never, may: { ...may, manage: false } as never, at: "about", onAt: () => {}, onClose: () => {}, onLeft: () => {} }));
+        await view.flush();
+        assert.equal(view.dom.window.document.querySelector("input[role=switch]"), null);
+        assert.match(view.body(), /Keep an answer to whoever asked until they share it/);
+    } finally {
+        await view.close();
+    }
+});

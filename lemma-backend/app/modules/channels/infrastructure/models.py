@@ -150,6 +150,12 @@ class ChannelModel(UUIDAuditBase):
     archived_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    #: A group's: an agent's answer made with the asking member's own access
+    #: is read by everybody in it (posted shared), not by the asker alone
+    #: until they share it. Ignored for a DIRECT or CONTACT channel.
+    answers_shared: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("true")
+    )
     # -- a contact's channel: who answers them ---------------------------------
     #: Whether its agents answer the contact at all.
     agents_answer: Mapped[bool] = mapped_column(

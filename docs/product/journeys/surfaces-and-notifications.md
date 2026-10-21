@@ -622,8 +622,17 @@ remember where the bot is, who is in there, or what is waiting on them.
 - Where the pod keeps its own record of a group, the system shall show a member
   what was said there, marking who is in the pod, and for each of the bot's
   answers, whom it answered and whether it answered from what the pod made
-  Public. An answer made with one member's own access shall show its words to
-  that member alone.
+  Public.
+- When the bot answers one member in a group with that member's own access,
+  the system shall show its words to everybody in the group, since they asked
+  in front of it.
+- Where a group is set to keep such answers to whoever asked, the system shall
+  show an answer's words to that member alone, and to the others only that it
+  was given and for whom, until that member shares it.
+- The system shall let only a member who may change a group choose whether it
+  keeps answers to whoever asked.
+- If a member who may not change a group asks to change whether it keeps
+  answers to whoever asked, then the system shall refuse the request.
 - The system shall keep its record of a group, and the bot shall say so in the
   group when it arrives.
 - The system shall never show a member's private conversation with the bot, or
@@ -637,7 +646,7 @@ remember where the bot is, who is in there, or what is waiting on them.
   does.
 
 **Contracts:** `channel.list`, `channel.source.get`, `channel.message.list`,
-`channel.source.update`
+`channel.source.update`, `channel.update`
 
 ### PS-SURF-041 — A member steps in for somebody outside the pod the bot cannot help
 **Status:** planned

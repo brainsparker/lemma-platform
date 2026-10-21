@@ -3,10 +3,13 @@
 Lines are counted by number, not read: a channel's unread lines are those
 past the member's ``last_read_seq``, less the replies in its threads among
 them -- counted on their thread, not in the timeline (``replies`` against
-``read_replies``). Only channels the member is in count
-lines -- a public group they never joined does not -- and every count is
-filtered by what they may see, so a channel they cannot open never shows a
-badge. Counts stop at ``UNREAD_CAP``; the app shows "99+" past it.
+``read_replies``). Lines are counted where the member hears of the channel:
+where they are in it, and -- in one they are not in, a public group say --
+while something there naming them is unread, from the line that named them
+(``mentions.sync_mentions``). A public group they never joined and nobody
+named them in counts nothing. Every count is filtered by what they may see,
+so a channel they cannot open never shows a badge. Counts stop at
+``UNREAD_CAP``; the app shows "99+" past it.
 
 A mention is unread until the member reads it where it was said: in the
 timeline, or in its thread (``members.mark_read``, ``mark_thread_read``).
@@ -25,6 +28,7 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from sqlalchemy import (
+    ColumnElement,
     Subquery,
     Uuid,
     and_,
@@ -37,6 +41,7 @@ from sqlalchemy import (
     values,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import InstrumentedAttribute
 
 from app.modules.channels.domain.access import Viewer
 from app.modules.channels.domain.entities import Channel, NotifyLevel
@@ -114,10 +119,12 @@ class InboxReads:
         for channel in channels:
             upto, replies_read = read.get(channel.id, (0, 0))
             new_lines = (channel.last_seq - upto) - (channel.replies - replies_read)
+            # Named where they are not: theirs to hear of until they read it.
+            hears = channel.id in joined or (
+                channel.id in read and mentions.get(channel.id, 0) > 0
+            )
             found[channel.id] = Unread(
-                lines=(
-                    min(UNREAD_CAP, max(0, new_lines)) if channel.id in joined else 0
-                ),
+                lines=min(UNREAD_CAP, max(0, new_lines)) if hears else 0,
                 mentions=mentions.get(channel.id, 0),
                 waiting=waiting.get(channel.id, 0),
                 read_seq=upto,
@@ -177,10 +184,12 @@ class InboxReads:
         channel = ChannelModel
         member = ChannelMemberModel
         state = ChannelReadStateModel
+        places = _places_of(viewer)
         new_channels = await self.session.scalar(
             select(func.count())
-            .select_from(channel)
-            .join(
+            .select_from(places)
+            .join(channel, channel.id == places.c.id)
+            .outerjoin(
                 member,
                 and_(member.channel_id == channel.id, member.user_id == viewer.user_id),
             )
@@ -191,8 +200,17 @@ class InboxReads:
             .where(
                 visible_to(viewer),
                 channel.archived_at.is_(None),
-                member.notify != NotifyLevel.NONE.value,
-                or_(member.muted_until.is_(None), member.muted_until <= func.now()),
+                or_(
+                    and_(
+                        member.notify != NotifyLevel.NONE.value,
+                        or_(
+                            member.muted_until.is_(None),
+                            member.muted_until <= func.now(),
+                        ),
+                    ),
+                    # Not in it: named there, and not read yet.
+                    and_(member.id.is_(None), _named_unread(viewer, channel.id)),
+                ),
                 # Something new in the timeline, not only in its threads.
                 channel.last_seq - func.coalesce(state.last_read_seq, 0)
                 > channel.replies - func.coalesce(state.read_replies, 0),
@@ -262,6 +280,24 @@ class InboxReads:
             .limit(limit)
             .subquery("unread_mentions")
         )
+
+
+def _named_unread(
+    viewer: Viewer, channel_id: ColumnElement[UUID] | InstrumentedAttribute[UUID]
+) -> ColumnElement[bool]:
+    """Whether something in the channel naming the member is unread: one probe
+    of ``ix_channel_mentions_user``, which holds only the unread."""
+    mention = ChannelMentionModel
+    return (
+        select(mention.id)
+        .where(
+            mention.user_id == viewer.user_id,
+            mention.pod_id == viewer.pod_id,
+            mention.channel_id == channel_id,
+            mention.read_at.is_(None),
+        )
+        .exists()
+    )
 
 
 def _places_of(viewer: Viewer) -> Subquery:

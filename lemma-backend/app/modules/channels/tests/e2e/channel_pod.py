@@ -80,6 +80,16 @@ async def group(pod: Pod, *, as_user=None, **body) -> dict:
     return made.json()
 
 
+async def keep_answers_to_the_asker(pod: Pod, channel_id) -> dict:
+    """The group keeps an agent's answer made with a member's own access to
+    that member until they share it (``answers_shared`` off)."""
+    changed = await pod.client().patch(
+        f"{pod.base}/{channel_id}", json={"answers_shared": False}
+    )
+    assert changed.status_code == 200, changed.text
+    return changed.json()
+
+
 async def say(pod: Pod, channel_id, text: str = "hi", *, as_user=None, **body) -> dict:
     said = await pod.client(as_user).post(
         f"{pod.base}/{channel_id}/messages", json={"text": text, **body}
@@ -88,8 +98,11 @@ async def say(pod: Pod, channel_id, text: str = "hi", *, as_user=None, **body) -
     return said.json()
 
 
-async def contact_place(db_session: AsyncSession, pod: Pod) -> tuple[Source, UUID]:
-    """Dana, a contact who wrote on Telegram, and her channel's place."""
+async def contact_place(
+    db_session: AsyncSession, pod: Pod, *, keeper: dict | None = None
+) -> tuple[Source, UUID]:
+    """Dana, a contact who wrote on Telegram, and her channel's place;
+    ``keeper``, the member looking after the bot's contacts."""
     uow = SqlAlchemyUnitOfWork(db_session)
     contact = await open_contact(
         uow,
@@ -110,7 +123,9 @@ async def contact_place(db_session: AsyncSession, pod: Pod) -> tuple[Source, UUI
             external_channel_id=None,
             external_user_id="5550001",
         ),
-        home=ContactsHome(contact.id),
+        home=ContactsHome(
+            contact.id, keeper_user_id=UUID(keeper["id"]) if keeper else None
+        ),
     )
     await post(
         uow,

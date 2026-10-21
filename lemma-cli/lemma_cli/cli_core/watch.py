@@ -13,7 +13,9 @@ machinery never loads on a plain ``lemma --help``.
 from __future__ import annotations
 
 import json
+import os
 import ssl
+import sys
 
 from rich.console import Console
 
@@ -66,19 +68,61 @@ def _ssl_option(ws_url: str, *, verify_ssl: bool) -> ssl.SSLContext | None:
     return context
 
 
+class _StdoutClosed(Exception):
+    """Whoever was reading stdout has gone -- ``| head``, a closed pipe.
+
+    Deliberately not an ``OSError``, which is what ``BrokenPipeError`` is: the
+    watch loop reads ``OSError`` as a dropped socket and reconnects, so a
+    reader that left would be answered with a reconnect loop writing to nobody.
+    """
+
+
+def _stop_on_sigterm(signum: int, frame: object) -> None:
+    raise KeyboardInterrupt
+
+
 def watch_datastore_changes(
     state: CliState,
     pod_id: str,
     table: str | None,
     since: str | None,
 ) -> None:
-    """Blocking entry point: stream changes until interrupted."""
-    import asyncio
+    """Blocking entry point: stream changes until interrupted.
 
+    SIGTERM stops it the way Ctrl-C does. Python's default for SIGTERM is to
+    die where it stands, without flushing stdout -- and stdout piped to a file
+    or another program is block-buffered, so `timeout 60 lemma datastore watch
+    --output json > changes.ndjson` used to end with the changes it had
+    printed still in the buffer, and an empty file.
+    """
+    import asyncio
+    import signal
+
+    try:
+        previous = signal.signal(signal.SIGTERM, _stop_on_sigterm)
+    except ValueError:  # not the main thread: leave the process's signals alone
+        previous = None
     try:
         asyncio.run(_run(state, pod_id, table, since))
     except KeyboardInterrupt:
         _err.print("[dim]Stopped.[/dim]")
+    except _StdoutClosed:
+        # Point stdout at /dev/null so the interpreter's own flush at exit does
+        # not raise the same BrokenPipeError again, as a traceback.
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, sys.stdout.fileno())
+        return
+    finally:
+        if previous is not None:
+            signal.signal(signal.SIGTERM, previous)
+    _flush_stdout()
+
+
+def _flush_stdout() -> None:
+    try:
+        sys.stdout.flush()
+    except OSError, ValueError:
+        pass
 
 
 async def _run(
@@ -216,7 +260,16 @@ def _render_event(state: CliState, event: LiveEvent) -> None:
 
 
 def _emit(frame: dict[str, object]) -> None:
-    print(json.dumps(frame, default=str))  # noqa: T201 — parseable stdout
+    """One NDJSON line, flushed as it is written.
+
+    A watch has no end for a buffer to wait for: piped stdout is
+    block-buffered, so unflushed lines sat in the buffer until it filled, and
+    a watch that was stopped lost every one of them.
+    """
+    try:
+        print(json.dumps(frame, default=str), flush=True)  # noqa: T201 — parseable stdout
+    except BrokenPipeError as exc:
+        raise _StdoutClosed from exc
 
 
 def _render_change(state: CliState, change: LiveChange) -> None:

@@ -386,3 +386,20 @@ async def test_a_contacts_cases_are_read_back_newest_first_with_their_events(
     assert (await pod.client(pod.user).get(cases)).status_code == 404
     made = await group(pod)
     assert (await pod.client().get(f"{pod.base}/{made['id']}/cases")).status_code == 409
+
+
+async def test_a_contacts_channel_names_its_current_case_wherever_it_is_listed(
+    pod: Pod, db_session: AsyncSession
+):
+    source, _ = await contact_place(db_session, pod)
+    [case] = await _cases(db_session, source.channel_id)
+    editor = pod.client(pod.editor)
+
+    listed = (await editor.get(pod.base, params={"kind": "CONTACT"})).json()
+    [row] = [item for item in listed["items"] if item["id"] == str(source.channel_id)]
+    assert row["case_id"] == str(case.id), row
+    shown = (await editor.get(f"{pod.base}/{source.channel_id}")).json()
+    assert shown["case_id"] == str(case.id), shown
+    # No other kind of channel has one.
+    crew = await group(pod, title="crew")
+    assert (await editor.get(f"{pod.base}/{crew['id']}")).json()["case_id"] is None

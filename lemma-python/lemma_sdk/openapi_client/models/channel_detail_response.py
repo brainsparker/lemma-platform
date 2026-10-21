@@ -39,10 +39,15 @@ class ChannelDetailResponse:
         last_line_at (datetime.datetime):
         visibility (Visibility):
         agents_answer (bool | None | Unset): A contact's channel: whether its agents answer the contact.
+        answers_shared (bool | None | Unset): A group's: whether an answer an agent gives a member here with their own
+            access is read by everybody in it (the default), or by that member alone until they share it. Absent for another
+            kind.
         archived (bool | Unset):  Default: False.
         assignee (None | PersonRef | Unset): A contact's channel: who answers them by hand.
         attention (AttentionResponse | None | Unset): A contact's channel: its current case asks for a person, and why.
             Never set on another kind of channel.
+        case_id (None | Unset | UUID): A contact's channel: its current case, the one `status`, `assignee` and
+            `attention` are read from (`/cases` lists them all).
         hand_back_after_hours (int | None | Unset): A contact's channel: how long the assignee holds the contact after
             their last line before the agent answers again.
         joined (bool | Unset): Whether the reader is in it. A pod admin listing a bot's groups (`source_surface`) is
@@ -71,9 +76,11 @@ class ChannelDetailResponse:
     last_line_at: datetime.datetime
     visibility: Visibility
     agents_answer: bool | None | Unset = UNSET
+    answers_shared: bool | None | Unset = UNSET
     archived: bool | Unset = False
     assignee: None | PersonRef | Unset = UNSET
     attention: AttentionResponse | None | Unset = UNSET
+    case_id: None | Unset | UUID = UNSET
     hand_back_after_hours: int | None | Unset = UNSET
     joined: bool | Unset = False
     last_line: LinePreview | None | Unset = UNSET
@@ -113,6 +120,12 @@ class ChannelDetailResponse:
         else:
             agents_answer = self.agents_answer
 
+        answers_shared: bool | None | Unset
+        if isinstance(self.answers_shared, Unset):
+            answers_shared = UNSET
+        else:
+            answers_shared = self.answers_shared
+
         archived = self.archived
 
         assignee: dict[str, Any] | None | Unset
@@ -130,6 +143,14 @@ class ChannelDetailResponse:
             attention = self.attention.to_dict()
         else:
             attention = self.attention
+
+        case_id: None | str | Unset
+        if isinstance(self.case_id, Unset):
+            case_id = UNSET
+        elif isinstance(self.case_id, UUID):
+            case_id = str(self.case_id)
+        else:
+            case_id = self.case_id
 
         hand_back_after_hours: int | None | Unset
         if isinstance(self.hand_back_after_hours, Unset):
@@ -233,12 +254,16 @@ class ChannelDetailResponse:
         )
         if agents_answer is not UNSET:
             field_dict["agents_answer"] = agents_answer
+        if answers_shared is not UNSET:
+            field_dict["answers_shared"] = answers_shared
         if archived is not UNSET:
             field_dict["archived"] = archived
         if assignee is not UNSET:
             field_dict["assignee"] = assignee
         if attention is not UNSET:
             field_dict["attention"] = attention
+        if case_id is not UNSET:
+            field_dict["case_id"] = case_id
         if hand_back_after_hours is not UNSET:
             field_dict["hand_back_after_hours"] = hand_back_after_hours
         if joined is not UNSET:
@@ -304,6 +329,15 @@ class ChannelDetailResponse:
 
         agents_answer = _parse_agents_answer(d.pop("agents_answer", UNSET))
 
+        def _parse_answers_shared(data: object) -> bool | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(bool | None | Unset, data)
+
+        answers_shared = _parse_answers_shared(d.pop("answers_shared", UNSET))
+
         archived = d.pop("archived", UNSET)
 
         def _parse_assignee(data: object) -> None | PersonRef | Unset:
@@ -339,6 +373,23 @@ class ChannelDetailResponse:
             return cast(AttentionResponse | None | Unset, data)
 
         attention = _parse_attention(d.pop("attention", UNSET))
+
+        def _parse_case_id(data: object) -> None | Unset | UUID:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                case_id_type_0 = UUID(data)
+
+                return case_id_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(None | Unset | UUID, data)
+
+        case_id = _parse_case_id(d.pop("case_id", UNSET))
 
         def _parse_hand_back_after_hours(data: object) -> int | None | Unset:
             if data is None:
@@ -502,9 +553,11 @@ class ChannelDetailResponse:
             last_line_at=last_line_at,
             visibility=visibility,
             agents_answer=agents_answer,
+            answers_shared=answers_shared,
             archived=archived,
             assignee=assignee,
             attention=attention,
+            case_id=case_id,
             hand_back_after_hours=hand_back_after_hours,
             joined=joined,
             last_line=last_line,

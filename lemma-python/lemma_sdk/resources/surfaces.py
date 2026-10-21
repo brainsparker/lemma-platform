@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..errors import LemmaNotFoundError
+from ..errors import LemmaConflictError, LemmaNotFoundError
 from ..openapi_client.api.agent_surfaces import (
     agent_surface_channels,
     agent_surface_available,
@@ -84,6 +84,19 @@ from ..openapi_client.models.telegram_managed_bot_setup_response import (
 from ..openapi_client.models.user_surfaces_response import UserSurfacesResponse
 from .base import BoundResource, Resource
 
+# The refusal a create meets when its agent already reaches the platform
+# somewhere else; its details name where.
+_AGENT_PLATFORM_CONFLICT = "AGENT_SURFACE_AGENT_PLATFORM_CONFLICT"
+
+
+def _agent_platform_holder(exc: LemmaConflictError) -> str | None:
+    """The name of the surface the agent already has, if that is the conflict."""
+    if exc.code != _AGENT_PLATFORM_CONFLICT or not isinstance(exc.details, dict):
+        return None
+    holder = exc.details.get("conflicting_surface")
+    name = holder.get("name") if isinstance(holder, dict) else None
+    return str(name) if name else None
+
 
 class PodSurfaces(BoundResource):
     """Agent surfaces, addressed by ``name`` (unique per pod).
@@ -129,16 +142,35 @@ class PodSurfaces(BoundResource):
         A surface's name is pod-unique and its platform is not, so a caller
         naming a second Slack surface has to say which platform it is: the
         platform comes from ``request`` when present, and only falls back to
-        the name for the original ``upsert("slack", ...)`` call shape.
+        the name for the original ``upsert("slack", ...)`` call shape. A
+        ``name`` in ``request`` is the surface to address, with ``name`` the
+        argument then read as its platform -- ``upsert("resend", {"name":
+        "resend-assistant", ...})`` -- rather than being dropped.
+
+        Addressed by platform, it means *this agent's* surface on that
+        platform, whatever it is called. An agent reaches a platform in one
+        place, and some of those places the caller never named: every agent is
+        given a mailbox when it is created, called ``resend-<agent>``. So when
+        the create is refused because the agent already has one, the surface
+        the refusal names is the one to update. Never when the caller chose a
+        name: that is a request for a distinct surface, and rewriting another
+        one in its place would change the wrong thing.
         """
-        surface_name = str(name).lower()
         body: dict[str, Any] = dict(request or {})
+        named = str(body.pop("name", None) or "").strip().lower()
+        surface_name = named or str(name).lower()
         platform = str(body.pop("platform", None) or name).upper()
-        body.pop("name", None)
         try:
             return self.update(surface_name, body)
         except LemmaNotFoundError:
+            pass
+        try:
             return self.create({**body, "platform": platform, "name": surface_name})
+        except LemmaConflictError as exc:
+            held = _agent_platform_holder(exc)
+            if named or held is None or held == surface_name:
+                raise
+            return self.update(held, body)
 
     def get(self, name: str) -> AgentSurfaceResponse:
         return self._call(agent_surface_get, self._pod_uuid(), name)

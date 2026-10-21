@@ -30,6 +30,7 @@ from sqlalchemy import text
 
 from app.core.infrastructure.db.base import Base
 from app.core.infrastructure.db.manager import DatabaseManager, TableSnapshot
+from app.modules.test_support.lock_holders import describe_lock_holders
 from app.core.test_utils import (
     SHARED_E2E_NETWORK_NAME,
     create_postgres_database,
@@ -1458,6 +1459,8 @@ async def db_manager(e2e_settings, request) -> AsyncGenerator[DatabaseManager, N
             await _asyncio.sleep(0.3 * (_attempt + 1))
     else:
         assert last_exc is not None
+        if "lock timeout" in str(last_exc).lower():
+            last_exc.add_note(await describe_lock_holders(e2e_settings.database_url))
         raise last_exc
 
     yield manager

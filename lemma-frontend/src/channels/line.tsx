@@ -112,10 +112,12 @@ function EditBox({ line, pending, problem, onSave, onCancel }: {
  *  to answer it when it waits on the reader. The reader's own lines can be
  *  changed or deleted here, and whoever may change the channel can remove
  *  anybody's; a copy already carried outside stays as sent. */
-export function LineView({ podId, channel, line, onThread, mayWrite = true, answering = [], agentName, highlighted = false, visible = true, continued = false }: {
+export function LineView({ podId, channel, line, onThread, mayWrite = true, answering = [], agentName, highlighted = false, visible = true, continued = false, quote = null }: {
     podId: string;
     channel: ChannelDetail;
     line: Line;
+    /** The line this answers, when it is not the one just above. */
+    quote?: Line | null;
     /** On screen: a thread's summary under its line is kept live while it is. */
     visible?: boolean;
     /** Said by the same person moments after the line above: drawn without
@@ -198,6 +200,17 @@ export function LineView({ podId, channel, line, onThread, mayWrite = true, answ
                     </div>
                 )}
                 {continued && <span className="sr-only">{personName(line.sender, me)}, {time}</span>}
+                {quote && (
+                    <button
+                        type="button"
+                        className="cline__quote"
+                        title="Go to the message this answers"
+                        onClick={() => document.getElementById("line-" + quote.id)?.scrollIntoView({ block: "center" })}
+                    >
+                        <span className="cline__quote-who">{personName(quote.sender, me)}</span>
+                        <span className="cline__quote-text">{quote.deleted ? "This message was deleted." : (quote.text ?? "").replace(/\s+/g, " ").slice(0, 140)}</span>
+                    </button>
+                )}
 
                 {line.deleted ? (
                     <p className="cline__gone">{removedNote(line, me)}</p>
@@ -286,7 +299,7 @@ export function LineView({ podId, channel, line, onThread, mayWrite = true, answ
 }
 
 /** When a thread's newest reply was written, the way a chat says it:
- *  "today at 18:11", "yesterday at 09:02", "on 19 October". */
+ *  today or yesterday at a time, else "on" and the day. */
 export function lastReplySaid(iso: string, now = new Date()): string {
     const at = new Date(iso);
     if (Number.isNaN(at.getTime())) return "";

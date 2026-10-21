@@ -39,6 +39,7 @@ from app.modules.channels.contracts import (
     channel_by_id,
     post,
 )
+from app.modules.channels.contracts.places import places_of
 
 #: What a line says when its run failed and left no reason of its own.
 COULD_NOT_ANSWER = "I couldn't answer this: something went wrong on my side."
@@ -163,7 +164,9 @@ async def _post_line(
         )
     )
     channel = await channel_by_id(uow, line.channel_id)
-    in_thread, place = where_the_answer_goes(channel, line)
+    in_thread, place = where_the_answer_goes(
+        channel, line, place_threads=await _place_threads(uow, line)
+    )
     if not carried or line.members_only:
         place = None
     return await post(
@@ -188,25 +191,54 @@ async def _post_line(
     )
 
 
+#: The platforms whose channels thread a bot's answer under the message it
+#: answers. Elsewhere -- WhatsApp, Telegram, a chat made in Lemma -- an answer
+#: is a message of the chat like any other, aimed at what it answers.
+THREADED_PLATFORMS = frozenset({"SLACK", "TEAMS"})
+
+
+async def _place_threads(uow: SqlAlchemyUnitOfWork, line: ChannelMessage) -> bool:
+    """Whether the place ``line`` is at threads a bot's answers there."""
+    if line.place_id is None:
+        return False
+    for source in await places_of(uow, line.channel_id):
+        if source.id == line.place_id:
+            return source.platform.upper() in THREADED_PLATFORMS
+    return False
+
+
 def where_the_answer_goes(
-    channel: Channel | None, line: ChannelMessage
+    channel: Channel | None, line: ChannelMessage, *, place_threads: bool = False
 ) -> tuple[UUID | None, UUID | None]:
     """The thread an answer is a reply in, and the place it is carried to.
 
-    A member's own channel reads as a chat: the answer follows the line it
-    answers. Elsewhere it is a reply in the line's thread. A group's line
-    carried to its platform was asked there too: the answer follows it, into
-    its thread there. A contact's channel never: the answer is the member's,
-    made with their access, not the contact's to read.
+    A member's own channel and a group read as a chat: an answer to a line
+    in the main timeline is in the main timeline too, right after it and
+    pointing at it (``reply_to_id``), and is carried to the group's place as
+    a reply to that message there. A group mirroring a platform that threads a
+    bot's answers (``place_threads``: Slack, Teams) keeps its habit: the
+    answer is a reply in the line's thread, there and here. A line already in
+    a thread is answered in that thread. A contact's channel answers a
+    member's line in its thread, off the contact's own line of talk, and
+    never carries it: the answer is the member's, made with their access,
+    not the contact's to read.
     """
     kind = channel.kind if channel is not None else None
-    in_thread = line.thread_root_id or (None if kind is ChannelKind.DIRECT else line.id)
+    if line.thread_root_id is not None:
+        in_thread: UUID | None = line.thread_root_id
+    elif kind is ChannelKind.DIRECT:
+        in_thread = None
+    elif kind is ChannelKind.GROUP:
+        in_thread = line.id if place_threads else None
+    else:
+        in_thread = line.id
     return in_thread, line.place_id if kind is ChannelKind.GROUP else None
 
 
 __all__ = [
     "COULD_NOT_ANSWER",
     "STOPPED_BEFORE_ANSWERING",
+    "THREADED_PLATFORMS",
     "clipped",
     "post_answer",
     "post_why_unanswered",

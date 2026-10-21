@@ -5,7 +5,7 @@ import { LineView } from "./line";
 import type { Answering } from "./live";
 import { lineDays, type ChannelDetail, type Line } from "./model";
 import { useSeenSeq } from "./read-state";
-import { continues, firstUnread, newSince, sayNewLines, unreadBeforeHeld } from "./timeline-model";
+import { answeredOutOfPlace, continues, firstUnread, newSince, sayNewLines, unreadBeforeHeld } from "./timeline-model";
 
 /** How many older pages "Jump to unread" reads back, at most, to reach the
  *  first unread line. */
@@ -60,6 +60,7 @@ export function Timeline({ podId, channel, lines, loading, failed, hasOlder, loa
     const [endState, setEndState] = useState(true);
     const fromEnd = useRef<number | null>(null);
     const days = useMemo(() => lineDays(lines), [lines]);
+    const byId = useMemo(() => new Map(lines.map((line) => [line.id, line])), [lines]);
     const newest = lines.at(-1)?.id ?? null;
     const newestSeq = lines.at(-1)?.seq ?? 0;
     const seenMax = useSeenSeq(box, lines.length + ":" + newest, visible);
@@ -203,6 +204,7 @@ export function Timeline({ podId, channel, lines, loading, failed, hasOlder, loa
                                             highlighted={highlight === line.id}
                                             visible={visible}
                                             continued={line.id !== unread && continues(day.lines[index - 1], line)}
+                                            quote={answeredOutOfPlace(line, day.lines[index - 1], byId)}
                                         />
                                     </Fragment>
                                 ))}

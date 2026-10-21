@@ -147,6 +147,8 @@ export interface Line {
     /** Where it was said; null for a line written in Lemma. */
     sourceId: string | null;
     threadRootId: string | null;
+    /** The line this one answers: an agent's answer points at its question. */
+    replyToId: string | null;
     replyCount: number;
     /** On a thread's first line: when its newest reply was written. */
     lastReplyAt: string | null;
@@ -364,6 +366,7 @@ export function readLine(raw: unknown): Line | null {
         membersOnly: row.members_only === true,
         sourceId: words(row.source_id),
         threadRootId: words(row.thread_root_id),
+        replyToId: words(row.reply_to_id),
         replyCount: count(row.reply_count),
         lastReplyAt: words(row.last_reply_at),
         interaction: readQuestion(row.question),

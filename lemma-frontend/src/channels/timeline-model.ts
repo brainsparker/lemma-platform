@@ -53,3 +53,15 @@ export function continues(
     const gap = Date.parse(line.createdAt) - Date.parse(before.createdAt);
     return Number.isFinite(gap) && gap >= 0 && gap < GROUP_WITHIN_MS;
 }
+
+/** The line an answer answers, when it is not the line just above it --
+ *  somebody wrote in between -- so the answer can say what it is answering.
+ *  Nothing for an answer right under its question, or one in a thread. */
+export function answeredOutOfPlace<T extends Pick<Line, "id" | "replyToId" | "threadRootId">>(
+    line: T,
+    above: Pick<Line, "id"> | undefined,
+    byId: ReadonlyMap<string, T>,
+): T | null {
+    if (!line.replyToId || line.threadRootId || above?.id === line.replyToId) return null;
+    return byId.get(line.replyToId) ?? null;
+}

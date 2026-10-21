@@ -34,6 +34,7 @@ from app.modules.agent_surfaces.infrastructure.repositories.slack_manager_reposi
 from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
     SurfaceRepository,
 )
+from app.modules.agent_surfaces.services.slack_manager_messages import stage_welcome
 from app.modules.agent_surfaces.services.slack_person_proof import record_proof
 from app.modules.connectors.contracts.own_apps import (
     grant_is_browser_bound,
@@ -114,6 +115,31 @@ async def _lemma_app_grant(
     return raw
 
 
+@dataclass(frozen=True, slots=True)
+class SlackGrant:
+    """Who a Slack account's grant was, as Slack's OAuth answer says."""
+
+    user_id: UUID
+    team_id: str
+    #: The Slack user who authorised it (``authed_user``).
+    installer: str
+
+
+async def grant_of(uow: SqlAlchemyUnitOfWork, account_id: UUID) -> SlackGrant | None:
+    """The Lemma person a Slack account is, and the workspace and Slack user
+    its grant names; None for an account that is not Slack's or is gone."""
+    found = await account_with_secrets(uow, account_id)
+    if found is None or found[0].connector_id != "slack":
+        return None
+    account, credentials = found
+    raw = _raw(credentials)
+    return SlackGrant(
+        user_id=account.user_id,
+        team_id=_nested_id(raw, "team"),
+        installer=_nested_id(raw, "authed_user"),
+    )
+
+
 def _workspace_of(raw: dict[str, object]) -> tuple[str, str | None, str]:
     """``(team_id, team_name, bot_user_id)`` from Slack's OAuth answer."""
     team = raw.get("team")
@@ -137,7 +163,8 @@ async def bind_manager(
     account_id: UUID,
 ) -> BoundWorkspace:
     """Bind the workspace this account authorised Lemma's app in to the
-    organization, and record its installer. Commits."""
+    organization, record its installer, and -- for a new binding -- owe the
+    installer the manager's welcome. Commits."""
     if not await may_manage_installs(
         uow, user_id=user_id, organization_id=organization_id
     ):
@@ -180,6 +207,16 @@ async def bind_manager(
             slack_user_id=installer,
             user_id=user_id,
             proved_by=PROVED_BY_INSTALL,
+        )
+    if claimed.created:
+        # Owed by this binding and staged with it, so it exists exactly when
+        # the binding commits; a reauthorisation of the same binding is not
+        # a new one and says nothing.
+        await stage_welcome(
+            uow,
+            install_id=claimed.install_id,
+            team_id=team_id,
+            installer_slack_user_id=installer,
         )
     await uow.commit()
     logger.info(

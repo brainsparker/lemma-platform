@@ -185,6 +185,17 @@ export function installsTemplate(destination: string | null, origin = "http://po
     }
 }
 
+/** Whether a sign-in is on its way to add Lemma to Slack. Somebody arriving
+ *  from Slack's "Add to Slack" has usually never been here either. */
+export function addsToSlack(destination: string | null, origin = "http://portal.invalid"): boolean {
+    if (!destination) return false;
+    try {
+        return /^\/slack\/install\/?$/.test(new URL(destination, origin).pathname);
+    } catch {
+        return false;
+    }
+}
+
 const INVITATION_PATH = /^\/invitations\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/accept\/?$/i;
 
 /** The invitation a sign-up is on its way to accept, read off where it lands.

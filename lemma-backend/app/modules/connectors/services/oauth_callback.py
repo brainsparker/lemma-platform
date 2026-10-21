@@ -28,6 +28,7 @@ operation rows and commits before executing any of them.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol
 from uuid import UUID
@@ -405,6 +406,47 @@ async def _record_installation(
     return account
 
 
+def _renewed_credentials(
+    account: AccountEntity,
+    pending_request: ConnectRequestEntity,
+    fresh: OAuthCredentials,
+) -> OAuthCredentials:
+    """What an account holds after a grant came back for it.
+
+    A reconnect replaces the grant. A renewal another module started for a
+    purpose, over an account still connected, is not the person asking to
+    reconnect: the fresh grant wins, and what only the earlier one carried is
+    kept. Lemma's Slack app added to a workspace asks for the bot alone, while
+    the person's own Slack connect also holds their user token
+    (``authed_user``), which a bot-only grant does not return and must not
+    erase.
+    """
+    earlier = account.credentials
+    if (
+        account.status != AccountStatus.CONNECTED
+        or purpose_of(pending_request) is None
+        or not isinstance(earlier, OAuthCredentials)
+        or not earlier.raw_response
+    ):
+        return fresh
+    raw = _kept_under(earlier.raw_response, fresh.raw_response or {})
+    return fresh.model_copy(update={"raw_response": raw})
+
+
+def _kept_under(
+    earlier: Mapping[str, object], fresh: Mapping[str, object]
+) -> dict[str, object]:
+    """``fresh`` over ``earlier``, key by key into nested objects."""
+    merged = dict(earlier)
+    for key, value in fresh.items():
+        prior = merged.get(key)
+        if isinstance(prior, Mapping) and isinstance(value, Mapping):
+            merged[key] = _kept_under(prior, value)
+        else:
+            merged[key] = value
+    return merged
+
+
 async def _persist_account(
     service: OAuthCallbackSeam,
     *,
@@ -436,8 +478,16 @@ async def _persist_account(
             user_id, auth_config.id, provider_account_id
         )
         # A healthy account for this identity blocks a duplicate connect; an
-        # unhealthy one is updated in place below (a genuine reconnect).
-        if account is not None and account.status == AccountStatus.CONNECTED:
+        # unhealthy one is updated in place below (a genuine reconnect). A
+        # request another module started for a purpose is renewed in place
+        # either way: its starter asked for a fresh grant -- Lemma's Slack app
+        # added to a workspace by someone who already connected Slack -- and
+        # "already connected" would end the flow it started.
+        if (
+            account is not None
+            and account.status == AccountStatus.CONNECTED
+            and purpose_of(pending_request) is None
+        ):
             raise AccountAlreadyConnectedError(connector.id)
     else:
         account = await service.account_repository.get_by_user_and_auth_config(
@@ -445,7 +495,9 @@ async def _persist_account(
         )
 
     if account:
-        account.credentials = identity.credentials
+        account.credentials = _renewed_credentials(
+            account, pending_request, identity.credentials
+        )
         account.external_ref = identity.external_ref
         if provider_account_id:
             account.provider_account_id = provider_account_id

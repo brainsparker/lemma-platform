@@ -474,17 +474,27 @@ def test_pod_surfaces_reach_lemmas_own_slack_app_through_generated_models():
         {"account_id": "33333333-3333-4333-8333-333333333333"}
     )
     pod.surfaces.start_slack_sign_in({"team_id": "T1", "slack_user_id": "U1"})
+    pod.surfaces.slack_install_availability()
+    pod.surfaces.start_slack_install(
+        {"organization_id": "11111111-1111-4111-8111-111111111111"}
+    )
 
     assert [call["endpoint"].rsplit(".", 1)[-1] for call in transport.calls] == [
         "agent_surface_slack_manager_list",
         "agent_surface_slack_manager_bind",
         "agent_surface_slack_person_sign_in",
+        "agent_surface_slack_install_availability",
+        "agent_surface_slack_install_start",
     ]
     assert transport.calls[0]["path_args"] == pod_uuid
     assert transport.calls[1]["body_model"] == "SlackManagerBindRequest"
     assert transport.calls[2]["body_model"] == "SlackSignInRequest"
     # Not the pod's: a person proves who they are in a workspace.
     assert transport.calls[2]["path_args"] == ()
+    # Nor is "Add to Slack": it names the organization in its body.
+    assert transport.calls[3]["path_args"] == ()
+    assert transport.calls[4]["body_model"] == "SlackInstallRequest"
+    assert transport.calls[4]["path_args"] == ()
 
 
 def test_user_update_profile_uses_generated_model():

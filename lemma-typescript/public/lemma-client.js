@@ -16250,6 +16250,45 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * Slack Install Availability
+     * Whether Lemma's own Slack app is set up on this server, so "Add to
+     * Slack" can work -- checked before a person with no organization is given
+     * one for it.
+     * @returns SlackInstallAvailabilityResponse Successful Response
+     * @throws ApiError
+     */
+    static agentSurfaceSlackInstallAvailability() {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/surface-setup/slack/install"
+      });
+    }
+    /**
+     * Start Slack Install Flow
+     * Add Lemma to a Slack workspace from "Add to Slack", for this organization.
+     *
+     * Answers with Slack's consent page for Lemma's own app, asking for its bot
+     * alone. Refused before anything is made when Slack isn't set up here, or
+     * the caller may not add the organization's installs. When the grant comes
+     * back to this same signed-in browser, the workspace becomes the
+     * organization's and Lemma's app says hello there; a grant finished anywhere
+     * else adopts nothing.
+     * @param requestBody
+     * @returns SlackInstallResponse Successful Response
+     * @throws ApiError
+     */
+    static agentSurfaceSlackInstallStart(requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/surface-setup/slack/install",
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * Get Slack App Manifest
      * The Slack app manifest to paste when running your own Slack app.
      *
@@ -16474,6 +16513,27 @@ var LemmaClient = (() => {
     startSlackSignIn(request2) {
       return this.client.request(
         () => AgentSurfacesService.agentSurfaceSlackPersonSignIn(request2)
+      );
+    }
+    /**
+     * Whether Lemma's own Slack app is set up on this server, so "Add to Slack"
+     * can work. Ask before giving anybody an organization for it.
+     */
+    slackInstallAvailability() {
+      return this.client.request(
+        () => AgentSurfacesService.agentSurfaceSlackInstallAvailability()
+      );
+    }
+    /**
+     * Add Lemma's own Slack app to a workspace for an organization, from "Add
+     * to Slack" rather than from a pod. Answers with Slack's consent page (bot
+     * scopes only), refused before anything is made when Slack isn't set up
+     * here or the caller may not add the organization's installs. A grant
+     * finished in a browser not signed in as the caller adopts nothing.
+     */
+    startSlackInstall(request2) {
+      return this.client.request(
+        () => AgentSurfacesService.agentSurfaceSlackInstallStart(request2)
       );
     }
   };

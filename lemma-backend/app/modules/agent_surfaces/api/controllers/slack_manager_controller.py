@@ -1,10 +1,12 @@
 """The web side of Lemma's own Slack app managing a workspace.
 
-Two things happen in a browser rather than in Slack: authorising Lemma's app,
-which a reach sheet turns into "this workspace is ours" (``PUT .../manager``),
-and proving which Lemma person a Slack user is, by Sign in with Slack started
-from the link their own App Home shows (``POST /surface-setup/slack/people/
-sign-in``, ending at its callback).
+Three things happen in a browser rather than in Slack: authorising Lemma's
+app, which a reach sheet turns into "this workspace is ours" (``PUT
+.../manager``); "Add to Slack" from outside the app, which starts that grant
+for an organization and lets it adopt the workspace on its own (``GET``/``POST
+/surface-setup/slack/install``); and proving which Lemma person a Slack user
+is, by Sign in with Slack started from the link their own App Home shows
+(``POST /surface-setup/slack/people/sign-in``, ending at its callback).
 """
 
 from __future__ import annotations
@@ -24,7 +26,13 @@ from app.modules.agent_surfaces.domain.errors import (
     AgentSurfaceValidationError,
     SlackSignInError,
 )
-from app.modules.agent_surfaces.services.slack_manager import refresh_home_of
+from app.modules.agent_surfaces.services.slack_install import (
+    install_available,
+    start_slack_install,
+)
+from app.modules.agent_surfaces.services.slack_manager import (
+    refresh_home_of,
+)
 from app.modules.agent_surfaces.services.slack_manager_install import (
     ManagedWorkspace,
     bind_manager,
@@ -59,6 +67,25 @@ class SlackManagerBindRequest(BaseModel):
     account_id: UUID = Field(
         description="The account made by authorising Lemma's own Slack app."
     )
+
+
+class SlackInstallAvailabilityResponse(BaseModel):
+    """Whether "Add to Slack" can work on this server, asked before anything
+    is made for it."""
+
+    available: bool
+
+
+class SlackInstallRequest(BaseModel):
+    """Which organization Lemma's app joins the workspace for."""
+
+    organization_id: UUID
+
+
+class SlackInstallResponse(BaseModel):
+    """Slack's consent page for Lemma's own app, to send the browser to."""
+
+    authorization_url: str
 
 
 class SlackSignInRequest(BaseModel):
@@ -118,6 +145,34 @@ async def bind_slack_manager(
         account_id=request.account_id,
     )
     return _response(bound)
+
+
+@people_router.get("/install", operation_id="agent.surface.slack_install.availability")
+async def slack_install_availability(
+    user: CurrentUser, uow: UoWDep
+) -> SlackInstallAvailabilityResponse:
+    """Whether Lemma's own Slack app is set up on this server, so "Add to
+    Slack" can work -- checked before a person with no organization is given
+    one for it."""
+    return SlackInstallAvailabilityResponse(available=await install_available(uow))
+
+
+@people_router.post("/install", operation_id="agent.surface.slack_install.start")
+async def start_slack_install_flow(
+    request: SlackInstallRequest, user: CurrentUser, uow: UoWDep
+) -> SlackInstallResponse:
+    """Add Lemma to a Slack workspace from "Add to Slack", for this organization.
+
+    Answers with Slack's consent page for Lemma's own app, asking for its bot
+    alone. Refused before anything is made when Slack isn't set up here, or
+    the caller may not add the organization's installs. When the grant comes
+    back to this same signed-in browser, the workspace becomes the
+    organization's and Lemma's app says hello there; a grant finished anywhere
+    else adopts nothing."""
+    url = await start_slack_install(
+        uow, user_id=user.id, organization_id=request.organization_id
+    )
+    return SlackInstallResponse(authorization_url=url)
 
 
 @people_router.post(

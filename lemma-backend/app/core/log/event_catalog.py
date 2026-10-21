@@ -565,6 +565,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent_surfaces.slack_manager.handed_over': EventSpec('info', frozenset({'private', 'surface_id', 'team_id'})),
     'agent_surfaces.slack_manager.handoff_failed.degraded': EventSpec('warning', frozenset({'error', 'private', 'team_id'})),
     'agent_surfaces.slack_manager.home_refresh_failed.degraded': EventSpec('warning', frozenset({'team_id'})),
+    'agent_surfaces.slack_manager.install_refused': EventSpec('info', frozenset({'organization_id', 'reason'})),
     'agent_surfaces.slack_manager.no_install': EventSpec('info', frozenset({'team_id'})),
     'agent_surfaces.slack_manager.person_linked': EventSpec('info', frozenset({'forgotten', 'proved_by', 'replaced', 'team_id'})),
     'agent_surfaces.slack_manager.respond_failed.degraded': EventSpec('warning', frozenset()),

@@ -69,8 +69,8 @@ The general pipeline's export boundary (`app/core/observability/span_sanitizer.p
 is default-deny: only a fixed allowlist of attribute keys crosses it (route
 templates, status codes, token counts, bounded Lemma business-context fields),
 strings are truncated to 256 chars, and span names are collapsed to a small
-safe set (`http.server`, `db.operation`, ...) rather than the raw operation
-name. This is why the dashboard's "Endpoints" tile groups by the
+safe set (`db.operation`, `http.client`, ...) rather than the raw operation
+name -- see [Span names](#span-names) for the ones built to be read. This is why the dashboard's "Endpoints" tile groups by the
 `http.route` *attribute* instead of span name, and why general logs never
 carry log message bodies beyond a bounded field allowlist
 (`SanitizingLoggingHandler`). None of this is configurable — it's a
@@ -116,6 +116,57 @@ The work gauges are sampled by a loop on the **worker** (every
 `WORK_GAUGE_INTERVAL_SECONDS`) and report nothing until the first successful
 sample — a gauge that reports a stale level reads as
 a healthy steady state, which is the failure these exist to catch.
+
+### Agent runs
+
+Recorded by `AgentRunnerService.execute` and `GracefulToolset`, through
+`AgentRunMetrics` (`app/modules/agent/services/run_metrics.py`). In a
+Prometheus-backed collector the dots become underscores and counters gain
+`_total`, so `lemma.agent.runs` is `lemma_agent_runs_total`.
+
+| Metric | Type | Labels | Answers |
+|---|---|---|---|
+| `lemma.agent.runs` | counter | `outcome`, `kind`, `model` | How many runs ended, and how |
+| `lemma.agent.run.duration` | histogram (s) | `kind`, `outcome` | How long runs take, by what started them |
+| `lemma.agent.first_token` | histogram (s) | `model` | Time from the harness starting to the first streamed token -- the same moment the `lemma.agent.first_token` span closes |
+| `lemma.agent.tool_calls` | counter | `tool_kind`, `outcome` | Which family of tool fails |
+| `lemma.agent.runs.active` | up/down counter | `kind` | Runs executing in this process now |
+
+What each label means, and what bounds it:
+
+- `outcome` (runs) -- `completed`, `failed`, `cancelled` (a person stopped
+  it), `waiting` (paused on a person: `ask_user`, an approval, a form), or
+  `interrupted`: the worker went away mid-run (a deploy, a lost lease) and
+  another worker resumes it, which counts it again when it does end. Read
+  `interrupted` as a deploy signal, not a failure.
+- `kind` -- what started the run, from `run_origin`: `chat` (a person in the
+  app), `surface` (a channel such as Slack or WhatsApp), `schedule`,
+  `workflow` (an AGENT step), `trigger`, `subagent` (another agent called it)
+  or `pod_ask`. A function that starts an agent does so through one of these,
+  so there is no separate `function` kind.
+- `model` -- the model name the run's runtime resolved to. Bounded by the
+  configured model catalog; cleaned to `[A-Za-z0-9_.:/-]` and 96 characters so
+  a hand-typed custom model cannot carry anything odd. `unknown` when the run
+  failed before its runtime resolved.
+- `tool_kind` -- `function` (`function_*` tools), `agent` (`agent_*`
+  tools), `connector` (the connector toolset), `sandbox` (the workspace CLI
+  and the VM browser) or `builtin` (everything else Lemma ships).
+- `outcome` (tool calls) -- `ok`, `error` (raised, or returned a failure),
+  `cancelled`, or `control_flow` (a pause, retry or usage limit -- not a
+  failure).
+
+Never on these: a run, conversation, pod, agent or user id, or an agent's
+name. Agents are named per pod, so names grow with the customer count. Those
+live on the `agent.run` span. Tool calls are counted for in-process (LEMMA
+harness) runs only; an Agent Host harness runs its own tools.
+
+### Span names
+
+| Span | Name | Notes |
+|---|---|---|
+| Inbound request | `{METHOD} {route}`, e.g. `GET /pods/{pod_id}/agents` | OTel HTTP semconv. A request refused before routing (a 401 from auth, a 413) is given the route template its path matches; one matching no route is `GET unmatched`, and `http.route` is `unmatched` too. An unknown method is `HTTP` |
+| Work item | `job {kind}`, e.g. `job agent.turn` | CONSUMER span around the handler, with `lemma.job_id`, `lemma.work_kind`, `lemma.attempt` and `lemma.outcome` |
+| Agent run | `agent.run` | Not `agent.run {name}`: names are per pod and unbounded across tenants, so the name is the `lemma.agent_name` attribute. The root carries `lemma.pod_id`, `lemma.agent_id`, `lemma.conversation_id`, `lemma.agent_run_id`, `lemma.agent_name` and `lemma.run_kind` (the `kind` above) |
 
 ### HTTP semantic conventions
 

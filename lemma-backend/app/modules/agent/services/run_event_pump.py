@@ -400,6 +400,7 @@ async def drive_harness(
     observer: Any,
     conversation: Any,
     ctx: Any,
+    on_first_token: Callable[[float], None] | None = None,
 ) -> None:
     """Pump a harness's events; on a shutdown yield, close the harness too.
 
@@ -408,7 +409,7 @@ async def drive_harness(
     """
     try:
         await pump.drive(
-            observe_first_output(events),
+            observe_first_output(events, on_first_token=on_first_token),
             run=run,
             outcome=outcome,
             observer=observer,

@@ -10,8 +10,10 @@ import asyncio
 import re
 import time
 import uuid
-from opentelemetry import metrics
+from opentelemetry import metrics, trace
+from opentelemetry.trace import SpanKind
 from fastapi.responses import JSONResponse
+from starlette.routing import Match
 
 from app.core.api.exception_handlers import ERROR_REQUEST_ID
 from app.core.domain.errors import PayloadTooLargeError
@@ -200,6 +202,7 @@ class RequestObserverMiddleware:
                 finished_at = time.perf_counter()
                 duration_ms = round((finished_at - started_at) * 1000, 1)
                 route = self._route_template(scope)
+                _name_server_span_route(route)
                 attributes = {
                     "http.request.method": str(scope.get("method", "UNKNOWN")),
                     "http.route": route,
@@ -312,7 +315,49 @@ class RequestObserverMiddleware:
     def _route_template(scope: Scope) -> str:
         route = scope.get("route")
         value = getattr(route, "path_format", None) or getattr(route, "path", None)
-        return value if isinstance(value, str) else _UNMATCHED_ROUTE
+        if isinstance(value, str):
+            return value
+        return _template_for_unrouted(scope)
+
+
+def _template_for_unrouted(scope: Scope) -> str:
+    """The route a request was headed for, when it never reached the router.
+
+    A request refused before routing -- a 401 from an auth middleware, a 413
+    from the body limit -- has no ``scope["route"]``, so it was counted, logged
+    and traced as ``unmatched`` even though its path names a real endpoint.
+    Matching the path against the app's routes recovers the template, which is
+    as bounded as any other route label. Only plain routes are tried: a
+    mount's template is its prefix, which would name the wrong thing. A path
+    nothing matches stays ``unmatched``.
+    """
+    router = getattr(scope.get("app"), "router", None)
+    partial: str | None = None
+    for candidate in getattr(router, "routes", ()):
+        template = getattr(candidate, "path_format", None)
+        if not isinstance(template, str):
+            continue
+        match, _ = candidate.matches(scope)
+        if match is Match.FULL:
+            return template
+        if match is Match.PARTIAL and partial is None:
+            partial = template
+    return partial or _UNMATCHED_ROUTE
+
+
+def _name_server_span_route(route: str) -> None:
+    """Give the request's server span an ``http.route`` if it has none.
+
+    The span is named ``{METHOD} {route}`` at export (see the span sanitizer),
+    so a span without a route is named for nothing. The instrumentation's own
+    value wins when it found one.
+    """
+    span = trace.get_current_span()
+    if not span.is_recording() or getattr(span, "kind", None) is not SpanKind.SERVER:
+        return
+    if "http.route" in (getattr(span, "attributes", None) or {}):
+        return
+    span.set_attribute("http.route", route)
 
 
 # Compatibility name retained for imports and generated SDK tests.

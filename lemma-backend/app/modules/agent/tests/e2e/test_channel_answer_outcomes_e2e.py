@@ -56,7 +56,7 @@ from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
     history_and_prompt,
 )
 from app.modules.agent.infrastructure.repositories import ConversationRepository
-from app.modules.agent.services.agent_runner_service import MAX_HISTORY_AGENT_RUNS
+from app.modules.agent.services.runtime_history import MAX_HISTORY_AGENT_RUNS
 from app.modules.agent.services.channel_answers import (
     COULD_NOT_ANSWER,
     STOPPED_BEFORE_ANSWERING,

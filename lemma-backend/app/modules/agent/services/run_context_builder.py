@@ -27,7 +27,10 @@ from app.modules.agent.domain.runtime_profiles import RuntimeModelCapability
 from app.modules.agent.domain.vision import resolve_vision_mode
 from app.modules.agent.infrastructure.repositories import ConversationRepository
 from app.modules.agent.domain.outsiders import Audience
-from app.modules.agent.domain.private_notes import keeper_started, run_is_private
+from app.modules.agent.domain.private_notes import (
+    keeper_started,
+    run_delivers_to_surface,
+)
 from app.modules.agent.domain.run_context_prompt import (
     render_run_context,
     task_list_section,
@@ -41,9 +44,7 @@ from app.modules.agent.services.outsider_brief import outsider_brief
 from app.modules.agent.services.link_brief import link_brief
 from app.modules.agent.services.brief_lines import run_source_of
 from app.modules.agent.domain.agent_kind import AgentKind
-from app.modules.agent.services.surface_context import (
-    surface_context_from_conversation,
-)
+from app.modules.agent.services.surface_context import surface_context_for_run
 from app.modules.agent.domain.workspace_location import (
     has_recorded_cwd,
     pod_cwd_from_workspace_cwd,
@@ -82,7 +83,7 @@ async def build_run_context(
     the harness options, and two calls to `runtime_snapshot()` would be two
     objects that only happen to agree.
     """
-    surface_context = surface_context_from_conversation(conversation)
+    surface_context = surface_context_for_run(conversation, agent_run.metadata)
     workspace_location = resolve_workspace_location(conversation)
     # Same rule the MCP bridge follows: a conversation that never had a
     # cwd written down gets one now, so metadata is the source of truth
@@ -140,7 +141,7 @@ async def build_run_context(
         workspace_readable=AgentToolset.WORKSPACE_CLI in run_toolsets,
         grant_summary=grant_summary,
         audience=audience,
-        delivers_to_surface=not run_is_private(agent_run.metadata),
+        delivers_to_surface=run_delivers_to_surface(agent_run.metadata),
         keeper_asking=for_outsider and keeper_started(agent_run.metadata),
         **surface_context,
     )
@@ -172,6 +173,7 @@ async def build_run_context(
                 # stamped, so only the run can say whether a person is here on
                 # this turn.
                 run_source=run_source_of(agent_run),
+                platform=surface_context["surface_platform"],
             )
             ctx.context_brief, run_brief = brief.stable, brief.per_run
     # The failures a run should survive: a denied grant, a missing file, a

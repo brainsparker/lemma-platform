@@ -205,7 +205,12 @@ class _Contacts:
         self.strengths.append(strength)
         return self.by_handle.setdefault(
             (kind, value),
-            ContactRef(id=uuid4(), pod_id=pod_id, display_name=display_name),
+            ContactRef(
+                id=uuid4(),
+                pod_id=pod_id,
+                display_name=display_name,
+                label=display_name or value,
+            ),
         )
 
 

@@ -66,6 +66,10 @@ class ContactHandle(BaseModel):
     value_raw: str | None = None
 
 
+#: The kinds of handle a person would recognise themselves by, best first.
+_LABELLED_BY = (IdentityKind.EMAIL, IdentityKind.PHONE)
+
+
 class Contact(BaseModel):
     """Somebody the pod talks to who is not a member.
 
@@ -91,3 +95,15 @@ class Contact(BaseModel):
     @property
     def is_anonymous(self) -> bool:
         return all(handle.kind is IdentityKind.WEB for handle in self.identities)
+
+    @property
+    def label(self) -> str:
+        """What to call them: their name, else the handle they would know
+        themselves by (an email address, a number), else what they are."""
+        if self.display_name:
+            return self.display_name
+        for kind in _LABELLED_BY:
+            for handle in self.identities:
+                if handle.kind is kind:
+                    return handle.value_raw or handle.value
+        return "Web visitor" if self.is_anonymous else "A contact"

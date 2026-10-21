@@ -98,8 +98,14 @@ class RunToolAssembler:
         host_execution: HostExecutionMode | None = None,
         include_question_tools: bool = False,
         harness_kind: HarnessKind | None = None,
+        surface_platform: str | None = None,
     ) -> list[AbstractToolset[ConversationContext]]:
         """Every tool this (agent, conversation) can reach.
+
+        ``surface_platform`` is the platform the run talks over, from its
+        context (``surface_context_for_run``): a run asked in Lemma has none,
+        and gets no platform's tools, whichever platform its conversation was
+        last heard on.
 
         ``include_question_tools`` adds ``answer_question`` for a run whose
         harness reaches tools only through this list -- an Agent Host run over
@@ -136,6 +142,7 @@ class RunToolAssembler:
                 include_final_answer=include_final_answer,
                 vision_mode=vision_mode,
                 grants=grants,
+                surface_platform=surface_platform,
             )
             if host_execution is not None:
                 toolsets = _for_host_execution(toolsets, host_execution)
@@ -191,6 +198,7 @@ class RunToolAssembler:
         include_final_answer: bool,
         vision_mode: AgentVisionMode | None = None,
         grants: AgentGrantSummary | None = None,
+        surface_platform: str | None = None,
     ) -> list[AbstractToolset[ConversationContext]]:
         if grants is None and agent is not None and callable(self.uow_factory):
             grants = await load_agent_grant_summary(self.uow_factory, agent=agent)
@@ -233,7 +241,9 @@ class RunToolAssembler:
                 )
             )
         if not for_outsider:
-            toolsets.extend(await self._surface_toolsets(conversation))
+            toolsets.extend(
+                await self._surface_toolsets(conversation, surface_platform)
+            )
         toolsets.extend(self._outside_toolsets(conversation, audience))
         toolsets.extend(
             self._final_answer_toolsets(
@@ -268,12 +278,10 @@ class RunToolAssembler:
         return toolsets
 
     async def _surface_toolsets(
-        self, conversation: Conversation | None
+        self, conversation: Conversation | None, surface_platform: str | None
     ) -> list[AbstractToolset[ConversationContext]]:
-        """The tools the conversation's chat platform adds, if it lives on one."""
-        if conversation is None or not (conversation.metadata or {}).get(
-            "surface_platform"
-        ):
+        """The tools the run's chat platform adds, if it talks over one."""
+        if conversation is None or not surface_platform:
             return []
         from app.modules.agent_surfaces.contracts.egress import (
             build_surface_toolsets,

@@ -133,25 +133,11 @@ async def _responses(
     return [_shown(contact, stopped) for contact in contacts]
 
 
-#: The kinds of handle a person would recognise themselves by, best first.
-_LABELLED_BY = (IdentityKind.EMAIL, IdentityKind.PHONE)
-
-
-def _label(contact: Contact) -> str:
-    if contact.display_name:
-        return contact.display_name
-    for kind in _LABELLED_BY:
-        for handle in contact.identities:
-            if handle.kind is kind:
-                return handle.value_raw or handle.value
-    return "Web visitor" if contact.is_anonymous else "A contact"
-
-
 def _shown(contact: Contact, stopped: set[UUID]) -> ContactResponse:
     return ContactResponse(
         id=contact.id,
         display_name=contact.display_name,
-        label=_label(contact),
+        label=contact.label,
         created_at=contact.created_at,
         identities=[
             ContactIdentityResponse(

@@ -566,19 +566,6 @@ class LineRepository:
             for row in rows
         ]
 
-    async def last_heard(self, conversation_id: UUID) -> ChannelMessage | None:
-        """The latest line a person said in a conversation, wherever they said it."""
-        row = await self.session.scalar(
-            select(ChannelMessageModel)
-            .where(
-                ChannelMessageModel.conversation_id == conversation_id,
-                ChannelMessageModel.sender_kind != SenderKind.AGENT.value,
-            )
-            .order_by(ChannelMessageModel.seq.desc())
-            .limit(1)
-        )
-        return message_entity(row) if row is not None else None
-
     async def at(self, source_id: UUID, external_message_id: str) -> UUID | None:
         """The line a platform message is at this source, if it is one: heard
         there, or written in Lemma and delivered there as that message."""

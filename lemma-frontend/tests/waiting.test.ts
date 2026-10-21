@@ -69,7 +69,7 @@ test("a form with no run to submit against is answered in words", () => {
 
 test("where it was asked is said plainly", () => {
     assert.equal(whereAsked(inbox.items[0]), "In launch");
-    assert.equal(whereAsked(inbox.items[1]), "In your channel");
+    assert.equal(whereAsked(inbox.items[1]), "Sent to you");
 });
 
 test("the badge says nothing, a count, or 99+", () => {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import { liveAvailable, podLive } from "@/live/pod-live";
 import { usePanelFocus } from "@/ui/focus-trap";
@@ -9,7 +9,9 @@ import { Composer } from "./composer";
 import { LineView } from "./line";
 import { sayTyping, upsertThread, type Answering } from "./live";
 import type { Mentionable } from "./mentions";
-import type { ChannelDetail, Line, ThreadPage } from "./model";
+import { channelTitle, type ChannelDetail, type Line, type ThreadPage } from "./model";
+import { ChannelMark } from "./chat-mark";
+import { continues } from "./timeline-model";
 import { linesKey, threadKey, useThread } from "./queries";
 
 /** How many pages of a thread are read on, at most, to reach a reply asked
@@ -46,7 +48,7 @@ export function ThreadPanel({ podId, channel, root, people, visible, mayWrite, w
     /* After the panel has taken the focus on opening, so the reply box is
        where it lands. */
     useEffect(() => {
-        if (replyAsked) panel.current?.querySelector<HTMLTextAreaElement>(".chcompose__text")?.focus();
+        if (replyAsked) panel.current?.querySelector<HTMLTextAreaElement>(".chcompose__text")?.focus({ preventScroll: true });
     }, [replyAsked]);
     const thread = useThread(podId, channel.id, root.id, visible);
     const replies = thread.replies;
@@ -62,9 +64,9 @@ export function ThreadPanel({ podId, channel, root, people, visible, mayWrite, w
     const pagesRead = useRef(0);
     useEffect(() => {
         if (!highlight || placed.current === highlight) return;
-        const element = panel.current?.querySelector("#line-" + CSS.escape(highlight));
+        const element = panel.current?.querySelector<HTMLElement>("#line-" + CSS.escape(highlight));
         if (element) {
-            element.scrollIntoView({ block: "center" });
+            element.scrollIntoView({ block: "center", inline: "nearest" });
             placed.current = highlight;
             return;
         }
@@ -74,10 +76,13 @@ export function ThreadPanel({ podId, channel, root, people, visible, mayWrite, w
         }
     }, [highlight, replies, thread]);
     const count = Math.max(root.replyCount, replies.length);
+    const width = useThreadWidth();
     return (
-        <aside className="cside chthread" aria-label="Thread" ref={panel} tabIndex={-1} onKeyDown={keys}>
-            <header className="cside__head">
+        <aside className="cside chthread" aria-label="Thread" ref={panel} tabIndex={-1} onKeyDown={keys} style={{ width: width.value }}>
+            <div className="chthread__grip" role="separator" aria-orientation="vertical" aria-label="Resize the thread" onPointerDown={width.drag} />
+            <header className="cside__head chthread__head">
                 <h2>Thread</h2>
+                <span className="chthread__where"><ChannelMark channel={channel} size={13} /> {channelTitle(channel, "")}</span>
                 <button type="button" className="icon-button" aria-label="Close the thread" onClick={onClose}><CloseIcon size={16} /></button>
             </header>
             <div className="chthread__body">
@@ -85,11 +90,11 @@ export function ThreadPanel({ podId, channel, root, people, visible, mayWrite, w
                     <LineView podId={podId} channel={channel} line={root} mayWrite={mayWrite} />
                 </ol>
                 <p className="chthread__count">
-                    {thread.isPending ? "Loading replies…" : thread.isError && !thread.data ? "Couldn’t load the replies." : count === 1 ? "1 reply" : count + " replies"}
+                    <span>{thread.isPending ? "Loading replies…" : thread.isError && !thread.data ? "Couldn’t load the replies." : count === 0 ? "No replies yet" : count === 1 ? "1 reply" : count + " replies"}</span>
                     {thread.isError && !thread.data && <> <button type="button" className="gsheet__inline" onClick={() => void thread.refetch()}>Try again</button></>}
                 </p>
                 <ol className="cday__lines">
-                    {replies.map((line) => (
+                    {replies.map((line, index) => (
                         <LineView
                             key={line.id}
                             podId={podId}
@@ -99,6 +104,7 @@ export function ThreadPanel({ podId, channel, root, people, visible, mayWrite, w
                             answering={answering.filter((one) => one.messageId === line.id)}
                             agentName={agentName}
                             highlighted={highlight === line.id}
+                            continued={continues(replies[index - 1], line)}
                         />
                     ))}
                 </ol>
@@ -117,11 +123,46 @@ export function ThreadPanel({ podId, channel, root, people, visible, mayWrite, w
                 channel={channel}
                 people={people}
                 threadRootId={root.id}
-                placeholder="Reply in the thread"
+                placeholder="Reply…"
                 disabledReason={mayWrite ? null : writeRefused ?? "You can’t write here."}
                 onPosted={posted}
                 onTyping={() => onTyping(root.id)}
             />
         </aside>
     );
+}
+
+const WIDTH_KEY = "lemma.thread-width";
+const WIDTH_MIN = 320;
+const WIDTH_DEFAULT = 460;
+
+/** The thread's width: dragged by its left edge, kept for next time. */
+function useThreadWidth(): { value: number; drag: (event: ReactPointerEvent<HTMLDivElement>) => void } {
+    const [value, setValue] = useState(() => {
+        try {
+            const kept = Number(localStorage.getItem(WIDTH_KEY));
+            return Number.isFinite(kept) && kept >= WIDTH_MIN ? kept : WIDTH_DEFAULT;
+        } catch {
+            return WIDTH_DEFAULT;
+        }
+    });
+    const drag = (event: ReactPointerEvent<HTMLDivElement>) => {
+        event.preventDefault();
+        const startX = event.clientX;
+        const startWidth = value;
+        const most = Math.max(WIDTH_MIN, Math.min(760, window.innerWidth * 0.6));
+        let latest = startWidth;
+        const move = (moved: PointerEvent) => {
+            latest = Math.round(Math.min(most, Math.max(WIDTH_MIN, startWidth + startX - moved.clientX)));
+            setValue(latest);
+        };
+        const up = () => {
+            window.removeEventListener("pointermove", move);
+            window.removeEventListener("pointerup", up);
+            try { localStorage.setItem(WIDTH_KEY, String(latest)); } catch { /* a width is only a preference */ }
+        };
+        window.addEventListener("pointermove", move);
+        window.addEventListener("pointerup", up);
+    };
+    return { value, drag };
 }

@@ -310,11 +310,12 @@ async def test_an_answer_the_agent_asked_for_comes_back_to_the_member(pod: Pod):
 # --------------------------------------------------- two lines in a group
 
 
-async def test_two_lines_in_a_group_are_answered_each_in_its_own_thread(pod: Pod):
+async def test_two_lines_in_a_group_are_answered_each_by_its_own_answer(pod: Pod):
     """With the agent answering every line, "say OK1" and then "say OK2"
     while it works on the first: the second is not steered into the first's
-    run -- whose one answer would land under OK1 -- but waits, and its own
-    run answers it under OK2."""
+    run -- whose one answer would answer OK1 alone -- but waits, and its own
+    run answers it. A group made in Lemma reads as a chat: each answer is in
+    the main timeline, pointing at the line it answers."""
     pod_id, owner = UUID(pod.id), UUID(pod.owner["id"])
     made = await group(pod, title="launch")
     channel_id = UUID(made["id"])
@@ -335,14 +336,22 @@ async def test_two_lines_in_a_group_are_answered_each_in_its_own_thread(pod: Pod
 
     await _end(first, pod_id=pod_id, user_id=owner, answer="OK1")
     [answer_one] = await _said_by_run(first)
-    assert (answer_one.body, answer_one.thread_root_id) == ("OK1", one.id)
+    assert (answer_one.body, answer_one.thread_root_id, answer_one.reply_to_id) == (
+        "OK1",
+        None,
+        one.id,
+    )
 
     await _drain(WorkClass.INTERACTIVE)
     _, second = await _run_answering(two.id)
     assert second != first
     await _end(second, pod_id=pod_id, user_id=owner, answer="OK2")
     [answer_two] = await _said_by_run(second)
-    assert (answer_two.body, answer_two.thread_root_id) == ("OK2", two.id)
+    assert (answer_two.body, answer_two.thread_root_id, answer_two.reply_to_id) == (
+        "OK2",
+        None,
+        two.id,
+    )
 
 
 async def test_a_reply_in_the_same_thread_still_joins_the_run(pod: Pod):
@@ -538,7 +547,7 @@ async def test_a_note_naming_the_agent_is_answered_as_a_note(pod: Pod):
     [answer] = await _said_by_run(run_id)
     assert answer.body == "Within 30 days."
     assert answer.members_only is True
-    assert answer.thread_root_id == note.id
+    assert (answer.thread_root_id, answer.reply_to_id) == (None, note.id)
 
 
 # ------------------------------------------------- a line after a stopped one
@@ -636,4 +645,8 @@ async def test_a_line_after_a_stopped_request_is_answered_for_itself(pod: Pod):
 
     await _end(note_run, pod_id=pod_id, user_id=owner, answer="4")
     [answer] = await _said_by_run(note_run)
-    assert (answer.body, answer.thread_root_id) == ("4", note.id)
+    assert (answer.body, answer.thread_root_id, answer.reply_to_id) == (
+        "4",
+        None,
+        note.id,
+    )

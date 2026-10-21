@@ -175,7 +175,7 @@ export function sampleChannelApi(_podId: string): ChannelApi {
                 id: id("sample-channel"), kind: "GROUP", title: body.title, topic: body.topic, person: null,
                 sources: [], source_places: [],
                 visibility: "PUBLIC",
-                members: [{ person: ME, role: "owner" }, ...body.members.map((member) => ({ person: { kind: "MEMBER", id: member, name: null }, role: "member" }))],
+                members: [{ person: ME, role: "owner" }, ...body.members.map((member) => ({ person: { kind: "MEMBER", id: member, name: null }, role: "member" })), ...(body.agents ?? []).map((agent) => ({ person: { kind: "AGENT", id: agent.id, name: null }, role: "member", answers: agent.answers }))],
                 me: { joined: true, notify: "ALL", read_seq: 0, role: "owner", can_manage: true }, unread: { lines: 0, mentions: 0, waiting: 0, read_seq: 0 },
                 created_at: now(), last_line_at: now(), last_seq: 0, joined: true,
             };

@@ -49,7 +49,12 @@ channel: they are private workspaces, not shared places.
 
 A line can be a reply in a thread (`thread_root_id`; a Slack or Teams thread
 is one here too), be edited or deleted (it keeps its place, empty), and name
-people and agents. A heard line is edited or deleted when its platform says
+people and agents. An agent's answer to a line in the main timeline is in the
+main timeline too, pointing at it (`reply_to_id`), and is carried to a
+group's place as a reply to that message there -- a quoted reply on WhatsApp
+or Telegram. On Slack and Teams, whose channels thread a bot's answers, it is
+a reply in the line's thread, there and here; a line already in a thread is
+answered in it (`agent/services/channel_answer_lines.where_the_answer_goes`). A heard line is edited or deleted when its platform says
 the message was (Slack `message_changed` / `message_deleted`, Teams
 `messageUpdate` / `messageDelete`, Telegram `edited_message`), through the same
 `revise_line` / `erase_line` a member's edit takes, and only the line heard as

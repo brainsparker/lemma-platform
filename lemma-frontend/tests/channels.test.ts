@@ -80,13 +80,17 @@ test("reads a contact's inbox fields off the channel itself", () => {
     assert.equal(direct.status, null);
 });
 
-test("names a channel the way its reader sees it", () => {
-    assert.equal(channelTitle(direct, "Marketing"), "You and Marketing");
+test("names a chat the way its reader sees it", () => {
+    /* Your private line is named by where you reach it, or is the notices
+       the teammate sends you. */
+    assert.equal(channelTitle({ kind: "DIRECT", title: null, person: null, sources: [{ platform: "WHATSAPP", title: null }] }, "Marketing"), "WhatsApp");
+    assert.equal(channelTitle({ kind: "DIRECT", title: null, person: null, sources: [{ platform: "WHATSAPP", title: null }, { platform: "TELEGRAM", title: null }] }, "Marketing"), "WhatsApp and Telegram");
+    assert.equal(channelTitle({ kind: "DIRECT", title: null, person: null, sources: [] }, "Marketing"), "Notices");
     assert.equal(channelTitle(contact, "Marketing"), "Tomás");
     assert.equal(channelTitle(launch, "Marketing"), "launch");
     // A group with no title of its own is called where it is.
     assert.equal(channelTitle({ kind: "GROUP", title: null, person: null, sources: [{ platform: "WHATSAPP", title: "Acme × Northwind" }] }, "M"), "Acme × Northwind");
-    assert.equal(channelTitle({ kind: "GROUP", title: null, person: null, sources: [] }, "M"), "Untitled channel");
+    assert.equal(channelTitle({ kind: "GROUP", title: null, person: null, sources: [] }, "M"), "Untitled chat");
 });
 
 test("a row's preview is who said the last line, on one line", () => {
@@ -112,7 +116,7 @@ test("says what is new, and the sidebar's badge puts questions first", () => {
     /* What the bell counts, so the two agree. */
     assert.deepEqual(inboxBadge({ channels: 3, mentions: 2, waiting: 1 }), { count: 3, tone: "waiting", said: "1 question waiting on you, 2 mentions of you" });
     assert.deepEqual(inboxBadge({ channels: 3, mentions: 2, waiting: 0 }), { count: 2, tone: "mention", said: "2 mentions of you" });
-    assert.deepEqual(inboxBadge({ channels: 0, mentions: 0, waiting: 0 }, 4), { count: 4, tone: "new", said: "4 new lines in your channel" });
+    assert.deepEqual(inboxBadge({ channels: 0, mentions: 0, waiting: 0 }, 4), { count: 4, tone: "new", said: "4 new messages for you" });
     /* A group with new lines and nothing for the reader -- every public
        group they never joined -- is not counted: the bell says nothing new. */
     assert.equal(inboxBadge({ channels: 11, mentions: 0, waiting: 0 }), null);
@@ -181,9 +185,9 @@ test("reads a line, and keeps no words of one withheld or deleted", () => {
     assert.equal(line({ seq: 12 }).seq, 12);
 });
 
-test("an agent's line says whom it acted for", () => {
-    assert.equal(senderLabel(line({ sender: lem, on_behalf_of: priya }), ME), "Lem, for Priya");
-    assert.equal(senderLabel(line({ sender: lem, on_behalf_of: dana }), ME), "Lem, for you");
+test("an agent's line says whom it answered, unless it was the reader", () => {
+    assert.equal(senderLabel(line({ sender: lem, on_behalf_of: priya }), ME), "Lem, answering Priya");
+    assert.equal(senderLabel(line({ sender: lem, on_behalf_of: dana }), ME), "Lem");
     assert.equal(senderLabel(line({ sender: lem }), ME), "Lem");
     assert.equal(senderLabel(line({ sender: dana }), ME), "You");
     assert.equal(senderLabel(line({ sender: { kind: "CONTACT" } }), ME), "A contact");
@@ -239,7 +243,7 @@ test("a question on a line is answered the way the bell answers one", () => {
     const asked = line({ id: "q", sender: lem, on_behalf_of: priya, text: "May I?", question: { kind: "APPROVAL", state: "OPEN", awaits: dana, question: { prompt: "May I?" } } });
     assert.deepEqual(asWaitingQuestion(asked, { id: "c-launch", kind: "GROUP", title: "launch" }, ME), {
         id: "q", channelId: "c-launch", channelTitle: "launch", channelKind: "GROUP", kind: "APPROVAL",
-        text: "May I?", from: "Lem, for Priya", askedAt: "2026-10-18T10:00:00Z", question: { prompt: "May I?" }, threadRootId: null,
+        text: "May I?", from: "Lem, answering Priya", askedAt: "2026-10-18T10:00:00Z", question: { prompt: "May I?" }, threadRootId: null,
     });
     assert.equal(asWaitingQuestion(line({}), { id: "c", kind: "GROUP", title: null }, ME), null);
 });
@@ -275,18 +279,18 @@ test("says who answers when nobody is named", () => {
     assert.equal(whoAnswers({ kind: "CONTACT", assignee: null, ...on }, "Marketing", ME), "Marketing’s agent answers them. Write here to answer them yourself.");
     assert.equal(
         whoAnswers({ kind: "CONTACT", assignee: { kind: "MEMBER", id: ME, name: null }, ...on }, "M", ME),
-        "You are answering here; its agent answers again 12 hours after your last line.",
+        "You are answering here; its agent answers again 12 hours after your last message.",
     );
     assert.equal(
         whoAnswers({ kind: "CONTACT", assignee: priya as never, ...on }, "M", ME),
-        "Priya is answering here; its agent answers again 12 hours after their last line.",
+        "Priya is answering here; its agent answers again 12 hours after their last message.",
     );
 });
 
 test("a contact whose agent is off is answered by members alone, whoever stepped in", () => {
     const off = { agentsAnswer: false, handBackAfterHours: 12 };
-    assert.equal(whoAnswers({ kind: "CONTACT", assignee: null, ...off }, "M", ME), "Its agent is off: only members answer them.");
-    assert.equal(whoAnswers({ kind: "CONTACT", assignee: priya as never, ...off }, "M", ME), "Its agent is off: only members answer them.");
+    assert.equal(whoAnswers({ kind: "CONTACT", assignee: null, ...off }, "M", ME), "The agent is off here: only people answer them.");
+    assert.equal(whoAnswers({ kind: "CONTACT", assignee: priya as never, ...off }, "M", ME), "The agent is off here: only people answer them.");
 });
 
 test("offers to add the space's people not in the channel yet, never a teammate", () => {

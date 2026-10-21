@@ -38,7 +38,7 @@ export function AnswersSwitch({ podId, channel, manage }: { podId: string; chann
             </label>
             {flip.isError && (
                 <p className="gside__problem" role="alert">
-                    {isForbidden(flip.error) ? "Only who made this channel, or an editor, can change this." : problemOf(flip.error, "Couldn’t change that.")}
+                    {isForbidden(flip.error) ? "Only who made this chat, or an editor, can change this." : problemOf(flip.error, "Couldn’t change that.")}
                 </p>
             )}
         </div>

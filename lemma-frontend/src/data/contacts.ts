@@ -167,12 +167,25 @@ export function contactSubline(contact: Contact): string {
     return handles.slice(1).join(" · ") || "No handle on record";
 }
 
-/** What each answer means, for a bot or a widget, in one line. */
+/** Whom a bot -- a WhatsApp number, a Telegram bot, an email address --
+ *  answers when somebody messages it privately. Its members are always
+ *  answered; the choice is who else is. */
 export function answerChoices(space: string): { value: WidgetAnswer; label: string; note: string }[] {
     return [
-        { value: "off", label: "Only people in " + space, note: "Anybody else is turned away, as now." },
-        { value: "known", label: "People in " + space + " and its contacts", note: "Strangers are turned away." },
-        { value: "anyone", label: "Anyone who writes", note: "A stranger becomes a contact with their first message." },
+        { value: "off", label: "Members only", note: "Anyone outside " + space + " is turned away." },
+        { value: "known", label: "Members and contacts", note: "People already in Contacts are answered too. Strangers are turned away." },
+        { value: "anyone", label: "Everyone", note: "Strangers are answered too, and join Contacts with their first message." },
+    ];
+}
+
+/** Whom a web chat answers. A visitor is nobody's member, so the choice is
+ *  between any visitor and the people already in Contacts, who confirm
+ *  their email (or are signed in by the site) before they may write. */
+export function widgetAnswerChoices(): { value: WidgetAnswer; label: string; note: string }[] {
+    return [
+        { value: "anyone", label: "Every visitor", note: "Nobody has to sign in." },
+        { value: "known", label: "Only people in Contacts", note: "Visitors confirm their email first, and strangers are turned away." },
+        { value: "off", label: "Off", note: "Every visitor is turned away." },
     ];
 }
 

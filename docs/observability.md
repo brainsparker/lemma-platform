@@ -99,6 +99,15 @@ sampled traffic and turns "the API is slow" into "it is slow for this
 customer"; as a metric label it would multiply every series by the customer
 count.
 
+The one exception is spend. `lemma.llm.tokens` and `lemma.llm.cost_usd` carry
+`billing.organization_id` — a key distinct from `lemma.organization_id`, so
+allowlisting it does not put the tenant on every metric that happens to carry
+the span key, and `test_billing_org_label.py` fails if anything but the usage
+service writes it. It is one series per organization on two counters, bounded
+by the org count and acceptable at current scale. If that stops being true,
+delete the key from `METRIC_ATTRIBUTE_KEYS` and spend falls back to per-model
+series with no change at the call site. Pod ids are never a metric label.
+
 ### Metrics worth knowing about
 
 | Metric | Labels | Answers |
@@ -109,8 +118,36 @@ count.
 | `lemma.work.items` | `work_class`, `state` | How much work is *waiting*, which throughput cannot tell you |
 | `lemma.work.ready_oldest_age` | `work_class` | How long the oldest claimable item has waited: the latency a person sees |
 | `lemma.work.dead` | `work_class`, `work_kind`, `error_class` | Work that gave up |
-| `lemma.llm.tokens` | `gen_ai.request.model`, `gen_ai.token.type` | Tokens per day by model |
-| `lemma.llm.cost_usd` | `gen_ai.request.model` | Spend, next to everything else |
+| `lemma.llm.tokens` | `gen_ai.request.model`, `gen_ai.token.type`, `operation`, `billing.organization_id` | Tokens per day by model and by customer |
+| `lemma.llm.cost_usd` | `gen_ai.request.model`, `operation`, `billing.organization_id` | Spend by model and by customer |
+| `lemma.channels.deliveries`, `lemma.channels.delivery_seconds` | `platform`, `result`, `target` | Channels sends. These labels were emitted but missing from the allowlist until the product counters below added them, so older data is one label-less series |
+
+### Product counters
+
+Defined in `app/core/observability/product_metrics.py`, which folds every
+label value onto a fixed set before recording. Prometheus names follow the
+usual translation (`.` → `_`, counters gain `_total`).
+
+| Metric | Labels | Recorded at |
+|---|---|---|
+| `lemma.conversations.started` | `surface` = app, slack, telegram, whatsapp, teams, email, web_widget, api, workflow, other | Root conversation insert (`conversation_repository.create_conversation`). The app and the public API write the same rows and both count as `app` |
+| `lemma.surface.messages` | `surface`, `direction` = in/out, `outcome` = success/failure/retry | In: `InboundAcceptor.accept`, for events classified as a message (success once stored or handled, failure if that raises). Out: every agent reply send (`reply_work`) and every Channels delivery. `retry` is a transient failure the row will try again, so `success + failure` is messages and `retry` is extra attempts |
+| `lemma.surface.delivery_seconds` | `surface` | Same outbound sends, platform call start to answer |
+| `lemma.workflow.runs`, `lemma.workflow.run_duration_seconds` | `outcome` = completed/failed/cancelled (counter only) | `RunPublication._record_transition`. A run cancelled before it started is counted and not timed |
+| `lemma.function.runs`, `lemma.function.run_duration_seconds` | `kind` = api/job, `outcome` (counter only) | `FunctionExecutionRepository._announce_finished`, every terminal transition |
+| `lemma.connector.operations`, `lemma.connector.operation_duration_seconds` | `connector` (catalog slug; the connectors table is global, so bounded by the catalog), `outcome` = success/failure (counter only) | `KindDispatcher.execute`, credential presentation included |
+| `lemma.sandbox.sessions_active` (gauge) | — | E2B `sandbox_instances` in state `ready`, sampled on the worker |
+| `lemma.sandbox.session_seconds` | — | An E2B instance leaving `ready` (release or destroy), timed from ready or its latest resume. A destroy through the epoch-fenced `claim_for_destroy` path is not timed |
+| `lemma.active_users` (gauge) | `window` = 5m/1h/24h | Distinct `user_id` in `usage_records` over the window — people the product did model work for. One query over a UUIDv7 primary-key range, every 20 gauge ticks (five minutes by default) |
+
+The two gauges are sampled by the work-gauge loop through
+`register_gauge_sampler` and, like the work gauges, report nothing until the
+first successful sample and nothing again after a failed one. Every worker
+replica reports the same reading: aggregate with `max`, not `sum`.
+
+`lemma.event.outbox.*` / `lemma.event.inbox.*` are gone: their definitions
+went with the old event transport in #981, so nothing in this tree emits them.
+A dashboard or alert still querying them is reading an empty series.
 
 The work gauges are sampled by a loop on the **worker** (every
 `WORK_GAUGE_INTERVAL_SECONDS`) and report nothing until the first successful

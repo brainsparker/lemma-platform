@@ -50,6 +50,7 @@ from redis.asyncio import Redis
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
+from app.core.observability.product_metrics import record_surface_delivery
 from app.modules.agent.contracts.contact_conversations import append_follow_up
 from app.modules.agent_surfaces.domain.adapter_port import IDEMPOTENCY_KEY
 from app.modules.agent_surfaces.domain.deliveries import SEND_TIMEOUT
@@ -193,8 +194,18 @@ class ChannelDeliveries:
             "result": outcome.result.value,
             "target": "place" if work.delivery.source_id else "member",
         }
+        elapsed = time.monotonic() - started
         deliveries_done.add(1, attributes)
-        delivery_seconds.record(time.monotonic() - started, attributes)
+        delivery_seconds.record(elapsed, attributes)
+        if outcome.result is not Result.SKIPPED:
+            # The product-wide view of the same send, next to agent replies:
+            # FAILED goes round again (``retry``), DEAD is the final failure.
+            record_surface_delivery(
+                outcome.platform,
+                delivered=outcome.result is Result.SENT,
+                transient=outcome.result is Result.FAILED,
+                seconds=elapsed,
+            )
         await self._record(work.delivery, outcome)
 
     async def _outcome(self, work: _Work) -> Outcome:

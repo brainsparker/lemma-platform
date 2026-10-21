@@ -26,6 +26,7 @@ from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.work import WorkWriter, facts
 from app.core.log.log import get_logger
+from app.core.observability.product_metrics import record_workflow_run
 from app.modules.workflow.contracts.run_work import WorkflowRunFinished
 from app.modules.workflow.domain.events import WorkflowRunTerminalEvent
 from app.modules.workflow.domain.ports import FormQuestionPort
@@ -51,6 +52,14 @@ from app.modules.workflow.infrastructure.run_channel import (
 logger = get_logger(__name__)
 
 
+def _seconds_between(start: datetime | None, end: datetime | None) -> float | None:
+    """Wall time of a finished run; ``None`` when it never started (a queued
+    run cancelled before admission) rather than a misleading zero."""
+    if start is None:
+        return None
+    return ((end or datetime.now(UTC)) - start).total_seconds()
+
+
 class RunPublication:
     uow: SqlAlchemyUnitOfWork
     work: WorkWriter
@@ -67,6 +76,10 @@ class RunPublication:
         if run.status not in TERMINAL_STATUSES:
             return
         self.uow.collect_events([WorkflowRunTerminalEvent.from_run(run)])
+        record_workflow_run(
+            WorkflowRunStatus(run.status).value,
+            _seconds_between(run.started_at, run.completed_at),
+        )
         await facts.emit(
             self.uow,
             WorkflowRunFinished(

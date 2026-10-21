@@ -723,10 +723,12 @@ export interface PodSource {
      *  their consent page, and the account appears here afterwards.
      *  `returnTo` is the path inside this app the provider's tab comes back to.
      *  `connectionFields` carries what the sign-in cannot — Shopify's store
-     *  `subdomain` — for the few connectors that declare any. */
+     *  `subdomain` — for the few connectors that declare any. `configSource`
+     *  asks for an install of that kind when none is named: Lemma's own app,
+     *  where an organization's own app of the same connector would not do. */
     startAccount(
         orgId: string, connectorId: string, authConfigId?: string, returnTo?: string,
-        connectionFields?: Record<string, unknown>,
+        connectionFields?: Record<string, unknown>, configSource?: "SYSTEM_DEFAULT" | "ORG_CUSTOM",
     ): Promise<AccountConnect>;
     /** The account this authorisation produced, once it exists and is usable.
      *  Empty until then. */

@@ -20,7 +20,7 @@ import { ChannelIcon, channelKey, channelName } from "./channels";
 import { Modal } from "./modal";
 import { Mark } from "./mark";
 import { completionPath, hereWith, openAuthorization, useConnectOutcome } from "@/connect/round-trip";
-import { connectorProblem } from "@/connect/install";
+import { connectorProblem, type ConfigSource } from "@/connect/install";
 import { copyText } from "@/desktop/clipboard";
 
 /** Giving a teammate a way to be reached.
@@ -319,6 +319,7 @@ function Account({
     pod,
     onDone,
     bind,
+    configSource,
 }: {
     entry: Connectable;
     pod: Pod;
@@ -326,6 +327,8 @@ function Account({
     /** What to do with the account once it exists. A surface on it, unless
      *  told otherwise: Slack makes Lemma's own app the workspace's manager. */
     bind?: (accountId: string) => Promise<unknown>;
+    /** Which kind of install to authorise against, when it matters. */
+    configSource?: ConfigSource;
 }) {
     const attach = bind ?? ((accountId: string) => source.connectAccount(pod.id, entry.platform, accountId));
     const [link, setLink] = useState<AccountConnect | null>(null);
@@ -450,6 +453,8 @@ function Account({
                             /* Back to this sheet. It polls for the account
                                anyway; this is where the tab lands. */
                             completionPath(hereWith({ reach: "1" })),
+                            undefined,
+                            configSource,
                         )
                         .then((started) => {
                             setLink(started);
@@ -722,6 +727,9 @@ function SlackManagerStep({ entry, pod, onReady }: { entry: Connectable; pod: Po
                 pod={pod}
                 onDone={onReady}
                 bind={(accountId) => source.bindSlackManager(pod.id, accountId)}
+                /* Lemma's own app, never a teammate's own Slack app: those are
+                   installs of the same connector, and the manager refuses them. */
+                configSource="SYSTEM_DEFAULT"
             />
             <button className="linkish focused__alt" onClick={onReady}>
                 Skip this, and give {pod.teammate.name} its bot now

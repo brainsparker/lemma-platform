@@ -24,6 +24,7 @@ from uuid import UUID, uuid4
 import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
+import httpx
 from httpx import AsyncClient
 from jwt.algorithms import RSAAlgorithm
 from pydantic import SecretStr
@@ -51,6 +52,7 @@ from app.modules.agent_surfaces.infrastructure.slack_manager_models import (
     SlackWorkspacePersonModel,
 )
 from app.modules.agent_surfaces.platforms.slack import manager_blocks as views
+from app.modules.agent_surfaces.platforms.slack import workspace_calls
 from app.modules.agent_surfaces.platforms.slack.app_configuration import (
     CreatedSlackApp,
     RotatedConfigurationToken,
@@ -315,6 +317,19 @@ async def _nothing_reached_the_inbound_pipeline() -> bool:
         "('surface.platform_update', 'surface.ingest')"
     )
     return inbound == 0 and updates == 0
+
+
+def _home_cannot_publish(monkeypatch) -> list[str]:
+    """Slack unreachable for the Home tab alone: a transport error, which
+    ``publish_home`` does not turn into a refusal. Returns who it was for."""
+    attempted: list[str] = []
+
+    async def unreachable(credentials, *, user_id, view):
+        attempted.append(user_id)
+        raise httpx.ConnectError("slack.com unreachable")
+
+    monkeypatch.setattr(workspace_calls, "publish_home", unreachable)
+    return attempted
 
 
 def _views(fake_slack: Any, bucket: str = "SLACK_VIEWS_PUBLISH") -> list[str]:
@@ -941,6 +956,42 @@ async def test_add_to_slack_from_slack_makes_one_app_and_queues_no_secret(
     assert purpose == "slack_teammate_app"
 
 
+async def test_a_home_that_fails_to_refresh_leaves_the_allow_on_screen(
+    authenticated_client, db_session, test_pod, fixed_test_user, fake_slack, monkeypatch
+):
+    """The add is done when the Home refresh after it fails. Retrying the item
+    would take the spent form again and put "took too long" over the Allow."""
+    workspace = await _bound(
+        authenticated_client, db_session, test_pod, fixed_test_user, fake_slack
+    )
+    connector = await _ensure_connector(db_session, "slack")
+    connector.kinds = [SLACK_KIND]
+    await db_session.commit()
+    apps = _FakeSlackApps(team=workspace.team)
+    monkeypatch.setattr(slack_manager_bots, "slack_app_calls", apps.calls)
+    attempted = _home_cannot_publish(monkeypatch)
+
+    await _say(
+        authenticated_client,
+        workspace,
+        interaction=_submitted(workspace, test_pod["id"], nonce="h1"),
+    )
+    await drain(_registry(), due=True)
+    # Anything left to retry runs now, rather than after its backoff.
+    await drain(_registry(), due=True)
+
+    assert attempted, "the Home refresh was not attempted"
+    assert apps.created == ["A0MGR1"]
+    shown = _views(fake_slack, "SLACK_VIEWS_UPDATE")
+    assert "Allow" in shown[-1]
+    assert not any("took too long" in view for view in shown)
+    # Finished, not waiting to try again.
+    left = await scalar(
+        "SELECT count(*) FROM work_items WHERE kind = 'surface.slack_manager'"
+    )
+    assert left == 0
+
+
 async def _allowed(
     db_session: AsyncSession,
     *,
@@ -965,12 +1016,16 @@ async def _allowed(
     return added
 
 
-async def test_the_allow_coming_back_makes_the_surface_once_and_says_so(
-    authenticated_client, db_session, test_pod, fixed_test_user, fake_slack
-):
-    workspace = await _bound(
-        authenticated_client, db_session, test_pod, fixed_test_user, fake_slack
-    )
+async def _awaiting_allow(
+    db_session: AsyncSession,
+    *,
+    workspace: _Workspace,
+    test_pod: dict,
+    fixed_test_user: dict,
+    fake_slack: Any,
+) -> tuple[str, Account, SlackPendingAppBindingModel]:
+    """A teammate's app added from Slack, whose Allow has just made an account:
+    ``(its bot, the account, the pending binding)``."""
     bot = _id("U")
     account = await _slack_account(
         db_session,
@@ -994,6 +1049,22 @@ async def test_the_allow_coming_back_makes_the_surface_once_and_says_so(
     )
     db_session.add(pending)
     await db_session.commit()
+    return bot, account, pending
+
+
+async def test_the_allow_coming_back_makes_the_surface_once_and_says_so(
+    authenticated_client, db_session, test_pod, fixed_test_user, fake_slack
+):
+    workspace = await _bound(
+        authenticated_client, db_session, test_pod, fixed_test_user, fake_slack
+    )
+    bot, account, pending = await _awaiting_allow(
+        db_session,
+        workspace=workspace,
+        test_pod=test_pod,
+        fixed_test_user=fixed_test_user,
+        fake_slack=fake_slack,
+    )
 
     # An ordinary Slack connect for tools is never this.
     assert (
@@ -1023,6 +1094,40 @@ async def test_the_allow_coming_back_makes_the_surface_once_and_says_so(
     assert left == 0
     told = [m for m in fake_slack._store.get_all("SLACK") if f"<@{bot}>" in str(m)]
     assert len(told) == 1
+
+
+async def test_a_home_that_fails_to_refresh_never_sends_the_dm_again(
+    authenticated_client, db_session, test_pod, fixed_test_user, fake_slack, monkeypatch
+):
+    """ "X is in Slack now" is out before the Home refresh fails; a retry of the
+    item would send it a second time."""
+    workspace = await _bound(
+        authenticated_client, db_session, test_pod, fixed_test_user, fake_slack
+    )
+    bot, account, pending = await _awaiting_allow(
+        db_session,
+        workspace=workspace,
+        test_pod=test_pod,
+        fixed_test_user=fixed_test_user,
+        fake_slack=fake_slack,
+    )
+    attempted = _home_cannot_publish(monkeypatch)
+    await _allowed(
+        db_session, pending=pending, account=account, purpose="slack_teammate_app"
+    )
+
+    await drain(_registry())
+    # Anything left to retry runs now, rather than after its backoff.
+    await drain(_registry(), due=True)
+    await drain(_registry(), due=True)
+
+    assert workspace.installer in attempted
+    told = [m for m in fake_slack._store.get_all("SLACK") if f"<@{bot}>" in str(m)]
+    assert len(told) == 1
+    left = await scalar(
+        "SELECT count(*) FROM work_items WHERE kind = 'surface.slack_manager_message'"
+    )
+    assert left == 0
 
 
 # -- Sign in with Slack -----------------------------------------------------------
@@ -1218,6 +1323,65 @@ async def test_a_sign_in_finished_by_another_lemma_session_is_refused(
             await SlackManagerRepository(session).person(workspace.team, victim_slack)
             is None
         )
+
+
+async def test_a_sign_in_coming_back_with_no_lemma_session_is_refused_on_the_page(
+    authenticated_client,
+    test_app,
+    db_session,
+    test_pod,
+    fixed_test_user,
+    fake_slack,
+    slack_sign_in,
+):
+    """A browser that lost its Lemma session on Slack's side lands on the page
+    with the reason, rather than on a bare 401 from the API."""
+    workspace = await _bound(
+        authenticated_client, db_session, test_pod, fixed_test_user, fake_slack
+    )
+    me = _id("U")
+    started = await _start(authenticated_client, workspace, me)
+    state, slack_sign_in.nonce = _state_and_nonce(started.json()["authorization_url"])
+    slack_sign_in.signed_in_as = (workspace.team, me)
+
+    # A browser with no session at all: no header, no cookie.
+    async with AsyncClient(
+        transport=httpx.ASGITransport(app=test_app), base_url="http://testserver"
+    ) as signed_out:
+        landed = await _callback(signed_out, state)
+
+    assert "error=session_changed" in landed
+    async with async_session_maker() as session:
+        assert await SlackManagerRepository(session).person(workspace.team, me) is None
+
+
+async def test_a_home_that_fails_to_refresh_still_lands_on_connected(
+    authenticated_client,
+    db_session,
+    test_pod,
+    fixed_test_user,
+    fake_slack,
+    slack_sign_in,
+    monkeypatch,
+):
+    """The proof is committed before the Home refresh; Slack being unreachable
+    for that refresh is no reason to tell the person it failed."""
+    workspace = await _bound(
+        authenticated_client, db_session, test_pod, fixed_test_user, fake_slack
+    )
+    me = _id("U")
+    started = await _start(authenticated_client, workspace, me)
+    state, slack_sign_in.nonce = _state_and_nonce(started.json()["authorization_url"])
+    slack_sign_in.signed_in_as = (workspace.team, me)
+    attempted = _home_cannot_publish(monkeypatch)
+
+    landed = await _callback(authenticated_client, state)
+
+    assert attempted == [me]
+    assert "connected=1" in landed
+    async with async_session_maker() as session:
+        proven = await SlackManagerRepository(session).person(workspace.team, me)
+    assert str(proven) == fixed_test_user["id"]
 
 
 async def test_only_the_workspaces_organization_may_sign_in_there(

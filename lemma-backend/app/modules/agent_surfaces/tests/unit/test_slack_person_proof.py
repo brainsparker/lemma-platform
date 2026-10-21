@@ -88,3 +88,29 @@ def test_an_expired_token_is_refused():
             client_id=CLIENT,
             nonce="n-1",
         )
+
+
+def test_a_token_minted_by_a_clock_a_little_ahead_is_accepted():
+    """Slack mints the token a moment before Lemma checks it, so a clock a few
+    seconds behind Slack's reads its ``iat`` as in the future."""
+    private, public = _key()
+    ahead = int(time.time()) + 5
+    identity = identity_from_id_token(
+        _token(private, iat=ahead, exp=ahead + 300),
+        keys={"keys": [public]},
+        client_id=CLIENT,
+        nonce="n-1",
+    )
+    assert identity.slack_user_id == "U1"
+
+
+def test_a_token_issued_well_in_the_future_is_still_refused():
+    private, public = _key()
+    later = int(time.time()) + 600
+    with pytest.raises(SlackSignInError):
+        identity_from_id_token(
+            _token(private, iat=later, exp=later + 300),
+            keys={"keys": [public]},
+            client_id=CLIENT,
+            nonce="n-1",
+        )

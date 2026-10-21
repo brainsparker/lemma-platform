@@ -89,7 +89,7 @@ async def send_manager_message(
     uow: SqlAlchemyUnitOfWork, payload: SlackManagerMessagePayload
 ) -> None:
     """Send one owed DM. Lemma removed from the workspace since: nothing to send."""
-    from app.modules.agent_surfaces.services.slack_manager import show_home
+    from app.modules.agent_surfaces.services.slack_manager import refresh_home
 
     ctx = await load_context(
         uow, team_id=payload.team_id, slack_user_id=payload.slack_user_id
@@ -108,7 +108,9 @@ async def send_manager_message(
     if error in slack.TRANSIENT_ERRORS:
         raise SlackSendDeferred(error)
     if payload.refresh_home:
-        await show_home(uow, ctx)
+        # The DM is out, and only a deferred send retries: a failed refresh
+        # retrying the item would send it again.
+        await refresh_home(uow, ctx)
 
 
 async def stage_teammate_hello(

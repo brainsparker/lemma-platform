@@ -16,7 +16,7 @@ from fastapi import APIRouter, Query
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
-from app.core.api.dependencies import CurrentUser, UoWDep
+from app.core.api.dependencies import BrowserUserId, CurrentUser, UoWDep
 from app.core.authorization.dependencies import require_action
 from app.core.authorization.permissions import Permissions
 from app.core.config import settings
@@ -24,8 +24,7 @@ from app.modules.agent_surfaces.domain.errors import (
     AgentSurfaceValidationError,
     SlackSignInError,
 )
-from app.modules.agent_surfaces.services.slack_manager import show_home
-from app.modules.agent_surfaces.services.slack_manager_context import load_context
+from app.modules.agent_surfaces.services.slack_manager import refresh_home_of
 from app.modules.agent_surfaces.services.slack_manager_install import (
     ManagedWorkspace,
     bind_manager,
@@ -152,26 +151,31 @@ def _back_to_page(**query: str) -> RedirectResponse:
     include_in_schema=False,
 )
 async def finish_slack_sign_in(
-    user: CurrentUser,
+    session_user_id: BrowserUserId,
     uow: UoWDep,
     state: str = Query(min_length=20, max_length=256),
     code: str | None = Query(default=None, min_length=1, max_length=4096),
     error: str | None = Query(default=None, max_length=255),
 ) -> RedirectResponse:
-    """Slack sending the browser back: check, record, and return to the page."""
+    """Slack sending the browser back: check, record, and return to the page.
+
+    Exempt from the session gate, which would answer a browser that lost its
+    session with a bare 401: the session is only read here, and one that is
+    missing or another person's is refused as ``session_changed``, on the page.
+    """
     try:
         proven = await finish_sign_in(
             uow,
             state=state,
             code=None if error else code,
-            session_user_id=user.id,
+            session_user_id=session_user_id,
         )
     except SlackSignInError as refused:
         return _back_to_page(error=refused.reason)
     # Their Home was the "connect" view; show them their teammates instead.
-    ctx = await load_context(
+    # The proof is committed, so a Home that fails to refresh still lands them
+    # on "connected"; it refreshes the next time they open it.
+    await refresh_home_of(
         uow, team_id=proven.team_id, slack_user_id=proven.slack_user_id
     )
-    if ctx is not None:
-        await show_home(uow, ctx)
     return _back_to_page(connected="1")

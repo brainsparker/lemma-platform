@@ -904,23 +904,47 @@ Public, the way a group's people from outside it are.
 > needs a forged Slack workspace that signs as Lemma's own app and completes
 > Sign in with Slack, which the forged chats do not yet.
 
-- The system shall make a Slack workspace one organization's when an owner or
-  editor installs Lemma's own app there from their own signed-in browser, and
-  shall refuse a second organization rather than move it.
-- The system shall know a Slack user as a Lemma person only by Slack's own
-  word -- the install that names its installer, or Sign in with Slack started by
-  that person from their own Home tab and finished in the same Lemma session as
-  that same Slack user -- and never by a profile email or a link somebody else
-  sent.
+- When an owner or editor installs Lemma's own app in a Slack workspace from
+  their own signed-in browser, the system shall make that workspace their
+  organization's.
+- If a second organization installs Lemma's own app in a workspace that is
+  already an organization's, then the system shall refuse it, leaving the
+  workspace with the organization that has it.
+- If a grant of Lemma's own app was finished in a browser signed in as somebody
+  other than the person binding it, then the system shall bind no workspace
+  with it.
+- When a workspace becomes an organization's, the system shall know the Slack
+  user that Slack names as its installer as the person who installed it.
+- When a person finishes Sign in with Slack, started from their own Home tab,
+  in the same Lemma session and as the Slack user that Home tab was for, the
+  system shall know that Slack user as them.
+- If Sign in with Slack finishes in another Lemma session than the one that
+  started it, or with no Lemma session, then the system shall refuse it,
+  knowing nobody by it.
+- If Sign in with Slack names a different Slack user than the one its link was
+  for, then the system shall refuse it, knowing nobody by it.
+- The system shall never know a Slack user as a Lemma person by their Slack
+  profile email.
 - The system shall show each known person, on Lemma's Home tab in Slack, the
-  teammates they can see in the organization, one per agent, with "Add to
-  Slack" for those not there yet, and shall finish adding one once Slack's
-  Allow comes back, without a visit to Lemma.
+  teammates they can see in the organization, one per agent.
+- The system shall offer "Add to Slack" on that Home tab for each teammate not
+  in the workspace yet.
+- When Slack's Allow comes back for a teammate added from the Home tab, the
+  system shall finish adding that teammate without a visit to Lemma.
 - When Lemma's app is invited to a channel, the system shall ask the inviter
-  which teammate joins, bring that teammate in under its own name with the
-  group hello, keep the channel as private as Slack says it is, and leave.
-- The system shall never answer a question through Lemma's own app, and
-  nothing said to it shall reach a pod.
+  which teammate joins.
+- When the inviter picks a teammate, the system shall bring that teammate into
+  the channel under its own name.
+- When a teammate is brought into a channel, the system shall say the group
+  hello there as that teammate.
+- When a teammate is brought into a channel, the system shall keep the channel
+  as private as Slack says it is.
+- When the teammate it asked about is in the channel, the system shall take
+  Lemma's own app out of it.
+- If somebody asks Lemma's own app a question, then the system shall point them
+  at the workspace's teammates instead of answering it.
+- If somebody says something to Lemma's own app, then the system shall pass
+  none of it to a pod.
 
 **Contracts:** `agent.surface.slack_manager.list`,
 `agent.surface.slack_manager.bind`, `agent.surface.slack_person.sign_in`

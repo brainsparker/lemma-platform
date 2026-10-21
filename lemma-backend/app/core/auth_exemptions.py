@@ -51,6 +51,9 @@ SELF_AUTHENTICATED: tuple[str, ...] = (
     "/auth/cli/refresh",  # the CLI's refresh token is the credential
     # The provider's redirect back after OAuth; bound by the state parameter.
     "/connectors/connect-requests/oauth/callback",
+    # Slack's redirect back after Sign in with Slack; bound by the state, and
+    # the browser's session is only read, to refuse one other than the starter's.
+    "/surface-setup/slack/people/sign-in/callback",
     # Microsoft's redirect after a tenant admin consents; bound by the state.
     "/surfaces/teams/admin-consent/callback",
     # Platform webhooks; each handler verifies its platform's signature.

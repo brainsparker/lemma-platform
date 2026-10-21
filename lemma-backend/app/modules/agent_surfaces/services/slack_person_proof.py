@@ -61,6 +61,8 @@ _TEAM_CLAIM = "https://slack.com/team_id"
 _USER_CLAIM = "https://slack.com/user_id"
 #: Long enough to pass Slack's consent page; a started sign-in is single use.
 SIGN_IN_TTL_SECONDS = 10 * 60
+#: Clock skew tolerated on the ID token's ``iat`` and ``exp``.
+ID_TOKEN_LEEWAY_SECONDS = 30
 #: The route Slack sends the browser back to, registered on Lemma's app.
 CALLBACK_PATH = "/surface-setup/slack/people/sign-in/callback"
 
@@ -131,6 +133,9 @@ def identity_from_id_token(
             algorithms=["RS256"],
             audience=client_id,
             issuer=SLACK_OIDC_ISSUER,
+            # The token is minted a moment before this check, so a clock a
+            # second behind Slack's reads its ``iat`` as in the future.
+            leeway=ID_TOKEN_LEEWAY_SECONDS,
             options={"require": ["exp", "iat", "iss", "aud", "sub", "nonce"]},
         )
     except StopIteration, jwt.PyJWTError:

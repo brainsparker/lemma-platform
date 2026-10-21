@@ -3,6 +3,8 @@ import type { SurfaceCreateRequest } from "../openapi_client/models/SurfaceCreat
 import type { SurfaceUpdateRequest } from "../openapi_client/models/SurfaceUpdateRequest.js";
 import type { SurfaceSendRequest } from "../openapi_client/models/SurfaceSendRequest.js";
 import type { TelegramManagedBotSetupRequest } from "../openapi_client/models/TelegramManagedBotSetupRequest.js";
+import type { SlackAppCreateRequest } from "../openapi_client/models/SlackAppCreateRequest.js";
+import type { SlackConfigurationTokenRequest } from "../openapi_client/models/SlackConfigurationTokenRequest.js";
 import { AgentSurfacesService } from "../openapi_client/services/AgentSurfacesService.js";
 
 /**
@@ -137,6 +139,53 @@ export class PodSurfacesNamespace {
   slackManifest(agentName?: string) {
     return this.client.request(() =>
       AgentSurfacesService.agentSurfaceSlackManifest(agentName),
+    );
+  }
+
+  /**
+   * The Slack workspaces this pod's organization lets Lemma create apps in --
+   * one per saved app configuration token. Carries no token. `can_manage` says
+   * whether the caller may save tokens and create apps (an organization owner
+   * or editor); others are shown no workspace.
+   */
+  slackAppWorkspaces(podId: string) {
+    return this.client.request(() =>
+      AgentSurfacesService.agentSurfaceSlackAppCreationList(podId),
+    );
+  }
+
+  /**
+   * Let Lemma create Slack apps in a workspace, from the refresh token of an
+   * app configuration token (api.slack.com/apps → Your App Configuration
+   * Tokens). Lemma rotates it at once, which proves it works and names the
+   * workspace. Needs the right to manage the org's connector installs.
+   */
+  saveSlackConfigurationToken(podId: string, request: SlackConfigurationTokenRequest) {
+    return this.client.request(() =>
+      AgentSurfacesService.agentSurfaceSlackAppCreationSave(podId, request),
+    );
+  }
+
+  /**
+   * Stop Lemma creating apps in that workspace. Apps it made are untouched,
+   * and the token stays valid at Slack until revoked there.
+   */
+  forgetSlackConfigurationToken(podId: string, teamId: string) {
+    return this.client.request(() =>
+      AgentSurfacesService.agentSurfaceSlackAppCreationForget(podId, teamId),
+    );
+  }
+
+  /**
+   * Create an agent's own Slack app (the pod's own agent unless `agent_id` is
+   * given), named after it, and register its credentials as the org's own
+   * install. Authorise that install (`auth_config_id`) to finish. Asking again
+   * for the same agent and workspace answers with the same app until it is
+   * authorised, and so does the same `idempotencyKey` for a day.
+   */
+  createSlackApp(podId: string, request: SlackAppCreateRequest, idempotencyKey?: string) {
+    return this.client.request(() =>
+      AgentSurfacesService.agentSurfaceSlackAppCreate(podId, request, idempotencyKey),
     );
   }
 }

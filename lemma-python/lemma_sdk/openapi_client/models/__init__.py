@@ -540,6 +540,11 @@ _NAME_TO_MODULE = {
     'SignedUrlListResponse': 'signed_url_list_response',
     'SignedUrlRevokeResponse': 'signed_url_revoke_response',
     'SignedUrlSummary': 'signed_url_summary',
+    'SlackAppCreateRequest': 'slack_app_create_request',
+    'SlackAppCreateResponse': 'slack_app_create_response',
+    'SlackAppWorkspaceListResponse': 'slack_app_workspace_list_response',
+    'SlackAppWorkspaceResponse': 'slack_app_workspace_response',
+    'SlackConfigurationTokenRequest': 'slack_configuration_token_request',
     'SourceKind': 'source_kind',
     'SourceSettingsDetailResponse': 'source_settings_detail_response',
     'SourceSettingsResponse': 'source_settings_response',
@@ -1233,6 +1238,11 @@ if TYPE_CHECKING:
     from .signed_url_list_response import SignedUrlListResponse
     from .signed_url_revoke_response import SignedUrlRevokeResponse
     from .signed_url_summary import SignedUrlSummary
+    from .slack_app_create_request import SlackAppCreateRequest
+    from .slack_app_create_response import SlackAppCreateResponse
+    from .slack_app_workspace_list_response import SlackAppWorkspaceListResponse
+    from .slack_app_workspace_response import SlackAppWorkspaceResponse
+    from .slack_configuration_token_request import SlackConfigurationTokenRequest
     from .source_kind import SourceKind
     from .source_settings_detail_response import SourceSettingsDetailResponse
     from .source_settings_response import SourceSettingsResponse
@@ -1939,6 +1949,11 @@ __all__ = [
     'SignedUrlListResponse',
     'SignedUrlRevokeResponse',
     'SignedUrlSummary',
+    'SlackAppCreateRequest',
+    'SlackAppCreateResponse',
+    'SlackAppWorkspaceListResponse',
+    'SlackAppWorkspaceResponse',
+    'SlackConfigurationTokenRequest',
     'SourceKind',
     'SourceSettingsDetailResponse',
     'SourceSettingsResponse',

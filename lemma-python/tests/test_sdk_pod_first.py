@@ -426,6 +426,38 @@ def test_pod_surfaces_use_generated_models():
     )
 
 
+def test_pod_surfaces_make_slack_apps_through_generated_models():
+    transport = StubTransport()
+    pod = Pod(
+        "22222222-2222-4222-8222-222222222222",
+        org_id="11111111-1111-4111-8111-111111111111",
+        token="token",
+        base_url="https://api.example.test",
+    )
+    pod.surfaces._transport = transport
+    pod_uuid = (UUID("22222222-2222-4222-8222-222222222222"),)
+
+    pod.surfaces.slack_app_workspaces()
+    pod.surfaces.save_slack_configuration_token({"refresh_token": "xoxe-1-x"})
+    pod.surfaces.create_slack_app({"team_id": "T1"}, idempotency_key="k-1")
+    pod.surfaces.create_slack_app({"team_id": "T1"})
+    pod.surfaces.forget_slack_configuration_token("T1")
+
+    assert [call["endpoint"].rsplit(".", 1)[-1] for call in transport.calls] == [
+        "agent_surface_slack_app_creation_list",
+        "agent_surface_slack_app_creation_save",
+        "agent_surface_slack_app_create",
+        "agent_surface_slack_app_create",
+        "agent_surface_slack_app_creation_forget",
+    ]
+    assert transport.calls[1]["body_model"] == "SlackConfigurationTokenRequest"
+    assert transport.calls[2]["body_model"] == "SlackAppCreateRequest"
+    assert transport.calls[2]["kwargs"] == {"idempotency_key": "k-1"}
+    # No key sends no header, rather than an empty one.
+    assert transport.calls[3]["kwargs"] == {}
+    assert transport.calls[4]["path_args"] == (*pod_uuid, "T1")
+
+
 def test_user_update_profile_uses_generated_model():
     transport = StubTransport()
     lemma = Lemma(

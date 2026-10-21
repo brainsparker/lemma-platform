@@ -41,6 +41,8 @@ FORMER_CRONS = {
     "surfaces.onboarding_cleanup": WorkClass.ADMIN,
     "surfaces.web_visitors": WorkClass.ADMIN,
     "surfaces.retention": WorkClass.ADMIN,
+    # Calls Slack to delete the apps nobody authorised.
+    "surfaces.slack_unauthorised_apps": WorkClass.AUTOMATION,
 }
 
 APP = Path(__file__).resolve().parents[3]

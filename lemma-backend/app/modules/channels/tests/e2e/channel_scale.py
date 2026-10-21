@@ -434,6 +434,19 @@ async def _seed_attention(session: AsyncSession, params: dict[str, object]) -> N
         """),
         params,
     )
+    # The two updates below join ~100k rows this transaction just wrote.
+    # Planned on the statistics an earlier test left behind they once took
+    # over two minutes instead of ten seconds, and a seed killed mid-statement
+    # by the test timeout left its transaction holding every later reset.
+    # ANALYZE inside the transaction counts its own rows; temp tables are
+    # never analyzed by autovacuum.
+    for table in (
+        "seed_channels",
+        "channel_messages",
+        "channel_mentions",
+        "channel_read_state",
+    ):
+        await session.execute(text(f"ANALYZE {table}"))
     # What the member read is read: its replies counted, and the lines naming
     # them up to there -- as reading the timeline through the API leaves it.
     await session.execute(

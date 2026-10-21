@@ -59,7 +59,9 @@ the merge moves it too.
   rows; follow `next_cursor`. Takes `pod.member.manage`.
 - `contracts`: `find_contact`, `open_contact`, `open_anonymous_contact`,
   `prove_handle`, `contact_by_id` (which follows a merge), `contact_handles` (as
-  `ContactHandle`), `note_inbound`, `note_answered`,
+  `ContactHandle`), `verified_contact_handles` (only the `CHANNEL`, `HOST` and
+  `CODE` handles, of the contact a merge led to: what a function opened to
+  contacts is told, `domain/verified.py`), `note_inbound`, `note_answered`,
   `answered_contacts_in_organization` and the two unsubscribes, for the surface
   that resolves a sender and the run that addresses them. `contracts/facts`
   publishes `ContactMerged`.

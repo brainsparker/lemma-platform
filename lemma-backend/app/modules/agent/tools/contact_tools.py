@@ -107,8 +107,9 @@ class ContactFunctionRequest(BaseModel):
     input: JsonObject = Field(
         default_factory=dict,
         description=(
-            "The function's input. Who is asking is added for you; never put "
-            "an id for them here."
+            "The function's input. Who is asking, and the email addresses and "
+            "phone numbers they have proved, are added for you; never put an "
+            "id, email or phone number for them here."
         ),
     )
 

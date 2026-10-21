@@ -483,6 +483,7 @@ class FunctionUseCases(FunctionRevisionUseCasesMixin):
         name: str,
         input_data: JsonObject,
         contact_id: UUID | None,
+        contact: JsonObject | None,
     ) -> FunctionRunEntity:
         """Create + enqueue a run for a contact, acting for no member."""
 
@@ -494,6 +495,7 @@ class FunctionUseCases(FunctionRevisionUseCasesMixin):
                     name=name,
                     input_data=input_data,
                     contact_id=contact_id,
+                    contact=contact,
                 )
 
         resolved = await self._resolve_with_revision_backfill(resolve_once)

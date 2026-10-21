@@ -1,10 +1,10 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { source, type Pod } from "@/data";
 import {
     EMPTY_WIDGET_DRAFT,
-    answerChoices,
+    widgetAnswerChoices,
     contactName,
     handleText,
     outreachProblem,
@@ -43,6 +43,8 @@ import {
     useWidgets,
 } from "./contact-queries";
 import { SecretSheet, WidgetPlaces } from "./widget-places";
+import { ChannelIcon } from "@/shell/channels";
+import { CopyButton } from "@/thread/copy-button";
 
 type ContactsTab = "inbox" | "people" | "setup";
 
@@ -365,7 +367,9 @@ function Widgets({ pod }: { pod: Pod }) {
     const [asking, setAsking] = useState<{ widget: WebWidget; to: "remove" | "rotate" } | null>(null);
     const [rotating, setRotating] = useState(false);
     const [problem, setProblem] = useState<string | null>(null);
-    const choices = useMemo(() => answerChoices(pod.name), [pod.name]);
+    const choices = widgetAnswerChoices();
+    /* The chat whose link, code and secret are showing: one at a time. */
+    const [open, setOpen] = useState<string | null>(null);
 
     const rotate = async (widget: WebWidget) => {
         setProblem(null);
@@ -402,31 +406,40 @@ function Widgets({ pod }: { pod: Pod }) {
             ) : widgets.data.length === 0 ? (
                 <p className="ccard__sub">A chat for your website, or a link to share.</p>
             ) : (
-                <ul className="cwidgets">
+                <ul className="crows cbots">
                     {widgets.data.map((widget) => (
-                        <li key={widget.id} className="cwidget">
-                            <div className="cwidget__top">
-                                <span className="cwidget__name">{widget.name}</span>
-                                <span className="cwidget__kind">Chat</span>
-                            </div>
-                            <label className="record-form__field">
-                                <span className="smanage__label">Answers</span>
-                                <select
-                                    value={widget.answer}
-                                    disabled={change.isPending}
-                                    onChange={(event) => change.mutate({ widgetId: widget.id, change: { answer: event.target.value as WebWidget["answer"] } })}
-                                >
-                                    {choices.map((choice) => <option key={choice.value} value={choice.value}>{choice.value === "off" ? "Nobody (switched off)" : choice.label}</option>)}
-                                </select>
-                            </label>
-                            <p className="cwidget__origins">
-                                {widget.allowedOrigins.length ? "Only on " + widget.allowedOrigins.join(", ") : "On any website"}
-                            </p>
-                            <WidgetPlaces link={widget.pageUrl} embed={widget.embed} />
-                            <div className="cwidget__actions">
-                                <button type="button" className="linkish" onClick={() => setAsking({ widget, to: "rotate" })}>New signing secret</button>
-                                <button type="button" className="linkish" disabled={remove.isPending} onClick={() => setAsking({ widget, to: "remove" })}>Remove</button>
-                            </div>
+                        <li key={widget.id} className="crow cbot cwebchat">
+                            <span className="cbot__mark" aria-hidden="true"><ChannelIcon platform="WEB" size={22} /></span>
+                            <span className="cbot__text">
+                                <span className="crow__name">{widget.name}</span>
+                                <span className="crow__sub">{widget.allowedOrigins.length ? "On " + widget.allowedOrigins.join(", ") : "On any website"}</span>
+                            </span>
+                            <span className="cwidget__acts">
+                                <label className="cbot__choose">
+                                    <span className="sr-only">Whom {widget.name} answers</span>
+                                    <select
+                                        value={widget.answer}
+                                        disabled={change.isPending}
+                                        title={choices.find((choice) => choice.value === widget.answer)?.note}
+                                        onChange={(event) => change.mutate({ widgetId: widget.id, change: { answer: event.target.value as WebWidget["answer"] } })}
+                                    >
+                                        {choices.map((choice) => <option key={choice.value} value={choice.value}>{choice.label}</option>)}
+                                    </select>
+                                </label>
+                                <CopyButton text={widget.pageUrl} label={"Copy the link to " + widget.name} />
+                                <button type="button" className="ghost-pill" aria-expanded={open === widget.id} onClick={() => setOpen(open === widget.id ? null : widget.id)}>
+                                    {open === widget.id ? "Done" : "Set up"}
+                                </button>
+                            </span>
+                            {open === widget.id && (
+                                <div className="cwidget__more">
+                                    <WidgetPlaces link={widget.pageUrl} embed={widget.embed} />
+                                    <div className="cwidget__actions">
+                                        <button type="button" className="linkish" onClick={() => setAsking({ widget, to: "rotate" })}>New signing secret</button>
+                                        <button type="button" className="linkish" disabled={remove.isPending} onClick={() => setAsking({ widget, to: "remove" })}>Remove</button>
+                                    </div>
+                                </div>
+                            )}
                         </li>
                     ))}
                 </ul>
@@ -493,7 +506,7 @@ function WidgetSheet({ pod, onClose, onMade }: { pod: Pod; onClose: () => void; 
     const set = (change: Partial<WidgetDraft>) => setDraft((was) => ({ ...was, ...change }));
 
     return (
-        <Modal title="New chat" subtitle={"Answered by " + pod.name} onClose={onClose}>
+        <Modal title="New web chat" subtitle={"Answered by " + pod.name} onClose={onClose}>
             <form
                 className="record-form csheet"
                 onSubmit={(event) => {
@@ -510,9 +523,9 @@ function WidgetSheet({ pod, onClose, onMade }: { pod: Pod; onClose: () => void; 
                         <input value={draft.name} maxLength={255} onChange={(event) => set({ name: event.target.value })} placeholder="Shop chat" />
                     </label>
                     <label className="record-form__field">
-                        <span className="smanage__label">Answers</span>
+                        <span className="smanage__label">Who can chat</span>
                         <select value={draft.answer} onChange={(event) => set({ answer: event.target.value as WidgetDraft["answer"] })}>
-                            {answerChoices(pod.name).filter((choice) => choice.value !== "off").map((choice) => <option key={choice.value} value={choice.value}>{choice.label}</option>)}
+                            {widgetAnswerChoices().filter((choice) => choice.value !== "off").map((choice) => <option key={choice.value} value={choice.value}>{choice.label}</option>)}
                         </select>
                     </label>
                     <label className="record-form__field">
@@ -520,7 +533,6 @@ function WidgetSheet({ pod, onClose, onMade }: { pod: Pod; onClose: () => void; 
                         <textarea rows={2} value={draft.origins} onChange={(event) => set({ origins: event.target.value })} placeholder="https://shop.example" />
                         <small>{readOrigins(draft.origins).length ? "One per line." : "Leave empty for any website. The link works either way."}</small>
                     </label>
-                    <p className="contacts__quiet">For a form, open a table to people outside instead: in the table, choose Collect responses.</p>
                 </fieldset>
                 {problem && <p role="alert">{problem}</p>}
                 <div className="csheet__actions">
@@ -552,7 +564,7 @@ function Reach({ pod }: { pod: Pod }) {
     return (
         <section className="ccard ccard--wide" aria-labelledby="contacts-reach">
             <div className="ccard__head"><h2 id="contacts-reach">Shared with contacts</h2></div>
-            <p className="ccard__sub">Beyond what is Public. Each contact sees only their own rows.</p>
+            <p className="ccard__sub">Tables and functions contacts can use, besides what is Public. Each contact sees only their own rows.</p>
             {reach.isPending ? (
                 <p className="all__empty" role="status">Loading…</p>
             ) : !reach.data ? (
@@ -561,7 +573,7 @@ function Reach({ pod }: { pod: Pod }) {
                 <div className="creach">
                     <div>
                         <h3>Tables</h3>
-                        {reach.data.tables.length === 0 ? <p className="ccard__sub">No tables yet.</p> : reach.data.tables.map((table) => (
+                        {reach.data.tables.length === 0 ? <p className="ccard__sub">No tables yet.</p> : <Shortlist items={reach.data.tables} on={(table) => table.contactOwned} noun={["table", "tables"]} render={(table) => (
                             <div key={table.name}>
                                 <label className="smanage__check">
                                     <input
@@ -586,11 +598,11 @@ function Reach({ pod }: { pod: Pod }) {
                                     />
                                 )}
                             </div>
-                        ))}
+                        )} />}
                     </div>
                     <div>
                         <h3>Functions</h3>
-                        {reach.data.functions.length === 0 ? <p className="ccard__sub">No functions yet.</p> : reach.data.functions.map((fn) => (
+                        {reach.data.functions.length === 0 ? <p className="ccard__sub">No functions yet.</p> : <Shortlist items={reach.data.functions} on={(fn) => fn.contactsInvoke} noun={["function", "functions"]} render={(fn) => (
                             <label key={fn.name} className="smanage__check">
                                 <input
                                     type="checkbox"
@@ -601,10 +613,10 @@ function Reach({ pod }: { pod: Pod }) {
                                 />
                                 <span>
                                     <span className="smanage__label">{fn.name}</span>
-                                    {fn.description && <small className="ccard__clip">{fn.description}</small>}
+                                    {fn.description && <small className="ccard__clip" title={fn.description}>{fn.description}</small>}
                                 </span>
                             </label>
-                        ))}
+                        )} />}
                     </div>
                 </div>
             )}
@@ -612,6 +624,37 @@ function Reach({ pod }: { pod: Pod }) {
         </section>
     );
 }
+
+/** A long list cut short: what is on first, then a few more, the rest one
+ *  click away. The order is fixed when it first shows, so ticking a box
+ *  does not move the row out from under the pointer. */
+function Shortlist<T extends { name: string }>({ items, on, noun, render }: {
+    items: T[];
+    on: (item: T) => boolean;
+    noun: [string, string];
+    render: (item: T) => React.ReactNode;
+}) {
+    const [order] = useState(() => [...items.filter(on), ...items.filter((item) => !on(item))].map((item) => item.name));
+    const [all, setAll] = useState(false);
+    const rank = (item: T) => { const at = order.indexOf(item.name); return at === -1 ? order.length : at; };
+    const sorted = [...items].sort((a, b) => rank(a) - rank(b));
+    const keep = Math.max(SHORTLIST, items.filter(on).length);
+    const shown = all ? sorted : sorted.slice(0, keep);
+    const more = sorted.length - keep;
+    return (
+        <>
+            {shown.map(render)}
+            {sorted.length > keep && (
+                <button type="button" className="linkish creach__more" onClick={() => setAll(!all)}>
+                    {all ? "Show fewer" : "Show " + more + " more " + (more === 1 ? noun[0] : noun[1])}
+                </button>
+            )}
+        </>
+    );
+}
+
+/** How many of a long list show before "Show more". */
+const SHORTLIST = 5;
 
 function reachNote(table: ContactReach["tables"][number]): string {
     if (table.perPerson) return "Per member: can’t be shared";

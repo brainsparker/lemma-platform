@@ -42,9 +42,6 @@ export function ContactBots({ pod, onConnect }: { pod: Pod; onConnect?: () => vo
     );
 }
 
-/** Whom a bot answers, in a word or two: the choice beside its handle. */
-const SHORT: Record<Answer, string> = { off: "Members only", known: "Members and known contacts", anyone: "Anyone" };
-
 function BotRow({ pod, surface }: { pod: Pod; surface: Surface }) {
     const cache = useQueryClient();
     const detail = useQuery({ queryKey: ["surface-detail", pod.id, surface.name], queryFn: () => source.getSurface(pod.id, surface.name) });
@@ -62,8 +59,10 @@ function BotRow({ pod, surface }: { pod: Pod; surface: Surface }) {
     const choices = answerChoices(pod.name);
     const platform = surface.platform.toUpperCase();
     /* Lemma's shared number and bot are every space's at once: they never
-       answer contacts, so they are not a choice here. */
-    if (detail.data && !own) return null;
+       answer contacts, so they are not a choice here. Which one a bot is
+       shows only in its details, so a row waits for them rather than
+       showing and then going. */
+    if (detail.isPending || (detail.data && !own)) return null;
     return (
         <li className="crow cbot">
             <span className="cbot__mark" aria-hidden="true"><ChannelIcon platform={platform} size={22} /></span>
@@ -75,7 +74,7 @@ function BotRow({ pod, surface }: { pod: Pod; surface: Surface }) {
                 <label className="cbot__choose">
                     <span className="sr-only">Whom {surface.handle || platformName(platform)} answers</span>
                     <select value={value} disabled={detail.isPending || save.isPending} onChange={(event) => save.mutate(event.target.value as Answer)}>
-                        {choices.map((choice) => <option key={choice.value} value={choice.value}>{SHORT[choice.value as Answer]}</option>)}
+                        {choices.map((choice) => <option key={choice.value} value={choice.value}>{choice.label}</option>)}
                     </select>
                 </label>
             )}

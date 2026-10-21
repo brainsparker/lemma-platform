@@ -1934,12 +1934,7 @@ button.chfile:disabled {
     align-items: center;
     gap: 6px;
 }
-.ccontact__k {
-    font-size: 12px;
-    color: var(--ink-3);
-}
-.cpage__strip .ccontact select,
-.cpage__strip .agent-switch__label {
+.cpage__strip .ccontact select {
     height: 28px;
     font-size: 13px;
 }

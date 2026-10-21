@@ -208,39 +208,6 @@
 }
 
 /* ── on your website ────────────────────────────────────────────────── */
-.cwidgets {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    margin: 0;
-    padding: 0;
-    list-style: none;
-}
-.cwidget {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    padding: 16px;
-    border: 1px solid var(--line);
-    border-radius: var(--r-lg);
-    background: var(--paper);
-}
-.cwidget__top {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 12px;
-}
-.cwidget__name {
-    font-size: 15px;
-    font-weight: 500;
-}
-.cwidget__kind,
-.cwidget__origins {
-    margin: 0;
-    font-size: 13px;
-    color: var(--ink-3);
-}
 .cwidget__embed {
     display: flex;
     align-items: flex-start;
@@ -571,8 +538,7 @@
 }
 .csetup {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
-    align-items: start;
+    grid-template-columns: minmax(0, 1fr);
     gap: 16px;
 }
 .ccard {
@@ -660,5 +626,44 @@
     }
     .ccard .cbot__choose select {
         max-width: 100%;
+    }
+}
+
+/* A web chat is a row like a bot's: what it answers, its link, and its
+   code and secret folded under "Set up". */
+.cwebchat .cwidget__acts {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.cwebchat .cwidget__more {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 4px 0 4px 42px;
+}
+/* A function's description stays on its line: the column, not the page,
+   is what it fits. */
+.ccard .smanage__check,
+.ccard .smanage__check > span {
+    min-width: 0;
+}
+.creach__more {
+    margin-top: 6px;
+    font-size: 13px;
+}
+.ccard .creach > div {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+}
+@media (max-width: 720px) {
+    .ccard .cwebchat .cwidget__acts {
+        grid-column: 2 / -1;
+    }
+    .ccard .cwebchat .cwidget__more {
+        padding-left: 0;
     }
 }

@@ -12,7 +12,6 @@ import { AgentMark } from "@/space/agent-mark";
 import type { PersonRef } from "./waiting";
 import { ChannelMark } from "./chat-mark";
 import { channelAbilities } from "./abilities";
-import { AgentSwitch } from "./agent-switch";
 import { channelApi } from "./api";
 import { ChatDetails, type DetailsTab } from "./chat-details";
 import { Composer } from "./composer";
@@ -20,8 +19,9 @@ import { ContactControls } from "./contact-controls";
 import { onFocusAsked, takeFocus, type LineFocus } from "./focus";
 import { answeringNews, sayTyping, typingIn, upsertTimeline } from "./live";
 import { channelReaders, mentionables } from "./mentions";
-import { channelTitle, newestSeq, personName, sayList, sinceShort, type ChannelDetail, type Line, type LinePage, type Member } from "./model";
+import { channelTitle, nameless, newestSeq, personName, sayList, sinceShort, type ChannelDetail, type Line, type LinePage, type Member } from "./model";
 import { answersHint, placeName, sharedWith } from "./chat-copy";
+import { platformName } from "./sources";
 import { keepChannel, linesKey, refreshLists, useChannel, useLines } from "./queries";
 import { readTarget, unseenThreadMention, usePageShown } from "./read-state";
 import { MentionablesContext } from "./mention-picker";
@@ -107,7 +107,9 @@ function ChatIntro({ pod, channel, title, me, onPeople }: { pod: Pod; channel: C
     if (channel.kind === "DIRECT") {
         said = "Your private line with " + teammate + ". " + answersHint(channel, teammate) + " Nobody else reads it.";
     } else if (channel.kind === "CONTACT") {
-        said = (channel.person?.name ?? "They") + " is outside " + pod.name + ". What they send comes in here, and your replies go back the same way.";
+        const via = [...new Set(places.map((place) => platformName(place.platform)))];
+        said = (channel.person?.name ?? (nameless(channel) === "A website visitor" ? "This visitor" : "This person")) + " is outside " + pod.name
+            + (via.length ? " and writes by " + sayList(via) : "") + ". Your replies go back the same way.";
     } else if (places.length) {
         said = "This chat mirrors " + sayList(places.map(placeName)) + ". Messages there show up here, and what you send here goes back. " + answersHint(channel, teammate);
     } else {
@@ -128,41 +130,50 @@ function ChatIntro({ pod, channel, title, me, onPeople }: { pod: Pod; channel: C
     );
 }
 
-/** A contact's channel, where it stands: open, waiting on them, closed, or
- *  asking for a person -- and the ways to move it: take it, assign it, set
- *  its status, switch its agent. */
+/** A contact's chat, where it stands, in one sentence -- who is answering
+ *  them -- and the one move that changes it: take over from the agent, or
+ *  hand back to it. Who it is assigned to and its status sit beside it; the
+ *  agent's own switch and the hand-back hours are in the chat's details. */
 function ContactStrip({ pod, channel, may }: { pod: Pod; channel: ChannelDetail; may: { contactOps: boolean; write: boolean } }) {
     const me = useMe();
     const cache = useQueryClient();
-    const take = useMutation({
-        mutationFn: () => channelApi(pod.id).update(channel.id, { assignee: "me" }),
-        onSuccess: (saved) => keepChannel(cache, pod.id, saved),
+    const move = useMutation({
+        mutationFn: (assignee: "me" | null) => channelApi(pod.id).update(channel.id, { assignee }),
+        onSuccess: (saved) => { keepChannel(cache, pod.id, saved); refreshLists(cache, pod.id); },
     });
     const asks = channel.attention && !channel.assignee;
     const teammate = pod.teammate?.name || pod.name;
+    const mine = Boolean(me) && channel.assignee?.id === me;
+    const open = channel.status !== "closed";
     const state = asks
         ? "Needs a person" + (channel.attention?.reason ? ": " + channel.attention.reason : "") + " · " + sinceShort(channel.attention?.since)
         : channel.assignee
-            ? (channel.assignee.id === me ? "You are answering." : (channel.assignee.name ?? "A member") + " is answering.")
-                + (channel.agentsAnswer ? " " + teammate + " takes over again after " + channel.handBackAfterHours + " quiet hours." : "")
+            ? (mine ? "You are answering." : (channel.assignee.name ?? "A member") + " is answering.")
+                + (channel.agentsAnswer ? " " + teammate + " takes over after " + channel.handBackAfterHours + " quiet hours." : "")
             : !channel.agentsAnswer
                 ? teammate + " is off here. Only people answer."
                 : channel.status === "waiting_on_contact" ? "Waiting on their reply. " + teammate + " answers when they write."
-                    : channel.status === "closed" ? "Closed." : teammate + " answers them.";
+                    : !open ? "Closed." : teammate + " is answering.";
+    const act: { to: "me" | null; label: string } | null = !may.contactOps || !open
+        ? null
+        : !channel.assignee
+            ? { to: "me", label: channel.agentsAnswer ? "Take over" : "I’ll answer" }
+            : mine && channel.agentsAnswer ? { to: null, label: "Hand back to " + teammate } : null;
     return (
         <div className="cpage__strip" data-asks={asks || undefined}>
             <span className="cpage__strip-state">{state}</span>
             {may.contactOps && (
                 <span className="cpage__strip-acts">
-                    {!channel.assignee && channel.status !== "closed" && (
-                        <button type="button" className="pill-button cpage__take" disabled={take.isPending} onClick={() => take.mutate()}>{take.isPending ? "Taking…" : "I’ll answer"}</button>
+                    {act && (
+                        <button type="button" className={act.to ? "pill-button cpage__take" : "ghost-pill cpage__take"} disabled={move.isPending} onClick={() => move.mutate(act.to)}>
+                            {move.isPending ? "Saving…" : act.label}
+                        </button>
                     )}
                     <ContactControls pod={pod} channel={channel} compact />
-                    <AgentSwitch podId={pod.id} channel={channel} />
                 </span>
             )}
             {!may.contactOps && channel.status && <span className="cpage__chip">{STATUS_LABELS[channel.status]}</span>}
-            {take.isError && <span className="gside__problem" role="alert">Couldn’t take it.</span>}
+            {move.isError && <span className="gside__problem" role="alert">Couldn’t change it.</span>}
         </div>
     );
 }

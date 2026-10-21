@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, useContext, type ReactNode } from "react";
+import { PersonIcon } from "@/ui/icons";
 import { initials, personName } from "./model";
 import type { PersonRef } from "./waiting";
 
@@ -20,9 +21,11 @@ export function Avatar({ person, size = 36 }: { person: PersonRef; size?: number
             </span>
         );
     }
+    /* Somebody nobody has named -- a visitor to the website's chat -- has
+       no initials worth drawing: "A contact" would read as "AC". */
     return (
         <span className="cavatar" data-contact={person.kind === "CONTACT" || undefined} style={{ width: size, height: size, fontSize: Math.round(size * 0.36) }}>
-            {initials(person.name ?? personName(person, null))}
+            {person.name ? initials(person.name) : person.kind === "CONTACT" ? <PersonIcon size={Math.round(size * 0.5)} aria-hidden="true" /> : initials(personName(person, null))}
         </span>
     );
 }

@@ -490,6 +490,12 @@ export function personName(person: PersonRef | null, me: string | null): string 
     return person.kind === "AGENT" ? "An agent" : person.kind === "CONTACT" ? "A contact" : "A member";
 }
 
+/** A contact nobody has named, by how they came: somebody on the
+ *  website's chat is a visitor; anybody else, a contact. */
+export function nameless(channel: Pick<Channel, "sources">): string {
+    return channel.sources.some((source) => source.platform === "WEB") ? "A website visitor" : "A contact";
+}
+
 /** A chat's name. The reader's default chat -- their private line with the
  *  teammate -- is named by where they reach it ("WhatsApp"), or "Notices"
  *  when it is only what the teammate sends them; a contact's is the
@@ -500,7 +506,7 @@ export function channelTitle(channel: Pick<Channel, "kind" | "title" | "person" 
         const names = [...new Set(channel.sources.map((source) => platformName(source.platform)))];
         return names.length ? sayList(names) : "Notices";
     }
-    if (channel.kind === "CONTACT") return channel.person?.name ?? channel.title ?? "A contact";
+    if (channel.kind === "CONTACT") return channel.person?.name ?? channel.title ?? nameless(channel);
     return channel.title ?? channel.sources.find((source) => source.title)?.title ?? "Untitled chat";
 }
 

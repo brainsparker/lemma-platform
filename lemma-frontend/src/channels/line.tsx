@@ -11,6 +11,7 @@ import {
     ASKER_ONLY_NOTE,
     answerSummary,
     asWaitingQuestion,
+    channelTitle,
     clockTime,
     isMine,
     personName,
@@ -159,8 +160,14 @@ export function LineView({ podId, channel, line, onThread, mayWrite = true, answ
     const agent = line.sender.kind === "AGENT";
     const withheld = withheldNote(line, me);
     const time = clockTime(line.createdAt);
-    const where = sourceLabel(line.sourceId, channel.places);
-    const whom = agent && line.onBehalfOf ? personName(line.onBehalfOf, me) : null;
+    /* In a contact's chat everything is with them, by the one way they
+       write: "answering", "Contact" and "via Web chat" on every message would
+       say only that. A contact on two ways still shows which. */
+    const withContact = channel.kind === "CONTACT";
+    const oneWay = withContact && new Set(channel.places.map((place) => place.platform)).size <= 1;
+    const where = oneWay ? null : sourceLabel(line.sourceId, channel.places);
+    const whom = agent && line.onBehalfOf && !withContact ? personName(line.onBehalfOf, me) : null;
+    const who = withContact && line.sender.kind === "CONTACT" && !line.sender.name ? channelTitle(channel, "") : personName(line.sender, me);
     /* Said outside, or sent there already -- a Slack channel, a WhatsApp
        group, a contact's inbox -- an edit or a delete changes only what is
        read here: the copy there stays as it is. So an edit is not offered on
@@ -191,15 +198,15 @@ export function LineView({ podId, channel, line, onThread, mayWrite = true, answ
             <div className="cline__body">
                 {!continued && (
                     <div className="cline__head">
-                        <span className="cline__who">{personName(line.sender, me)}</span>
+                        <span className="cline__who">{who}</span>
                         {whom && whom !== "You" && <span className="cline__for">answering {whom}</span>}
-                        {line.sender.kind === "CONTACT" && <span className="cline__chip">Contact</span>}
+                        {line.sender.kind === "CONTACT" && !withContact && <span className="cline__chip">Contact</span>}
                         {line.membersOnly && <span className="cline__chip cline__chip--note">Only in Lemma</span>}
                         <time className="cline__at" dateTime={line.createdAt}>{time}</time>
                         {where && <span className="cline__at">via {where}</span>}
                     </div>
                 )}
-                {continued && <span className="sr-only">{personName(line.sender, me)}, {time}</span>}
+                {continued && <span className="sr-only">{who}, {time}</span>}
                 {quote && (
                     <button
                         type="button"

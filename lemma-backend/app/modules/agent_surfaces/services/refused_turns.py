@@ -19,7 +19,7 @@ message still lands on the place's timeline: it is something they said.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
 from typing import Protocol
 
@@ -40,6 +40,10 @@ logger = get_logger(__name__)
 
 _PLATFORM_NAMES = {"WHATSAPP": "WhatsApp"}
 
+#: How the member is told: ``tell_member`` (looked up per call), unless a caller
+#: passes another.
+TellMember = Callable[..., Awaitable[object]]
+
 
 class _Starter(Protocol):
     """What of ``SurfaceTurnStarter`` saying a refusal takes."""
@@ -55,6 +59,8 @@ async def say_turn_refused(
     context: SurfaceChatContext,
     message_text: str,
     refused: DomainError,
+    *,
+    tell: TellMember | None = None,
 ) -> None:
     """A refusal retrying cannot change, said instead of retried: written in
     the ingest's own completion, so the inbound row is done with it."""
@@ -65,6 +71,7 @@ async def say_turn_refused(
             message_text=message_text,
             refused=refused,
             lines=starter.channel_lines(uow),
+            tell=tell,
         )
     if says_in_place(context):
         await starter.tell_sender(context, refusal_text(context, refused))
@@ -98,6 +105,7 @@ async def note_refused_turn(
     message_text: str,
     refused: DomainError,
     lines: ChannelLines,
+    tell: TellMember | None = None,
 ) -> None:
     """The message as its line, and the member told why it was not answered."""
     assert context.pod_id is not None  # a chat context that reached a turn
@@ -109,7 +117,7 @@ async def note_refused_turn(
     )
     if message_text.strip():
         await lines.heard(context, text=message_text)
-    await tell_member(
+    await (tell or tell_member)(
         uow,
         pod_id=context.pod_id,
         user_id=context.user_id,

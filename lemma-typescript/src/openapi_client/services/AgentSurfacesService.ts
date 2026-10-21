@@ -13,6 +13,11 @@ import type { SlackAppCreateResponse } from '../models/SlackAppCreateResponse.js
 import type { SlackAppWorkspaceListResponse } from '../models/SlackAppWorkspaceListResponse.js';
 import type { SlackAppWorkspaceResponse } from '../models/SlackAppWorkspaceResponse.js';
 import type { SlackConfigurationTokenRequest } from '../models/SlackConfigurationTokenRequest.js';
+import type { SlackManagedWorkspaceListResponse } from '../models/SlackManagedWorkspaceListResponse.js';
+import type { SlackManagedWorkspaceResponse } from '../models/SlackManagedWorkspaceResponse.js';
+import type { SlackManagerBindRequest } from '../models/SlackManagerBindRequest.js';
+import type { SlackSignInRequest } from '../models/SlackSignInRequest.js';
+import type { SlackSignInResponse } from '../models/SlackSignInResponse.js';
 import type { SurfaceCreateRequest } from '../models/SurfaceCreateRequest.js';
 import type { SurfacePlatformSetupGuide } from '../models/SurfacePlatformSetupGuide.js';
 import type { SurfaceSendRequest } from '../models/SurfaceSendRequest.js';
@@ -200,6 +205,56 @@ export class AgentSurfacesService {
                 409: `Not set up, the token needs replacing, or busy.`,
                 422: `Validation Error`,
                 429: `Slack is rate-limiting app creation.`,
+            },
+        });
+    }
+    /**
+     * List Slack Managed Workspaces
+     * The Slack workspaces Lemma's own app manages for this pod's organization.
+     * @param podId
+     * @returns SlackManagedWorkspaceListResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentSurfaceSlackManagerList(
+        podId: string,
+    ): CancelablePromise<SlackManagedWorkspaceListResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/surface-setup/slack/manager',
+            path: {
+                'pod_id': podId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Bind Slack Manager
+     * Make Lemma's own app this workspace's manager. The workspace becomes the
+     * organization's, and the person who authorised it is known in Slack.
+     *
+     * Only for a grant this browser finished signed in as the caller: a consent
+     * link somebody else completed is refused.
+     * @param podId
+     * @param requestBody
+     * @returns SlackManagedWorkspaceResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentSurfaceSlackManagerBind(
+        podId: string,
+        requestBody: SlackManagerBindRequest,
+    ): CancelablePromise<SlackManagedWorkspaceResponse> {
+        return __request(OpenAPI, {
+            method: 'PUT',
+            url: '/pods/{pod_id}/surface-setup/slack/manager',
+            path: {
+                'pod_id': podId,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
             },
         });
     }
@@ -652,6 +707,30 @@ export class AgentSurfacesService {
             query: {
                 'agent_name': agentName,
             },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Start Slack Sign In
+     * Start Sign in with Slack for the signed-in person, to prove they are the
+     * Slack user their App Home's link was for.
+     *
+     * Connects nothing. The callback connects only when it sees this same Lemma
+     * session and Slack names this same Slack user and workspace.
+     * @param requestBody
+     * @returns SlackSignInResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentSurfaceSlackPersonSignIn(
+        requestBody: SlackSignInRequest,
+    ): CancelablePromise<SlackSignInResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/surface-setup/slack/people/sign-in',
+            body: requestBody,
+            mediaType: 'application/json',
             errors: {
                 422: `Validation Error`,
             },

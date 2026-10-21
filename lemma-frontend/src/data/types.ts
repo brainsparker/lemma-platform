@@ -701,6 +701,14 @@ export interface PodSource {
      *  same teammate and workspace before it is authorised, answers with the
      *  same app rather than making another. */
     createSlackApp(podId: string, teamId: string, idempotencyKey: string): Promise<{ appId: string; authConfigId: string }>;
+    /** Slack workspaces Lemma's own app manages for this pod's organization. */
+    slackManagedWorkspaces(podId: string): Promise<SlackManagedWorkspace[]>;
+    /** Make Lemma's own app the manager of the workspace this account
+     *  authorised it in. */
+    bindSlackManager(podId: string, accountId: string): Promise<SlackManagedWorkspace>;
+    /** Start Sign in with Slack, to prove the signed-in person is the Slack
+     *  user their App Home's link was for. Returns Slack's page to open. */
+    startSlackSignIn(link: SlackPersonLink): Promise<string>;
     /** Register an app the organization made itself, so its credentials are
      *  what the authorisation runs against. Returns the auth config to
      *  authorise. */
@@ -715,10 +723,12 @@ export interface PodSource {
      *  their consent page, and the account appears here afterwards.
      *  `returnTo` is the path inside this app the provider's tab comes back to.
      *  `connectionFields` carries what the sign-in cannot — Shopify's store
-     *  `subdomain` — for the few connectors that declare any. */
+     *  `subdomain` — for the few connectors that declare any. `configSource`
+     *  asks for an install of that kind when none is named: Lemma's own app,
+     *  where an organization's own app of the same connector would not do. */
     startAccount(
         orgId: string, connectorId: string, authConfigId?: string, returnTo?: string,
-        connectionFields?: Record<string, unknown>,
+        connectionFields?: Record<string, unknown>, configSource?: "SYSTEM_DEFAULT" | "ORG_CUSTOM",
     ): Promise<AccountConnect>;
     /** The account this authorisation produced, once it exists and is usable.
      *  Empty until then. */
@@ -823,4 +833,17 @@ export interface SlackAppWorkspace {
 export interface SlackAppWorkspaces {
     canManage: boolean;
     workspaces: SlackAppWorkspace[];
+}
+
+/** A Slack workspace Lemma's own app manages. */
+export interface SlackManagedWorkspace {
+    teamId: string;
+    teamName: string | null;
+}
+
+/** Whom the "Connect your Lemma account" link from Slack was shown to. It
+ *  proves nothing by itself: Sign in with Slack does. */
+export interface SlackPersonLink {
+    teamId: string;
+    slackUserId: string;
 }

@@ -13,10 +13,17 @@ import json
 import re
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
-from uuid import UUID
 
 from fastapi import HTTPException
 
+from app.modules.agent_surfaces.config import surface_settings
+from app.modules.agent_surfaces.domain.slack_manager import InboundVerification
+from app.modules.agent_surfaces.services.slack_manager_install import (
+    manages_workspace,
+)
+from app.modules.agent_surfaces.services.webhook_security_service import (
+    SlackWebhookVerificationCandidate,
+)
 from app.modules.agent_surfaces.contracts.whatsapp import (
     deployment_owns_whatsapp_number,
 )
@@ -173,18 +180,25 @@ def _decode_webhook_payload(raw_body: bytes, headers: dict[str, str]) -> dict:
     return decoded
 
 
-async def _slack_candidates(uow_factory: UnitOfWorkFactory, payload: dict):
-    """Read the signing-secret candidates for a workspace and let the session go.
+async def _slack_candidates(
+    uow_factory: UnitOfWorkFactory, payload: dict
+) -> tuple[list[SlackWebhookVerificationCandidate], bool]:
+    """Read the signing-secret candidates for a workspace, and whether Lemma's
+    own app manages it, and let the session go.
 
     The scope closes before `verify_slack_request` runs, so the HMAC comparison
     (and the request it authenticates) holds no pooled connection.
     """
+    team_id = slack_team_id(payload)
     async with uow_scope(uow_factory) as uow:
-        return await slack_candidates_for_workspace(
+        managed = bool(team_id) and await manages_workspace(uow, team_id or "")
+        candidates = await slack_candidates_for_workspace(
             service=get_surface_service(uow),
-            team_id=slack_team_id(payload),
+            team_id=team_id,
+            is_managed=managed,
             also_paused=is_uninstall_delivery(payload),
         )
+    return candidates, managed
 
 
 async def _verify_inbound_request(
@@ -195,7 +209,7 @@ async def _verify_inbound_request(
     payload: dict,
     security_service,
     uow_factory: UnitOfWorkFactory,
-) -> list[UUID] | None:
+) -> InboundVerification:
     """Check a shared-endpoint request is really from the platform.
 
     Slack is the one platform where the answer depends on *who* sent it: an org
@@ -206,22 +220,36 @@ async def _verify_inbound_request(
     candidate is rejected exactly as an unsigned one would be.
 
     This is what lets an org's own app deliver to the shared endpoint like
-    everyone else, rather than needing a URL of its own.
+    everyone else, rather than needing a URL of its own -- and Lemma's own app
+    deliver as a workspace's manager, which the result names apart
+    (``manager_team``) rather than as an empty receiver list.
     """
     if platform == "slack":
+        team_id = slack_team_id(payload)
+        candidates, managed = await _slack_candidates(uow_factory, payload)
         verified = security_service.verify_slack_request(
             headers=headers,
             raw_body=raw_body,
             api_app_id=slack_api_app_id(payload),
-            candidates=await _slack_candidates(uow_factory, payload),
+            candidates=candidates,
         )
-        return list(verified.receiver_surface_ids) or None
+        receivers = list(verified.receiver_surface_ids)
+        lemma_app = surface_settings.slack_app_id
+        if (
+            not receivers
+            and managed
+            and lemma_app
+            and verified.app_id == lemma_app
+            and team_id
+        ):
+            return InboundVerification(receivers=None, manager_team=team_id)
+        return InboundVerification(receivers=receivers or None)
     await security_service.verify_platform_request(
         platform=platform,
         headers=headers,
         raw_body=raw_body,
     )
-    return None
+    return InboundVerification(receivers=None)
 
 
 async def _handle_resend_webhook(

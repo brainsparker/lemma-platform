@@ -66,6 +66,20 @@ sequenceDiagram
     API->>DB: encrypt credentials + connect account
 ```
 
+Storing a grant -- a new account, or an existing one granted again -- emits
+`ConnectorAccountConnected` (`contracts/facts.py`) in the same transaction,
+for other modules to subscribe a work kind to. It carries the account, the
+install, the connector, the organization and the person; the `purpose` the
+request's starter recorded (`own_apps.start_authorization(purpose=...)`), so a
+subscriber acts only on the grants it started; `renewed`; and `browser_bound`,
+whether the browser that came back carried the starter's own Lemma session.
+The callback is completed by `state` alone, so a consent link somebody was sent
+stores *their* grant on the sender's account; anything that treats a grant as
+proof of who the provider's user is requires `browser_bound`, which a spent
+request also keeps (`own_apps.grant_is_browser_bound`). The analytics
+`connector.connected` event is a projection, not this contract. Credential
+accounts made without an OAuth round trip do not emit it.
+
 For execution, a short UoW resolves the auth config, operation, account, and
 decrypted credential values into a session-free DTO. The provider call happens
 outside a UoW; a final short UoW marks accounts for reauthentication when an

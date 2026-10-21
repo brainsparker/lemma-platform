@@ -545,6 +545,11 @@ _NAME_TO_MODULE = {
     'SlackAppWorkspaceListResponse': 'slack_app_workspace_list_response',
     'SlackAppWorkspaceResponse': 'slack_app_workspace_response',
     'SlackConfigurationTokenRequest': 'slack_configuration_token_request',
+    'SlackManagedWorkspaceListResponse': 'slack_managed_workspace_list_response',
+    'SlackManagedWorkspaceResponse': 'slack_managed_workspace_response',
+    'SlackManagerBindRequest': 'slack_manager_bind_request',
+    'SlackSignInRequest': 'slack_sign_in_request',
+    'SlackSignInResponse': 'slack_sign_in_response',
     'SourceKind': 'source_kind',
     'SourceSettingsDetailResponse': 'source_settings_detail_response',
     'SourceSettingsResponse': 'source_settings_response',
@@ -1243,6 +1248,11 @@ if TYPE_CHECKING:
     from .slack_app_workspace_list_response import SlackAppWorkspaceListResponse
     from .slack_app_workspace_response import SlackAppWorkspaceResponse
     from .slack_configuration_token_request import SlackConfigurationTokenRequest
+    from .slack_managed_workspace_list_response import SlackManagedWorkspaceListResponse
+    from .slack_managed_workspace_response import SlackManagedWorkspaceResponse
+    from .slack_manager_bind_request import SlackManagerBindRequest
+    from .slack_sign_in_request import SlackSignInRequest
+    from .slack_sign_in_response import SlackSignInResponse
     from .source_kind import SourceKind
     from .source_settings_detail_response import SourceSettingsDetailResponse
     from .source_settings_response import SourceSettingsResponse
@@ -1954,6 +1964,11 @@ __all__ = [
     'SlackAppWorkspaceListResponse',
     'SlackAppWorkspaceResponse',
     'SlackConfigurationTokenRequest',
+    'SlackManagedWorkspaceListResponse',
+    'SlackManagedWorkspaceResponse',
+    'SlackManagerBindRequest',
+    'SlackSignInRequest',
+    'SlackSignInResponse',
     'SourceKind',
     'SourceSettingsDetailResponse',
     'SourceSettingsResponse',

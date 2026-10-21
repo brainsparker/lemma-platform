@@ -15834,6 +15834,51 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * List Slack Managed Workspaces
+     * The Slack workspaces Lemma's own app manages for this pod's organization.
+     * @param podId
+     * @returns SlackManagedWorkspaceListResponse Successful Response
+     * @throws ApiError
+     */
+    static agentSurfaceSlackManagerList(podId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/surface-setup/slack/manager",
+        path: {
+          "pod_id": podId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Bind Slack Manager
+     * Make Lemma's own app this workspace's manager. The workspace becomes the
+     * organization's, and the person who authorised it is known in Slack.
+     *
+     * Only for a grant this browser finished signed in as the caller: a consent
+     * link somebody else completed is refused.
+     * @param podId
+     * @param requestBody
+     * @returns SlackManagedWorkspaceResponse Successful Response
+     * @throws ApiError
+     */
+    static agentSurfaceSlackManagerBind(podId, requestBody) {
+      return request(OpenAPI, {
+        method: "PUT",
+        url: "/pods/{pod_id}/surface-setup/slack/manager",
+        path: {
+          "pod_id": podId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * Get Surface Setup Guide
      * The static pre-creation checklist for a platform (env/OAuth
      * prerequisites) — works before any surface of this platform exists.
@@ -16232,6 +16277,28 @@ var LemmaClient = (() => {
         }
       });
     }
+    /**
+     * Start Slack Sign In
+     * Start Sign in with Slack for the signed-in person, to prove they are the
+     * Slack user their App Home's link was for.
+     *
+     * Connects nothing. The callback connects only when it sees this same Lemma
+     * session and Slack names this same Slack user and workspace.
+     * @param requestBody
+     * @returns SlackSignInResponse Successful Response
+     * @throws ApiError
+     */
+    static agentSurfaceSlackPersonSignIn(requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/surface-setup/slack/people/sign-in",
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
   };
 
   // src/namespaces/pod-surfaces.ts
@@ -16375,6 +16442,38 @@ var LemmaClient = (() => {
     createSlackApp(podId, request2, idempotencyKey) {
       return this.client.request(
         () => AgentSurfacesService.agentSurfaceSlackAppCreate(podId, request2, idempotencyKey)
+      );
+    }
+    /**
+     * The Slack workspaces Lemma's own app manages for this pod's organization.
+     * Lemma's app answers nobody: it is where a workspace sees its teammates,
+     * adds one, and hands one a channel.
+     */
+    slackManagedWorkspaces(podId) {
+      return this.client.request(
+        () => AgentSurfacesService.agentSurfaceSlackManagerList(podId)
+      );
+    }
+    /**
+     * Make Lemma's own app the manager of the workspace an account authorised it
+     * in. The workspace becomes the organization's, and the person who
+     * authorised it is known in Slack from then on. Only for a grant this
+     * browser finished signed in as the caller.
+     */
+    bindSlackManager(podId, request2) {
+      return this.client.request(
+        () => AgentSurfacesService.agentSurfaceSlackManagerBind(podId, request2)
+      );
+    }
+    /**
+     * Start Sign in with Slack for the signed-in person, to prove they are the
+     * Slack user their App Home's "Connect your Lemma account" link was for.
+     * Returns Slack's sign-in page; the callback connects only when it sees this
+     * same Lemma session and Slack names that same Slack user and workspace.
+     */
+    startSlackSignIn(request2) {
+      return this.client.request(
+        () => AgentSurfacesService.agentSurfaceSlackPersonSignIn(request2)
       );
     }
   };

@@ -3,7 +3,7 @@ import { readOrigins, type Contact, type ContactReach, type ContactsCap, type We
 import type { Audience, OfferedColumn, TableOpening } from "./public-rows";
 import { NEW_CONVERSATION } from "./types";
 import type { AgentSurfaceResponse, AvailableSurfaceChannelsResponse, SurfaceSetupResponse } from "lemma-sdk";
-import type { Conversation, FileContent, Invitation, LibraryItem, LinkShare, Member, Message, NewOrg, Org, Profile, Pod, PodSource, SharedLink, SlackAppWorkspace, Surface, Tab } from "./types";
+import type { Conversation, FileContent, Invitation, LibraryItem, LinkShare, Member, Message, NewOrg, Org, Profile, Pod, PodSource, SharedLink, SlackAppWorkspace, SlackManagedWorkspace, SlackPersonLink, Surface, Tab } from "./types";
 import { displayAgentName, isPodDefaultAgent } from "./agent-names";
 import { originOf } from "@/thread/conversation-origin";
 import { sampleListing } from "@/thread/memory-notes";
@@ -1564,6 +1564,7 @@ let guidedStartedAt = 0;
 let accountStartedAt = 0;
 let accountPending = "";
 let slackAppWorkspaces: SlackAppWorkspace[] = [];
+let slackManagedWorkspaces: SlackManagedWorkspace[] = [];
 
 /* The authorisation lands on the backend, not here, so in the sample it lands
    on a timer: anything that reads accounts settles a pending one first. Both
@@ -3008,6 +3009,21 @@ export const fixtureSource: PodSource = {
     async createSlackApp() {
         await wait(900);
         return { appId: "A0SAMPLE", authConfigId: "authcfg-sample" };
+    },
+    async slackManagedWorkspaces() {
+        await wait(200);
+        return slackManagedWorkspaces.slice();
+    },
+    async bindSlackManager() {
+        await wait(500);
+        const bound = { teamId: "T0SAMPLE", teamName: "Sample workspace" };
+        slackManagedWorkspaces = [bound];
+        return bound;
+    },
+    async startSlackSignIn(link: SlackPersonLink) {
+        await wait(300);
+        // The sample has no Slack: come straight back as if it said yes.
+        return `/slack/connect?connected=1&team=${encodeURIComponent(link.teamId)}`;
     },
     async addCustomApp() {
         await wait(600);

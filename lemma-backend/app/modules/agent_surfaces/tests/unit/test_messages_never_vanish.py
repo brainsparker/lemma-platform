@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from app.modules.test_support.channel_seats_double import InMemoryChannelSeats
 
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
@@ -26,6 +27,7 @@ from app.modules.agent_surfaces.services import turn_starter
 from app.modules.agent_surfaces.services.personal_dm_routes import (
     PersonalRouteUnavailable,
 )
+from app.modules.agent_surfaces.services.refused_turns import say_turn_refused
 from app.modules.agent_surfaces.services.turn_starter import (
     SurfaceTurnStarter,
 )
@@ -195,58 +197,53 @@ def _not_shareable():
     )
 
 
-def _refusing_starter(monkeypatch, told: list[str], noted: list[dict], heard):
-    from app.modules.agent_surfaces.services import refused_turns
+class _RefusalStarter:
+    """What of the turn starter saying a refusal takes: a scope, the place's
+    lines, and the sender's own reply."""
 
-    async def refuse(*_args, **_kwargs):
-        raise _not_shareable()
+    def __init__(self, heard: AsyncMock) -> None:
+        self.told: list[str] = []
+        self._heard = heard
 
-    async def tell_member(_uow, **kwargs):
+    @asynccontextmanager
+    async def write_scope(self):
+        yield SimpleNamespace()
+
+    def channel_lines(self, _uow):
+        return SimpleNamespace(heard=self._heard)
+
+    async def tell_sender(self, _context, message: str) -> None:
+        self.told.append(message)
+
+
+def _noting(noted: list[dict]):
+    async def tell(_uow, **kwargs) -> None:
         noted.append(kwargs)
 
-    async def background(*_args, **_kwargs):
-        return SimpleNamespace(to_metadata=dict)
-
-    monkeypatch.setattr(turn_starter, "write_inbound_message", refuse)
-    monkeypatch.setattr(turn_starter, "run_background", background)
-    monkeypatch.setattr(
-        turn_starter, "reply_all_audience", AsyncMock(return_value=None)
-    )
-    monkeypatch.setattr(refused_turns, "tell_member", tell_member)
-    starter = _starter(
-        channel_lines=lambda _uow: SimpleNamespace(heard=heard),
-    )
-
-    async def tell(_context, message: str) -> None:
-        told.append(message)
-
-    starter.tell_sender = tell  # type: ignore[method-assign]
-    starter._credentials_for = AsyncMock(return_value={})  # type: ignore[method-assign]
-    starter._ingest_files = AsyncMock(  # type: ignore[method-assign]
-        return_value=turn_starter.AttachmentIngest()
-    )
-    starter._name_new_thread = AsyncMock()  # type: ignore[method-assign]
-    return starter
+    return tell
 
 
-async def test_a_turn_refused_in_a_group_tells_the_member_once_and_not_the_group(
-    monkeypatch,
-):
+async def test_a_turn_refused_in_a_group_tells_the_member_once_and_not_the_group():
     """Before, the refusal was retried until the message went dead, and a
     group was told nothing: the agent never answered and nobody knew why."""
-    told: list[str] = []
     noted: list[dict] = []
     heard = AsyncMock()
-    starter = _refusing_starter(monkeypatch, told, noted, heard)
+    starter = _RefusalStarter(heard)
     in_group = _context("@helper what's on today?", agent_display_name="Helper")
     in_group = in_group.model_copy(
         update={"event": in_group.event.model_copy(update={"is_dm": False})}
     )
 
-    await starter.start_agent_chat(in_group)
-    await starter.start_agent_chat(in_group)
+    for _ in range(2):
+        await say_turn_refused(
+            starter,
+            in_group,
+            "@helper what's on today?",
+            _not_shareable(),
+            tell=_noting(noted),
+        )
 
-    assert told == [], "a shared place is not told one person's refusal"
+    assert starter.told == [], "a shared place is not told one person's refusal"
     assert heard.await_count == 2, "what they said still lands on the timeline"
     first, again = noted
     assert first["user_id"] == in_group.user_id
@@ -256,13 +253,14 @@ async def test_a_turn_refused_in_a_group_tells_the_member_once_and_not_the_group
     assert first["key"] == again["key"]
 
 
-async def test_a_turn_refused_in_a_direct_message_says_why_there_too(monkeypatch):
-    told: list[str] = []
+async def test_a_turn_refused_in_a_direct_message_says_why_there_too():
     noted: list[dict] = []
-    starter = _refusing_starter(monkeypatch, told, noted, AsyncMock())
+    starter = _RefusalStarter(AsyncMock())
 
-    await starter.start_agent_chat(_context("hello"))
+    await say_turn_refused(
+        starter, _context("hello"), "hello", _not_shareable(), tell=_noting(noted)
+    )
 
-    [said] = told
+    [said] = starter.told
     assert "Ada's own Claude Code" in said
     assert len(noted) == 1

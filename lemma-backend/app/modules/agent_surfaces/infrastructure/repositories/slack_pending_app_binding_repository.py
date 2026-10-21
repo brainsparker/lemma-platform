@@ -17,6 +17,9 @@ _Pending = SlackPendingAppBindingModel
 
 #: The ``source`` of a row the reach sheet's create made.
 SOURCE_WEB = "WEB"
+#: The ``source`` of a row Lemma's Home tab in Slack made: its Allow is
+#: finished by the account it creates, with nobody back in Lemma to do it.
+SOURCE_SLACK = "SLACK"
 
 
 class SlackPendingAppBindingRepository:
@@ -68,6 +71,16 @@ class SlackPendingAppBindingRepository:
                 constraint="uq_slack_pending_app_bindings_agent_team"
             )
             .returning(_Pending.id)
+        )
+        return result.scalar_one_or_none()
+
+    async def for_auth_config(
+        self, auth_config_id: UUID
+    ) -> SlackPendingAppBindingModel | None:
+        result = await self.session.execute(
+            select(_Pending)
+            .where(_Pending.auth_config_id == auth_config_id)
+            .execution_options(populate_existing=True)
         )
         return result.scalar_one_or_none()
 

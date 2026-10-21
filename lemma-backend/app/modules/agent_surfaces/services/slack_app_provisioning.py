@@ -181,6 +181,8 @@ class _Request:
     agent_id: UUID
     user_id: UUID
     team_id: str
+    source: str = SOURCE_WEB
+    slack_user_id: str | None = None
 
 
 def _workspace(row: SlackConfigurationTokenModel) -> SlackAppWorkspace:
@@ -272,14 +274,26 @@ class SlackAppProvisioner:
         user_id: UUID,
         team_id: str,
         idempotency_key: str | None = None,
+        source: str = SOURCE_WEB,
+        slack_user_id: str | None = None,
     ) -> ProvisionedSlackApp:
         """Create the agent's app in Slack and register it as the org's own install.
 
         Named by the server from the agent, never by the caller: the name is
-        the bot's, and the bot is the agent's.
+        the bot's, and the bot is the agent's. ``source`` and ``slack_user_id``
+        say where the request came from -- Lemma's Home tab in Slack names the
+        Slack user to tell when the app is in.
         """
         await self._require_install_manager(organization_id, user_id)
-        request = _Request(organization_id, pod_id, agent_id, user_id, team_id)
+        request = _Request(
+            organization_id,
+            pod_id,
+            agent_id,
+            user_id,
+            team_id,
+            source=source,
+            slack_user_id=slack_user_id,
+        )
         app_name = await self._app_name(pod_id, agent_id)
         async with connection_released(self.uow.session):
             known = await create_keys.made_with_key(pod_id, user_id, idempotency_key)
@@ -347,7 +361,8 @@ class SlackAppProvisioner:
                 team_id=request.team_id,
                 app_id=created.app_id,
                 requested_by_user_id=request.user_id,
-                source=SOURCE_WEB,
+                source=request.source,
+                slack_user_id=request.slack_user_id,
             )
             await self.uow.commit()
         except BaseException:

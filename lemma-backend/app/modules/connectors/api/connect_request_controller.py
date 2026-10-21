@@ -11,7 +11,7 @@ from app.core.api.callback_page import (
     safe_provider_error,
     sentence,
 )
-from app.core.api.dependencies import CurrentUser
+from app.core.api.dependencies import BrowserUserId, CurrentUser
 from app.core.config import settings
 from app.modules.connectors.contracts.github import (
     github_install_url,
@@ -39,6 +39,7 @@ from app.modules.connectors.services.followup_request import (
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
+
 
 router = APIRouter(prefix="/connectors/connect-requests", tags=["Connectors"])
 org_router = APIRouter(
@@ -255,6 +256,7 @@ async def initiate_install_request(
 )
 async def oauth_callback(
     request: Request,
+    browser_user_id: BrowserUserId,
     connector_service: ConnectorServiceDep,
     error: Optional[str] = Query(default=None),
     response_format: Optional[str] = Query(
@@ -316,6 +318,7 @@ async def oauth_callback(
         account = await connector_service.handle_oauth_callback(
             redirect_uri=redirect_uri,
             state=state,
+            browser_user_id=browser_user_id,
         )
     except ConnectorDomainError as exc:
         if wants_json:

@@ -88,7 +88,7 @@ from app.modules.connectors.services.auth_install_resolver import (
 )
 from app.modules.connectors.services.connect_request_lifecycle import (
     pkce_verifier_for,
-    with_return_path,
+    request_attributes,
 )
 from app.modules.connectors.services.install_provisioning import (
     DiscoveryOutcome,
@@ -623,6 +623,7 @@ class ConnectorService:
         auth_config_id: UUID | None = None,
         return_to: str | None = None,
         connection_fields: dict[str, object] | None = None,
+        purpose: str | None = None,
     ) -> ConnectRequestEntity:
         await self._require_org_member(user_id=user_id, organization_id=organization_id)
         auth_config = await self._resolve_auth_config(
@@ -702,13 +703,8 @@ class ConnectorService:
             connector_id=connector.id,
             authorization_url=authorization_url,
             status=ConnectRequestStatus.PENDING,
-            attributes=with_return_path(
-                {
-                    "state": state,
-                    "provider_state": provider_state,
-                    **({"code_verifier": code_verifier} if code_verifier else {}),
-                },
-                return_to,
+            attributes=request_attributes(
+                state, provider_state, code_verifier, return_to, purpose
             ),
         )
         connect_request = await self.connect_request_repository.create(connect_request)
@@ -870,11 +866,11 @@ class ConnectorService:
         self,
         redirect_uri: str,
         state: Optional[str] = None,
+        browser_user_id: UUID | None = None,
     ) -> AccountEntity:
-        """See `oauth_callback`, which owns the resolve/release/call/persist
-        split this path needs and the request-scoped session cannot express
-        inline."""
-        return await handle_oauth_callback(self, redirect_uri=redirect_uri, state=state)
+        """See `oauth_callback`: it owns the resolve/release/call/persist split."""
+        callback = {"state": state, "browser_user_id": browser_user_id}
+        return await handle_oauth_callback(self, redirect_uri=redirect_uri, **callback)
 
     async def list_accounts(
         self,

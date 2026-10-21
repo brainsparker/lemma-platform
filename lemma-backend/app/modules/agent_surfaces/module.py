@@ -26,6 +26,10 @@ def _routers():
     from app.modules.agent_surfaces.api.controllers.slack_app_creation_controller import (
         router as slack_app_creation,
     )
+    from app.modules.agent_surfaces.api.controllers.slack_manager_controller import (
+        people_router as slack_people,
+        router as slack_manager,
+    )
     from app.modules.agent_surfaces.api.controllers.source_controller import (
         router as sources,
     )
@@ -59,6 +63,8 @@ def _routers():
         surface_setup_guide,
         surface_platform_setup,
         slack_app_creation,
+        slack_manager,
+        slack_people,
         surface_catalog,
         telegram_manager,
         user_surfaces,
@@ -123,6 +129,7 @@ def _register_work() -> None:
     import app.modules.agent_surfaces.events.receiver_work  # noqa: F401
     import app.modules.agent_surfaces.events.reply_for_run_work  # noqa: F401
     import app.modules.agent_surfaces.events.reply_work  # noqa: F401
+    import app.modules.agent_surfaces.events.slack_manager_work  # noqa: F401
 
 
 module = LemmaModule(

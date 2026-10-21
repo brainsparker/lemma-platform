@@ -42,7 +42,7 @@ type JoinWire = NonNullable<
     NonNullable<Parameters<ReturnType<typeof lemma>["pods"]["update"]>[1]["config"]>["join_policy"]
 >;
 import { readAccount, readConnector, type Connector, type ConnectorAccount } from "./accounts";
-import { canInstallWithDefaults, primaryKind, type CatalogEntry } from "@/connect/install";
+import { canInstallWithDefaults, freshInstallName, heldInstall, primaryKind, type CatalogEntry, type ConfigSource, type Install } from "@/connect/install";
 import {
     readChoice,
     readComputer,
@@ -58,6 +58,8 @@ import type {
     AccountConnect,
     AskablePod,
     SlackAppWorkspace,
+    SlackManagedWorkspace,
+    SlackPersonLink,
     SlackAppWorkspaces,
     LinkShare,
     PodLink,
@@ -1107,6 +1109,24 @@ export const liveSource: PodSource = {
         return { appId: made.app_id, authConfigId: String(made.auth_config_id) };
     },
 
+    async slackManagedWorkspaces(podId: string): Promise<SlackManagedWorkspace[]> {
+        const listed = await lemma().podSurfaces.slackManagedWorkspaces(podId);
+        return (listed.items ?? []).map((item) => ({ teamId: item.team_id, teamName: item.team_name ?? null }));
+    },
+
+    async bindSlackManager(podId: string, accountId: string): Promise<SlackManagedWorkspace> {
+        const bound = await lemma().podSurfaces.bindSlackManager(podId, { account_id: accountId });
+        return { teamId: bound.team_id, teamName: bound.team_name ?? null };
+    },
+
+    async startSlackSignIn(link: SlackPersonLink): Promise<string> {
+        const started = await lemma().podSurfaces.startSlackSignIn({
+            team_id: link.teamId,
+            slack_user_id: link.slackUserId,
+        });
+        return started.authorization_url;
+    },
+
     async addCustomApp(
         orgId: string,
         connectorId: string,
@@ -1129,7 +1149,7 @@ export const liveSource: PodSource = {
 
     async startAccount(
         orgId: string, connectorId: string, authConfigId?: string, returnTo?: string,
-        connectionFields?: Record<string, unknown>,
+        connectionFields?: Record<string, unknown>, configSource?: ConfigSource,
     ): Promise<AccountConnect> {
         const client = lemma();
         /* Read what is already usable first. The callback lands on the
@@ -1146,14 +1166,13 @@ export const liveSource: PodSource = {
            ever *looks one up* here — a connect request by connector id alone
            is a 404 for any connector this organization has not installed yet,
            which is every connector the first time anybody clicks Connect. So
-           the install is settled first: the one named, else the default, else
-           Lemma's own, made now. */
+           the install is settled first: the one named, else the default (of
+           the kind asked for, when one is), else Lemma's own, made now. */
         let installId = authConfigId;
         let madeHere: { id: string; name: string } | null = null;
         if (!installId) {
-            const installs = (await client.connectors.authConfigs.list(orgId, { limit: 200 })).items ?? [];
-            const active = installs.filter((one) => one.connector_id === connectorId && one.status === "ACTIVE");
-            const held = active.find((one) => one.is_default) ?? active[0];
+            const installs = ((await client.connectors.authConfigs.list(orgId, { limit: 200 })).items ?? []) as Install[];
+            const held = heldInstall(installs, connectorId, configSource);
             if (held) {
                 installId = held.id;
             } else {
@@ -1169,6 +1188,9 @@ export const liveSource: PodSource = {
                     connector_id: connectorId,
                     kind: kind?.kind,
                     config_source: "SYSTEM_DEFAULT",
+                    /* Names are unique per organization, and an install of the
+                       other kind may already hold the connector's own. */
+                    name: freshInstallName(connectorId, installs.map((one) => one.name)),
                 });
                 madeHere = { id: String(made.id), name: String(made.name) };
                 installId = madeHere.id;

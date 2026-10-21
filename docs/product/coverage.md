@@ -14,9 +14,9 @@ only a promise marked `covered` with no test is.
 | `covered` | 175 |
 | `gap` | 4 |
 | `manual` | 24 |
-| `planned` | 22 |
+| `planned` | 23 |
 | `withdrawn` | 0 |
-| **total** | **225** |
+| **total** | **226** |
 
 Scenario tests declaring a promise: 449.
 
@@ -28,7 +28,7 @@ the module suites may cover it — but it is untested *as product*.
 
 | Surface | Exercised | Total |
 | --- | ---: | ---: |
-| OpenAPI operations | 250 | 339 |
+| OpenAPI operations | 250 | 342 |
 | Product events | 28 | 28 |
 
 ## Covered, but only in a lane that is not routinely run
@@ -312,6 +312,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-SURF-050` A member writes first to a contact only where the contact wants it | `planned` | — |
 | `PS-SURF-051` People outside the pod add rows to a table it opened to them | `planned` | — |
 | `PS-SURF-047` Contacts cost the organization, never a member | `planned` | — |
+| `PS-SURF-052` Lemma's own Slack app sets a workspace's teammates up, and answers nobody | `planned` | — |
 
 ## [Working with data](journeys/working-with-data.md)
 

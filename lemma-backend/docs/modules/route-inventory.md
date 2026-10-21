@@ -59,6 +59,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/available-surfaces` | `agent.surface.available` | List Available Surfaces |
 | GET | `/pods/{pod_id}/channels/{channel_id}/sources/{source_id}` | `channel.source.get` | Get Source |
 | GET | `/pods/{pod_id}/surface-setup/slack/app-creation` | `agent.surface.slack_app_creation.list` | List Slack App Workspaces |
+| GET | `/pods/{pod_id}/surface-setup/slack/manager` | `agent.surface.slack_manager.list` | List Slack Managed Workspaces |
 | GET | `/pods/{pod_id}/surface-setup/{platform}` | `agent.surface.setup_guide` | Get Surface Setup Guide |
 | GET | `/pods/{pod_id}/surfaces` | `agent.surface.list` | List Surfaces |
 | GET | `/pods/{pod_id}/surfaces/{surface_name}` | `agent.surface.get` | Get Surface |
@@ -95,11 +96,13 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/public/web/{public_key}/messages` | `public.web.message.send` | Web Send Message |
 | POST | `/public/web/{public_key}/rows` | `public.web.row.add` | Web Add Row |
 | POST | `/public/web/{public_key}/session` | `public.web.session.start` | Web Start Session |
+| POST | `/surface-setup/slack/people/sign-in` | `agent.surface.slack_person.sign_in` | Start Slack Sign In |
 | POST | `/surfaces/webhooks/telegram-manager` | `surface.webhook.handle_telegram_manager` | Handle Telegram manager-bot webhook |
 | POST | `/surfaces/webhooks/whatsapp/numbers/{phone_number_id}` | `surface.webhook.handle_whatsapp_number` | Handle a webhook delivered to one pooled WhatsApp number |
 | POST | `/surfaces/webhooks/{platform}` | `surface.webhook.handle_platform` | Handle platform-level surface webhook |
 | POST | `/surfaces/{surface_id}/webhook` | `surface.webhook.handle_surface` | Handle surface-level webhook |
 | PUT | `/pods/{pod_id}/surface-setup/slack/app-creation` | `agent.surface.slack_app_creation.save` | Save Slack Configuration Token |
+| PUT | `/pods/{pod_id}/surface-setup/slack/manager` | `agent.surface.slack_manager.bind` | Bind Slack Manager |
 | PUT | `/surfaces/me/default` | `agent.surface.set_my_default` | Set My Default Surface |
 
 ## apps

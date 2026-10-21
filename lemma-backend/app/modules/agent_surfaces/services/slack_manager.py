@@ -172,7 +172,46 @@ async def run(uow: SqlAlchemyUnitOfWork, parsed: ManagerInput) -> None:
         await _point_at_teammates(uow, ctx, parsed)
     elif parsed.kind is ManagerInputKind.ADD_SUBMITTED:
         await bots.complete_add(uow, ctx, parsed)
+        # The add is done and its Allow is on screen. A retry would take the
+        # form again, find it spent, and put "took too long" over that Allow.
+        await refresh_home(uow, ctx)
+
+
+async def refresh_home(uow: SqlAlchemyUnitOfWork, ctx: ManagerContext) -> None:
+    """``show_home`` after the real work is done and committed, best effort.
+
+    A Home that fails to refresh is shown again the next time it is opened;
+    failing the caller instead would redo what already happened -- a DM sent
+    again, an add retried over its own Allow, a sign-in answered as an error.
+    Reads only, so rolling back loses nothing and leaves ``uow`` usable.
+    """
+    try:
         await show_home(uow, ctx)
+    except Exception:
+        await uow.rollback()
+        logger.warning(
+            "agent_surfaces.slack_manager.home_refresh_failed.degraded",
+            team_id=ctx.team_id,
+            exc_info=True,
+        )
+
+
+async def refresh_home_of(
+    uow: SqlAlchemyUnitOfWork, *, team_id: str, slack_user_id: str
+) -> None:
+    """``refresh_home`` for a Slack user named by id; the context is read too."""
+    try:
+        ctx = await load_context(uow, team_id=team_id, slack_user_id=slack_user_id)
+    except Exception:
+        await uow.rollback()
+        logger.warning(
+            "agent_surfaces.slack_manager.home_refresh_failed.degraded",
+            team_id=team_id,
+            exc_info=True,
+        )
+        return
+    if ctx is not None:
+        await refresh_home(uow, ctx)
 
 
 async def show_home(uow: SqlAlchemyUnitOfWork, ctx: ManagerContext) -> None:

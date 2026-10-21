@@ -38,6 +38,7 @@ from app.modules.channels.tests.e2e.channel_pod import (
     an_asker,
     contact_place,
     group,
+    keep_answers_to_the_asker,
     say,
 )
 from app.modules.test_support.e2e.live_socket import Frame, LiveClient, live_socket
@@ -210,6 +211,7 @@ async def test_an_answer_withheld_over_rest_is_withheld_on_the_socket(
     pod: Pod, db_session: AsyncSession, backend_server
 ) -> None:
     channel = await group(pod, title="Answers", members=[pod.editor["id"]])
+    await keep_answers_to_the_asker(pod, channel["id"])
     agent = await pod.scenario.create_agent()
     async with (
         live_socket(backend_server, pod.id, pod.owner["token"]) as owner,

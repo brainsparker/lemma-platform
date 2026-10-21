@@ -51,7 +51,9 @@ from app.modules.datastore.infrastructure.pod_schema_migrations import (
     CHANGE_LOG_VERSION,
     schema_name_for_pod,
 )
+from app.modules.datastore.domain.row_security import RowPrincipal
 from app.modules.datastore.infrastructure.record_bulk_sql import array_element_type
+from app.modules.datastore.infrastructure.rls_context import apply_row_principal
 from app.modules.datastore.infrastructure.session import get_datastore_engine
 from app.modules.datastore.services.table_context import TableContext
 from app.modules.datastore.services.value_converter import ValueConverter
@@ -319,9 +321,14 @@ async def fetch_rows(
 ) -> dict[str, JsonRow]:
     """The current rows for ``record_ids``, keyed by record id; gone ones absent.
 
-    Read as the database owner, without row-level security: the caller decides
-    visibility (a live reader by each change's ``owner_user_id``). Values are
-    in the record API's JSON form.
+    Every row, whoever owns it: the caller decides visibility (a live reader by
+    each change's ``owner_user_id``). Values are in the record API's JSON form.
+
+    The read names a principal every row policy admits
+    (``RowPrincipal.every_row``). Per-user and contact-owned tables are
+    ``FORCE ROW LEVEL SECURITY``, which binds the role that owns them unless it
+    is a superuser or ``BYPASSRLS``; a read that named nobody matched none of
+    their rows there, so the live sockets sent no per-user change at all.
     """
     if not record_ids:
         return {}
@@ -329,7 +336,10 @@ async def fetch_rows(
         raise ValueError("table belongs to another pod")
     sql, params = fetch_rows_statement(table, record_ids)
     async with (engine or get_datastore_engine()).connect() as conn:
-        rows = (await conn.execute(text(sql), params)).mappings().all()
+        async with conn.begin():
+            # Transaction-local, so it ends with this read.
+            await apply_row_principal(conn, RowPrincipal.every_row())
+            rows = (await conn.execute(text(sql), params)).mappings().all()
     pk = table.primary_key_column
     found: dict[str, JsonRow] = {}
     for row in rows:

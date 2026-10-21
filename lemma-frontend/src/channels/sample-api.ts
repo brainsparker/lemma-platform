@@ -175,7 +175,7 @@ export function sampleChannelApi(_podId: string): ChannelApi {
                 id: id("sample-channel"), kind: "GROUP", title: body.title, topic: body.topic, person: null,
                 sources: [], source_places: [],
                 visibility: "PUBLIC",
-                members: [{ person: ME, role: "owner" }, ...body.members.map((member) => ({ person: { kind: "MEMBER", id: member, name: null }, role: "member" }))],
+                members: [{ person: ME, role: "owner" }, ...body.members.map((member) => ({ person: { kind: "MEMBER", id: member, name: null }, role: "member" })), ...(body.agents ?? []).map((agent) => ({ person: { kind: "AGENT", id: agent.id, name: null }, role: "member", answers: agent.answers }))],
                 me: { joined: true, notify: "ALL", read_seq: 0, role: "owner", can_manage: true }, unread: { lines: 0, mentions: 0, waiting: 0, read_seq: 0 },
                 created_at: now(), last_line_at: now(), last_seq: 0, joined: true,
             };
@@ -191,6 +191,7 @@ export function sampleChannelApi(_podId: string): ChannelApi {
             if (body.topic !== undefined) change.topic = body.topic;
             if (body.archived !== undefined) change.archived = body.archived;
             if (body.visibility !== undefined) change.visibility = body.visibility;
+            if (body.answersShared !== undefined) change.answers_shared = body.answersShared;
             if (body.agentsAnswer !== undefined) change.agents_answer = body.agentsAnswer;
             if (body.handBackAfterHours !== undefined) change.hand_back_after_hours = body.handBackAfterHours;
             if (body.status !== undefined) change.status = body.status;

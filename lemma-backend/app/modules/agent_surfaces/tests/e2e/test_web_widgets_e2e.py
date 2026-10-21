@@ -906,6 +906,11 @@ async def test_a_members_line_waits_in_a_web_contacts_chat(
     # A member writes in their channel; there is nobody to hand it to, so it
     # waits in their web chat for their next visit.
     channel = await contact_channel_id(authenticated_client, pod_id, contact)
+    # The member looking after the widget hears of a new contact without
+    # joining their channel.
+    shown = await authenticated_client.get(f"/pods/{pod_id}/channels/{channel}")
+    assert shown.json()["joined"] is True, shown.text
+    assert shown.json()["unread"]["lines"] >= 1, shown.text
     written = await member_writes(
         authenticated_client, pod_id, channel, "It's back in stock."
     )

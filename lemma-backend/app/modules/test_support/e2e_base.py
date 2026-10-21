@@ -30,6 +30,10 @@ from sqlalchemy import text
 
 from app.core.infrastructure.db.base import Base
 from app.core.infrastructure.db.manager import DatabaseManager, TableSnapshot
+from app.modules.test_support.lock_holders import (
+    describe_lock_holders,
+    warn_lock_holders,
+)
 from app.core.test_utils import (
     SHARED_E2E_NETWORK_NAME,
     create_postgres_database,
@@ -1455,6 +1459,12 @@ async def db_manager(e2e_settings, request) -> AsyncGenerator[DatabaseManager, N
             if not _is_transient_db_error(exc):
                 raise
             last_exc = exc
+            if "lock timeout" in str(exc).lower():
+                # A wait that later succeeds still costs the test its duration
+                # budget; the warnings summary names the holder either way.
+                warn_lock_holders(
+                    await describe_lock_holders(e2e_settings.database_url)
+                )
             await _asyncio.sleep(0.3 * (_attempt + 1))
     else:
         assert last_exc is not None

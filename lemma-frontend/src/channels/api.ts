@@ -38,6 +38,8 @@ export interface ChannelChange {
     topic?: string | null;
     archived?: boolean;
     visibility?: Visibility;
+    /** A group's: whether agents' answers are read by everybody in it. */
+    answersShared?: boolean;
     agentsAnswer?: boolean;
     handBackAfterHours?: number;
     /** `me`, a user id, or null to unassign. */
@@ -78,7 +80,7 @@ export interface ChannelApi {
     /** The reader has seen the channel up to line `seq`. */
     /** Read the timeline to `seq` -- or, with `threadRootId`, that thread. */
     markRead(channelId: string, seq: number, threadRootId?: string | null): Promise<void>;
-    create(body: { title: string; topic: string | null; members: string[]; visibility: Visibility }): Promise<ChannelDetail>;
+    create(body: { title: string; topic: string | null; members: string[]; visibility: Visibility; agents?: { id: string; answers: AgentAnswers }[] }): Promise<ChannelDetail>;
     update(channelId: string, change: ChannelChange): Promise<ChannelDetail>;
     /** Delete a group made in Lemma, and its timeline. */
     destroy(channelId: string): Promise<void>;
@@ -158,6 +160,7 @@ export function updateRequest(change: ChannelChange): Parameters<Channels["updat
     if (change.topic !== undefined) body.topic = change.topic;
     if (change.archived !== undefined) body.archived = change.archived;
     if (change.visibility !== undefined) body.visibility = change.visibility;
+    if (change.answersShared !== undefined) body.answers_shared = change.answersShared;
     if (change.agentsAnswer !== undefined) body.agents_answer = change.agentsAnswer;
     if (change.handBackAfterHours !== undefined) body.hand_back_after_hours = change.handBackAfterHours;
     if (change.assignee !== undefined) body.assignee = change.assignee;

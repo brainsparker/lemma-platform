@@ -37,7 +37,13 @@ from app.modules.channels.contracts import (
     post,
 )
 from app.modules.channels.contracts.deliveries import delivery_by_id, delivery_folded
-from app.modules.channels.tests.e2e.channel_pod import Pod, an_asker, group, say
+from app.modules.channels.tests.e2e.channel_pod import (
+    Pod,
+    an_asker,
+    group,
+    keep_answers_to_the_asker,
+    say,
+)
 from app.modules.channels.tests.e2e.push_support import (
     pushed,
     pushes_of,
@@ -111,17 +117,12 @@ async def test_somebody_named_or_asked_who_is_not_in_a_group_is_told(pod: Pod):
     assert (await pushes_of(asked.id))[pod.viewer["id"]].urgent
 
 
-async def test_a_line_withheld_from_a_member_is_never_pushed_to_them(pod: Pod):
-    """An answer the agent made with the owner's own access, in a group: the
-    editor sees only that it was given -- and is not pushed what it said,
-    even named in it."""
-    crew = await group(pod, members=[pod.editor["id"]])
-    await _hears_everything(pod, crew["id"], pod.editor)
-
+async def _owners_answer(channel_id: str, pod: Pod) -> UUID:
+    """The agent's answer made with the owner's own access, naming the editor."""
     async with create_uow_from_session_maker(async_session_maker) as uow:
         answer = await post(
             uow,
-            channel_id=UUID(crew["id"]),
+            channel_id=UUID(channel_id),
             line=NewLine(
                 sender=Sender.agent(
                     UUID(pod.id), on_behalf_of=Principal.member(UUID(pod.owner["id"]))
@@ -131,9 +132,32 @@ async def test_a_line_withheld_from_a_member_is_never_pushed_to_them(pod: Pod):
             mentions=[Principal.member(UUID(pod.editor["id"]))],
         )
         await uow.commit()
-
     assert answer is not None
-    assert pod.editor["id"] not in await pushed(answer.id)
+    return answer.id
+
+
+async def test_a_line_withheld_from_a_member_is_never_pushed_to_them(pod: Pod):
+    """An answer the agent made with the owner's own access, in a group that
+    keeps such answers to the asker: the editor sees only that it was given
+    -- and is not pushed what it said, even named in it."""
+    crew = await group(pod, members=[pod.editor["id"]])
+    await keep_answers_to_the_asker(pod, crew["id"])
+    await _hears_everything(pod, crew["id"], pod.editor)
+
+    answer = await _owners_answer(crew["id"], pod)
+
+    assert pod.editor["id"] not in await pushed(answer)
+
+
+async def test_an_answer_a_group_shows_everybody_is_pushed_like_any_line(pod: Pod):
+    """The same answer in a group that shows its agents' answers (the
+    default): the editor reads it, so it is pushed to them."""
+    crew = await group(pod, members=[pod.editor["id"]])
+    await _hears_everything(pod, crew["id"], pod.editor)
+
+    answer = await _owners_answer(crew["id"], pod)
+
+    assert pod.editor["id"] in await pushed(answer)
 
 
 async def test_a_busy_channel_pushes_a_member_once_until_a_line_calls_them(

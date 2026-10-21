@@ -22,7 +22,7 @@ import { DocSpace, isDoc } from "@/docs/doc-space";
 import { CommentsButton } from "@/docpages/comments/button";
 import { DocAskContext } from "@/docs/doc-ask";
 import { AllView } from "@/space/all-view";
-import { SpaceNav } from "@/space/space-nav";
+import { SpaceNav, useContactsPlace } from "@/space/space-nav";
 import { ShareSheet, type ShareSubject } from "@/space/share-sheet";
 import { SIGN_IN_EVENT, type SignInRequest } from "@/computer/sign-in-bridge";
 import { SignInPane } from "@/computer/sign-in-pane";
@@ -30,7 +30,6 @@ import { AgentPage } from "@/space/agent-page";
 import { WorkflowPage } from "@/space/workflow-page";
 import { displayAgentName, isPodDefaultAgent } from "@/data/agent-names";
 import { WorkflowsPage } from "@/space/workflows-page";
-import { ChannelsPage } from "@/channels/channels-page";
 import { ChannelPage } from "@/channels/channel-page";
 import { ContactsPage } from "@/space/contacts-page";
 import { Home } from "@/space/home";
@@ -99,7 +98,6 @@ import { HelpMenu } from "@/tour/help-menu";
 import { tourStops, type Stop } from "@/tour/stops";
 import { guideFor, placeOf } from "@/tour/guides";
 import { PlaceGuide } from "@/tour/place-guide";
-import { useFeature } from "@/site/analytics/flags";
 import { atHome, offersTour, readTourSeen, writeTourSeen } from "@/tour/when";
 import { humanizeName } from "@/schedule/schedules";
 
@@ -131,7 +129,7 @@ function homeListOf(tab: Tab): string | null {
         case "workflow":
             return "space:workflows";
         case "channel":
-            return "space:channels";
+            return "space:chats";
         default:
             return null;
     }
@@ -164,12 +162,17 @@ function NotSwitchedOn({ what }: { what: string }) {
     );
 }
 
-const SPACE_TABS: Tab[] = ([["home", "Home"], ["pages", "Pages"], ["apps", "Apps"], ["tables", "Tables"], ["files", "Files"], ["chats", "Chats"], ["workflows", "Workflows"], ["channels", "Channels"], ["contacts", "Contacts"], ["about", "About"]] as [SpaceView, string][])
+/** Contacts, for whoever may look after contacts: a pod's editors and
+ *  admins. Reached by its address by anyone else, it says it is not on. */
+function ContactsPlace({ pod, onConnect }: { pod: Pod; onConnect: () => void }) {
+    return useContactsPlace(pod.id) ? <ContactsPage pod={pod} onConnect={onConnect} /> : <NotSwitchedOn what="Contacts" />;
+}
+
+const SPACE_TABS: Tab[] = ([["home", "Home"], ["pages", "Pages"], ["apps", "Apps"], ["tables", "Tables"], ["files", "Files"], ["chats", "Chats"], ["workflows", "Workflows"], ["channels", "Shared chats"], ["contacts", "Contacts"], ["about", "About"]] as [SpaceView, string][])
     .map(([view, label]) => ({ id: "space:" + view, kind: "space", label, view }));
 
 export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoStep?: number; demoRevision?: number; onPreviewPainted?: () => void } = {}) {
     const preview = isLandingPreview();
-    const contactsOn = useFeature("contacts");
     const [previewPod, setPreviewPod] = useState<string | null>("kit");
     const pathname = usePathname();
     const incoming = useSearchParams();
@@ -786,7 +789,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
     );
     /* A channel opens on its own page, with Channels one step back. */
     const openChannel = useCallback(
-        (channel: { id: string; title: string | null }) => openTab({ id: "channel:" + channel.id, kind: "channel", label: channel.title || "Channel", channelId: channel.id }, "space:channels"),
+        (channel: { id: string; title: string | null }) => openTab({ id: "channel:" + channel.id, kind: "channel", label: channel.title || "Chat", channelId: channel.id }, "space:chats"),
         [openTab],
     );
 
@@ -974,7 +977,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
         const known = allTabs.some((tab) => tab.id === wanted);
         const rebuilt = known ? null : tabFromId(wanted);
         /* A channel lives in Channels, whichever page linked to it. */
-        if (rebuilt) openTab(rebuilt, rebuilt.kind === "channel" ? "space:channels" : undefined);
+        if (rebuilt) openTab(rebuilt, rebuilt.kind === "channel" ? "space:chats" : undefined);
         /* Only a tab that will exist: one that never arrives would hold the
            mirror still for good. */
         if (known || rebuilt) pendingTab.current = wanted === "profile" ? "space:about" : wanted;
@@ -1462,6 +1465,8 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                 onWorkflows={() => { pickTab("space:workflows"); setMobileOpen(false); }}
                                 openChatId={openConversationId}
                                 onOpenChat={(id) => { setConversationId(id); pickTab("conversation"); setMobileOpen(false); }}
+                                onOpenChannel={(channel) => { openChannel(channel); setMobileOpen(false); }}
+                                onConnect={() => setReaching(true)}
                             />
                         </>}
                     </div>
@@ -1767,6 +1772,12 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                             ) : <>
                                 <button type="button" className="crumb__up crumb__mate" onClick={() => pickTab("space:home")}>{pod.name}</button>
                                 <span className="crumb__sep">/</span>
+                                {/* A chat names itself in its own header: the
+                                    crumb ends at the list it is in, rather
+                                    than saying its name a second time. */}
+                                {activeTab?.kind === "channel" ? (
+                                    <button type="button" className="crumb__from" onClick={() => pickTab(cameFrom?.id ?? "space:chats")}>{cameFrom?.label ?? "Chats"}</button>
+                                ) : <>
                                 {cameFrom && <>
                                     <button type="button" className="crumb__from" onClick={() => pickTab(cameFrom.id)}>{cameFrom.label}</button>
                                     <span className="crumb__sep crumb__sep--from">/</span>
@@ -1779,6 +1790,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                 </> : (
                                     <span className="crumb__here">{activeTab?.kind === "conversation" ? "Chat" : activeTab?.label ?? "Pages"}</span>
                                 )}
+                                </>}
                             </>}
                         </div>
                             {activeTab?.kind !== "space" && <ViewActions key={activeTab?.id} tab={activeTab} podId={pod.id}
@@ -1911,11 +1923,14 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                         <Home
                                             pod={pod}
                                             pods={pods.data ?? []}
+                                            apps={allTabs.filter((each): each is Extract<Tab, { kind: "app" }> => each.kind === "app")}
+                                            onOpenApp={pickTab}
+                                            onOpenApps={() => pickTab("apps")}
                                             onNewPage={newPage}
                                             onOpenRun={openRun}
                                             onOpenConversation={(id) => { setConversationId(id); pickTab("conversation"); }}
                                             onAbout={() => openAbout(null)}
-                                            onAsk={(text, files) => startChat(text, undefined, files)}
+                                            onAsk={(text, files, model) => startChat(text, model ? { agent_runtime: { profile_id: model.runtimeId, model_name: model.model || null } } : undefined, files)}
                                         />
                                     ) : tab.view === "about" ? (
                                         <AboutPage
@@ -1934,9 +1949,13 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                             onFile={(path) => openFile(path, "space:about")}
                                             onDeleted={() => goToTeam(null)}
                                         />
-                                    ) : tab.view === "chats" ? (
+                                    ) : tab.view === "chats" || tab.view === "channels" ? (
                                         <ChatsPage
+                                            key={tab.view}
                                             pod={pod}
+                                            initialFilter={tab.view === "channels" ? "channels" : "all"}
+                                            onOpenChannel={(id) => openChannel({ id, title: null })}
+                                            onConnect={() => setReaching(true)}
                                             openId={openConversationId}
                                             onOpen={(id) => { setConversationId(id); pickTab("conversation"); }}
                                             onOpenRun={(runId) => openRun(runId, "Workflow run")}
@@ -1947,10 +1966,8 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                         />
                                     ) : tab.view === "workflows" ? (
                                         <WorkflowsPage pod={pod} pods={pods.data ?? []} onOpenWorkflow={openWorkflow} onOpenRun={openRun} onAsk={chat.prompt} onLearn={() => setGuideOpen(true)} />
-                                    ) : tab.view === "channels" ? (
-                                        <ChannelsPage pod={pod} onOpenChannel={openChannel} onConnect={() => setReaching(true)} />
                                     ) : tab.view === "contacts" ? (
-                                        contactsOn ? <ContactsPage pod={pod} /> : <NotSwitchedOn what="Contacts" />
+                                        <ContactsPlace pod={pod} onConnect={() => setReaching(true)} />
                                     ) : <AllView
                                         podId={pod.id}
                                         spaceName={pod.name}
@@ -2012,7 +2029,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                         channelId={tab.channelId}
                                         visible={isVisible(tab.id)}
                                         onNamed={(title) => renameTab(tab.id, title)}
-                                        onOpenChannels={() => pickTab("space:channels")}
+                                        onLeft={() => pickTab("space:chats")}
                                     />
                                 </Pane>
                             ))}

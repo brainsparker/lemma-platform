@@ -50,7 +50,7 @@ export type ChannelMessageResponse = {
      */
     seq: number;
     /**
-     * When the member it was made for shared it with the channel.
+     * When it was shared with the channel: by the member it was made for, or as it was posted, in a group that shows agents' answers to everybody (`answers_shared`).
      */
     shared_at?: (string | null);
     /**

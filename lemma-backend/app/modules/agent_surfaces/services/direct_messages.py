@@ -111,10 +111,12 @@ async def tell_member(
     user_id: UUID,
     text: str,
     urgent: bool = False,
+    key: str | None = None,
 ) -> ChannelMessage | None:
     """A notice to one member: a note in their own channel. Not pushed, unless
     ``urgent`` -- somebody is waiting on them -- when it names them, so it
-    reaches them outside the app whatever their push budget."""
+    reaches them outside the app whatever their push budget. ``key`` makes it
+    said once: the same key again is the first note, not a second."""
     channel = await direct_channel(uow, pod_id=pod_id, user_id=user_id)
     agent_id = effective_agent_id(None, pod_id=pod_id)
     return await post(
@@ -124,6 +126,7 @@ async def tell_member(
             sender=Sender.agent(agent_id, on_behalf_of=Principal.member(user_id)),
             text=text,
             members_only=True,
+            client_message_id=_line_name(key),
         ),
         mentions=[Principal.member(user_id)] if urgent else (),
     )

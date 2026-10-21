@@ -48,6 +48,7 @@ CHANGEABLE = frozenset(
         "topic",
         "visibility",
         "archived_at",
+        "answers_shared",
         "agents_answer",
         "hand_back_after_hours",
     }

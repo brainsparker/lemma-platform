@@ -103,17 +103,17 @@ function nameOf(control: Element): string {
     return by?.textContent?.trim() ?? "";
 }
 
-test("making a channel asks for the pod's members again, and names each checkbox for its person", async () => {
-    const { NewChannel } = await import("../src/channels/new-channel.tsx");
+test("starting a shared chat asks for the pod's members again, and names each checkbox for its person", async () => {
+    const { NewSharedChat } = await import("../src/channels/new-channel.tsx");
     const view = await page();
     let reads = 0;
     try {
         /* The shell's roster, read when the space opened. */
         await view.cache.prefetchQuery({ queryKey: ["pod-detail", "pod"], queryFn: async () => { reads += 1; return { members: [] }; }, staleTime: 5 * 60_000 });
-        await view.draw(createElement(NewChannel, { pod: pod as never, onClose: () => {}, onMade: () => {} }));
+        await view.draw(createElement(NewSharedChat, { pod: pod as never, onClose: () => {}, onMade: () => {} }));
         await view.flush();
         assert.equal(view.cache.getQueryState(["pod-detail", "pod"])?.isInvalidated, true, "the roster held is asked for again");
-        const boxes = [...view.dom.window.document.querySelectorAll("input[type=checkbox]")];
+        const boxes = [...view.dom.window.document.querySelectorAll("fieldset input[type=checkbox]")];
         assert.deepEqual(boxes.map(nameOf), ["Sam Okonkwo-Fairweather", "Lee"]);
         assert.ok(reads >= 1);
     } finally {
@@ -134,17 +134,18 @@ const detail = {
 };
 const may = { manage: true, write: true, writeRefused: null, contactOps: false, delete: true, rename: true, archive: true, visibility: true };
 
-test("the About panel puts each picker under its own list, and a long name can be read in full", async () => {
-    const { ChannelPanel } = await import("../src/channels/channel-panel.tsx");
+test("a chat's details list each person in full, and offer only the tabs the reader can use", async () => {
+    const { ChatDetails } = await import("../src/channels/chat-details.tsx");
     const view = await page();
     try {
-        await view.draw(createElement(ChannelPanel, { pod: pod as never, channel: detail as never, may: may as never, onClose: () => {}, onLeft: () => {} }));
+        await view.draw(createElement(ChatDetails, { pod: pod as never, channel: detail as never, may: may as never, at: "members", onAt: () => {}, onClose: () => {}, onLeft: () => {} }));
         await view.flush();
         const doc = view.dom.window.document;
-        const order = [...doc.querySelectorAll("h4.gside__label, .cside__add select")].map((one) => one.tagName === "H4" ? "heading:" + one.textContent : "picker:" + nameOf(one));
-        assert.deepEqual(order, ["picker:Add someone from Bolt", "heading:Agents", "picker:Add an agent"]);
-        const sam = [...doc.querySelectorAll(".gpeople__who > span")].find((one) => one.textContent?.startsWith("Sam"));
+        const tabs = [...doc.querySelectorAll("[role=tab]")].map((one) => one.textContent);
+        assert.deepEqual(tabs, ["About", "Members2", "Agents1", "Settings"]);
+        const sam = [...doc.querySelectorAll(".cdet__name")].find((one) => one.textContent?.startsWith("Sam"));
         assert.equal(sam?.getAttribute("title"), "Sam Okonkwo-Fairweather");
+        assert.ok([...doc.querySelectorAll("button")].some((one) => one.textContent === "Add people"), "whoever may change it can add people");
     } finally {
         await view.close();
     }
@@ -165,6 +166,45 @@ test("an answered question says what was answered", async () => {
     try {
         await view.draw(createElement("ol", null, createElement(LineView, { podId: "pod", channel: detail as never, line: asked as never })));
         assert.match(view.body(), /Answered by you: Coffee/);
+    } finally {
+        await view.close();
+    }
+});
+
+test("who may change a group switches whether agents' answers are shown to everyone there", async () => {
+    const { ChatDetails } = await import("../src/channels/chat-details.tsx");
+    const view = await page();
+    const asked: unknown[] = [];
+    api.update = ((channelId: string, body: unknown) => {
+        asked.push({ channelId, body });
+        return Promise.resolve({ ...detail, answersShared: false });
+    }) as never;
+    try {
+        await view.draw(createElement(ChatDetails, { pod: pod as never, channel: { ...detail, answersShared: true } as never, may: may as never, at: "about", onAt: () => {}, onClose: () => {}, onLeft: () => {} }));
+        await view.flush();
+        const doc = view.dom.window.document;
+        const toggle = doc.querySelector<HTMLInputElement>("input[role=switch]");
+        assert.ok(toggle, "a switch is offered");
+        assert.equal(toggle.checked, true, "on by default: everyone reads the answers");
+        assert.match(nameOf(toggle), /^Show agents’ answers to everyone here/);
+        assert.match(view.body(), /Everyone here reads what an agent answers/);
+        await act(async () => { toggle.click(); });
+        await view.flush();
+        assert.deepEqual(asked, [{ channelId: "c1", body: { answersShared: false } }]);
+    } finally {
+        delete api.update;
+        await view.close();
+    }
+});
+
+test("somebody who may not change a group is told it keeps answers to the asker, not offered a switch", async () => {
+    const { ChatDetails } = await import("../src/channels/chat-details.tsx");
+    const view = await page();
+    try {
+        await view.draw(createElement(ChatDetails, { pod: pod as never, channel: { ...detail, answersShared: false } as never, may: { ...may, manage: false } as never, at: "about", onAt: () => {}, onClose: () => {}, onLeft: () => {} }));
+        await view.flush();
+        assert.equal(view.dom.window.document.querySelector("input[role=switch]"), null);
+        assert.match(view.body(), /Keep an answer to whoever asked until they share it/);
     } finally {
         await view.close();
     }

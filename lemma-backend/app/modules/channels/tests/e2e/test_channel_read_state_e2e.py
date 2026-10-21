@@ -7,6 +7,10 @@
 * Replying in a thread reads that thread, not the channel.
 * Joining a channel starts at its newest line; what named them before stays.
 * A channel muted for now is not among the channels with something new.
+* Named in a channel one is not in, it is new to them from the line naming
+  them until they read it; one member reading it leaves it new for another.
+* The member looking after a bot's contacts is in a new contact's channel
+  from the contact's first word.
 
 Against Postgres, through the API.
 """
@@ -16,8 +20,9 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.channels.tests.e2e.channel_pod import Pod, group, say
+from app.modules.channels.tests.e2e.channel_pod import Pod, contact_place, group, say
 
 pytestmark = pytest.mark.e2e
 
@@ -143,3 +148,89 @@ async def test_a_channel_muted_for_now_is_not_counted_as_new(pod: Pod):
     )
     inbox = await member.get(f"/pods/{pod.id}/inbox")
     assert inbox.json()["totals"]["channels"] == 1, inbox.text
+
+
+async def _totals(pod: Pod, who: dict) -> dict:
+    inbox = await pod.client(who).get(f"/pods/{pod.id}/inbox")
+    assert inbox.status_code == 200, inbox.text
+    return inbox.json()["totals"]
+
+
+async def test_a_member_named_where_they_are_not_is_told_from_that_line(pod: Pod):
+    town = await group(pod, title="Town square")
+    for n in range(3):
+        await say(pod, town["id"], f"history {n}")
+    before = await _totals(pod, pod.user)
+
+    named = await say(pod, town["id"], "can you look?", parts=_naming(pod.user))
+
+    # Not in it, but named: the channel is new to them from the line naming
+    # them -- what was said before is history, as it is for joining.
+    unread = await _unread(pod, town["id"], pod.user)
+    assert (unread["lines"], unread["mentions"]) == (1, 1), unread
+    totals = await _totals(pod, pod.user)
+    assert totals["channels"] == before["channels"] + 1, totals
+    assert totals["mentions"] == before["mentions"] + 1, totals
+
+    await _read(pod, town["id"], pod.user, named["seq"])
+    unread = await _unread(pod, town["id"], pod.user)
+    assert (unread["lines"], unread["mentions"]) == (0, 0), unread
+    assert await _totals(pod, pod.user) == before
+
+    # Read, and never joined: what is said next is not theirs to hear of.
+    await say(pod, town["id"], "thanks")
+    assert (await _unread(pod, town["id"], pod.user))["lines"] == 0
+    assert await _totals(pod, pod.user) == before
+
+
+async def test_one_member_reading_leaves_it_new_for_another(pod: Pod):
+    town = await group(pod, title="Town square")
+    named = await say(
+        pod, town["id"], "kickoff at 3", parts=_naming(pod.user) + _naming(pod.viewer)
+    )
+
+    await _read(pod, town["id"], pod.user, named["seq"])
+
+    assert (await _unread(pod, town["id"], pod.user))["lines"] == 0
+    theirs = await _unread(pod, town["id"], pod.viewer)
+    assert (theirs["lines"], theirs["mentions"]) == (1, 1), theirs
+    assert (await _totals(pod, pod.viewer))["channels"] >= 1
+
+
+async def test_reading_to_the_end_reads_what_named_them_before_they_joined(pod: Pod):
+    town = await group(pod, title="Town square")
+    named = await say(pod, town["id"], "ask the user", parts=_naming(pod.user))
+    joined = await pod.client(pod.user).post(f"{pod.base}/{town['id']}/members/me")
+    assert joined.json()["unread"]["mentions"] == 1, joined.text
+
+    # Their read number is already there: reading to it still reads the line.
+    await _read(pod, town["id"], pod.user, named["seq"])
+
+    assert (await _unread(pod, town["id"], pod.user))["mentions"] == 0
+    assert (await _totals(pod, pod.user))["mentions"] == 0
+
+
+async def test_the_member_looking_after_contacts_hears_a_new_one(
+    pod: Pod, db_session: AsyncSession
+):
+    before = await _totals(pod, pod.editor)
+
+    source, _ = await contact_place(db_session, pod, keeper=pod.editor)
+
+    # In it from the contact's first word, without joining: theirs to answer.
+    shown = (await pod.client(pod.editor).get(f"{pod.base}/{source.channel_id}")).json()
+    assert shown["joined"] is True, shown
+    assert shown["unread"]["lines"] == 1, shown
+    assert (await _totals(pod, pod.editor))["channels"] == before["channels"] + 1
+
+
+async def test_a_keeper_who_cannot_open_contacts_is_not_put_in_their_channel(
+    pod: Pod, db_session: AsyncSession
+):
+    source, _ = await contact_place(db_session, pod, keeper=pod.user)
+
+    members = await pod.client(pod.owner).get(f"{pod.base}/{source.channel_id}/members")
+    assert members.status_code == 200, members.text
+    assert pod.user["id"] not in {
+        item["person"]["id"] for item in members.json()["items"]
+    }

@@ -447,8 +447,10 @@ async def update_channel(
 ) -> ChannelDetailResponse:
     """Change exactly the fields named; `null` clears.
 
-    A group: `title`, `topic`, `visibility`, `archived` -- its owners' or an
-    admin's. A contact's channel: `agents_answer`, `hand_back_after_hours`,
+    A group: `title`, `topic`, `visibility`, `archived`, `answers_shared`
+    (whether agents' answers made with the asker's access are read by
+    everybody here, or kept to the asker until they share one) -- its
+    owners' or an admin's. A contact's channel: `agents_answer`, `hand_back_after_hours`,
     `status`, `assignee` -- for who may write to contacts. Switching the agent
     on hands the contact back to it now: nobody is assigned.
     """
@@ -505,6 +507,8 @@ async def _change_group(
         values["visibility"] = body.visibility.value
     if "archived" in named:
         values["archived_at"] = now() if body.archived else None
+    if "answers_shared" in named:
+        values["answers_shared"] = body.answers_shared
     await ChannelRepository(uow.session).change(channel.id, values)
 
 

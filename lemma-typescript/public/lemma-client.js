@@ -16861,8 +16861,10 @@ var LemmaClient = (() => {
      * Update Channel
      * Change exactly the fields named; `null` clears.
      *
-     * A group: `title`, `topic`, `visibility`, `archived` -- its owners' or an
-     * admin's. A contact's channel: `agents_answer`, `hand_back_after_hours`,
+     * A group: `title`, `topic`, `visibility`, `archived`, `answers_shared`
+     * (whether agents' answers made with the asker's access are read by
+     * everybody here, or kept to the asker until they share one) -- its
+     * owners' or an admin's. A contact's channel: `agents_answer`, `hand_back_after_hours`,
      * `status`, `assignee` -- for who may write to contacts. Switching the agent
      * on hands the contact back to it now: nobody is assigned.
      * @param podId
@@ -17822,7 +17824,10 @@ var LemmaClient = (() => {
       return this.client.request(() => ChannelsService.channelMeCreate(podId));
     }
     /** Change exactly the fields present; `null` clears. A group: `title`,
-     *  `topic`, `visibility`, `archived`. A contact's channel: `agents_answer`,
+     *  `topic`, `visibility`, `archived`, `answers_shared` (on, the default:
+     *  an agent's answer made with the asker's own access is read by everybody
+     *  in it; off, by the asker alone until they share it). A contact's
+     *  channel: `agents_answer`,
      *  `hand_back_after_hours`, `status`, `assignee` (`me` or a user id). */
     update(podId, channelId, body) {
       return this.client.request(() => ChannelsService.channelUpdate(podId, channelId, body));

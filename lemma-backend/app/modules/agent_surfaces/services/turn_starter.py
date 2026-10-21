@@ -30,6 +30,7 @@ from typing import Any
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.agent.contracts import RuntimeUnavailableError
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.adapter_port import SurfacePlatformAdapterPort
@@ -82,6 +83,7 @@ from app.modules.agent_surfaces.services.surface_file_ingest_service import (
 )
 from app.modules.agent_surfaces.domain.decision_card import CardRetirement
 from app.modules.agent_surfaces.services.held_replies import stage_held_replies
+from app.modules.agent_surfaces.services.refused_turns import say_turn_refused
 from app.modules.agent_surfaces.services.message_claims import SurfaceEventDedupStore
 from app.modules.agent_surfaces.services.card_retirement import (
     retire_superseded_cards,
@@ -263,19 +265,23 @@ class SurfaceTurnStarter:
         # was mostly the agent talking to itself about its own plumbing -- and
         # it is no longer true: `PendingUserMessagesCapability` steers these
         # into the run already going, which answers all of them at once.
-        async with self.write_scope() as uow:
-            finished = await write_inbound_message(
-                context, message_text, metadata, uow, lines=self.channel_lines(uow)
-            )
-            # Their message reopened a closed reply window: what waited for it
-            # is written out now, before the answer this message will get is
-            # even started, and the destination pump sends it at once.
-            await stage_held_replies(
-                uow,
-                conversation_id=context.conversation_id,
-                pod_id=context.pod_id,
-                platform=context.platform,
-            )
+        try:
+            async with self.write_scope() as uow:
+                finished = await write_inbound_message(
+                    context, message_text, metadata, uow, lines=self.channel_lines(uow)
+                )
+                # Their message reopened a closed reply window: what waited for
+                # it is written out now, before the answer this message will get
+                # is even started, and the destination pump sends it at once.
+                await stage_held_replies(
+                    uow,
+                    conversation_id=context.conversation_id,
+                    pod_id=context.pod_id,
+                    platform=context.platform,
+                )
+        except RuntimeUnavailableError as refused:
+            await say_turn_refused(self, context, message_text, refused)
+            return
         for tool_call_ids, reason in (
             (finished.superseded, CardRetirement.SUPERSEDED),
             (finished.answered, CardRetirement.ANSWERED),

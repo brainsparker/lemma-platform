@@ -2,14 +2,15 @@
 
 import { useEffect, useId, useRef, useState, useSyncExternalStore, type DragEvent, type KeyboardEvent } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { AttachIcon, CloseIcon, SendIcon } from "@/ui/icons";
+import { AttachIcon, CloseIcon, LockIcon, SendIcon } from "@/ui/icons";
 import { channelApi } from "./api";
 import { attachmentSaid, carriedFiles, dragHasFiles, enterSends, uniqueNames, uploadProgress, type AttachmentState } from "./compose-model";
 import { draftKey, keepDraft, readDraft } from "./drafts";
 import { problemOf } from "./problem";
 import { useMentionPicker } from "./mention-picker";
 import { mentionsIn, pickedIn, removeMention, type Mentionable } from "./mentions";
-import { composerChoices, sourceLabel, type ChannelDetail, type Line, type Part } from "./model";
+import { composerChoices, type ChannelDetail, type Line, type Part } from "./model";
+import { goesTo, latestPlace, placeName } from "./chat-copy";
 
 type FilePart = Extract<Part, { type: "file" }>;
 
@@ -41,6 +42,49 @@ function subscribeTouch(notify: () => void): () => void {
 
 function touchNow(): boolean {
     return typeof window !== "undefined" && Boolean(window.matchMedia?.("(hover: none) and (pointer: coarse)").matches);
+}
+
+/** Where a message sent here goes besides this chat, said plainly under the
+ *  box -- "Also goes to #launch on Slack", "Goes to Dana Ruiz by email" --
+ *  with the place to pick where there are several, and one switch to keep
+ *  it inside Lemma, for the people in the space only. */
+function Destination({ channel, place, onPlace, only, onOnly, disabled }: {
+    channel: ChannelDetail;
+    place: string;
+    onPlace: (sourceId: string) => void;
+    only: boolean;
+    onOnly: (only: boolean) => void;
+    disabled: boolean;
+}) {
+    const live = channel.places.filter((one) => !one.pending);
+    const latest = latestPlace(channel.places);
+    const chosen = live.find((one) => one.id === place) ?? latest;
+    return (
+        <span className="chcompose__dest">
+            <button
+                type="button"
+                className="chcompose__only"
+                aria-pressed={only}
+                disabled={disabled}
+                title={only ? "Only people in Lemma see this. Click to send it out too." : "Keep this inside Lemma: nothing outside sees it."}
+                onClick={() => onOnly(!only)}
+            >
+                <LockIcon size={13} aria-hidden="true" /> Only in Lemma
+            </button>
+            {!only && chosen && (live.length > 1 ? (
+                <label className="chcompose__where">
+                    <span>{channel.kind === "CONTACT" ? "Goes" : "Also goes"} to</span>
+                    <select value={place} disabled={disabled} onChange={(event) => onPlace(event.target.value)}>
+                        {latest && <option value="">{placeName(latest)}</option>}
+                        {live.filter((one) => one.id !== latest?.id).map((one) => <option key={one.id} value={one.id}>{placeName(one)}</option>)}
+                    </select>
+                </label>
+            ) : (
+                <span className="chcompose__where">{goesTo(channel, chosen)}</span>
+            ))}
+            {only && <span className="chcompose__where">Only people in Lemma see this</span>}
+        </span>
+    );
 }
 
 /** Writing in a channel, or in one thread of it.
@@ -76,9 +120,14 @@ export function Composer({ podId, channel, people, threadRootId, placeholder, di
     const [files, setFiles] = useState<Attached[]>([]);
     const [dragging, setDragging] = useState(false);
     const touch = useSyncExternalStore(subscribeTouch, touchNow, () => false);
-    const [membersOnly, setMembersOnly] = useState(false);
-    const [place, setPlace] = useState("");
     const choices = composerChoices(channel);
+    /* A message here can go outside -- to a mirrored group, or to a contact
+       -- unless it is kept inside Lemma. Your default chat has nobody else in
+       it: nothing to choose. */
+    const offersPlaces = choices.notes && channel.kind !== "DIRECT";
+    const [only, setOnly] = useState(false);
+    const [place, setPlace] = useState("");
+    const membersOnly = offersPlaces && only;
     /* One name per line being written: sending it again after a failure is
        the same line, not a second one. Anything changed is a new line. */
     const lineId = useRef<string | null>(null);
@@ -143,7 +192,7 @@ export function Composer({ podId, channel, people, threadRootId, placeholder, di
             setPicked([]);
             setFiles([]);
             onPosted(line);
-            box.current?.focus();
+            box.current?.focus({ preventScroll: true });
         },
     });
 
@@ -157,7 +206,7 @@ export function Composer({ podId, channel, people, threadRootId, placeholder, di
         lineId.current = null;
         setText(removeMention(text, who));
         setPicked((was) => was.filter((one) => !(one.kind === who.kind && one.id === who.id)));
-        box.current?.focus();
+        box.current?.focus({ preventScroll: true });
     };
 
     const keys = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -254,22 +303,29 @@ export function Composer({ podId, channel, people, threadRootId, placeholder, di
                 <button type="button" className="icon-button chcompose__attach" aria-label="Attach files" title="Attach files" disabled={sending} onClick={() => picker.current?.click()}>
                     <AttachIcon size={18} />
                 </button>
-                {choices.notes && (
-                    <label className="chcompose__note">
-                        <input type="checkbox" checked={membersOnly} disabled={sending} onChange={(event) => setMembersOnly(event.target.checked)} />
-                        <span>Note to members only</span>
-                    </label>
-                )}
-                {choices.places.length > 0 && !membersOnly && (
-                    <label className="chcompose__place">
-                        <span className="sr-only">Send to</span>
-                        <select value={place} disabled={sending} onChange={(event) => setPlace(event.target.value)}>
-                            <option value="">Where it last heard from</option>
-                            {choices.places.map((one) => <option key={one.id} value={one.id}>{sourceLabel(one.id, channel.places)}</option>)}
-                        </select>
-                    </label>
-                )}
-                <button type="submit" className="icon-button chcompose__send" aria-label={sending ? "Sending" : membersOnly ? "Send note to members" : "Send"} disabled={sending || (!text.trim() && files.length === 0)}>
+                <button
+                    type="button"
+                    className="icon-button chcompose__at"
+                    aria-label="Mention someone"
+                    title="Mention someone"
+                    disabled={sending}
+                    onClick={() => {
+                        /* An "@" where the caret is, after a space when it
+                           follows a word: the same as typing it. */
+                        const element = box.current;
+                        const at = element?.selectionStart ?? text.length;
+                        const before = text.slice(0, at);
+                        const insert = before && !/\s$/.test(before) ? " @" : "@";
+                        const next = before + insert + text.slice(element?.selectionEnd ?? at);
+                        const caret = before.length + insert.length;
+                        if (!mention.changed(next, caret)) return;
+                        requestAnimationFrame(() => { element?.focus({ preventScroll: true }); element?.setSelectionRange(caret, caret); });
+                    }}
+                >
+                    <span aria-hidden="true">@</span>
+                </button>
+                {offersPlaces && <Destination channel={channel} place={place} onPlace={setPlace} only={only} onOnly={setOnly} disabled={sending} />}
+                <button type="submit" className="icon-button chcompose__send" aria-label={sending ? "Sending" : membersOnly ? "Send, only in Lemma" : "Send"} disabled={sending || (!text.trim() && files.length === 0)}>
                     <SendIcon size={18} />
                 </button>
             </div>

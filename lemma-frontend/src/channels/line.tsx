@@ -4,19 +4,21 @@ import { useContext, useEffect, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useMe } from "@/session/use-me";
 import { Prose } from "@/thread/markdown";
-import { AgentIcon } from "@/ui/icons";
+import { ChatIcon, DeleteIcon, EditIcon } from "@/ui/icons";
+import { Avatar } from "./avatar";
 import { channelApi } from "./api";
 import {
     ASKER_ONLY_NOTE,
     answerSummary,
     asWaitingQuestion,
-    initials,
+    channelTitle,
+    clockTime,
     isMine,
-    lineMeta,
     personName,
     questionState,
     sayQuestion,
-    senderLabel,
+    sayList,
+    sourceLabel,
     withheldNote,
     type ChannelDetail,
     type Line,
@@ -27,7 +29,8 @@ import { MentionablesContext, useMentionPicker } from "./mention-picker";
 import { mentionsIn, type Mentionable } from "./mentions";
 import { DeliveryStatus, LineParts, LineText } from "./parts";
 import { problemOf } from "./problem";
-import { lineKeys } from "./queries";
+import { lineKeys, useThread } from "./queries";
+import { platformName } from "./sources";
 import { WaitingRow } from "./waiting-panel";
 
 export { problemOf };
@@ -51,7 +54,7 @@ function EditBox({ line, pending, problem, onSave, onCancel }: {
     const { setCaret } = mention;
     useEffect(() => {
         const end = box.current?.value.length ?? 0;
-        box.current?.focus();
+        box.current?.focus({ preventScroll: true });
         box.current?.setSelectionRange(end, end);
         setCaret(end);
     }, [setCaret]);
@@ -110,10 +113,17 @@ function EditBox({ line, pending, problem, onSave, onCancel }: {
  *  to answer it when it waits on the reader. The reader's own lines can be
  *  changed or deleted here, and whoever may change the channel can remove
  *  anybody's; a copy already carried outside stays as sent. */
-export function LineView({ podId, channel, line, onThread, mayWrite = true, answering = [], agentName, highlighted = false }: {
+export function LineView({ podId, channel, line, onThread, mayWrite = true, answering = [], agentName, highlighted = false, visible = true, continued = false, quote = null }: {
     podId: string;
     channel: ChannelDetail;
     line: Line;
+    /** The line this answers, when it is not the one just above. */
+    quote?: Line | null;
+    /** On screen: a thread's summary under its line is kept live while it is. */
+    visible?: boolean;
+    /** Said by the same person moments after the line above: drawn without
+     *  a face or a name, the way a chat groups a run of messages. */
+    continued?: boolean;
     /** Open the line's thread. Absent inside a thread, which has no threads. */
     onThread?: (line: Line) => void;
     /** The reader may write here: their own lines can be changed. */
@@ -149,29 +159,65 @@ export function LineView({ podId, channel, line, onThread, mayWrite = true, answ
     const removable = mine || (mayWrite && channel.me.canManage);
     const agent = line.sender.kind === "AGENT";
     const withheld = withheldNote(line, me);
-    const meta = lineMeta(line, channel.places);
+    const time = clockTime(line.createdAt);
+    /* In a contact's chat everything is with them, by the one way they
+       write: "answering", "Contact" and "via Web chat" on every message would
+       say only that. A contact on two ways still shows which. */
+    const withContact = channel.kind === "CONTACT";
+    const oneWay = withContact && new Set(channel.places.map((place) => place.platform)).size <= 1;
+    const where = oneWay ? null : sourceLabel(line.sourceId, channel.places);
+    const whom = agent && line.onBehalfOf && !withContact ? personName(line.onBehalfOf, me) : null;
+    const who = withContact && line.sender.kind === "CONTACT" && !line.sender.name ? channelTitle(channel, "") : personName(line.sender, me);
+    /* Said outside, or sent there already -- a Slack channel, a WhatsApp
+       group, a contact's inbox -- an edit or a delete changes only what is
+       read here: the copy there stays as it is. So an edit is not offered on
+       it, and a delete says so before it happens. */
+    const sentOut = (line.delivered ?? []).filter((one) => one.status === "SENT");
+    const places = [
+        /* Said there in the first place: written on Slack, mirrored here. */
+        ...(line.sourceId ? [sourceLabel(line.sourceId, channel.places) ?? "the place it was said"] : []),
+        ...sentOut.map((one) => sourceLabel(one.sourceId, channel.places) ?? (one.platform ? platformName(one.platform) : "outside")),
+    ];
+    const outside = places.length ? sayList([...new Set(places)]) : null;
+    const editable = mine && line.text !== null && !outside;
+    const tools = !line.deleted && !editing && !confirming && (Boolean(onThread) || editable || removable);
     return (
         <li
             className="cline"
             id={"line-" + line.id}
             data-seq={line.seq || undefined}
+            data-continued={continued || undefined}
             data-highlight={highlighted || undefined}
             data-agent={agent || undefined}
             data-note={line.membersOnly || undefined}
             data-gone={line.deleted || line.withheld || undefined}
         >
-            <span className="cline__face" aria-hidden="true">
-                {agent ? <span className="gface gface--agent"><AgentIcon size={16} /></span>
-                    : <span className="gface">{initials(personName(line.sender, null))}</span>}
+            <span className="cline__gutter" aria-hidden="true">
+                {continued ? <time className="cline__stamp" dateTime={line.createdAt}>{time}</time> : <Avatar person={line.sender} />}
             </span>
             <div className="cline__body">
-                <div className="cline__head">
-                    <span className="cline__who">{senderLabel(line, me)}</span>
-                    {line.sender.kind === "CONTACT" && <span className="cline__chip">Contact</span>}
-                    {line.membersOnly && <span className="cline__chip cline__chip--note">Members only</span>}
-                    {meta && <time className="cline__at" dateTime={line.createdAt}>{meta}</time>}
-                    {line.editedAt && !line.deleted && <span className="cline__at">· edited</span>}
-                </div>
+                {!continued && (
+                    <div className="cline__head">
+                        <span className="cline__who">{who}</span>
+                        {whom && whom !== "You" && <span className="cline__for">answering {whom}</span>}
+                        {line.sender.kind === "CONTACT" && !withContact && <span className="cline__chip">Contact</span>}
+                        {line.membersOnly && <span className="cline__chip cline__chip--note">Only in Lemma</span>}
+                        <time className="cline__at" dateTime={line.createdAt}>{time}</time>
+                        {where && <span className="cline__at">via {where}</span>}
+                    </div>
+                )}
+                {continued && <span className="sr-only">{who}, {time}</span>}
+                {quote && (
+                    <button
+                        type="button"
+                        className="cline__quote"
+                        title="Go to the message this answers"
+                        onClick={() => document.getElementById("line-" + quote.id)?.scrollIntoView({ block: "center" })}
+                    >
+                        <span className="cline__quote-who">{personName(quote.sender, me)}</span>
+                        <span className="cline__quote-text">{quote.deleted ? "This message was deleted." : (quote.text ?? "").replace(/\s+/g, " ").slice(0, 140)}</span>
+                    </button>
+                )}
 
                 {line.deleted ? (
                     <p className="cline__gone">{removedNote(line, me)}</p>
@@ -191,13 +237,14 @@ export function LineView({ podId, channel, line, onThread, mayWrite = true, answ
                     agent ? <div className="cline__text cline__text--md"><Prose text={line.text} /></div>
                         : <LineText text={line.text} parts={line.parts} me={me} />
                 ) : null}
+                {line.editedAt && !line.deleted && !editing && <span className="cline__edited">(edited)</span>}
                 {!line.deleted && !withheld && !editing && <LineParts podId={podId} channelId={channel.id} line={line} />}
                 {line.canShare && (
                     <div className="cline__private">
                         <span>{ASKER_ONLY_NOTE}</span>
                         {sharing ? (
                             <>
-                                <span className="cline__ask-delete">Everyone in this channel will read it.</span>
+                                <span className="cline__ask-delete">Everyone in this chat will read it.</span>
                                 <button type="button" className="cline__act" disabled={share.isPending} onClick={() => share.mutate()}>{share.isPending ? "Sharing…" : "Share"}</button>
                                 <button type="button" className="cline__act" onClick={() => setSharing(false)}>Keep private</button>
                             </>
@@ -211,27 +258,20 @@ export function LineView({ podId, channel, line, onThread, mayWrite = true, answ
 
                 {line.interaction && <Question podId={podId} channel={channel} line={line} me={me} />}
 
-                <div className="cline__foot">
-                    {onThread && line.replyCount > 0 && (
-                        <button type="button" className="cline__replies" onClick={() => onThread(line)}>
-                            {line.replyCount === 1 ? "1 reply" : line.replyCount + " replies"}
-                        </button>
-                    )}
-                    {!line.deleted && !editing && (
-                        <span className="cline__acts">
-                            {onThread && line.replyCount === 0 && <button type="button" className="cline__act" onClick={() => onThread(line)}>Reply in thread</button>}
-                            {mine && line.text !== null && <button type="button" className="cline__act" onClick={() => { edit.reset(); setEditing(true); }}>Edit</button>}
-                            {removable && (confirming ? (
-                                <>
-                                    <span className="cline__ask-delete">{!mine ? "Remove " + personName(line.sender, me) + "’s line for everyone?" : "Delete it?"}</span>
-                                    <button type="button" className="cline__act cline__act--bad" disabled={remove.isPending} onClick={() => remove.mutate()}>{remove.isPending ? "Deleting…" : "Delete"}</button>
-                                    <button type="button" className="cline__act" onClick={() => setConfirming(false)}>Keep</button>
-                                </>
-                            ) : <button type="button" className="cline__act" onClick={() => setConfirming(true)}>Delete</button>)}
+                {confirming && (
+                    <div className="cline__confirm" role="group" aria-label="Delete this message">
+                        <span className="cline__ask-delete">
+                            {!mine ? "Remove " + personName(line.sender, me) + "’s message for everyone?" : "Delete this message?"}
+                            {outside && " It goes from here only; the copy in " + outside + " stays."}
                         </span>
-                    )}
-                </div>
+                        <button type="button" className="cline__act cline__act--bad" disabled={remove.isPending} onClick={() => remove.mutate()}>{remove.isPending ? "Deleting…" : "Delete"}</button>
+                        <button type="button" className="cline__act" onClick={() => setConfirming(false)}>Keep</button>
+                    </div>
+                )}
                 {remove.isError && <p className="cline__problem" role="alert">{problemOf(remove.error, "Couldn’t delete it.")}</p>}
+                {onThread && line.replyCount > 0 && !line.threadRootId && (
+                    <ThreadSummary podId={podId} channel={channel} root={line} visible={visible} onOpen={() => onThread(line)} />
+                )}
                 {answering.map((one) => (
                     /* Not a live region: every piece written would be read out
                        again. Its start and its finished line are said by the
@@ -242,14 +282,78 @@ export function LineView({ podId, channel, line, onThread, mayWrite = true, answ
                     </div>
                 ))}
             </div>
+            {tools && (
+                <div className="cline__tools" role="toolbar" aria-label="Message actions">
+                    {onThread && (
+                        <button type="button" className="cline__tool" title="Reply in thread" onClick={() => onThread(line)}>
+                            <ChatIcon size={17} aria-hidden="true" /><span className="sr-only">Reply</span>
+                        </button>
+                    )}
+                    {editable && (
+                        <button type="button" className="cline__tool" title="Edit message" onClick={() => { edit.reset(); setEditing(true); }}>
+                            <EditIcon size={17} aria-hidden="true" /><span className="sr-only">Edit</span>
+                        </button>
+                    )}
+                    {removable && (
+                        <button type="button" className="cline__tool cline__tool--bad" title={mine ? "Delete message" : "Remove for everyone"} onClick={() => setConfirming(true)}>
+                            <DeleteIcon size={17} aria-hidden="true" /><span className="sr-only">Delete</span>
+                        </button>
+                    )}
+                </div>
+            )}
         </li>
+    );
+}
+
+/** When a thread's newest reply was written, the way a chat says it:
+ *  today or yesterday at a time, else "on" and the day. */
+export function lastReplySaid(iso: string, now = new Date()): string {
+    const at = new Date(iso);
+    if (Number.isNaN(at.getTime())) return "";
+    const day = (date: Date) => new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+    const back = Math.round((day(now) - day(at)) / 86_400_000);
+    if (back === 0) return "today at " + clockTime(iso);
+    if (back === 1) return "yesterday at " + clockTime(iso);
+    return "on " + at.toLocaleDateString([], at.getFullYear() === now.getFullYear() ? { day: "numeric", month: "long" } : { day: "numeric", month: "long", year: "numeric" });
+}
+
+/** A thread under the line it hangs off: who replied, how many replies, and
+ *  when the last came -- one row that opens the thread beside the chat. */
+function ThreadSummary({ podId, channel, root, visible, onOpen }: {
+    podId: string;
+    channel: ChannelDetail;
+    root: Line;
+    visible: boolean;
+    onOpen: () => void;
+}) {
+    const thread = useThread(podId, channel.id, root.id, visible);
+    const seen = new Set<string>();
+    const repliers = [...thread.replies].reverse().filter((reply) => {
+        const key = reply.sender.kind + ":" + (reply.sender.id ?? reply.sender.name ?? "");
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+    }).slice(0, 3);
+    const count = Math.max(root.replyCount, thread.replies.length);
+    const last = root.lastReplyAt ?? thread.replies.at(-1)?.createdAt ?? null;
+    return (
+        <button type="button" className="cline__thread" onClick={onOpen}>
+            {repliers.length > 0 && (
+                <span className="cline__thread-faces" aria-hidden="true">
+                    {repliers.map((reply) => <Avatar key={reply.id} person={reply.sender} size={22} />)}
+                </span>
+            )}
+            <span className="cline__thread-count">{count === 1 ? "1 reply" : count + " replies"}</span>
+            {last && <span className="cline__thread-last">Last reply {lastReplySaid(last)}</span>}
+            <span className="cline__thread-view" aria-hidden="true">View thread</span>
+        </button>
     );
 }
 
 /** What a deleted line says in its place: who removed it, when that was
  *  not who wrote it. */
 function removedNote(line: Line, me: string | null): string {
-    if (!line.removedBy) return "This line was deleted.";
+    if (!line.removedBy) return "This message was deleted.";
     const who = me && line.removedBy.id === me ? "you" : personName(line.removedBy, me);
     return "Removed by " + who + ".";
 }

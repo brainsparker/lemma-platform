@@ -6,6 +6,10 @@ the pod made Public. Only a channel Slack marks as shared with another company
 (Slack Connect), and only a sender from that other company, is an outsider.
 Getting either half wrong answers a colleague as a stranger, or a stranger with
 somebody's access.
+
+The exception is a workspace the pod's organization holds through Lemma's own
+app: there its colleagues are its people, and a group that welcomes outsiders
+answers them as contacts (``slack_workspace_people``).
 """
 
 from __future__ import annotations
@@ -110,6 +114,21 @@ def test_only_the_other_company_in_a_shared_channel_is_answered_as_outsiders(
 # ------------------------------------------------------- at the door
 
 
+@pytest.fixture(autouse=True)
+def held(monkeypatch):
+    """Which workspaces Lemma's app holds for the pod's organization."""
+    teams: set[str] = set()
+
+    async def held_for_pods(uow, team_id, pod_ids):
+        return team_id in teams and set(pod_ids) == {POD}
+
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.services.slack_workspace_people.held_for_pods",
+        held_for_pods,
+    )
+    return teams
+
+
 def _door(group: SurfaceGroup) -> OutsiderDoor:
     async def _get(*, surface_id, external_channel_id):
         return group
@@ -148,6 +167,7 @@ def _slack_surface():
         pod_id=POD,
         surface_type=SurfacePlatform.SLACK,
         config=SurfaceConfig(),
+        matches_tenant=lambda tenant: tenant == HOME,
     )
 
 
@@ -171,6 +191,35 @@ async def test_a_colleague_outside_the_pod_is_not_answered_as_a_stranger():
     found = await _door(_slack_group(shared=True)).group_welcoming(
         surface=_slack_surface(),
         parsed=_said(shared=True, sender_team=HOME),
+        sender=_unknown(),
+    )
+
+    assert found is None
+
+
+@pytest.mark.parametrize("guest", [False, True, None])
+async def test_a_colleague_in_a_workspace_the_organization_holds_is_answered(
+    held, guest
+):
+    """A guest too: the group let them in. Only a private chat asks."""
+    held.add(HOME)
+    group = _slack_group(shared=False)
+
+    found = await _door(group).group_welcoming(
+        surface=_slack_surface(),
+        parsed=_said(shared=False, sender_team=HOME),
+        sender=ResolvedSurfaceUser(external_user_id="U0SENDER", is_guest=guest),
+    )
+
+    assert found == group
+
+
+async def test_a_visitor_named_by_another_team_is_not_the_holding_workspaces(held):
+    """Their own team decides, never the installing one."""
+    held.update({HOME, THEIRS})
+    found = await _door(_slack_group(shared=False)).group_welcoming(
+        surface=_slack_surface(),
+        parsed=_said(shared=False, sender_team=THEIRS),
         sender=_unknown(),
     )
 

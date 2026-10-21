@@ -28,7 +28,8 @@ class LinePreview:
             of its contacts, or one of its agents. There is nobody else -- everybody
             outside the pod is a contact.
         seq (int):
-        text (str): The start of what was said; empty when withheld.
+        text (str): The start of what was said; empty when withheld or deleted.
+        deleted (bool | Unset): Its writer deleted it. Default: False.
         withheld (bool | Unset):  Default: False.
     """
 
@@ -37,6 +38,7 @@ class LinePreview:
     sender: PersonRef
     seq: int
     text: str
+    deleted: bool | Unset = False
     withheld: bool | Unset = False
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -51,6 +53,8 @@ class LinePreview:
 
         text = self.text
 
+        deleted = self.deleted
+
         withheld = self.withheld
 
         field_dict: dict[str, Any] = {}
@@ -64,6 +68,8 @@ class LinePreview:
                 "text": text,
             }
         )
+        if deleted is not UNSET:
+            field_dict["deleted"] = deleted
         if withheld is not UNSET:
             field_dict["withheld"] = withheld
 
@@ -84,6 +90,8 @@ class LinePreview:
 
         text = d.pop("text")
 
+        deleted = d.pop("deleted", UNSET)
+
         withheld = d.pop("withheld", UNSET)
 
         line_preview = cls(
@@ -92,6 +100,7 @@ class LinePreview:
             sender=sender,
             seq=seq,
             text=text,
+            deleted=deleted,
             withheld=withheld,
         )
 

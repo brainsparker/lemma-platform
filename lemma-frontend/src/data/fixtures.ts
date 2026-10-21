@@ -3,7 +3,7 @@ import { readOrigins, type Contact, type ContactReach, type ContactsCap, type We
 import type { Audience, OfferedColumn, TableOpening } from "./public-rows";
 import { NEW_CONVERSATION } from "./types";
 import type { AgentSurfaceResponse, AvailableSurfaceChannelsResponse, SurfaceSetupResponse } from "lemma-sdk";
-import type { Conversation, FileContent, Invitation, LibraryItem, LinkShare, Member, Message, NewOrg, Org, Profile, Pod, PodSource, SharedLink, Surface, Tab } from "./types";
+import type { Conversation, FileContent, Invitation, LibraryItem, LinkShare, Member, Message, NewOrg, Org, Profile, Pod, PodSource, SharedLink, SlackAppWorkspace, SlackManagedWorkspace, SlackPersonLink, Surface, Tab } from "./types";
 import { displayAgentName, isPodDefaultAgent } from "./agent-names";
 import { originOf } from "@/thread/conversation-origin";
 import { sampleListing } from "@/thread/memory-notes";
@@ -1563,6 +1563,8 @@ const ASKS: Conversation = {
 let guidedStartedAt = 0;
 let accountStartedAt = 0;
 let accountPending = "";
+let slackAppWorkspaces: SlackAppWorkspace[] = [];
+let slackManagedWorkspaces: SlackManagedWorkspace[] = [];
 
 /* The authorisation lands on the backend, not here, so in the sample it lands
    on a timer: anything that reads accounts settles a pending one first. Both
@@ -2991,6 +2993,51 @@ export const fixtureSource: PodSource = {
             },
         } as Record<string, unknown>;
     },
+    async slackAppWorkspaces() {
+        await wait(200);
+        return { canManage: true, workspaces: slackAppWorkspaces.slice() };
+    },
+    async saveSlackConfigurationToken(_podId: string, refreshToken: string) {
+        await wait(500);
+        if (!refreshToken.trim().startsWith("xoxe-")) {
+            throw new Error("Slack did not accept that refresh token (invalid_refresh_token). Generate a new configuration token on api.slack.com/apps and paste its refresh token.");
+        }
+        const saved = { teamId: "T0SAMPLE", teamName: "Sample workspace", needsNewToken: false };
+        slackAppWorkspaces = [saved];
+        return saved;
+    },
+    async createSlackApp() {
+        await wait(900);
+        return { appId: "A0SAMPLE", authConfigId: "authcfg-sample" };
+    },
+    async slackManagedWorkspaces() {
+        await wait(200);
+        return slackManagedWorkspaces.slice();
+    },
+    async bindSlackManager() {
+        await wait(500);
+        const bound = { teamId: "T0SAMPLE", teamName: "Sample workspace" };
+        slackManagedWorkspaces = [bound];
+        return bound;
+    },
+    async startSlackSignIn(link: SlackPersonLink) {
+        await wait(300);
+        // The sample has no Slack: come straight back as if it said yes.
+        return `/slack/connect?connected=1&team=${encodeURIComponent(link.teamId)}`;
+    },
+    async slackInstallAvailable() {
+        await wait(200);
+        return true;
+    },
+    async ensureFirstWorkspace() {
+        await wait(400);
+        return { orgId: ORGS[0].id };
+    },
+    async startSlackInstall() {
+        await wait(400);
+        // The sample has no Slack: come straight back as if it said yes.
+        return "/slack/installed?connect=connected&connector=slack";
+    },
     async addCustomApp() {
         await wait(600);
         return "authcfg-sample";
@@ -3134,7 +3181,7 @@ export const fixtureSource: PodSource = {
             { id: "c7", title: WHATSAPP_DM.title, at: "18 Jul", kind: "CHAT", meta: WHATSAPP_DM.metadata ?? {} },
             { id: "c8", title: "hey", at: "Fri 17 Jul", kind: "CHAT", meta: {} },
             { id: "c9", title: ASKS.title, at: "Thu 16 Jul", kind: "CHAT", meta: {} },
-        ].map(({ meta, ...row }) => ({ ...row, origin: originOf(meta, row.kind) }));
+        ].map(({ meta, ...row }, index) => ({ ...row, activityAt: new Date(Date.now() - (index * 9 + 1) * 3_600_000).toISOString(), origin: originOf(meta, row.kind) }));
         const needle = search?.toLowerCase();
         const found = needle ? all.filter((entry) => entry.title.toLowerCase().includes(needle)) : all;
         return cursor === "2" ? { items: found.slice(6), next: null } : { items: found.slice(0, 6), next: found.length > 6 ? "2" : null };
@@ -3395,6 +3442,8 @@ const JORDAN_REF = { kind: "MEMBER", id: "jordan-user", name: "Jordan" };
 const LEM_REF = { kind: "AGENT", id: "a-default", name: "Lem" };
 const TOMAS_REF = { kind: "CONTACT", id: "contact-tomas", name: "Tomás Rivera" };
 const RUIZ_REF = { kind: "CONTACT", id: "contact-dana", name: "Dana Ruiz" };
+/* Somebody on the website's chat who has not said who they are. */
+const VISITOR_REF = { kind: "CONTACT", id: "contact-visitor", name: null };
 
 /** A pod's channels as the API sends them, one of each kind a row has to
  *  draw: your own, fed by your WhatsApp chat, with two questions waiting on
@@ -3456,6 +3505,18 @@ export const SAMPLE_CHANNELS: Record<string, unknown>[] = [
         unread: { lines: 1, mentions: 0, waiting: 0, read_seq: 1 },
         created_at: ago(2 * DAYS), last_line_at: ago(25 * MINUTES), last_seq: 2,
     },
+    {
+        id: "sample-visitor", kind: "CONTACT", title: null, topic: null, person: VISITOR_REF,
+        sources: [{ platform: "WEB", title: "Website" }],
+        source_places: [{ id: "src-web-visitor", platform: "WEB", kind: "PRIVATE", title: "Website", surface_id: null, pending: false, last_inbound_at: ago(40 * MINUTES) }],
+        visibility: "PRIVATE",
+        members: [{ person: VISITOR_REF, role: "guest" }, { person: ME_REF, role: "member" }],
+        me: { joined: true, notify: "ALL", read_seq: 2, role: "member", can_manage: false },
+        agents_answer: true, hand_back_after_hours: 12, assignee: null, status: "open",
+        attention: null,
+        unread: { lines: 0, mentions: 0, waiting: 0, read_seq: 2 },
+        created_at: ago(40 * MINUTES), last_line_at: ago(39 * MINUTES), last_seq: 2,
+    },
 ];
 
 /** Each sample channel's top-level lines, oldest first. */
@@ -3495,6 +3556,10 @@ export const SAMPLE_CHANNEL_LINES: Record<string, Record<string, unknown>[]> = {
     "sample-contact": [
         { id: "c-1", seq: 1, sender: RUIZ_REF, text: "Hi, order 4471 arrived broken. Can I get a refund?", created_at: ago(26 * MINUTES), source_id: "src-mail-ruiz" },
         { id: "c-2", seq: 2, sender: LEM_REF, on_behalf_of: RUIZ_REF, text: "I’m sorry it arrived broken. A refund this size needs someone on the team — I’ve asked them, and they’ll write back here.", created_at: ago(25 * MINUTES), source_id: "src-mail-ruiz" },
+    ],
+    "sample-visitor": [
+        { id: "v-1", seq: 1, sender: VISITOR_REF, text: "Hey, do you ship to Canada?", created_at: ago(40 * MINUTES), source_id: "src-web-visitor" },
+        { id: "v-2", seq: 2, sender: LEM_REF, on_behalf_of: VISITOR_REF, text: "We do. Orders to Canada arrive in five to seven business days.", created_at: ago(39 * MINUTES), source_id: "src-web-visitor" },
     ],
 };
 

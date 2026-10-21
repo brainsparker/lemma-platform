@@ -19,6 +19,10 @@ export type ChannelDetailResponse = {
      * A contact's channel: whether its agents answer the contact.
      */
     agents_answer?: (boolean | null);
+    /**
+     * A group's: whether an answer an agent gives a member here with their own access is read by everybody in it (the default), or by that member alone until they share it. Absent for another kind.
+     */
+    answers_shared?: (boolean | null);
     archived?: boolean;
     /**
      * A contact's channel: who answers them by hand.
@@ -28,6 +32,10 @@ export type ChannelDetailResponse = {
      * A contact's channel: its current case asks for a person, and why. Never set on another kind of channel.
      */
     attention?: (AttentionResponse | null);
+    /**
+     * A contact's channel: its current case, the one `status`, `assignee` and `attention` are read from (`/cases` lists them all).
+     */
+    case_id?: (string | null);
     created_at: string;
     /**
      * A contact's channel: how long the assignee holds the contact after their last line before the agent answers again.
@@ -44,6 +52,10 @@ export type ChannelDetailResponse = {
     last_seq?: number;
     me?: MyMembershipResponse;
     members?: Array<ChannelMemberResponse>;
+    /**
+     * A contact's channel: whether they asked the pod to stop writing to a handle of theirs -- lines to it are not sent until they write from it again (the contact's `identities` say which).
+     */
+    opted_out?: (boolean | null);
     /**
      * Whose channel it is: the member's for a DIRECT one, the contact's for a CONTACT one; absent for a GROUP.
      */

@@ -260,7 +260,7 @@ export type { PodsNamespace } from "./namespaces/pods.js";
 export type { PodSurfacesNamespace } from "./namespaces/pod-surfaces.js";
 export type { ChannelSourcesNamespace } from "./namespaces/channel-sources.js";
 export type { PodLinkShares, PodLinksNamespace } from "./namespaces/pod-links.js";
-export type { ChannelsNamespace } from "./namespaces/channels.js";
+export type { ChannelLineEdit, ChannelsNamespace } from "./namespaces/channels.js";
 export type { ContactsNamespace } from "./namespaces/contacts.js";
 export type { UserSurfacesNamespace } from "./namespaces/user-surfaces.js";
 export type { RecordsNamespace } from "./namespaces/records.js";

@@ -34,6 +34,26 @@ def _parse_response(
 
         return response_200
 
+    if response.status_code == 400:
+        response_400 = ErrorResponse.from_dict(response.json())
+
+        return response_400
+
+    if response.status_code == 403:
+        response_403 = ErrorResponse.from_dict(response.json())
+
+        return response_403
+
+    if response.status_code == 404:
+        response_404 = ErrorResponse.from_dict(response.json())
+
+        return response_404
+
+    if response.status_code == 409:
+        response_409 = ErrorResponse.from_dict(response.json())
+
+        return response_409
+
     if response.status_code == 422:
         response_422 = ErrorResponse.from_dict(response.json())
 
@@ -64,7 +84,8 @@ def sync_detailed(
     """Get Inbox
 
      What is new for the reader across the pod: the badges, the questions
-    waiting on them, and the unread lines naming them -- newest first.
+    waiting on them, the unread lines naming them -- newest first -- and the
+    contacts waiting on a reply.
 
     Args:
         pod_id (UUID):
@@ -96,7 +117,8 @@ def sync(
     """Get Inbox
 
      What is new for the reader across the pod: the badges, the questions
-    waiting on them, and the unread lines naming them -- newest first.
+    waiting on them, the unread lines naming them -- newest first -- and the
+    contacts waiting on a reply.
 
     Args:
         pod_id (UUID):
@@ -123,7 +145,8 @@ async def asyncio_detailed(
     """Get Inbox
 
      What is new for the reader across the pod: the badges, the questions
-    waiting on them, and the unread lines naming them -- newest first.
+    waiting on them, the unread lines naming them -- newest first -- and the
+    contacts waiting on a reply.
 
     Args:
         pod_id (UUID):
@@ -153,7 +176,8 @@ async def asyncio(
     """Get Inbox
 
      What is new for the reader across the pod: the badges, the questions
-    waiting on them, and the unread lines naming them -- newest first.
+    waiting on them, the unread lines naming them -- newest first -- and the
+    contacts waiting on a reply.
 
     Args:
         pod_id (UUID):

@@ -57,7 +57,7 @@ to continue; nothing is replayed
 | `/pods/{pod_id}/agents` | Agent CRUD plus resource permission replacement |
 | `/pods/{pod_id}/conversations` | Create/list/read/update, messages, approvals, send, stream, stop |
 | `/organizations/{org}/agent-runtime/profiles` | Discover/create model runtime profiles |
-| `/me/runtime/agent-hosts...`, `/agent-host/link` | Agent Host pairing and management; the host's link WebSocket (commands, events, harnesses, Lemma MCP) |
+| `/me/runtime/agent-hosts...`, `/agent-host/link`, `/agent-host/transfers/{id}`, `/agent-host/runs/{run_id}/blobs/{sha256}` | Agent Host pairing and management; the host's link WebSocket (commands, events, harnesses, Lemma MCP), and the host-authenticated HTTP routes its bulk bytes take instead (file chunks, event images) |
 | `/tools/*` | Server-side web search and feedback endpoints used by runtimes |
 | `/public/widgets/serve...`, `/pods/{pod}/widgets...` | Render/submit a tool widget and mint an authenticated embed URL (`/widgets/serve...` is a legacy alias until 2026-11-08) |
 

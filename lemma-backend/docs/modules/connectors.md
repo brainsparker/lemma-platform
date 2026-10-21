@@ -66,6 +66,31 @@ sequenceDiagram
     API->>DB: encrypt credentials + connect account
 ```
 
+Storing a grant -- a new account, or an existing one granted again -- emits
+`ConnectorAccountConnected` (`contracts/facts.py`) in the same transaction,
+for other modules to subscribe a work kind to. It carries the account, the
+install, the connector, the organization and the person; the `purpose` the
+request's starter recorded (`own_apps.start_authorization(purpose=...)`), so a
+subscriber acts only on the grants it started; `renewed`; and `browser_bound`,
+whether the browser that came back carried the starter's own Lemma session.
+The callback is completed by `state` alone, so a consent link somebody was sent
+stores *their* grant on the sender's account; anything that treats a grant as
+proof of who the provider's user is requires `browser_bound`, which a spent
+request also keeps (`own_apps.grant_is_browser_bound`). A request with a
+purpose renews an account its person already has connected for the same
+provider identity instead of refusing it as `ACCOUNT_ALREADY_CONNECTED`: its
+starter asked for a fresh grant. `start_authorization(omit_authorize_params=)`
+drops some of the install's own authorize parameters for one request (Slack's
+`user_scope`, for installing Lemma's app with its bot alone), and
+`own_apps.ensure_system_install` finds or makes an organization's
+`SYSTEM_DEFAULT` install the way the web app's Connect does. Two first installs
+of one connector at once collide on being its default, which is a
+`ConnectorConflictError` like a taken name, never a 500. A refusal on the
+provider's own page (`?error=`) returns to the request's recorded return path,
+like a success, rather than to the app root. The analytics
+`connector.connected` event is a projection, not this contract. Credential
+accounts made without an OAuth round trip do not emit it.
+
 For execution, a short UoW resolves the auth config, operation, account, and
 decrypted credential values into a session-free DTO. The provider call happens
 outside a UoW; a final short UoW marks accounts for reauthentication when an

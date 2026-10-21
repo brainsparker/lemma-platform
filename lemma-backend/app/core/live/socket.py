@@ -17,7 +17,7 @@ import contextlib
 from collections.abc import Awaitable, Callable
 from uuid import UUID
 
-from fastapi import WebSocket, WebSocketDisconnect, status
+from fastapi import WebSocket, WebSocketDisconnect
 from opentelemetry import metrics
 from sqlalchemy.exc import SQLAlchemyError
 from supertokens_python.exceptions import SuperTokensError
@@ -29,10 +29,9 @@ from supertokens_python.recipe.session.interfaces import SessionContainer
 
 from app.core.live.connection import LiveConnection
 from app.core.live.limits import SLOT_REFRESH_SECONDS
+from app.core.live.pod_access import close_code_for
 from app.core.live.sessions import LiveSession, open_sockets
 from app.core.live.protocol import (
-    CLOSE_FORBIDDEN,
-    CLOSE_NOT_FOUND,
     CLOSE_UNAUTHENTICATED,
     MAX_CLIENT_FRAME_BYTES,
     PONG_FRAME,
@@ -124,15 +123,6 @@ async def accept_and_authenticate(websocket: WebSocket) -> LiveSession | None:
     return _session_of(session)
 
 
-def close_code_for(status_code: int) -> int:
-    """Map a domain HTTP status to a websocket close code."""
-    if status_code == 404:
-        return CLOSE_NOT_FOUND
-    if status_code == 403:
-        return CLOSE_FORBIDDEN
-    return status.WS_1008_POLICY_VIOLATION
-
-
 class LiveDispatcher:
     """Acts on one socket's client frames, against the registered topics and
     calls."""
@@ -144,7 +134,13 @@ class LiveDispatcher:
         self._registry = registry or live_registry()
 
     async def handle(self, connection: LiveConnection, raw: str) -> None:
-        if len(raw) > MAX_CLIENT_FRAME_BYTES:
+        # Bytes, as the limit says: a character may take four. The length in
+        # characters is a floor of it, checked first so a huge frame is not
+        # encoded only to be refused.
+        if (
+            len(raw) > MAX_CLIENT_FRAME_BYTES
+            or len(raw.encode("utf-8", errors="surrogatepass")) > MAX_CLIENT_FRAME_BYTES
+        ):
             connection.offer_error(None, LiveErrorCode.INVALID, "Frame too large.")
             return
         try:
@@ -277,6 +273,9 @@ async def _receive(
         raw = message.get("text")
         if raw is None:
             payload = message.get("bytes")
+            if payload and len(payload) > MAX_CLIENT_FRAME_BYTES:
+                # Only enough of it to be refused is decoded; ``handle`` refuses it.
+                payload = payload[: MAX_CLIENT_FRAME_BYTES + 1]
             raw = payload.decode("utf-8", errors="replace") if payload else None
         if handle is None or raw is None:
             continue

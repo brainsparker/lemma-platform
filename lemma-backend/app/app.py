@@ -531,10 +531,13 @@ app = create_app()
 if __name__ == "__main__":
     import uvicorn
 
+    from app.core.server_limits import WS_MAX_BYTES
+
     uvicorn.run(
         "app.app:app",
         host="0.0.0.0",
         port=8000,
         reload=True,
+        ws_max_size=WS_MAX_BYTES,
         access_log=False,
     )

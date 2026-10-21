@@ -71,6 +71,7 @@ from app.modules.channels.infrastructure.deliveries import (
     DeliveryRepository,
 )
 from app.modules.channels.infrastructure.models import (
+    ChannelDeliveryAttemptModel,
     ChannelMessageDeliveryModel,
     ExternalAccountModel,
 )
@@ -209,6 +210,45 @@ async def test_a_refusal_is_given_up_at_once_not_after_every_retry(
     assert (dead.status, dead.attempts) == (DeliveryStatus.DEAD, 1)
     assert dead.next_attempt_at is None
     assert "refused" in (dead.reason or "")
+
+
+@pytest.mark.usefixtures("telegram_webhooks")
+async def test_a_bot_whose_token_is_refused_says_so_on_its_surface(
+    authenticated_client,
+    db_session,
+    test_pod,
+    fixed_test_user,
+    fake_telegram,
+):
+    """A 401 refuses the bot, not the message: the send is ``DEAD`` with the
+    platform's answer kept on it, and the surface says why until a send
+    goes through again."""
+    delivery_id = await _planned_answer(
+        authenticated_client,
+        db_session,
+        test_pod,
+        fixed_test_user,
+        fake_telegram,
+        "token-refused-bot",
+    )
+    fake_telegram.unauthorized |= {"sendRichMessage", "sendMessage"}
+
+    await _deliver(delivery_id)
+
+    dead = await _row(delivery_id)
+    assert dead.status is DeliveryStatus.DEAD
+    async with async_session_maker() as session:
+        answered = await session.scalar(
+            select(ChannelDeliveryAttemptModel.provider_status).where(
+                ChannelDeliveryAttemptModel.delivery_id == delivery_id
+            )
+        )
+    assert answered == "401"
+    surface = f"/pods/{test_pod['id']}/surfaces/token-refused-bot"
+    shown = (await authenticated_client.get(surface)).json()
+    assert shown["status"] == "ACTIVE"
+    assert "refused the bot's credentials" in shown["problem"]
+    assert (await authenticated_client.get(f"{surface}/setup")).json()["ready"] is False
 
 
 @pytest.mark.usefixtures("telegram_webhooks")

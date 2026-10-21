@@ -17,7 +17,6 @@ from app.modules.channels.api.message_schemas import (
     message_agents,
     message_people,
     message_response,
-    wrote,
 )
 from app.modules.channels.api.schemas import (
     AgentNames,
@@ -48,6 +47,7 @@ from app.modules.channels.infrastructure.lines import LineRepository
 from app.modules.channels.infrastructure.members import MemberRepository
 from app.modules.channels.infrastructure.names import Names
 from app.modules.channels.infrastructure.source_repository import SourceRepository
+from app.modules.contacts.contracts.outreach import opted_out
 
 
 async def _named(
@@ -82,6 +82,7 @@ def _preview(
         sender=shown.sender,
         text=(shown.text or "")[:PREVIEW_CHARS],
         withheld=hidden,
+        deleted=line.is_deleted,
         created_at=line.created_at,
     )
 
@@ -161,6 +162,11 @@ async def channel_detail(
     )
     return ChannelDetailResponse(
         **row.model_dump(),
+        opted_out=(
+            await opted_out(uow, pod_id=channel.pod_id, contact_id=channel.contact_id)
+            if channel.contact_id is not None
+            else None
+        ),
         source_places=[
             source_response(source)
             for source in await SourceRepository(uow.session).of_channel(channel.id)
@@ -201,17 +207,15 @@ async def lines_response(
     channel: Channel,
     lines: Sequence[ChannelMessage],
 ) -> list[ChannelMessageResponse]:
-    """Lines of one channel, as the caller reads them -- their own with where
-    each went outside Lemma."""
+    """Lines of one channel, as the caller reads them -- each with where it
+    went outside Lemma."""
     names, agents = await _named(
         uow,
         caller.pod_id,
         people=[person for line in lines for person in message_people(line)],
         agents=[agent for line in lines for agent in message_agents(line)],
     )
-    sent = await deliveries_of(
-        uow, [line.id for line in lines if wrote(line, caller.user_id)]
-    )
+    sent = await deliveries_of(uow, [line.id for line in lines])
     return [
         message_response(
             line,
@@ -228,9 +232,12 @@ async def lines_response(
 async def deliveries_of(
     uow: SqlAlchemyUnitOfWork, message_ids: Sequence[UUID]
 ) -> dict[UUID, list[Delivery]]:
-    """The sends of these lines, by line: one read for a page."""
+    """Where these lines went outside Lemma, by line: one read for a page.
+    Pushes to members are not among them."""
     by_line: dict[UUID, list[Delivery]] = {}
-    for delivery in await DeliveryRepository(uow.session).of_messages(message_ids):
+    for delivery in await DeliveryRepository(uow.session).of_messages(
+        message_ids, to_places=True
+    ):
         by_line.setdefault(delivery.message_id, []).append(delivery)
     return by_line
 

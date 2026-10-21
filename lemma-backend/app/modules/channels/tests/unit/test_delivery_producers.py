@@ -89,7 +89,7 @@ PRODUCERS: dict[str, Producer] = {
         f"{_CHANNELS}/test_heard_and_carried_e2e.py"
         "::test_a_member_line_carried_to_a_mirrored_group_plans_its_place_row",
     ),
-    "agent/services/channel_answers.py:_post_answer": Producer(
+    "agent/services/channel_answer_lines.py:_post_line": Producer(
         Sends.PLACE,
         f"{_CHANNELS}/test_heard_and_carried_e2e.py"
         "::test_an_agent_answer_to_a_carried_group_line_follows_it_to_the_place",
@@ -135,6 +135,11 @@ PRODUCERS: dict[str, Producer] = {
     "agent_surfaces/services/direct_messages.py:tell_member": Producer(
         Sends.NOTE,
         f"{_PRODUCERS_E2E}::test_a_notice_is_a_note_in_their_channel_and_never_sent",
+    ),
+    "agent_surfaces/services/opt_out_notes.py:note_opt_out": Producer(
+        Sends.NOTE,
+        f"{_SURFACES}/test_contact_care_e2e.py"
+        "::test_stop_unsubscribes_the_address_it_came_from",
     ),
 }
 

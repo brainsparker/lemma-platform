@@ -57,7 +57,7 @@ test("a viewer reads and is told why they cannot write; a user writes but not to
     const toContact = { kind: "CONTACT" as const, me: { canManage: false } };
     const viewer = channelAbilities(readAbilities(["channel.read", "contact.read"]), group, "Acme");
     assert.equal(viewer.write, false);
-    assert.match(viewer.writeRefused ?? "", /You can read this channel/);
+    assert.match(viewer.writeRefused ?? "", /You can read this chat/);
     const user = readAbilities(["channel.write"]);
     assert.equal(channelAbilities(user, group, "Acme").write, true);
     const userToContact = channelAbilities(user, toContact, "Acme");

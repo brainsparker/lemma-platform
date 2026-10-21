@@ -13,7 +13,14 @@ from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, StringConstraints
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    StringConstraints,
+)
 
 from app.modules.channels.contracts.people import PersonRef
 from app.modules.channels.contracts.source_settings import SourceSettingsResponse
@@ -38,16 +45,41 @@ Names = Mapping[Principal, str | None]
 #: What to call each agent a page names.
 AgentNames = Mapping[UUID, str]
 
+
+def no_nul(value: str) -> str:
+    """Text a person sends is stored as Postgres text, which cannot hold a NUL
+    character: refused here, as the request's fault, not the database's."""
+    if "\x00" in value:
+        raise ValueError("Text cannot contain a NUL character")
+    return value
+
+
+#: Any text a person sends: kept whole, but never with a NUL in it.
+UserText = Annotated[str, AfterValidator(no_nul)]
+
 Title = Annotated[
-    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)
-]
-Topic = Annotated[str, StringConstraints(strip_whitespace=True, max_length=500)]
-Platform = Annotated[
     str,
-    StringConstraints(
-        strip_whitespace=True, to_upper=True, min_length=1, max_length=20
-    ),
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=255),
+    AfterValidator(no_nul),
 ]
+Topic = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, max_length=500),
+    AfterValidator(no_nul),
+]
+
+
+def _upper(value: object) -> object:
+    return value.strip().upper() if isinstance(value, str) else value
+
+
+#: Where a member may ask to be told outside the app: email, or a platform.
+Platform = Annotated[
+    Literal["EMAIL", "SLACK", "TEAMS", "WHATSAPP", "TELEGRAM", "RESEND"],
+    BeforeValidator(_upper),
+]
+#: A line's number, as Postgres keeps it (``bigint``).
+MAX_SEQ = 2**63 - 1
 
 
 # -- reading --------------------------------------------------------------------
@@ -78,8 +110,9 @@ class UnreadResponse(BaseModel):
     lines: int = Field(
         default=0,
         description=(
-            f"New lines since the reader last read it, in channels they joined; "
-            f"stops at {UNREAD_CAP}."
+            f"New lines since the reader last read it, in channels they joined "
+            f"-- and, in one they are not in, while a line naming them is "
+            f"unread, from that line; stops at {UNREAD_CAP}."
         ),
     )
     mentions: int = Field(default=0, description="Unread lines naming the reader.")
@@ -98,8 +131,11 @@ class LinePreview(BaseModel):
     id: UUID
     seq: int
     sender: PersonRef
-    text: str = Field(description="The start of what was said; empty when withheld.")
+    text: str = Field(
+        description="The start of what was said; empty when withheld or deleted."
+    )
     withheld: bool = False
+    deleted: bool = Field(default=False, description="Its writer deleted it.")
     created_at: datetime
 
 
@@ -128,6 +164,14 @@ class ChannelResponse(BaseModel):
     created_at: datetime
     last_line_at: datetime
     last_seq: int = 0
+    answers_shared: bool | None = Field(
+        default=None,
+        description=(
+            "A group's: whether an answer an agent gives a member here with "
+            "their own access is read by everybody in it (the default), or by "
+            "that member alone until they share it. Absent for another kind."
+        ),
+    )
     # -- a contact's channel: the inbox -------------------------------------
     agents_answer: bool | None = Field(
         default=None,
@@ -138,6 +182,13 @@ class ChannelResponse(BaseModel):
         description=(
             "A contact's channel: how long the assignee holds the contact after "
             "their last line before the agent answers again."
+        ),
+    )
+    case_id: UUID | None = Field(
+        default=None,
+        description=(
+            "A contact's channel: its current case, the one `status`, "
+            "`assignee` and `attention` are read from (`/cases` lists them all)."
         ),
     )
     assignee: PersonRef | None = Field(
@@ -193,6 +244,14 @@ class MyMembershipResponse(BaseModel):
 
 
 class ChannelDetailResponse(ChannelResponse):
+    opted_out: bool | None = Field(
+        default=None,
+        description=(
+            "A contact's channel: whether they asked the pod to stop writing "
+            "to a handle of theirs -- lines to it are not sent until they "
+            "write from it again (the contact's `identities` say which)."
+        ),
+    )
     source_places: list[ChannelSourceResponse] = Field(default_factory=list)
     members: list[ChannelMemberResponse] = Field(default_factory=list)
     me: MyMembershipResponse = Field(default_factory=MyMembershipResponse)
@@ -237,8 +296,8 @@ class ChannelCreateRequest(BaseModel):
 class ChannelUpdateRequest(BaseModel):
     """Absent is unchanged; ``null`` clears where clearing means something.
 
-    A group takes ``title``, ``topic``, ``visibility``, ``archived``. A
-    contact's channel takes ``agents_answer``, ``hand_back_after_hours``,
+    A group takes ``title``, ``topic``, ``visibility``, ``archived``,
+    ``answers_shared``. A contact's channel takes ``agents_answer``, ``hand_back_after_hours``,
     ``status``, ``assignee`` (and needs ``contact.message``). Anything else
     for the kind is 409.
     """
@@ -247,6 +306,14 @@ class ChannelUpdateRequest(BaseModel):
     topic: Topic | None = None
     visibility: Visibility | None = None
     archived: bool | None = None
+    answers_shared: bool | None = Field(
+        default=None,
+        description=(
+            "A group's: on, agents' answers made with the asker's access are "
+            "read by everybody here; off, by the asker alone until they share "
+            "one. Applies to answers posted from then on."
+        ),
+    )
     agents_answer: bool | None = Field(
         default=None,
         description="On also hands the contact back now: nobody is assigned.",
@@ -260,7 +327,7 @@ class ChannelUpdateRequest(BaseModel):
 
 
 #: The fields of a PATCH each kind of channel takes.
-GROUP_FIELDS = frozenset({"title", "topic", "visibility", "archived"})
+GROUP_FIELDS = frozenset({"title", "topic", "visibility", "archived", "answers_shared"})
 CONTACT_FIELDS = frozenset(
     {"agents_answer", "hand_back_after_hours", "status", "assignee"}
 )
@@ -270,6 +337,7 @@ NOT_CLEARABLE = frozenset(
         "title",
         "visibility",
         "archived",
+        "answers_shared",
         "agents_answer",
         "hand_back_after_hours",
         "status",
@@ -278,6 +346,8 @@ NOT_CLEARABLE = frozenset(
 
 
 class MembersAddRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     people: list[UUID] = Field(
         default_factory=list, max_length=200, description="Members, by user id."
     )
@@ -299,7 +369,16 @@ class MyMembershipUpdate(BaseModel):
 
 
 class ReadRequest(BaseModel):
-    seq: int = Field(ge=0, description="The newest line the reader has seen.")
+    seq: int = Field(
+        ge=0, le=MAX_SEQ, description="The newest line the reader has seen."
+    )
+    thread_root_id: UUID | None = Field(
+        default=None,
+        description=(
+            "Read in this thread: its replies (and its first line) up to `seq` "
+            "are seen. Without it, the timeline is: thread replies are not."
+        ),
+    )
 
 
 # -- mappers --------------------------------------------------------------------
@@ -351,6 +430,7 @@ def _inbox_fields(channel: Channel, names: Names) -> dict[str, object]:
     return {
         "agents_answer": channel.agents_answer,
         "hand_back_after_hours": channel.hand_back_after_hours,
+        "case_id": channel.case_id,
         "assignee": (
             ref(Principal.member(channel.assignee_user_id), names)
             if channel.assignee_user_id
@@ -382,6 +462,9 @@ def channel_response(
         created_at=channel.created_at,
         last_line_at=channel.last_line_at,
         last_seq=channel.last_seq,
+        answers_shared=(
+            channel.answers_shared if channel.kind is ChannelKind.GROUP else None
+        ),
         sources=[
             SourceSummary(platform=source.platform, title=source.title)
             for source in sources or []

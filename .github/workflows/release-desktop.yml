@@ -622,6 +622,9 @@ jobs:
       - name: Publish the update feed
         shell: bash
         env:
+          # Set only while the update signing key is rotated (desktop/README.md,
+          # "Rotating the update signing key"); the check then requires the mismatch.
+          LEMMA_UPDATER_KEY_ROTATION: ${{ vars.LEMMA_UPDATER_KEY_ROTATION }}
           VERSION: ${{ steps.version.outputs.version }}
           REPOSITORY: ${{ github.repository }}
           PRERELEASE: ${{ github.event.release.prerelease }}

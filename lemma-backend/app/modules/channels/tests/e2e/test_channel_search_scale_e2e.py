@@ -6,8 +6,15 @@ newest page is found by walking the pod's lines back from the newest
 (``ix_channel_messages_pod_time``) until the page is full -- never by finding
 every match and sorting them, which is what the search did before that
 index: every one of the hundred thousand lines. A rare word, in a few lines
-across the whole history, is found through its own posting list. Rank and
-snippet come back with every hit, and the newest is first.
+across the whole history, is found through its own posting list -- typed in
+full or only its start. Rank and snippet come back with every hit, and the
+newest is first.
+
+Each line carries one of a few hundred other words too, as real lines do:
+which plan is cheaper is the planner's call from the words' statistics, and
+it sizes a word given by its start (``zebrac:*``) from the commonest
+words it has counted -- with only a handful of them, it guesses, and guesses
+a rare word common.
 
 Plan shape is the check (``channel_scale``): the lines each search's
 statements touch, explained again with their parameters. The p95 beside it
@@ -51,7 +58,7 @@ async def _seed(db_session, pod: Pod) -> UUID:
           (id, channel_id, pod_id, seq, sender_kind, sender_user_id, body,
            created_at, updated_at)
         SELECT gen_random_uuid(), :channel, :pod, s, 'MEMBER', :owner,
-               'line ' || s
+               'line ' || s || ' word' || (s % 300)
                  || CASE WHEN s % {COMMON_EVERY} = 0 THEN ' {COMMON}' ELSE '' END
                  || CASE WHEN s % {RARE_EVERY} = 7 THEN ' {RARE}' ELSE '' END,
                now() - ({LINES} - s) * interval '{_SPACING_MINUTES} minutes',
@@ -100,6 +107,7 @@ async def test_search_reads_back_from_the_newest_not_every_match(
     for name, read, ceiling in (
         ("a common word", common, LINES_CEILING),
         ("a rare word", rare, LINES_CEILING),
+        ("a rare word part typed", _search(pod, RARE[:6]), LINES_CEILING),
     ):
         shape = await shape_of(db_manager.engine, read)
         print(f"\n  {name}:\n{shape.describe()}")

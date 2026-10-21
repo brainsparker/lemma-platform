@@ -8,6 +8,10 @@ export type InboxTotals = {
      */
     channels: number;
     /**
+     * Contacts waiting on a reply: asking for a person, or assigned to the reader and written to last by the contact.
+     */
+    contacts?: number;
+    /**
      * Unread lines naming the reader.
      */
     mentions: number;

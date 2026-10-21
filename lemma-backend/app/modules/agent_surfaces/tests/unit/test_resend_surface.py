@@ -13,6 +13,8 @@ from app.modules.agent_surfaces.platforms.resend.inbound import (
 )
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
+    ConversationType,
+    ParsedInboundSurfaceEvent,
     SurfaceConfig,
     SurfaceCredentialMode,
     SurfacePlatform,
@@ -94,6 +96,57 @@ async def test_resend_send_email_builds_resend_api_payload():
     assert "<strong style=" in body["html"] and ">hi</strong>" in body["html"]
     assert body["headers"]["In-Reply-To"] == "<m1@example.com>"
     assert body["attachments"][0]["filename"] == "note.txt"
+    # The default body is a readable column, not the full window.
+    assert "max-width:640px" in body["html"]
+    assert "margin:0 auto" in body["html"]
+
+
+@pytest.mark.asyncio
+async def test_a_full_width_reply_reaches_the_send_uncapped():
+    """The renderer could always lift the width cap; nothing could ask it to.
+
+    The request rides the same metadata seam as the sender name and the
+    attachments, so a caller that knows this message wants the window can say
+    so without a new argument on every signature between here and there.
+    """
+    service = ResendPlatformService(
+        {"api_key": "re_test", "from_address": "pod-1@ops.lemma.work"}
+    )
+    event = ParsedInboundSurfaceEvent(
+        platform=SurfacePlatform.RESEND,
+        conversation_type=ConversationType.EXTERNAL_DM,
+        external_thread_id="<root@example.com>",
+        message_text="the question",
+        reply_target={"recipient_email": "bob@example.com", "subject": "Standup"},
+    )
+
+    with platform_http(answer_json({"id": "email-1"})) as http:
+        await service.send_message(event, "hello", {"full_width": True})
+
+    html = http.json_of(http.requests[-1])["html"]
+    assert "max-width:none" in html
+    assert "max-width:640px" not in html
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asked", ["false", "true", 1, None])
+async def test_only_a_real_true_lifts_the_width_cap(asked):
+    """The metadata is untyped: a string "false" must not read as yes."""
+    service = ResendPlatformService(
+        {"api_key": "re_test", "from_address": "pod-1@ops.lemma.work"}
+    )
+    event = ParsedInboundSurfaceEvent(
+        platform=SurfacePlatform.RESEND,
+        conversation_type=ConversationType.EXTERNAL_DM,
+        external_thread_id="<root@example.com>",
+        message_text="the question",
+        reply_target={"recipient_email": "bob@example.com", "subject": "Standup"},
+    )
+
+    with platform_http(answer_json({"id": "email-1"})) as http:
+        await service.send_message(event, "hello", {"full_width": asked})
+
+    assert "max-width:640px" in http.json_of(http.requests[-1])["html"]
 
 
 async def test_a_resend_surface_without_an_address_is_refused(monkeypatch):
@@ -1382,6 +1435,51 @@ async def test_the_name_borrows_the_suffix_its_address_already_carries(monkeypat
     assert name == f"resend-assistant-{suffix}", (
         f"name {name!r} and address {address!r} carry different suffixes"
     )
+
+
+async def test_a_chosen_name_survives_a_taken_address(monkeypatch):
+    """Only the address is a candidate when the caller named the surface.
+
+    The plain address can be held elsewhere -- another pod on a deployment-wide
+    domain -- which the index reports as an IntegrityError. That retry used to
+    suffix the name too, so a caller who asked for `support` got
+    `support-p7k3`, and the bundle applier, keyed on the name, could not find
+    it on the next apply.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    from app.modules.agent_surfaces.services import email_surface_provisioning
+    from app.modules.agent_surfaces.config import surface_settings
+
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.lemma.work")
+
+    calls: list[tuple[str, str]] = []
+
+    async def create(**kwargs):
+        calls.append((kwargs["name"], kwargs["surface_identity_email"]))
+        if len(calls) == 1:
+            raise IntegrityError("INSERT", {}, Exception("address taken"))
+        return SimpleNamespace(id=uuid4(), name=kwargs["name"])
+
+    service = _minting_service()
+    service.create_surface = AsyncMock(side_effect=create)
+
+    surface = await email_surface_provisioning._insert_on_first_free_address(
+        service,
+        _minting_uow().session,
+        pod_id=uuid4(),
+        agent_id=uuid4(),
+        agent_name="Ops",
+        pod_name="Acme",
+        name="support",
+        name_is_chosen=True,
+        config=SurfaceConfig(),
+        credential_mode=SurfaceCredentialMode.SYSTEM,
+    )
+
+    assert surface is not None
+    assert [name for name, _ in calls] == ["support", "support"]
+    assert calls[1][1] != calls[0][1], "the address did not advance"
 
 
 async def test_a_database_failure_degrades_rather_than_killing_the_creation(

@@ -14,6 +14,7 @@ from lemma_sdk.live import (
     LiveReady,
     LiveResync,
     LiveSession,
+    LiveTopicEvent,
     live_ws_url,
     watch_changes,
 )
@@ -97,6 +98,28 @@ def test_session_tracks_each_subscriptions_cursor_across_reconnects() -> None:
 
     resumed = [json.loads(f).get("since") for f in session.subscribe_frames()]
     assert resumed == ["c.4", "c.9"]
+
+
+def test_session_carries_a_channel_topics_events_and_resumes_after_them() -> None:
+    session = LiveSession()
+    channel = session.add(topic="channel", params={"channel_id": "C"})
+    inbox = session.add(topic="inbox")
+    assert [json.loads(f) for f in session.subscribe_frames()] == [
+        {"channel_id": "C", "op": "subscribe", "id": channel, "topic": "channel"},
+        {"op": "subscribe", "id": inbox, "topic": "inbox"},
+    ]
+    line = {"type": "line.created", "message": {"id": "m", "text": "hi"}}
+    _, events = session.handle(
+        json.dumps({"type": "events", "id": channel, "cursor": "7:3", "events": [line]})
+    )
+    assert events == [LiveTopicEvent(channel, "line.created", line, "7:3")]
+    counts = {"type": "inbox.updated", "channel_id": "C"}
+    _, events = session.handle(
+        json.dumps({"type": "events", "id": inbox, "cursor": None, "events": [counts]})
+    )
+    assert events == [LiveTopicEvent(inbox, "inbox.updated", counts, "")]
+    # Reconnected, the channel resumes after what it was sent.
+    assert json.loads(session.subscribe_frames()[0])["since"] == "7:3"
 
 
 def test_session_drops_a_refused_or_revoked_subscription() -> None:

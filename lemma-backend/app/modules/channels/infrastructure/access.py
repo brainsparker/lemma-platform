@@ -66,6 +66,8 @@ def shown_in_full_to(viewer: Viewer) -> ColumnElement[bool]:
         # An agent acting for a contact used nobody's own access.
         message.on_behalf_contact_id.is_not(None),
         message.on_behalf_user_id == viewer.user_id,
+        # Shared with the channel by the member it was made for.
+        message.shared_at.is_not(None),
         and_(
             channel.kind == ChannelKind.DIRECT.value,
             channel.member_user_id == viewer.user_id,

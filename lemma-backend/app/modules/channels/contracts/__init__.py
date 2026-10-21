@@ -148,6 +148,7 @@ __all__ = [
     "named_in",
     "names_of",
     "post",
+    "read_upto",
     "readable",
     "revise_line",
     "source_by_id",
@@ -209,6 +210,16 @@ async def member_of(
 ) -> Member | None:
     """Somebody's membership of a channel -- how they hear of it -- if they have one."""
     return await MemberRepository(uow.session).of_principal(channel_id, principal)
+
+
+async def read_upto(
+    uow: SqlAlchemyUnitOfWork, *, channel_id: UUID, user_id: UUID
+) -> int:
+    """How far a member has read the channel: the ``seq`` of the last line
+    they read there, ``0`` if none."""
+    return await MemberRepository(uow.session).read_seq(
+        channel_id=channel_id, user_id=user_id
+    )
 
 
 async def post(

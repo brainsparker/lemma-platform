@@ -11,6 +11,9 @@ from app.core.api.callback_page import (
     render_callback_page,
     safe_provider_error,
 )
+from app.modules.agent_surfaces.api.controllers.slack_manager_lane import (
+    answer_manager,
+)
 from app.modules.agent_surfaces.config import (
     surface_settings,
 )
@@ -147,7 +150,7 @@ async def handle_platform_webhook(
     # Authenticity failures raise SurfaceWebhookAuthenticationError (a DomainError),
     # translated to the right status by the global handler.
     security_service.assert_platform_request_allowed(resolved.value)
-    receiver_surface_ids = await _verify_inbound_request(
+    verified = await _verify_inbound_request(
         platform=source,
         headers=headers,
         raw_body=raw_body,
@@ -155,6 +158,19 @@ async def handle_platform_webhook(
         security_service=security_service,
         uow_factory=uow_factory,
     )
+    receiver_surface_ids = verified.receivers
+
+    if verified.is_managers:
+        # Lemma's own app managing the workspace: its own lane, decided here
+        # and only here, before onboarding and before `accept()` -- nothing it
+        # receives is stored as an inbound message or reaches group updates.
+        return await answer_manager(
+            payload,
+            source_event_id=webhook_source_event_id(
+                source, payload, raw_body, receiver=SHARED_PLATFORM_RECEIVER
+            ),
+            uow_factory=uow_factory,
+        )
 
     if resolved is SurfacePlatform.WHATSAPP and await _published_whatsapp_verification(
         payload, uow_factory

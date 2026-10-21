@@ -30,10 +30,15 @@ from app.modules.datastore.contracts.contact_rows import (
     contact_owned_tables,
 )
 from app.modules.function.contracts.contact_functions import (
+    CONTACT_HANDLES_KEY,
     CONTACT_INPUT_KEY,
     ContactFunction,
     contact_functions,
 )
+
+
+#: Inputs the platform fills for the contact: not the model's to mention.
+_SET_BY_THE_PLATFORM = frozenset({CONTACT_INPUT_KEY, CONTACT_HANDLES_KEY})
 
 
 async def outsider_brief(
@@ -156,7 +161,7 @@ def render_contact_brief(
         fields = sorted(
             str(key)
             for key in (properties if isinstance(properties, dict) else {})
-            if key != CONTACT_INPUT_KEY
+            if key not in _SET_BY_THE_PLATFORM
         )
         lines.append(
             f"- `contact_function` name={function.name!r}"

@@ -1,11 +1,11 @@
 "use client";
 
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { LineView } from "./line";
 import type { Answering } from "./live";
 import { lineDays, type ChannelDetail, type Line } from "./model";
 import { useSeenSeq } from "./read-state";
-import { firstUnread, newSince, sayNewLines, unreadBeforeHeld } from "./timeline-model";
+import { answeredOutOfPlace, continues, firstUnread, newSince, sayNewLines, unreadBeforeHeld } from "./timeline-model";
 
 /** How many older pages "Jump to unread" reads back, at most, to reach the
  *  first unread line. */
@@ -27,7 +27,7 @@ const JUMP_PAGES = 8;
  *  marks the channel read. Only new lines are said to a screen reader
  *  (`announced`), not the history as it loads. */
 export function Timeline({ podId, channel, lines, loading, failed, hasOlder, loadingOlder, onOlder, onRetry, onThread, pin, visible,
-    mayWrite, answering, agentName, highlight, announced, onProgress, unreadFrom = null, me = null }: {
+    mayWrite, answering, agentName, highlight, announced, onProgress, unreadFrom = null, me = null, intro = null }: {
     podId: string;
     channel: ChannelDetail;
     lines: Line[];
@@ -52,12 +52,15 @@ export function Timeline({ podId, channel, lines, loading, failed, hasOlder, loa
      *  mark goes after it, and stays put while they read. */
     unreadFrom?: number | null;
     me?: string | null;
+    /** What the chat is, at the very top once there is nothing older. */
+    intro?: ReactNode;
 }) {
     const box = useRef<HTMLDivElement>(null);
     const atEnd = useRef(true);
     const [endState, setEndState] = useState(true);
     const fromEnd = useRef<number | null>(null);
     const days = useMemo(() => lineDays(lines), [lines]);
+    const byId = useMemo(() => new Map(lines.map((line) => [line.id, line])), [lines]);
     const newest = lines.at(-1)?.id ?? null;
     const newestSeq = lines.at(-1)?.seq ?? 0;
     const seenMax = useSeenSeq(box, lines.length + ":" + newest, visible);
@@ -102,7 +105,7 @@ export function Timeline({ podId, channel, lines, loading, failed, hasOlder, loa
         if (!highlight || placed.current === highlight) return;
         const element = box.current?.querySelector<HTMLElement>("#line-" + CSS.escape(highlight));
         if (!element) return;
-        element.scrollIntoView({ block: "center" });
+        element.scrollIntoView({ block: "center", inline: "nearest" });
         placed.current = highlight;
         atEnd.current = false;
         setEndState(false);
@@ -113,7 +116,7 @@ export function Timeline({ podId, channel, lines, loading, failed, hasOlder, loa
         if (!jumping) return;
         const element = unread ? box.current?.querySelector<HTMLElement>("#line-" + CSS.escape(unread)) : null;
         if (element && !unreadEarlier) {
-            element.scrollIntoView({ block: "start" });
+            element.scrollIntoView({ block: "start", inline: "nearest" });
             setJumping(0);
             return;
         }
@@ -151,7 +154,7 @@ export function Timeline({ podId, channel, lines, loading, failed, hasOlder, loa
                 className="ctimeline"
                 ref={box}
                 tabIndex={0}
-                aria-label={"Lines in this channel"}
+                aria-label="Messages"
                 onWheel={moved}
                 onTouchMove={moved}
                 onKeyDown={(event) => { if (["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)) moved(); }}
@@ -167,22 +170,23 @@ export function Timeline({ podId, channel, lines, loading, failed, hasOlder, loa
             >
                 {hasOlder && (
                     <button type="button" className="ghost-pill ctimeline__older" disabled={loadingOlder} onClick={older}>
-                        {loadingOlder ? "Loading…" : "Show earlier lines"}
+                        {loadingOlder ? "Loading…" : "Show earlier messages"}
                     </button>
                 )}
-                {loading && <p className="ctimeline__quiet" role="status">Loading what was said…</p>}
+                {loading && <p className="ctimeline__quiet" role="status">Loading…</p>}
                 {failed && (
                     <p className="ctimeline__quiet" role="alert">
-                        Couldn’t load what was said. <button type="button" className="gsheet__inline" onClick={onRetry}>Try again</button>
+                        Couldn’t load the messages. <button type="button" className="gsheet__inline" onClick={onRetry}>Try again</button>
                     </p>
                 )}
-                {!loading && !failed && lines.length === 0 && <p className="ctimeline__quiet">Nothing said here yet.</p>}
+                {!loading && !failed && !hasOlder && intro}
+                {!loading && !failed && lines.length === 0 && !intro && <p className="ctimeline__quiet">No messages yet.</p>}
                 <div>
                     {days.map((day) => (
                         <section key={day.key} className="cday" aria-label={day.label}>
-                            <h2 className="cday__label">{day.label}</h2>
+                            <h2 className="cday__label"><span>{day.label}</span></h2>
                             <ol className="cday__lines">
-                                {day.lines.map((line) => (
+                                {day.lines.map((line, index) => (
                                     <Fragment key={line.id}>
                                         {line.id === unread && (
                                             <li className="ctimeline__unread" aria-label="New since you last read">
@@ -198,6 +202,9 @@ export function Timeline({ podId, channel, lines, loading, failed, hasOlder, loa
                                             answering={answering.filter((one) => one.messageId === line.id)}
                                             agentName={agentName}
                                             highlighted={highlight === line.id}
+                                            visible={visible}
+                                            continued={line.id !== unread && continues(day.lines[index - 1], line)}
+                                            quote={answeredOutOfPlace(line, day.lines[index - 1], byId)}
                                         />
                                     </Fragment>
                                 ))}

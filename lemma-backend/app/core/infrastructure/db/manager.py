@@ -35,6 +35,16 @@ class DatabaseManager:
             pool_recycle=300,
             pool_size=2,
             max_overflow=3,
+            # A test's own statements finish well inside its budget. One that
+            # runs away, or a transaction a timed-out test never ended, would
+            # otherwise hold its locks until the run ends and fail every later
+            # test's reset on that worker; these end it with a named error.
+            connect_args={
+                "server_settings": {
+                    "statement_timeout": "60000",
+                    "idle_in_transaction_session_timeout": "60000",
+                }
+            },
         )
         self.session_factory = async_sessionmaker(
             self.engine, class_=AsyncSession, expire_on_commit=False

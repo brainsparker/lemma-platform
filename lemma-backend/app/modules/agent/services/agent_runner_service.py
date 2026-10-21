@@ -245,6 +245,7 @@ class AgentRunnerService:
                 grants=getattr(ctx, "grant_summary", None),
                 host_execution=ctx.host_execution_mode,
                 harness_kind=resolved_runtime.harness_kind,
+                surface_platform=ctx.surface_platform,
             )
             # Remote harnesses reach every tool through the MCP server and keep the
             # full list; the in-process LEMMA harness shows core tools directly,

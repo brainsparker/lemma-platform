@@ -167,6 +167,40 @@ async def test_a_contacts_function_writes_rows_as_from_outside():
         assert changes.outside_actor == f"contact:{contact_id}"
 
 
+async def test_a_contacts_function_creates_rows_as_that_contact():
+    """The repository is told whom the rows are for, so the contact policy
+    holds the insert to them -- not to the member audience a run's empty user
+    would otherwise read as."""
+    contact_id = uuid4()
+    run = _working_for_contact(contact_id)
+    run.is_outsider = False
+    handed: list[tuple[TableContext, list[dict]]] = []
+
+    async def write(ctx, rows, user_id, **kwargs):
+        handed.append((ctx, rows if isinstance(rows, list) else [rows]))
+        return type("StoredRecord", (), {"data": {}})()
+
+    record_repository = AsyncMock()
+    record_repository.create_record.side_effect = write
+    record_repository.bulk_create_records.side_effect = write
+    service = RecordService(
+        record_repository=record_repository, authorization_service=object()
+    )
+    table = _events_enabled_context()
+    table.contact_owned = True
+    token = set_current_context(run)
+    try:
+        await service.create_record(table, {"merchant": "Hotel"}, NOBODY_USER_ID)
+        await service.bulk_create_records(table, [{"merchant": "Inn"}], NOBODY_USER_ID)
+    finally:
+        reset_current_context(token)
+
+    assert table.for_contact is None
+    assert [ctx.for_contact for ctx, _rows in handed] == [contact_id, contact_id]
+    for _ctx, rows in handed:
+        assert [row["contact_id"] for row in rows] == [str(contact_id)]
+
+
 async def test_a_members_write_and_a_visitors_row_keep_their_own_names():
     user_id = uuid4()
     token = set_current_context(_member_ctx())

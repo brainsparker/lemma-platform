@@ -47,6 +47,8 @@ from app.modules.agent.infrastructure.models.conversation import MessageModel
 from app.modules.agent.infrastructure.repositories.conversation_repository import (
     ConversationRepository,
 )
+from app.modules.agent.services.approval_action import approval_action
+from app.modules.agent.services.pause_supersession import SUPERSEDED_KEY
 from app.modules.agent.services.service_factories import build_conversation_service
 from app.modules.channels.contracts import (
     Asker,
@@ -121,18 +123,33 @@ def _questions(args: Mapping[str, object]) -> list[dict[str, object]]:
 
 
 def shown(pause: Pause) -> tuple[str, dict[str, object]]:
-    """The line's words, and what it shows to be answered."""
+    """The line's words, and what it shows to be answered.
+
+    An approval shows the action it approves -- the tool and what it is
+    called with -- not only the title and reason the agent wrote: the member
+    approves running exactly that with their own access. Shown with any
+    secret in it masked, and clipped (``approval_action``).
+    """
     args = pause.tool_args
     if pause.kind == REQUEST_APPROVAL:
         title = str(args.get("title") or "May I go ahead?")
         reason = args.get("reason")
+        action = args.get("tool_name")
+        action_args, action_text = approval_action(args.get("args"))
+        text = f"{title}\n{reason}" if reason else title
+        if action:
+            text += f"\n\nIt runs `{action}`" + (
+                f":\n```\n{action_text}\n```" if action_text else "."
+            )
         return (
-            f"{title}\n{reason}" if reason else title,
+            text,
             {
                 "tool": REQUEST_APPROVAL,
                 "prompt": title,
                 "reason": reason,
-                "action": args.get("tool_name"),
+                "action": action,
+                "action_args": action_args,
+                "action_text": action_text,
                 "choices": sorted(channel_questions.APPROVAL_DECISIONS),
             },
         )
@@ -346,7 +363,10 @@ async def _close_stale(
     )
     for question in stale:
         decided = decisions.get(calls.get(question.ref, ""))
-        if decided is None:
+        if decided is None or decided.response.get(SUPERSEDED_KEY) is True:
+            # Nobody decided -- or the member wrote past it, which denies it
+            # for the run's sake (``pause_supersession``) but answers nothing:
+            # the line was not answered, it stopped waiting.
             await channel_questions.close(
                 uow, message_id=question.message_id, state=QuestionState.CANCELLED
             )
@@ -421,12 +441,17 @@ def ask_response(
     a single question -- ``{"choice"}`` / ``{"text"}``. Every question needs
     its own answer; one is never taken for all.
     """
-    headers = [str(q["header"]) for q in questions if q.get("header")]
+    asked = {str(q["header"]): q for q in questions if q.get("header")}
+    headers = list(asked)
     if not headers:
         raise AnswerRefused("This question cannot be answered here", status_code=422)
     answers = given.get("answers")
     if not isinstance(answers, Mapping):
-        said = given.get("choice") or given.get("text")
+        choice, text = given.get("choice"), given.get("text")
+        if len(headers) == 1 and choice is not None:
+            # A choice is one of the options: words of their own are a text.
+            [choice] = _check_picked(asked[headers[0]], [choice])
+        said = choice or text
         answers = (
             {headers[0]: said}
             if len(headers) == 1 and said is not None
@@ -437,7 +462,44 @@ def ask_response(
         raise AnswerRefused(
             "Answer each question: " + ", ".join(missing), status_code=422
         )
+    answers = dict(answers)
+    for header in headers:
+        value = answers[header]
+        if isinstance(value, list | tuple):
+            answers[header] = _check_picked(asked[header], list(value))
     return {"answers": {header: _cleaned(answers[header]) for header in headers}}
+
+
+def _check_picked(question: Mapping[str, object], picked: list[object]) -> list[str]:
+    """Choices picked are the question's options, one unless it takes several.
+
+    A text of their own is always an answer -- every question offers
+    "Other" (``AskUserRequest``) -- but it is given as text, never as a
+    choice: a choice that is none of the options is refused. Matched without
+    regard to case ("Cats" picks "cats") and given back as the option spells
+    it, so the agent reads the option it offered.
+    """
+    header = str(question.get("header") or "")
+    if len(picked) > 1 and not question.get("multi_select"):
+        raise AnswerRefused(f"Pick one answer for {header}", status_code=422)
+    raw = question.get("options")
+    options: dict[str, str] = {}
+    for option in raw if isinstance(raw, list) else []:
+        if isinstance(option, Mapping) and option.get("label"):
+            label = str(option.get("label")).strip()
+            options.setdefault(label.casefold(), label)
+    outside = [
+        str(choice)
+        for choice in picked
+        if str(choice).strip().casefold() not in options
+    ]
+    if outside:
+        raise AnswerRefused(
+            f"Not one of the choices for {header}: {', '.join(outside)}. "
+            "Write it as your own answer instead.",
+            status_code=422,
+        )
+    return [options[str(choice).strip().casefold()] for choice in picked]
 
 
 def _cleaned(value: object) -> str | list[str]:

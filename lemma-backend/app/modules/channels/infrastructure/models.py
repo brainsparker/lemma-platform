@@ -150,6 +150,12 @@ class ChannelModel(UUIDAuditBase):
     archived_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    #: A group's: an agent's answer made with the asking member's own access
+    #: is read by everybody in it (posted shared), not by the asker alone
+    #: until they share it. Ignored for a DIRECT or CONTACT channel.
+    answers_shared: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("true")
+    )
     # -- a contact's channel: who answers them ---------------------------------
     #: Whether its agents answer the contact at all.
     agents_answer: Mapped[bool] = mapped_column(
@@ -176,6 +182,11 @@ class ChannelModel(UUIDAuditBase):
     #: The newest line's number; the next line takes ``last_seq + 1`` under
     #: this row's lock.
     last_seq: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
+    #: How many of its lines are replies in a thread: a reader's unread lines
+    #: are the timeline's, counted by number without them (``inbox``).
+    replies: Mapped[int] = mapped_column(
         BigInteger, nullable=False, default=0, server_default=text("0")
     )
     #: The newest line outside a thread, for lists; no FK (it is a pointer
@@ -340,6 +351,12 @@ class ChannelReadStateModel(Base):
     channel_id: Mapped[UUID] = mapped_column(primary_key=True)
     pod_id: Mapped[UUID] = mapped_column(nullable=False)
     last_read_seq: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
+    #: How many of the lines up to ``last_read_seq`` are replies in a thread:
+    #: what is unread in the timeline is ``last_seq - last_read_seq`` less the
+    #: replies since (``ChannelModel.replies - read_replies``).
+    read_replies: Mapped[int] = mapped_column(
         BigInteger, nullable=False, default=0, server_default=text("0")
     )
     created_at: Mapped[datetime] = mapped_column(

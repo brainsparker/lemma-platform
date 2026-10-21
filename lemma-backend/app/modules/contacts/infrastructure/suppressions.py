@@ -11,7 +11,7 @@ from collections.abc import Collection
 from enum import StrEnum
 from uuid import UUID
 
-from sqlalchemy import delete, select
+from sqlalchemy import column, delete, exists, select, table
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -55,6 +55,13 @@ class SuppressionRepository:
             .on_conflict_do_nothing()
         )
         return bool(result.rowcount)
+
+    async def pod_exists(self, pod_id: UUID) -> bool:
+        """Whether the pod is still there to keep an opt-out against."""
+        pods = table("pods", column("id"))
+        return bool(
+            await self.session.scalar(select(exists().where(pods.c.id == pod_id)))
+        )
 
     async def lift(self, *, pod_id: UUID, kind: IdentityKind, value: str) -> bool:
         """Opt the handle back in; whether it was opted out."""

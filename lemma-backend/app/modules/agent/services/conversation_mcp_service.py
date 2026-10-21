@@ -22,13 +22,11 @@ from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
-from app.modules.agent.services.surface_context import (
-    surface_context_from_conversation,
-)
+from app.modules.agent.services.surface_context import surface_context_for_run
 from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation
 from app.modules.agent.domain.outsiders import Audience
-from app.modules.agent.domain.private_notes import run_is_private
+from app.modules.agent.domain.private_notes import run_delivers_to_surface
 from app.modules.agent.domain.vision import vision_mode_from_runtime_profile
 from app.modules.agent.services.vision_service import vision_delegate_available
 from app.modules.agent.services.mcp_content import (
@@ -539,9 +537,10 @@ def _tool_context(
         # The same answer the runner gives: a remote harness answering
         # somebody outside the pod authorizes as nobody too.
         audience=Audience.of(conversation),
-        # And a run a private note started delivers nothing to the
-        # platform from here either -- `display_resource` included.
-        delivers_to_surface=not run_is_private(
+        # And a run a private note or a line in Lemma started delivers
+        # nothing to the platform from here either -- `display_resource`
+        # included.
+        delivers_to_surface=run_delivers_to_surface(
             run.metadata if run is not None else None
         ),
         # The runner computes these for the in-process harness, and this
@@ -565,7 +564,9 @@ def _tool_context(
         workspace_cwd=workspace_location.cwd,
         workspace_repo=workspace_location.repo,
         pod_cwd=pod_cwd_from_workspace_cwd(workspace_location.cwd),
-        **surface_context_from_conversation(conversation),
+        **surface_context_for_run(
+            conversation, run.metadata if run is not None else None
+        ),
     )
 
 

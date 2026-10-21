@@ -17,6 +17,7 @@ export class ContactsService {
      * @param podId
      * @param limit
      * @param cursor
+     * @param q Only contacts whose name, email address or number holds this.
      * @returns ContactListResponse Successful Response
      * @throws ApiError
      */
@@ -24,6 +25,7 @@ export class ContactsService {
         podId: string,
         limit: number = 50,
         cursor?: (string | null),
+        q?: (string | null),
     ): CancelablePromise<ContactListResponse> {
         return __request(OpenAPI, {
             method: 'GET',
@@ -34,6 +36,7 @@ export class ContactsService {
             query: {
                 'limit': limit,
                 'cursor': cursor,
+                'q': q,
             },
             errors: {
                 422: `Validation Error`,

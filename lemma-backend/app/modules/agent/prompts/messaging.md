@@ -5,8 +5,8 @@ someone else -- or a channel -- and returns before anyone replies.
 
 1. Resolve the recipient with `list_pod_members` if needed. Pass the returned
    `to` value, a member/user id, or an exact email; names do not resolve.
-2. Send everything before waiting. Set `wants_answer` on each message you need
-   an answer to: it waits on them in their inbox in Lemma.
+2. Send everything first. Set `wants_answer` on each message you need an
+   answer to: the question waits on them in their inbox in Lemma, not you.
 3. If awaiting answers, end your turn. Do not `wait_for` them: you get a fresh
    turn here once everyone you asked has answered (or can no longer), and it
    tells you so. Then call `channel_read(asked_by_me=True)`. Never loop.

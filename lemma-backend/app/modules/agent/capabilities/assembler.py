@@ -312,10 +312,10 @@ async def _build_lemma_harness_tooling(
     if getattr(ctx, "memory_enabled", False):
         capabilities.append(MemoryCapability())
 
-    # When the run is on a third-party surface, append standing per-platform
-    # guidance (delivery/forms/formatting/channel-context). Stable per
-    # conversation, so it rides in the cached prefix alongside the other
-    # instruction-bearing capabilities.
+    # When the run talks over a third-party surface, append standing
+    # per-platform guidance (delivery/forms/formatting/channel-context). The
+    # platform is the run's: none for a run asked in Lemma, whatever platform
+    # its conversation was last heard on.
     surface_platform = getattr(ctx, "surface_platform", None)
     audience = run_audience(ctx)
     answers_outsider = audience.answers_outsiders

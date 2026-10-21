@@ -66,10 +66,17 @@ class Outcome:
 
     @classmethod
     def delivered(
-        cls, platform: str | None, *, external_message_id: str | None = None
+        cls,
+        platform: str | None,
+        *,
+        external_message_id: str | None = None,
+        reason: str | None = None,
     ) -> Outcome:
         return cls(
-            Result.SENT, platform=platform, external_message_id=external_message_id
+            Result.SENT,
+            platform=platform,
+            external_message_id=external_message_id,
+            reason=reason,
         )
 
     @classmethod
@@ -191,6 +198,21 @@ def of_send(
     )
 
 
+#: The platform's answer that refuses the bot itself, not the message. Not
+#: 403: Telegram says that for one person who blocked the bot.
+_REFUSED_CREDENTIALS = frozenset({"401"})
+
+
+def refused_credentials(outcome: Outcome) -> bool:
+    """Whether the platform gave up on the bot rather than the message: its
+    credentials were refused, so every send of the bot meets the same answer."""
+    return (
+        outcome.result is Result.DEAD
+        and outcome.code is Code.REFUSED
+        and outcome.provider_status in _REFUSED_CREDENTIALS
+    )
+
+
 def timed_out(sends: SendOutcome, *, timeout: float) -> Outcome:
     """A send cut off by ``SEND_TIMEOUT``: tried again only when the platform
     was not called yet, or dedupes a resend; otherwise it may be there."""
@@ -233,5 +255,6 @@ __all__ = [
     "may_have_arrived",
     "of_send",
     "raised_before_recording",
+    "refused_credentials",
     "timed_out",
 ]

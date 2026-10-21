@@ -26,13 +26,87 @@ pytestmark = pytest.mark.unit
 
 TWO = [
     {"question": "Which size?", "header": "size", "options": [{"label": "S"}]},
-    {"question": "Which colour?", "header": "colour", "options": [{"label": "Red"}]},
+    {
+        "question": "Which colour?",
+        "header": "colour",
+        "options": [{"label": "Red"}, {"label": "Blue"}],
+        "multi_select": True,
+    },
 ]
 
 
 def test_one_question_takes_a_choice_or_words():
     assert ask_response(TWO[:1], {"choice": "S"}) == {"answers": {"size": "S"}}
     assert ask_response(TWO[:1], {"text": " small "}) == {"answers": {"size": "small"}}
+
+
+def test_a_choice_is_one_of_the_options():
+    """Words of their own are taken as text -- every ask offers "Other" --
+    but a choice that is none of the options is refused."""
+    with pytest.raises(AnswerRefused) as refused:
+        ask_response(TWO[:1], {"choice": "XXL"})
+    assert refused.value.status_code == 422
+    assert "XXL" in str(refused.value)
+
+    with pytest.raises(AnswerRefused):
+        ask_response(TWO, {"answers": {"size": "S", "colour": ["Red", "Green"]}})
+    # One answer to a question that takes one.
+    with pytest.raises(AnswerRefused) as refused:
+        ask_response(TWO[:1], {"answers": {"size": ["S", "S"]}})
+    assert "Pick one" in str(refused.value)
+
+    assert ask_response(TWO[:1], {"text": "XXL"}) == {"answers": {"size": "XXL"}}
+
+
+def test_a_choice_is_matched_whatever_its_case():
+    """ "Cats" picks the option "cats", and the agent reads it as the option
+    it offered."""
+    pets = [{"question": "Which?", "header": "pet", "options": [{"label": "cats"}]}]
+    assert ask_response(pets, {"choice": "Cats"}) == {"answers": {"pet": "cats"}}
+    assert ask_response(
+        TWO, {"answers": {"size": "s", "colour": [" red", "BLUE"]}}
+    ) == {"answers": {"size": "s", "colour": ["Red", "Blue"]}}
+
+
+def test_an_approval_line_shows_the_action_and_masks_its_secrets():
+    from app.modules.agent.services.approval_action import MAX_ACTION_CHARS
+    from app.modules.agent.services.pause_questions import Pause, shown
+
+    def approval(args: dict) -> Pause:
+        return Pause(
+            tool_call_id="call",
+            kind="request_approval",
+            tool_args={
+                "title": "Create the table?",
+                "reason": "You asked for it.",
+                "tool_name": "exec_command",
+                "args": args,
+            },
+            agent_run_id=None,
+        )
+
+    text, question = shown(approval({"cmd": "lemma tables create orders"}))
+    assert "exec_command" in text and "lemma tables create orders" in text
+    assert question["action"] == "exec_command"
+    assert question["action_args"] == {"cmd": "lemma tables create orders"}
+    assert question["action_text"] == "lemma tables create orders"
+
+    secret = "sk-live-not-a-real-credential-0123456789"
+    text, question = shown(
+        approval(
+            {
+                "url": "https://api.example.com/x",
+                "api_key": secret,
+                "body": f"Authorization: Bearer {secret}",
+            }
+        )
+    )
+    assert secret not in text and secret not in str(question)
+    assert "https://api.example.com/x" in text
+
+    text, question = shown(approval({"cmd": "echo " + "x" * 10_000}))
+    assert len(str(question["action_text"])) <= MAX_ACTION_CHARS
+    assert len(text) < MAX_ACTION_CHARS + 200
 
 
 def test_several_questions_are_answered_field_by_field():

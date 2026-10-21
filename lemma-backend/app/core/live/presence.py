@@ -24,6 +24,7 @@ from app.core.config import settings as core_settings
 from app.core.infrastructure.redis.client import get_redis
 from app.core.live.connection import LiveConnection
 from app.core.live.limits import SLOT_TTL_SECONDS, slots_held
+from app.core.live.pod_access import require_kept_pod_access
 from app.core.live.protocol import JsonObject
 from app.core.log.log import get_logger
 
@@ -133,6 +134,9 @@ class PresenceCall:
     async def __call__(
         self, connection: LiveConnection, params: JsonObject, *, call_id: str
     ) -> JsonValue:
+        # Who is in the pod is for who still is: one taken out of it is
+        # refused, and their socket closed.
+        await require_kept_pod_access(connection)
         return {"online": [str(user_id) for user_id in await online(connection.pod_id)]}
 
 

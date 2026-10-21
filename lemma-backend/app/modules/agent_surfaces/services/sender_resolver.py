@@ -18,6 +18,7 @@ from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     ParsedInboundSurfaceEvent,
     ResolvedSurfaceUser,
+    SurfacePlatform,
 )
 from app.modules.agent_surfaces.domain.ports import SurfacePodMembershipPort
 from app.modules.agent_surfaces.platforms.common import platform_transport_errors
@@ -27,6 +28,7 @@ from app.modules.agent_surfaces.platforms.platform_capabilities import (
 from app.modules.agent_surfaces.services.identity_resolution_service import (
     SurfaceIdentityResolutionService,
 )
+from app.modules.agent_surfaces.services.slack_workspace_people import slack_guest
 
 logger = get_logger(__name__)
 
@@ -99,6 +101,10 @@ class SenderResolver:
             installation_id=installation_id,
             profile_unavailable=profile_unavailable,
         )
+        if parsed.platform is SurfacePlatform.SLACK:
+            # Read off this message's profile however resolution answered: a
+            # cached answer says who they are, never what Slack lets them do.
+            resolved.is_guest = slack_guest(sender_profile)
         return await self._hydrate_resolved_user(resolved)
 
     async def _hydrate_resolved_user(

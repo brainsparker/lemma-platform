@@ -7,7 +7,8 @@ group's members never agreed to a log, so they are told it exists before
 anything goes into it.
 
 Said once: as a message when the bot is added to a Telegram group, however it
-was added, and as the description of a WhatsApp group the bot creates.
+was added; as the teammate's first message in a Slack channel Lemma's own app
+handed it; and as the description of a WhatsApp group the bot creates.
 """
 
 from __future__ import annotations
@@ -62,7 +63,8 @@ async def say_hello_in_group(
         external_thread_id=channel_id,
         message_text="",
         is_dm=False,
-        reply_target={"chat_id": channel_id},
+        # Each platform reads its own key: Telegram's chat, Slack's channel.
+        reply_target={"chat_id": channel_id, "channel": channel_id},
     )
     try:
         async with connection_released(uow.session):

@@ -25,7 +25,6 @@ from app.modules.datastore.domain.errors import (
     DatastoreRecordNotFoundError,
 )
 from app.modules.datastore.domain.record_entities import RecordEntity
-from app.modules.datastore.domain.row_security import RowPrincipal
 from app.modules.datastore.infrastructure.record_errors import (
     raise_record_write_error,
 )
@@ -83,10 +82,8 @@ async def create_logged(
     await changes.prepare()
     try:
         async with repo.schema_manager.session_factory() as session:
-            if ctx.enable_rls:
-                await repo.schema_manager.set_rls_context(
-                    session, RowPrincipal.for_user(user_id)
-                )
+            if (principal := ctx.row_principal(user_id)) is not None:
+                await repo.schema_manager.set_rls_context(session, principal)
             await changes.begin(session)
             statement, params = changes.wrap(sql, dict(values), op="I")
             row = (await session.execute(text(statement), params)).fetchone()
@@ -140,11 +137,9 @@ async def update_logged(
     await changes.prepare()
     try:
         async with repo.schema_manager.session_factory() as session:
-            if ctx.enable_rls:
-                await repo.schema_manager.set_rls_context(
-                    session,
-                    RowPrincipal.for_user(user_id, is_pod_admin=not enforce_user_scope),
-                )
+            principal = ctx.row_principal(user_id, is_pod_admin=not enforce_user_scope)
+            if principal is not None:
+                await repo.schema_manager.set_rls_context(session, principal)
             await changes.begin(session)
             # The prior image is captured only for an update a subscriber reads:
             # it costs a locked self-join that nobody else has a use for.
@@ -198,11 +193,9 @@ async def delete_logged(
     )
     await changes.prepare()
     async with repo.schema_manager.session_factory() as session:
-        if ctx.enable_rls:
-            await repo.schema_manager.set_rls_context(
-                session,
-                RowPrincipal.for_user(user_id, is_pod_admin=not enforce_user_scope),
-            )
+        principal = ctx.row_principal(user_id, is_pod_admin=not enforce_user_scope)
+        if principal is not None:
+            await repo.schema_manager.set_rls_context(session, principal)
         try:
             await changes.begin(session)
             statement, bound = changes.wrap(sql, params, op="D")
@@ -251,10 +244,8 @@ async def bulk_write_logged(
     await changes.prepare()
     try:
         async with repo.schema_manager.session_factory() as session:
-            if ctx.enable_rls:
-                await repo.schema_manager.set_rls_context(
-                    session, RowPrincipal.for_user(user_id)
-                )
+            if (principal := ctx.row_principal(user_id)) is not None:
+                await repo.schema_manager.set_rls_context(session, principal)
             await changes.begin(session)
             written = 0
             for sql, params in statements:

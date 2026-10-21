@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
@@ -80,9 +81,15 @@ class RecordService:
             self.authz.refuse_contact_scoped_records(ctx)
         await self.authz.require_record_write(user_id=user_id, ctx=ctx)
 
-    def _stamp_contact(self, ctx: TableContext, row: dict[str, Any]) -> dict[str, Any]:
-        """A new row made for a contact names them, whatever the caller sent."""
+    def _for_contact(self, ctx: TableContext) -> TableContext:
+        """``ctx`` for a create made for a contact, whose rows alone it may write."""
         contact_id = self.authz.contact_scope(ctx) if self.authz is not None else None
+        return ctx if contact_id is None else replace(ctx, for_contact=contact_id)
+
+    @staticmethod
+    def _stamp_contact(ctx: TableContext, row: dict[str, Any]) -> dict[str, Any]:
+        """A new row made for a contact names them, whatever the caller sent."""
+        contact_id = ctx.for_contact
         return row if contact_id is None else {**row, CONTACT_COLUMN: str(contact_id)}
 
     async def _should_enforce_user_scope(
@@ -126,6 +133,7 @@ class RecordService:
         """Insert one record; ``idempotency_key`` makes a repeat return the first
         (``services/record_idempotency``)."""
         await self._require_record_write(user_id=user_id, ctx=ctx, creates=True)
+        ctx = self._for_contact(ctx)
 
         validator = RecordValidator(ctx)
         sanitized_data = self._stamp_contact(
@@ -367,6 +375,7 @@ class RecordService:
         await self._require_record_write(user_id=user_id, ctx=ctx, creates=not upsert)
         if not records:
             return 0
+        ctx = self._for_contact(ctx)
 
         validator = RecordValidator(ctx)
         sanitized_records = [

@@ -74,6 +74,7 @@ CREATE TABLE channels (
 	hand_back_after_hours INTEGER DEFAULT 12 NOT NULL,
 	current_case_id UUID,
 	last_seq BIGINT DEFAULT 0 NOT NULL,
+	replies BIGINT DEFAULT 0 NOT NULL,
 	last_line_id UUID,
 	last_line_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
 	last_rev BIGINT DEFAULT 0 NOT NULL,
@@ -191,6 +192,7 @@ CREATE TABLE channel_read_state (
 	channel_id UUID NOT NULL,
 	pod_id UUID NOT NULL,
 	last_read_seq BIGINT DEFAULT 0 NOT NULL,
+	read_replies BIGINT DEFAULT 0 NOT NULL,
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
 	updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
 	PRIMARY KEY (user_id, channel_id),
@@ -238,7 +240,7 @@ CREATE TABLE channel_messages (
 	channel_id UUID NOT NULL,
 	pod_id UUID NOT NULL,
 	seq BIGINT NOT NULL,
-	client_message_id VARCHAR(64),
+	client_message_id VARCHAR(128),
 	source_id UUID,
 	target_source_id UUID,
 	sender_kind VARCHAR(10) NOT NULL,
@@ -250,7 +252,7 @@ CREATE TABLE channel_messages (
 	sender_name VARCHAR(255),
 	body TEXT NOT NULL,
 	parts JSONB DEFAULT '[]'::jsonb NOT NULL,
-	search TSVECTOR GENERATED ALWAYS AS (to_tsvector('simple', coalesce(body, ''))) STORED,
+	search TSVECTOR GENERATED ALWAYS AS (to_tsvector('english', coalesce(body, '')) || to_tsvector('simple', coalesce(body, ''))) STORED,
 	members_only BOOLEAN DEFAULT false NOT NULL,
 	conversation_id UUID,
 	agent_run_id UUID,
@@ -261,6 +263,8 @@ CREATE TABLE channel_messages (
 	thread_root_id UUID,
 	edited_at TIMESTAMP WITH TIME ZONE,
 	deleted_at TIMESTAMP WITH TIME ZONE,
+	shared_at TIMESTAMP WITH TIME ZONE,
+	deleted_by_user_id UUID,
 	id UUID NOT NULL,
 	created_at TIMESTAMP WITH TIME ZONE NOT NULL,
 	updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
@@ -283,9 +287,11 @@ CREATE TABLE channel_messages (
 	FOREIGN KEY(on_behalf_user_id) REFERENCES users (id) ON DELETE SET NULL,
 	FOREIGN KEY(on_behalf_contact_id) REFERENCES contacts (id) ON DELETE SET NULL,
 	FOREIGN KEY(conversation_id) REFERENCES agent_conversations (id) ON DELETE SET NULL,
-	FOREIGN KEY(agent_run_id) REFERENCES agent_runs (id) ON DELETE SET NULL
+	FOREIGN KEY(agent_run_id) REFERENCES agent_runs (id) ON DELETE SET NULL,
+	FOREIGN KEY(deleted_by_user_id) REFERENCES users (id) ON DELETE SET NULL
 );
 CREATE INDEX ix_channel_messages_conversation ON channel_messages (conversation_id, seq) WHERE conversation_id IS NOT NULL;
+CREATE INDEX ix_channel_messages_deleted_by ON channel_messages (deleted_by_user_id) WHERE deleted_by_user_id IS NOT NULL;
 CREATE INDEX ix_channel_messages_on_behalf_contact ON channel_messages (on_behalf_contact_id) WHERE on_behalf_contact_id IS NOT NULL;
 CREATE INDEX ix_channel_messages_on_behalf_user ON channel_messages (on_behalf_user_id) WHERE on_behalf_user_id IS NOT NULL;
 CREATE INDEX ix_channel_messages_pod_time ON channel_messages (pod_id, created_at);
@@ -308,6 +314,7 @@ CREATE TABLE channel_mentions (
 	user_id UUID,
 	contact_id UUID,
 	agent_id UUID,
+	read_at TIMESTAMP WITH TIME ZONE,
 	id UUID NOT NULL,
 	created_at TIMESTAMP WITH TIME ZONE NOT NULL,
 	updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
@@ -320,7 +327,7 @@ CREATE TABLE channel_mentions (
 );
 CREATE INDEX ix_channel_mentions_agent ON channel_mentions (agent_id) WHERE agent_id IS NOT NULL;
 CREATE INDEX ix_channel_mentions_contact ON channel_mentions (contact_id) WHERE contact_id IS NOT NULL;
-CREATE INDEX ix_channel_mentions_user ON channel_mentions (user_id, pod_id, channel_id, seq) WHERE user_id IS NOT NULL;
+CREATE INDEX ix_channel_mentions_user ON channel_mentions (user_id, pod_id, channel_id, seq) WHERE user_id IS NOT NULL AND read_at IS NULL;
 CREATE UNIQUE INDEX uq_channel_mentions_named ON channel_mentions (message_id, coalesce(user_id, contact_id, agent_id));
 CREATE TABLE channel_questions (
 	message_id UUID NOT NULL,

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Component, useEffect, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { FileIcon, LinkIcon } from "@/ui/icons";
 import { channelApi } from "./api";
@@ -30,7 +30,27 @@ export function LineText({ text, parts, me }: { text: string; parts: readonly Pa
  *  anything else saved -- and the links it carries that its text does not
  *  show. A file is never opened by its path: that is the writer's own, and
  *  the reader may not read it there. */
-export function LineParts({ podId, channelId, line }: { podId: string; channelId: string; line: Line }) {
+export function LineParts(props: { podId: string; channelId: string; line: Line }) {
+    return <PartsBoundary><LinePartsList {...props} /></PartsBoundary>;
+}
+
+/** What a line shares that could not be drawn is said under it; the
+ *  timeline around it -- every other line -- stays. */
+class PartsBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+    state = { failed: false };
+    static getDerivedStateFromError() {
+        return { failed: true };
+    }
+    componentDidCatch(error: unknown) {
+        console.error("A line's files could not be shown", error);
+    }
+    render() {
+        if (this.state.failed) return <p className="cline__problem" role="alert">Couldn’t show what this line shares.</p>;
+        return this.props.children;
+    }
+}
+
+function LinePartsList({ podId, channelId, line }: { podId: string; channelId: string; line: Line }) {
     const files = line.parts.filter((part): part is Extract<Part, { type: "file" }> => part.type === "file");
     const links = extraLinks(line.text ?? "", line.parts);
     if (!files.length && !links.length) return null;
@@ -53,11 +73,18 @@ export function LineParts({ podId, channelId, line }: { podId: string; channelId
     );
 }
 
+/** Whether `value` is bytes a URL can be made for: a server answering
+ *  with something else (text, JSON) is a file that cannot be shown, not a
+ *  timeline that cannot be drawn. */
+export function isBlob(value: unknown): value is Blob {
+    return typeof Blob !== "undefined" && value instanceof Blob;
+}
+
 /** An object URL for `blob` for as long as this component shows it. */
 export function useObjectUrl(blob: Blob | null): string | null {
     const [url, setUrl] = useState<string | null>(null);
     useEffect(() => {
-        if (!blob) { setUrl(null); return; }
+        if (!isBlob(blob)) { setUrl(null); return; }
         const made = URL.createObjectURL(blob);
         setUrl(made);
         return () => URL.revokeObjectURL(made);
@@ -78,10 +105,13 @@ export function FileChip({ podId, channelId, lineId, file }: { podId: string; ch
         retry: false,
         queryFn: () => channelApi(podId).file(channelId, lineId, file.fileId as string),
     });
-    const shown = useObjectUrl(preview.data ?? null);
+    const bytes = isBlob(preview.data) ? preview.data : null;
+    const shown = useObjectUrl(bytes);
+    const unshown = image && (preview.isError || (preview.isSuccess && !bytes));
     const save = useMutation({
         mutationFn: async () => {
-            const blob = await channelApi(podId).file(channelId, lineId, file.fileId as string);
+            const blob: unknown = await channelApi(podId).file(channelId, lineId, file.fileId as string);
+            if (!isBlob(blob)) throw new Error("The file came back unreadable.");
             const url = URL.createObjectURL(blob);
             const link = document.createElement("a");
             link.href = url;
@@ -104,6 +134,7 @@ export function FileChip({ podId, channelId, lineId, file }: { podId: string; ch
                 {sizeShown(file.size) && <small>{sizeShown(file.size)}</small>}
                 {save.isPending && <small>Saving…</small>}
             </button>
+            {unshown && !save.isError && <small className="cline__problem" role="alert">Couldn’t show this image.</small>}
             {save.isError && <small className="cline__problem" role="alert">{problemOf(save.error, "Couldn’t get the file.")}</small>}
         </span>
     );

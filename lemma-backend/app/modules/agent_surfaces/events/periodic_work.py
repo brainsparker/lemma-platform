@@ -7,8 +7,11 @@
 * ``surfaces.retention`` (1 d) -- inbound rows past the redelivery window
   (ROUTED/DROPPED after 7 days, which covers Meta's 7-day retry; FAILED after
   30), message claims after 7 days, finished deliveries after 30.
+* ``surfaces.slack_unauthorised_apps`` (1 h) -- teammate Slack apps Lemma made
+  that nobody authorised within a week: deleted from Slack, with their installs.
+  Automation class, since it calls Slack.
 
-Admin class: none of it is anybody waiting.
+The rest are admin class: none of it is anybody waiting.
 """
 
 from __future__ import annotations
@@ -40,6 +43,7 @@ logger = get_logger(__name__)
 
 WEB_VISITORS_PERIODIC = "surfaces.web_visitors"
 RETENTION_PERIODIC = "surfaces.retention"
+SLACK_UNAUTHORISED_APPS_PERIODIC = "surfaces.slack_unauthorised_apps"
 
 #: Answered inbound rows are kept past the longest platform retry (Meta: 7 d).
 INBOUND_KEPT = timedelta(days=7)
@@ -108,6 +112,18 @@ async def retention(ctx: JobContext, payload: NoPayload) -> None:
     )
 
 
+async def slack_unauthorised_apps(ctx: JobContext, payload: NoPayload) -> None:
+    from app.modules.agent_surfaces.services.slack_app_sweep import (
+        sweep_unauthorised_apps,
+    )
+
+    del ctx, payload
+    settled = await sweep_unauthorised_apps(_sessions())
+    logger.info(
+        "agent_surfaces.tasks.slack_unauthorised_apps.observed", settled=settled
+    )
+
+
 def register_periodic_work(registry: WorkRegistry) -> None:
     for kind, handler in (
         (ONBOARDING_CLEANUP_PERIODIC, onboarding_cleanup),
@@ -117,9 +133,20 @@ def register_periodic_work(registry: WorkRegistry) -> None:
         registry.handler(
             kind=kind, cls=WorkClass.ADMIN, mode=WorkMode.JOB, payload=NoPayload
         )(handler)
+    registry.handler(
+        kind=SLACK_UNAUTHORISED_APPS_PERIODIC,
+        cls=WorkClass.AUTOMATION,
+        mode=WorkMode.JOB,
+        payload=NoPayload,
+    )(slack_unauthorised_apps)
 
 
 register_periodic_work(default_registry)
 periodic(ONBOARDING_CLEANUP_PERIODIC, timedelta(minutes=1), ONBOARDING_CLEANUP_PERIODIC)
 periodic(WEB_VISITORS_PERIODIC, timedelta(hours=1), WEB_VISITORS_PERIODIC)
 periodic(RETENTION_PERIODIC, timedelta(days=1), RETENTION_PERIODIC)
+periodic(
+    SLACK_UNAUTHORISED_APPS_PERIODIC,
+    timedelta(hours=1),
+    SLACK_UNAUTHORISED_APPS_PERIODIC,
+)

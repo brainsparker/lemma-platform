@@ -25,6 +25,9 @@ from app.modules.connectors.infrastructure.models import AuthConfig
 #: One active install per name in an organization: the name is how a pod, an
 #: agent's toolset and the API ask for it.
 _NAME_TAKEN = "ix_auth_configs_unique_active_org_name"
+#: One default install per connector in an organization: what a bare
+#: connector id resolves to.
+_DEFAULT_TAKEN = "uq_auth_configs_default_per_connector"
 
 
 class AuthConfigRepository(
@@ -95,7 +98,9 @@ class AuthConfigRepository(
 
     @asynccontextmanager
     async def _name_must_be_free(self, name: str) -> AsyncIterator[None]:
-        """Write inside a savepoint; a clash on the install name is a conflict.
+        """Write inside a savepoint; a clash on the install name -- or on
+        being the connector's default, which two first installs at once both
+        claim -- is a conflict.
 
         Left to the unique index rather than looked up first: two requests
         naming the same install at once both find the name free.
@@ -104,7 +109,17 @@ class AuthConfigRepository(
             async with self.session.begin_nested():
                 yield
         except IntegrityError as error:
-            if violated_constraint(error) != _NAME_TAKEN:
+            constraint = violated_constraint(error)
+            if constraint == _DEFAULT_TAKEN:
+                # Two first installs of one connector at once both decided to
+                # be its default; the other got there first. A conflict, not a
+                # 500: the caller can read the install that won.
+                raise ConnectorConflictError(
+                    "Another install of this connector became the "
+                    "organization's default at the same moment. Try again.",
+                    details={"name": name},
+                ) from None
+            if constraint != _NAME_TAKEN:
                 raise
             raise ConnectorConflictError(
                 f"An active connector install is already called {name!r}. "
@@ -151,6 +166,27 @@ class AuthConfigRepository(
                 AuthConfig.status == AuthConfigStatus.ACTIVE.value,
             )
             .order_by(AuthConfig.is_default.desc(), AuthConfig.created_at.asc())
+        )
+        result = await self.session.execute(stmt)
+        instance = result.scalars().first()
+        return await self._to_entity(instance) if instance else None
+
+    async def get_active_by_org_app_and_source(
+        self, organization_id: UUID, connector_id: str, config_source: str
+    ) -> AuthConfigEntity | None:
+        """The org's active install of this connector from this source -- Lemma's
+        own app (``SYSTEM_DEFAULT``) rather than one the org brought. Ordered as
+        `get_active_by_org_and_app` is, so the answer is stable."""
+        stmt = (
+            select(AuthConfig)
+            .where(
+                AuthConfig.organization_id == organization_id,
+                AuthConfig.connector_id == connector_id,
+                AuthConfig.config_source == config_source,
+                AuthConfig.status == AuthConfigStatus.ACTIVE.value,
+            )
+            .order_by(AuthConfig.is_default.desc(), AuthConfig.created_at.asc())
+            .limit(1)
         )
         result = await self.session.execute(stmt)
         instance = result.scalars().first()

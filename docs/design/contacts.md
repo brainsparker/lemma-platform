@@ -109,7 +109,8 @@ passes the pod-membership check.
    from a contact's run. It runs as the **function's own workload** with the
    function's grants, never as a member: the run has no user, carries the
    contact, and authenticates with a `function-run` token that reaches only its
-   pod's data. Its reads of contact-owned tables see that contact's rows only.
+   pod's data. Its reads of contact-owned tables see that contact's rows only,
+   and the rows it adds there are written as that contact.
    The platform writes `contact_id` into its input, replacing whatever the
    model sent. Identity strength is not passed yet (see Step-up).
 
@@ -323,6 +324,17 @@ one:
   the contact's rows. At most `FUNCTION_CONTACT_CALLS_PER_DAY` calls per
   contact per function; a tool call is never run twice; a run still going at
   the wait deadline is cancelled and reported as such.
+  A function that also declares `contact` is told who is asking beyond the id:
+  `{id, emails, phones, telegram_ids, host_ids, slack_ids, teams_ids}`, in
+  their stored spellings (E.164, lower-cased, `host:{issuer}:{sub}`), so it can
+  match an order or a project by the address it was placed under. Only handles
+  something proved count -- `channel`, `host` or `code`, never one a member
+  typed in or a browser session -- and whatever the model put under `contact`
+  is dropped, declared or not. A merged contact is told as the survivor (its
+  `id` and handles); `contact_id` stays what the conversation named. `contact`
+  is `null` for an anonymous form submission. A handle the contact said stop
+  on is still listed: a stop is about the pod writing to it, not about whose it
+  is, and outreach checks it on its own.
   What such a run writes is the contact's, not a member's: every row event it
   raises, insert, update or delete, on any table, is marked from outside and
   names `contact:{id}`, as a form row does. A DATASTORE schedule ignores it

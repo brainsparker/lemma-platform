@@ -7,9 +7,10 @@ written here, so the two harnesses cannot drift apart -- the in-process one
 receives it through ``SurfacePlatformCapability`` and the remote ones through
 ``build_system_prompt``, and both call :func:`surface_platform_guidance`.
 
-Pure string assembly, no I/O: safe on the prompt-build hot path, and stable per
-conversation (a conversation never changes platform), so it rides in the cached
-system-prompt prefix.
+Pure string assembly, no I/O: safe on the prompt-build hot path. The platform
+is the run's (``surface_context_for_run``), not the conversation's: a member's
+conversation in a channel spans Lemma and every platform of it, and a run asked
+in Lemma gets no fragment at all.
 """
 
 from __future__ import annotations
@@ -282,12 +283,29 @@ def _quoted_names(names: object) -> list[str]:
     return [quoted for name in names if (quoted := quoted_name(name)) is not None]
 
 
-def withheld_background_note(count: int) -> str:
-    """Say that some of a group's lines were left out of the background, and why."""
-    return (
-        f"({count} message(s) in this chat from people outside the pod, or "
-        "answers to them, are not shown to you.)"
-    )
+#: Why lines of a channel were left out of a run's background, by the view it
+#: was read for (``channels.contracts.backgrounds.BackgroundView``). Each says
+#: only what is true of that view: a member's run in Lemma is never shown
+#: another member's answers, and those are not "from outside the pod".
+_WITHHELD_BECAUSE = {
+    "MEMBER_IN_LEMMA": (
+        "answers an agent gave other members, made with their access, which "
+        "the person you are answering may not read"
+    ),
+    "MEMBER_IN_GROUP": (
+        "from people outside the pod, answers to them, or notes members kept "
+        "out of the chat"
+    ),
+    "CONTACT": "that the person you are answering may not read",
+    "PLATFORM": "from people outside the pod, or answers to them",
+}
+
+
+def withheld_background_note(count: int, *, view: str | None = None) -> str:
+    """Say that some of a channel's lines were left out of the background,
+    and why -- the reason of the view they were read for."""
+    because = _WITHHELD_BECAUSE.get(view or "", _WITHHELD_BECAUSE["PLATFORM"])
+    return f"({count} message(s) in this chat are not shown to you: {because}.)"
 
 
 def _email_sections(facts: PlatformFacts) -> list[str]:

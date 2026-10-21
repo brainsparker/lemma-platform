@@ -163,7 +163,7 @@ export class LemmaClient {
     this.organizations = new OrganizationsNamespace(this._generated, this._http);
     this.podSurfaces = new PodSurfacesNamespace(this._generated);
     this.podLinks = new PodLinksNamespace(this._generated);
-    this.channels = new ChannelsNamespace(this._generated);
+    this.channels = new ChannelsNamespace(this._generated, this._http);
     this.contacts = new ContactsNamespace(this._generated);
     this.userSurfaces = new UserSurfacesNamespace(this._generated);
   }

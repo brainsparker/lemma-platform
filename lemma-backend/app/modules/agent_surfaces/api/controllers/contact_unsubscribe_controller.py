@@ -25,7 +25,9 @@ from app.modules.contacts.contracts.outreach import (
 public_router = APIRouter(prefix="/public/contacts", tags=["Contacts"])
 
 
-def _page(heading: str, body: str, form: str = "") -> HTMLResponse:
+def _page(
+    heading: str, body: str, form: str = "", *, status_code: int = 200
+) -> HTMLResponse:
     return HTMLResponse(
         "<!doctype html><meta charset=utf-8><meta name=viewport "
         'content="width=device-width,initial-scale=1"><title>Email preferences'
@@ -33,6 +35,7 @@ def _page(heading: str, body: str, form: str = "") -> HTMLResponse:
         'margin:4rem auto;padding:0 1rem;color:#1d1b18">'
         f'<h1 style="font-weight:500;font-size:1.4rem">{escape(heading)}</h1>'
         f"<p>{escape(body)}</p>{form}</body>",
+        status_code=status_code,
         headers={"Cache-Control": "no-store", "X-Robots-Tag": "noindex"},
     )
 
@@ -69,8 +72,16 @@ async def unsubscribe(
     if target is None:
         return _page("This link doesn't work", "It may have been copied incompletely.")
     async with uow_factory() as uow:
-        await opt_out_by_token(uow, target)
+        opted_out = await opt_out_by_token(uow, target)
         await uow.commit()
+    if opted_out is None:
+        # Signed, but for a workspace that has since been deleted.
+        return _page(
+            "This link no longer works",
+            "The workspace that sent these emails has been deleted, so nothing "
+            "more will come from it.",
+            status_code=404,
+        )
     return _page("You're unsubscribed", "You won't get emails like this again.")
 
 

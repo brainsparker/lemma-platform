@@ -169,7 +169,8 @@ async def channel_post(
 
     With `to`, it goes to their own channel in Lemma, and they are told where
     they are. With `channel_id`, a line in the channel of the person you work
-    for -- never a group: the others there would not see it. It does **not**
+    for -- never a group: it would speak for them in front of the others, and
+    it is not carried to the chat a group mirrors. It does **not**
     pause your turn, and an answer never comes back as a tool result. When you
     need answers, set `wants_answer` on each (only with `to`), send them all,
     then **finish your turn**: you get a fresh one here once the last person
@@ -261,6 +262,29 @@ async def _post_to_member(
     )
 
 
+def _group_refused(answers_shared: bool) -> str:
+    """Why a run may not write in a group for its member. A line it writes
+    is made with their access and is not carried to the chat a group
+    mirrors; and where the group keeps such answers to whoever asked
+    (``answers_shared`` off), the others are shown only that it was said.
+    Each says only what is true of that group."""
+    if answers_shared:
+        why = (
+            "it would be said for them in front of everybody there, and it "
+            "would not reach the chat the group mirrors."
+        )
+    else:
+        why = (
+            "what you write is made with their access, and this group keeps "
+            "such answers to the person they were for, so the others would "
+            "not see it."
+        )
+    return (
+        f"You cannot write in a group for them: {why} Reach the people you "
+        "need with `to`, or ask them to post it themselves."
+    )
+
+
 async def _post_in_channel(
     ctx: RunContext[BaseAgentContext], channel_id: UUID, text: str
 ) -> ChannelPostResponse:
@@ -280,18 +304,8 @@ async def _post_in_channel(
                 ),
             )
         if channel.kind is ChannelKind.GROUP:
-            # A line an agent writes for a member is made with their access,
-            # so every other reader of a group is shown only that it was said
-            # -- and it is not carried to the chat a group mirrors. Posting it
-            # would tell the member it was said to people who never read it.
             return ChannelPostResponse(
-                success=False,
-                error=(
-                    "You cannot write in a group for them: what you write is "
-                    "made with their access, so the others would not see it. "
-                    "Reach the people you need with `to`, or ask them to post "
-                    "it themselves."
-                ),
+                success=False, error=_group_refused(channel.answers_shared)
             )
         if channel.is_archived:
             return ChannelPostResponse(

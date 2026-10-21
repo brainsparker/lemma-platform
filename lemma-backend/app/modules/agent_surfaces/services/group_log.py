@@ -58,7 +58,10 @@ from app.modules.agent_surfaces.platforms.platform_capabilities import (
 )
 from app.modules.agent_surfaces.services.line_markup import Bot, LineMarkup
 from app.modules.agent_surfaces.services.channel_lines import reply_ref_of
-from app.modules.agent_surfaces.services.sender_handles import group_handle
+from app.modules.agent_surfaces.services.sender_handles import (
+    group_handle,
+    workspace_handle,
+)
 from app.modules.agent_surfaces.services.channel_places import (
     ChannelSeats,
     ChannelSeatsInDatabase,
@@ -82,7 +85,11 @@ from app.modules.channels.contracts import (
     speakers_in,
 )
 from app.modules.channels.contracts.lines import thread_root_at
-from app.modules.contacts.contracts import IdentityStrength, open_contact
+from app.modules.contacts.contracts import (
+    IdentityStrength,
+    find_contact,
+    open_contact,
+)
 
 logger = get_logger(__name__)
 
@@ -214,7 +221,9 @@ class GroupLog:
             ):
                 return Sender.member(user_id, display_name=name)
         handle = group_handle(parsed)
-        if handle is None or not handle.vouched_for:
+        if handle is None:
+            return await self._known_colleague(group, parsed, name)
+        if not handle.vouched_for:
             # Nobody the platform vouches for: still a line the group saw, said
             # by somebody the pod cannot name as a contact.
             return Sender(kind=SenderKind.CONTACT, display_name=name)
@@ -227,6 +236,28 @@ class GroupLog:
             display_name=name,
         )
         return Sender.contact(contact.id, display_name=name)
+
+    async def _known_colleague(
+        self, group: SurfaceGroup, parsed: ParsedInboundSurfaceEvent, name: str | None
+    ) -> Sender:
+        """A Slack colleague the pod already answers as a contact, else nobody named.
+
+        Found, never opened: this runs before anything has resolved the
+        sender, and a pod member not recognised yet is not to be made a
+        contact. A door opens one once resolution says they are not in the pod
+        (``slack_workspace_people``); from then their lines name them.
+        """
+        handle = workspace_handle(parsed)
+        known = (
+            await find_contact(
+                self.uow, pod_id=group.pod_id, kind=handle.kind, value=handle.value
+            )
+            if handle is not None
+            else None
+        )
+        if known is None:
+            return Sender(kind=SenderKind.CONTACT, display_name=name)
+        return Sender.contact(known.id, display_name=name)
 
 
 @dataclass(frozen=True, slots=True)

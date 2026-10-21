@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, JsonValue, model_validator
 
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfaceDirectWebhookIngress,
@@ -66,3 +66,23 @@ __all__ = [
     "PlatformUpdatePayload",
     "ReceiverPayload",
 ]
+
+
+class SlackManagerMessagePayload(BaseModel):
+    """A DM from Lemma's own Slack app, and whether to bring the person's Home
+    up to date after it."""
+
+    team_id: str
+    slack_user_id: str
+    text: str
+    blocks: list[dict[str, JsonValue]] | None = None
+    refresh_home: bool = False
+    #: Send as this grant of Lemma's app rather than the workspace's manager:
+    #: for an install that did not become the manager (refused), where the
+    #: workspace has no binding of this organization's to send through.
+    account_id: UUID | None = None
+
+
+class SlackTeammateHelloPayload(BaseModel):
+    surface_id: UUID
+    channel_id: str

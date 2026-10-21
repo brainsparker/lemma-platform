@@ -1958,6 +1958,17 @@
             "title": "Pod Id",
             "type": "string"
           },
+          "problem": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Problem"
+          },
           "reach": {
             "anyOf": [
               {
@@ -3628,6 +3639,18 @@
             "description": "A contact's channel: whether its agents answer the contact.",
             "title": "Agents Answer"
           },
+          "answers_shared": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A group's: whether an answer an agent gives a member here with their own access is read by everybody in it (the default), or by that member alone until they share it. Absent for another kind.",
+            "title": "Answers Shared"
+          },
           "archived": {
             "default": false,
             "title": "Archived",
@@ -3654,6 +3677,19 @@
               }
             ],
             "description": "A contact's channel: its current case asks for a person, and why. Never set on another kind of channel."
+          },
+          "case_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A contact's channel: its current case, the one `status`, `assignee` and `attention` are read from (`/cases` lists them all).",
+            "title": "Case Id"
           },
           "created_at": {
             "format": "date-time",
@@ -3715,6 +3751,18 @@
             },
             "title": "Members",
             "type": "array"
+          },
+          "opted_out": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A contact's channel: whether they asked the pod to stop writing to a handle of theirs -- lines to it are not sent until they write from it again (the contact's `identities` say which).",
+            "title": "Opted Out"
           },
           "person": {
             "anyOf": [
@@ -3964,6 +4012,12 @@
       },
       "ChannelMessageResponse": {
         "properties": {
+          "can_share": {
+            "default": false,
+            "description": "The reader is the member an `asker_only` answer was made for, and may share it with the channel (`\u2026/messages/{id}/share`).",
+            "title": "Can Share",
+            "type": "boolean"
+          },
           "channel_id": {
             "format": "uuid",
             "title": "Channel Id",
@@ -3978,6 +4032,7 @@
                 "type": "null"
               }
             ],
+            "description": "On the reader's own line: the name their client gave it, as sent (`client_message_id`, or `Idempotency-Key`).",
             "title": "Client Message Id"
           },
           "conversation_id": {
@@ -4014,7 +4069,7 @@
                 "type": "null"
               }
             ],
-            "description": "Only on the reader's own line: each place outside Lemma it went to, and what became of it. Pushes to members are not listed here (`\u2026/deliveries` has every send).",
+            "description": "Each place outside Lemma the line went to, and what became of it -- on every line the reader may read. Pushes to members are not listed here (`\u2026/deliveries` has the writer's every send).",
             "title": "Delivered"
           },
           "edited_at": {
@@ -4097,6 +4152,17 @@
               }
             ]
           },
+          "removed_by": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PersonRef"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "On a deleted line: the member who removed it, when that was not who wrote it -- somebody who may change the channel."
+          },
           "reply_count": {
             "default": 0,
             "description": "On a thread's first line.",
@@ -4122,6 +4188,19 @@
             "description": "Its place in the channel's timeline.",
             "title": "Seq",
             "type": "integer"
+          },
+          "shared_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When it was shared with the channel: by the member it was made for, or as it was posted, in a group that shows agents' answers to everybody (`answers_shared`).",
+            "title": "Shared At"
           },
           "source_id": {
             "anyOf": [
@@ -4160,6 +4239,16 @@
             ],
             "description": "The line this one is a reply in the thread of.",
             "title": "Thread Root Id"
+          },
+          "visibility": {
+            "default": "channel",
+            "description": "`asker_only`: an agent's answer made with one member's own access, read in full by that member alone; everybody else here is shown it `withheld`. `channel`: everybody here reads it.",
+            "enum": [
+              "asker_only",
+              "channel"
+            ],
+            "title": "Visibility",
+            "type": "string"
           },
           "withheld": {
             "default": false,
@@ -4238,7 +4327,7 @@
                 "type": "null"
               }
             ],
-            "description": "The client's name for this line: sending it again is the same line.",
+            "description": "The client's name for this line: sending it again is the same line. Shown back on the line to its writer, as sent.",
             "title": "Client Message Id"
           },
           "members_only": {
@@ -4375,6 +4464,18 @@
             "description": "A contact's channel: whether its agents answer the contact.",
             "title": "Agents Answer"
           },
+          "answers_shared": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A group's: whether an answer an agent gives a member here with their own access is read by everybody in it (the default), or by that member alone until they share it. Absent for another kind.",
+            "title": "Answers Shared"
+          },
           "archived": {
             "default": false,
             "title": "Archived",
@@ -4401,6 +4502,19 @@
               }
             ],
             "description": "A contact's channel: its current case asks for a person, and why. Never set on another kind of channel."
+          },
+          "case_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A contact's channel: its current case, the one `status`, `assignee` and `attention` are read from (`/cases` lists them all).",
+            "title": "Case Id"
           },
           "created_at": {
             "format": "date-time",
@@ -4605,7 +4719,7 @@
         "type": "object"
       },
       "ChannelUpdateRequest": {
-        "description": "Absent is unchanged; ``null`` clears where clearing means something.\n\nA group takes ``title``, ``topic``, ``visibility``, ``archived``. A\ncontact's channel takes ``agents_answer``, ``hand_back_after_hours``,\n``status``, ``assignee`` (and needs ``contact.message``). Anything else\nfor the kind is 409.",
+        "description": "Absent is unchanged; ``null`` clears where clearing means something.\n\nA group takes ``title``, ``topic``, ``visibility``, ``archived``,\n``answers_shared``. A contact's channel takes ``agents_answer``, ``hand_back_after_hours``,\n``status``, ``assignee`` (and needs ``contact.message``). Anything else\nfor the kind is 409.",
         "properties": {
           "agents_answer": {
             "anyOf": [
@@ -4618,6 +4732,18 @@
             ],
             "description": "On also hands the contact back now: nobody is assigned.",
             "title": "Agents Answer"
+          },
+          "answers_shared": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A group's: on, agents' answers made with the asker's access are read by everybody here; off, by the asker alone until they share one. Applies to answers posted from then on.",
+            "title": "Answers Shared"
           },
           "archived": {
             "anyOf": [
@@ -5571,6 +5697,12 @@
           "kind": {
             "$ref": "#/components/schemas/IdentityKind"
           },
+          "opted_out": {
+            "default": false,
+            "description": "They asked the pod to stop writing to this handle (STOP, an unsubscribe link, a bounce or a complaint): nothing is sent to it until they write from it again.",
+            "title": "Opted Out",
+            "type": "boolean"
+          },
           "strength": {
             "$ref": "#/components/schemas/IdentityStrength"
           },
@@ -5669,10 +5801,16 @@
             "description": "Known only by the browser they wrote from: a web visitor nobody has vouched for yet.",
             "title": "Is Anonymous",
             "type": "boolean"
+          },
+          "label": {
+            "description": "What to call them: their name, else the handle they are known by (an email address, a number), else that they are a web visitor.",
+            "title": "Label",
+            "type": "string"
           }
         },
         "required": [
           "id",
+          "label",
           "created_at"
         ],
         "title": "ContactResponse",
@@ -11351,6 +11489,12 @@
             ],
             "title": "Client Nonce"
           },
+          "from_person": {
+            "default": false,
+            "description": "A person on the team wrote it, not the bot.",
+            "title": "From Person",
+            "type": "boolean"
+          },
           "role": {
             "title": "Role",
             "type": "string"
@@ -11888,6 +12032,14 @@
       },
       "InboxResponse": {
         "properties": {
+          "contacts": {
+            "description": "Contacts waiting on a reply, most recently active first: those asking for a person, and those assigned to the reader the contact wrote to last. Only for a reader who may see contacts.",
+            "items": {
+              "$ref": "#/components/schemas/ChannelResponse"
+            },
+            "title": "Contacts",
+            "type": "array"
+          },
           "mentions": {
             "description": "Unread lines naming the reader, newest first.",
             "items": {
@@ -11919,6 +12071,12 @@
           "channels": {
             "description": "Channels with something new.",
             "title": "Channels",
+            "type": "integer"
+          },
+          "contacts": {
+            "default": 0,
+            "description": "Contacts waiting on a reply: asking for a person, or assigned to the reader and written to last by the contact.",
+            "title": "Contacts",
             "type": "integer"
           },
           "mentions": {
@@ -12099,7 +12257,7 @@
       },
       "JsonValue": {},
       "LineDelivery": {
-        "description": "Where a line went outside Lemma, as its writer is shown on it.",
+        "description": "Where a line went outside Lemma, as everybody who reads it is shown.",
         "properties": {
           "id": {
             "description": "The delivery; retry it by this id.",
@@ -12160,6 +12318,12 @@
             "title": "Created At",
             "type": "string"
           },
+          "deleted": {
+            "default": false,
+            "description": "Its writer deleted it.",
+            "title": "Deleted",
+            "type": "boolean"
+          },
           "id": {
             "format": "uuid",
             "title": "Id",
@@ -12173,7 +12337,7 @@
             "type": "integer"
           },
           "text": {
-            "description": "The start of what was said; empty when withheld.",
+            "description": "The start of what was said; empty when withheld or deleted.",
             "title": "Text",
             "type": "string"
           },
@@ -12585,6 +12749,7 @@
         "type": "object"
       },
       "MembersAddRequest": {
+        "additionalProperties": false,
         "properties": {
           "agents": {
             "items": {
@@ -12949,8 +13114,14 @@
             "anyOf": [
               {
                 "items": {
-                  "maxLength": 20,
-                  "minLength": 1,
+                  "enum": [
+                    "EMAIL",
+                    "SLACK",
+                    "TEAMS",
+                    "WHATSAPP",
+                    "TELEGRAM",
+                    "RESEND"
+                  ],
                   "type": "string"
                 },
                 "maxItems": 10,
@@ -16305,9 +16476,23 @@
         "properties": {
           "seq": {
             "description": "The newest line the reader has seen.",
+            "maximum": 9.223372036854776e+18,
             "minimum": 0.0,
             "title": "Seq",
             "type": "integer"
+          },
+          "thread_root_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Read in this thread: its replies (and its first line) up to `seq` are seen. Without it, the timeline is: thread replies are not.",
+            "title": "Thread Root Id"
           }
         },
         "required": [
@@ -18085,6 +18270,285 @@
           "expires_at"
         ],
         "title": "SignedUrlSummary",
+        "type": "object"
+      },
+      "SlackAppCreateRequest": {
+        "properties": {
+          "agent_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The agent the app answers as; the pod's own agent when omitted. The app is named after it.",
+            "title": "Agent Id"
+          },
+          "team_id": {
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Team Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "team_id"
+        ],
+        "title": "SlackAppCreateRequest",
+        "type": "object"
+      },
+      "SlackAppCreateResponse": {
+        "description": "The app Slack made, and the install to authorise it against.",
+        "properties": {
+          "app_id": {
+            "title": "App Id",
+            "type": "string"
+          },
+          "auth_config_id": {
+            "format": "uuid",
+            "title": "Auth Config Id",
+            "type": "string"
+          },
+          "reused": {
+            "default": false,
+            "description": "An app made earlier for the same agent and workspace (or the same Idempotency-Key), not a new one.",
+            "title": "Reused",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "app_id",
+          "auth_config_id"
+        ],
+        "title": "SlackAppCreateResponse",
+        "type": "object"
+      },
+      "SlackAppWorkspaceListResponse": {
+        "properties": {
+          "can_manage": {
+            "description": "Whether the caller may save tokens and create apps: an owner or editor of the organization. Others are shown no workspace.",
+            "title": "Can Manage",
+            "type": "boolean"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SlackAppWorkspaceResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "can_manage",
+          "items"
+        ],
+        "title": "SlackAppWorkspaceListResponse",
+        "type": "object"
+      },
+      "SlackAppWorkspaceResponse": {
+        "description": "A Slack workspace Lemma can create apps in. Carries no token.",
+        "properties": {
+          "needs_new_token": {
+            "default": false,
+            "description": "Slack no longer accepts the saved token, or Lemma can no longer read it: paste a new one before Lemma can create apps here.",
+            "title": "Needs New Token",
+            "type": "boolean"
+          },
+          "saved_at": {
+            "format": "date-time",
+            "title": "Saved At",
+            "type": "string"
+          },
+          "slack_user_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The Slack user whose configuration token this is. Slack creates every app as them, and the token can change every app they collaborate on.",
+            "title": "Slack User Id"
+          },
+          "team_id": {
+            "title": "Team Id",
+            "type": "string"
+          },
+          "team_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Team Name"
+          }
+        },
+        "required": [
+          "team_id",
+          "saved_at"
+        ],
+        "title": "SlackAppWorkspaceResponse",
+        "type": "object"
+      },
+      "SlackConfigurationTokenRequest": {
+        "properties": {
+          "refresh_token": {
+            "description": "The refresh token of an app configuration token, from api.slack.com/apps. Lemma rotates it at once, which proves it works and names the workspace it is for.",
+            "format": "password",
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "Refresh Token",
+            "type": "string",
+            "writeOnly": true
+          }
+        },
+        "required": [
+          "refresh_token"
+        ],
+        "title": "SlackConfigurationTokenRequest",
+        "type": "object"
+      },
+      "SlackInstallAvailabilityResponse": {
+        "description": "Whether \"Add to Slack\" can work on this server, asked before anything\nis made for it.",
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "available"
+        ],
+        "title": "SlackInstallAvailabilityResponse",
+        "type": "object"
+      },
+      "SlackInstallRequest": {
+        "description": "Which organization Lemma's app joins the workspace for.",
+        "properties": {
+          "organization_id": {
+            "format": "uuid",
+            "title": "Organization Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "organization_id"
+        ],
+        "title": "SlackInstallRequest",
+        "type": "object"
+      },
+      "SlackInstallResponse": {
+        "description": "Slack's consent page for Lemma's own app, to send the browser to.",
+        "properties": {
+          "authorization_url": {
+            "title": "Authorization Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "authorization_url"
+        ],
+        "title": "SlackInstallResponse",
+        "type": "object"
+      },
+      "SlackManagedWorkspaceListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SlackManagedWorkspaceResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "SlackManagedWorkspaceListResponse",
+        "type": "object"
+      },
+      "SlackManagedWorkspaceResponse": {
+        "description": "A Slack workspace Lemma's own app manages for this organization.",
+        "properties": {
+          "team_id": {
+            "title": "Team Id",
+            "type": "string"
+          },
+          "team_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Team Name"
+          }
+        },
+        "required": [
+          "team_id"
+        ],
+        "title": "SlackManagedWorkspaceResponse",
+        "type": "object"
+      },
+      "SlackManagerBindRequest": {
+        "properties": {
+          "account_id": {
+            "description": "The account made by authorising Lemma's own Slack app.",
+            "format": "uuid",
+            "title": "Account Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "account_id"
+        ],
+        "title": "SlackManagerBindRequest",
+        "type": "object"
+      },
+      "SlackSignInRequest": {
+        "description": "Whom the App Home link was for.",
+        "properties": {
+          "slack_user_id": {
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Slack User Id",
+            "type": "string"
+          },
+          "team_id": {
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Team Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "team_id",
+          "slack_user_id"
+        ],
+        "title": "SlackSignInRequest",
+        "type": "object"
+      },
+      "SlackSignInResponse": {
+        "description": "Where to send the browser: Slack's own sign-in page.",
+        "properties": {
+          "authorization_url": {
+            "title": "Authorization Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "authorization_url"
+        ],
+        "title": "SlackSignInResponse",
         "type": "object"
       },
       "SourceKind": {
@@ -20042,6 +20506,7 @@
       "ThreadResponse": {
         "properties": {
           "has_more": {
+            "description": "Whether there are more replies in the direction read: newer ones, or with `before_seq` or `newest`, older ones.",
             "title": "Has More",
             "type": "boolean"
           },
@@ -20062,7 +20527,20 @@
                 "type": "null"
               }
             ],
+            "description": "Pass as `after_seq` for the newer page.",
             "title": "Next After Seq"
+          },
+          "next_before_seq": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Reading backwards: pass as `before_seq` for the older page.",
+            "title": "Next Before Seq"
           },
           "root": {
             "$ref": "#/components/schemas/ChannelMessageResponse"
@@ -20168,7 +20646,7 @@
         "properties": {
           "lines": {
             "default": 0,
-            "description": "New lines since the reader last read it, in channels they joined; stops at 100.",
+            "description": "New lines since the reader last read it, in channels they joined -- and, in one they are not in, while a line naming them is unread, from that line; stops at 100.",
             "title": "Lines",
             "type": "integer"
           },
@@ -31297,7 +31775,7 @@
             }
           },
           {
-            "description": "Only channels whose title holds these words, in any case.",
+            "description": "Only channels named by every one of these words, in any order and case: by title, or -- a member's or a contact's own channel -- by whose it is.",
             "in": "query",
             "name": "q",
             "required": false,
@@ -31312,7 +31790,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Only channels whose title holds these words, in any case.",
+              "description": "Only channels named by every one of these words, in any order and case: by title, or -- a member's or a contact's own channel -- by whose it is.",
               "title": "Q"
             }
           },
@@ -31475,6 +31953,46 @@
             },
             "description": "Successful Response"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A cursor this API did not give."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not allowed: `INSUFFICIENT_PERMISSION`."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not there, or not the reader's to see: `CHANNEL_NOT_FOUND`, `LINE_NOT_FOUND`, `MEMBER_NOT_FOUND` ..."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not in this channel's state: `CHANNEL_ARCHIVED`, `WRONG_CHANNEL_KIND`, `LAST_OWNER`, `LAST_MEMBER`, `NOT_JOINED`, `CHANNEL_CONFLICT`."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -31483,7 +32001,7 @@
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "The request cannot be done as asked: `VALIDATION_ERROR`."
           }
         },
         "summary": "List Channels",
@@ -31499,7 +32017,7 @@
         }
       },
       "post": {
-        "description": "A group made in Lemma: public unless asked otherwise, with its maker as\nits owner and the members and agents named in it. The same\n`Idempotency-Key` from the same member returns the group it made.",
+        "description": "A group made in Lemma: public unless asked otherwise, with its maker as\nits owner and the members and agents named in it. The same\n`Idempotency-Key` from the same member returns the group it made; sent\nwith another title, topic or visibility, it is refused (422).",
         "operationId": "channel.create",
         "parameters": [
           {
@@ -31552,6 +32070,46 @@
             },
             "description": "Successful Response"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A cursor this API did not give."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not allowed: `INSUFFICIENT_PERMISSION`."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not there, or not the reader's to see: `CHANNEL_NOT_FOUND`, `LINE_NOT_FOUND`, `MEMBER_NOT_FOUND` ..."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not in this channel's state: `CHANNEL_ARCHIVED`, `WRONG_CHANNEL_KIND`, `LAST_OWNER`, `LAST_MEMBER`, `NOT_JOINED`, `CHANNEL_CONFLICT`."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -31560,7 +32118,7 @@
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "The request cannot be done as asked: `VALIDATION_ERROR`."
           }
         },
         "summary": "Create Channel",
@@ -31606,6 +32164,46 @@
             },
             "description": "Successful Response"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A cursor this API did not give."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not allowed: `INSUFFICIENT_PERMISSION`."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not there, or not the reader's to see: `CHANNEL_NOT_FOUND`, `LINE_NOT_FOUND`, `MEMBER_NOT_FOUND` ..."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not in this channel's state: `CHANNEL_ARCHIVED`, `WRONG_CHANNEL_KIND`, `LAST_OWNER`, `LAST_MEMBER`, `NOT_JOINED`, `CHANNEL_CONFLICT`."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -31614,7 +32212,7 @@
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "The request cannot be done as asked: `VALIDATION_ERROR`."
           }
         },
         "summary": "Get My Channel",
@@ -31655,6 +32253,46 @@
             },
             "description": "Successful Response"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A cursor this API did not give."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not allowed: `INSUFFICIENT_PERMISSION`."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not there, or not the reader's to see: `CHANNEL_NOT_FOUND`, `LINE_NOT_FOUND`, `MEMBER_NOT_FOUND` ..."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not in this channel's state: `CHANNEL_ARCHIVED`, `WRONG_CHANNEL_KIND`, `LAST_OWNER`, `LAST_MEMBER`, `NOT_JOINED`, `CHANNEL_CONFLICT`."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -31663,7 +32301,7 @@
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "The request cannot be done as asked: `VALIDATION_ERROR`."
           }
         },
         "summary": "Create My Channel",
@@ -31878,6 +32516,46 @@
           "204": {
             "description": "Successful Response"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A cursor this API did not give."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not allowed: `INSUFFICIENT_PERMISSION`."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not there, or not the reader's to see: `CHANNEL_NOT_FOUND`, `LINE_NOT_FOUND`, `MEMBER_NOT_FOUND` ..."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not in this channel's state: `CHANNEL_ARCHIVED`, `WRONG_CHANNEL_KIND`, `LAST_OWNER`, `LAST_MEMBER`, `NOT_JOINED`, `CHANNEL_CONFLICT`."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -31886,7 +32564,7 @@
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "The request cannot be done as asked: `VALIDATION_ERROR`."
           }
         },
         "summary": "Delete Channel",
@@ -31940,6 +32618,46 @@
             },
             "description": "Successful Response"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A cursor this API did not give."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not allowed: `INSUFFICIENT_PERMISSION`."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not there, or not the reader's to see: `CHANNEL_NOT_FOUND`, `LINE_NOT_FOUND`, `MEMBER_NOT_FOUND` ..."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not in this channel's state: `CHANNEL_ARCHIVED`, `WRONG_CHANNEL_KIND`, `LAST_OWNER`, `LAST_MEMBER`, `NOT_JOINED`, `CHANNEL_CONFLICT`."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -31948,7 +32666,7 @@
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "The request cannot be done as asked: `VALIDATION_ERROR`."
           }
         },
         "summary": "Get Channel",
@@ -31964,7 +32682,7 @@
         }
       },
       "patch": {
-        "description": "Change exactly the fields named; `null` clears.\n\nA group: `title`, `topic`, `visibility`, `archived` -- its owners' or an\nadmin's. A contact's channel: `agents_answer`, `hand_back_after_hours`,\n`status`, `assignee` -- for who may write to contacts. Switching the agent\non hands the contact back to it now: nobody is assigned.",
+        "description": "Change exactly the fields named; `null` clears.\n\nA group: `title`, `topic`, `visibility`, `archived`, `answers_shared`\n(whether agents' answers made with the asker's access are read by\neverybody here, or kept to the asker until they share one) -- its\nowners' or an admin's. A contact's channel: `agents_answer`, `hand_back_after_hours`,\n`status`, `assignee` -- for who may write to contacts. Switching the agent\non hands the contact back to it now: nobody is assigned.",
         "operationId": "channel.update",
         "parameters": [
           {
@@ -32009,6 +32727,46 @@
             },
             "description": "Successful Response"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A cursor this API did not give."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not allowed: `INSUFFICIENT_PERMISSION`."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not there, or not the reader's to see: `CHANNEL_NOT_FOUND`, `LINE_NOT_FOUND`, `MEMBER_NOT_FOUND` ..."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not in this channel's state: `CHANNEL_ARCHIVED`, `WRONG_CHANNEL_KIND`, `LAST_OWNER`, `LAST_MEMBER`, `NOT_JOINED`, `CHANNEL_CONFLICT`."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -32017,7 +32775,7 @@
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "The request cannot be done as asked: `VALIDATION_ERROR`."
           }
         },
         "summary": "Update Channel",
@@ -32102,6 +32860,46 @@
             },
             "description": "Successful Response"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A cursor this API did not give."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not allowed: `INSUFFICIENT_PERMISSION`."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not there, or not the reader's to see: `CHANNEL_NOT_FOUND`, `LINE_NOT_FOUND`, `MEMBER_NOT_FOUND` ..."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not in this channel's state: `CHANNEL_ARCHIVED`, `WRONG_CHANNEL_KIND`, `LAST_OWNER`, `LAST_MEMBER`, `NOT_JOINED`, `CHANNEL_CONFLICT`."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -32110,7 +32908,7 @@
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "The request cannot be done as asked: `VALIDATION_ERROR`."
           }
         },
         "summary": "List Cases",
@@ -32192,6 +32990,46 @@
             },
             "description": "Successful Response"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A cursor this API did not give."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not allowed: `INSUFFICIENT_PERMISSION`."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not there, or not the reader's to see: `CHANNEL_NOT_FOUND`, `LINE_NOT_FOUND`, `MEMBER_NOT_FOUND` ..."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not in this channel's state: `CHANNEL_ARCHIVED`, `WRONG_CHANNEL_KIND`, `LAST_OWNER`, `LAST_MEMBER`, `NOT_JOINED`, `CHANNEL_CONFLICT`."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -32200,7 +33038,7 @@
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "The request cannot be done as asked: `VALIDATION_ERROR`."
           }
         },
         "summary": "List Members",
@@ -32261,6 +33099,46 @@
             },
             "description": "Successful Response"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A cursor this API did not give."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not allowed: `INSUFFICIENT_PERMISSION`."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not there, or not the reader's to see: `CHANNEL_NOT_FOUND`, `LINE_NOT_FOUND`, `MEMBER_NOT_FOUND` ..."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not in this channel's state: `CHANNEL_ARCHIVED`, `WRONG_CHANNEL_KIND`, `LAST_OWNER`, `LAST_MEMBER`, `NOT_JOINED`, `CHANNEL_CONFLICT`."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -32269,7 +33147,7 @@
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "The request cannot be done as asked: `VALIDATION_ERROR`."
           }
         },
         "summary": "Add Members",
@@ -32290,7 +33168,7 @@
     },
     "/pods/{pod_id}/channels/{channel_id}/members/me": {
       "delete": {
-        "description": "Leave a channel. Leaving one not joined is nothing; a member's own\nchannel cannot be left.",
+        "description": "Leave a channel. Leaving one not joined is nothing; a member's own\nchannel cannot be left, nor a private group by the last person in it (409\n`LAST_MEMBER`). A group's last owner leaving hands it to whoever has been\nin it longest.",
         "operationId": "channel.member.leave",
         "parameters": [
           {
@@ -32318,6 +33196,46 @@
           "204": {
             "description": "Successful Response"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A cursor this API did not give."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not allowed: `INSUFFICIENT_PERMISSION`."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not there, or not the reader's to see: `CHANNEL_NOT_FOUND`, `LINE_NOT_FOUND`, `MEMBER_NOT_FOUND` ..."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not in this channel's state: `CHANNEL_ARCHIVED`, `WRONG_CHANNEL_KIND`, `LAST_OWNER`, `LAST_MEMBER`, `NOT_JOINED`, `CHANNEL_CONFLICT`."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -32326,7 +33244,7 @@
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "The request cannot be done as asked: `VALIDATION_ERROR`."
           }
         },
         "summary": "Leave Channel",
@@ -32390,6 +33308,46 @@
             },
             "description": "Successful Response"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A cursor this API did not give."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not allowed: `INSUFFICIENT_PERMISSION`."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not there, or not the reader's to see: `CHANNEL_NOT_FOUND`, `LINE_NOT_FOUND`, `MEMBER_NOT_FOUND` ..."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not in this channel's state: `CHANNEL_ARCHIVED`, `WRONG_CHANNEL_KIND`, `LAST_OWNER`, `LAST_MEMBER`, `NOT_JOINED`, `CHANNEL_CONFLICT`."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -32398,7 +33356,7 @@
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "The request cannot be done as asked: `VALIDATION_ERROR`."
           }
         },
         "summary": "Update My Membership",
@@ -32452,6 +33410,46 @@
             },
             "description": "Successful Response"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A cursor this API did not give."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not allowed: `INSUFFICIENT_PERMISSION`."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not there, or not the reader's to see: `CHANNEL_NOT_FOUND`, `LINE_NOT_FOUND`, `MEMBER_NOT_FOUND` ..."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not in this channel's state: `CHANNEL_ARCHIVED`, `WRONG_CHANNEL_KIND`, `LAST_OWNER`, `LAST_MEMBER`, `NOT_JOINED`, `CHANNEL_CONFLICT`."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -32460,7 +33458,7 @@
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "The request cannot be done as asked: `VALIDATION_ERROR`."
           }
         },
         "summary": "Join Channel",
@@ -32481,7 +33479,7 @@
     },
     "/pods/{pod_id}/channels/{channel_id}/members/{kind}:{member_id}": {
       "delete": {
-        "description": "Take somebody out of a group -- its owners' or an editor's -- or leave a\nchannel oneself.",
+        "description": "Take somebody out of a group -- its owners' or an editor's -- or leave a\nchannel oneself. A group keeps an owner, and a private one somebody in it\n(409 `LAST_OWNER`, `LAST_MEMBER`): its last owner leaving hands it on.",
         "operationId": "channel.member.remove",
         "parameters": [
           {
@@ -32527,6 +33525,46 @@
           "204": {
             "description": "Successful Response"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A cursor this API did not give."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not allowed: `INSUFFICIENT_PERMISSION`."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not there, or not the reader's to see: `CHANNEL_NOT_FOUND`, `LINE_NOT_FOUND`, `MEMBER_NOT_FOUND` ..."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not in this channel's state: `CHANNEL_ARCHIVED`, `WRONG_CHANNEL_KIND`, `LAST_OWNER`, `LAST_MEMBER`, `NOT_JOINED`, `CHANNEL_CONFLICT`."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -32535,7 +33573,7 @@
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "The request cannot be done as asked: `VALIDATION_ERROR`."
           }
         },
         "summary": "Remove Member",
@@ -32617,6 +33655,46 @@
             },
             "description": "Successful Response"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A cursor this API did not give."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not allowed: `INSUFFICIENT_PERMISSION`."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not there, or not the reader's to see: `CHANNEL_NOT_FOUND`, `LINE_NOT_FOUND`, `MEMBER_NOT_FOUND` ..."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not in this channel's state: `CHANNEL_ARCHIVED`, `WRONG_CHANNEL_KIND`, `LAST_OWNER`, `LAST_MEMBER`, `NOT_JOINED`, `CHANNEL_CONFLICT`."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -32625,7 +33703,7 @@
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "The request cannot be done as asked: `VALIDATION_ERROR`."
           }
         },
         "summary": "Update Member",
@@ -32676,6 +33754,7 @@
             "schema": {
               "anyOf": [
                 {
+                  "maximum": 9223372036854775807,
                   "minimum": 1,
                   "type": "integer"
                 },
@@ -32693,6 +33772,7 @@
             "schema": {
               "anyOf": [
                 {
+                  "maximum": 9223372036854775807,
                   "minimum": 0,
                   "type": "integer"
                 },
@@ -32727,6 +33807,46 @@
             },
             "description": "Successful Response"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A cursor this API did not give."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not allowed: `INSUFFICIENT_PERMISSION`."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not there, or not the reader's to see: `CHANNEL_NOT_FOUND`, `LINE_NOT_FOUND`, `MEMBER_NOT_FOUND` ..."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not in this channel's state: `CHANNEL_ARCHIVED`, `WRONG_CHANNEL_KIND`, `LAST_OWNER`, `LAST_MEMBER`, `NOT_JOINED`, `CHANNEL_CONFLICT`."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -32735,7 +33855,7 @@
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "The request cannot be done as asked: `VALIDATION_ERROR`."
           }
         },
         "summary": "List Messages",
@@ -32814,6 +33934,46 @@
             },
             "description": "Successful Response"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A cursor this API did not give."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not allowed: `INSUFFICIENT_PERMISSION`."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not there, or not the reader's to see: `CHANNEL_NOT_FOUND`, `LINE_NOT_FOUND`, `MEMBER_NOT_FOUND` ..."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not in this channel's state: `CHANNEL_ARCHIVED`, `WRONG_CHANNEL_KIND`, `LAST_OWNER`, `LAST_MEMBER`, `NOT_JOINED`, `CHANNEL_CONFLICT`."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -32822,7 +33982,7 @@
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "The request cannot be done as asked: `VALIDATION_ERROR`."
           }
         },
         "summary": "Post Message",
@@ -32843,7 +34003,7 @@
     },
     "/pods/{pod_id}/channels/{channel_id}/messages/{message_id}": {
       "delete": {
-        "description": "Delete one's own line: it keeps its place, saying nothing.",
+        "description": "Delete a line: it keeps its place, saying nothing. One's own -- or,\nfor who may change the channel, anybody's, shown as removed by them. A\ncopy already sent outside Lemma stays as sent.",
         "operationId": "channel.message.delete",
         "parameters": [
           {
@@ -32881,6 +34041,46 @@
           "204": {
             "description": "Successful Response"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A cursor this API did not give."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not allowed: `INSUFFICIENT_PERMISSION`."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not there, or not the reader's to see: `CHANNEL_NOT_FOUND`, `LINE_NOT_FOUND`, `MEMBER_NOT_FOUND` ..."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not in this channel's state: `CHANNEL_ARCHIVED`, `WRONG_CHANNEL_KIND`, `LAST_OWNER`, `LAST_MEMBER`, `NOT_JOINED`, `CHANNEL_CONFLICT`."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -32889,7 +34089,7 @@
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "The request cannot be done as asked: `VALIDATION_ERROR`."
           }
         },
         "summary": "Delete Message",
@@ -32963,6 +34163,46 @@
             },
             "description": "Successful Response"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A cursor this API did not give."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not allowed: `INSUFFICIENT_PERMISSION`."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not there, or not the reader's to see: `CHANNEL_NOT_FOUND`, `LINE_NOT_FOUND`, `MEMBER_NOT_FOUND` ..."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not in this channel's state: `CHANNEL_ARCHIVED`, `WRONG_CHANNEL_KIND`, `LAST_OWNER`, `LAST_MEMBER`, `NOT_JOINED`, `CHANNEL_CONFLICT`."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -32971,7 +34211,7 @@
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "The request cannot be done as asked: `VALIDATION_ERROR`."
           }
         },
         "summary": "Edit Message",
@@ -33047,6 +34287,46 @@
             },
             "description": "Successful Response"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A cursor this API did not give."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not allowed: `INSUFFICIENT_PERMISSION`."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not there, or not the reader's to see: `CHANNEL_NOT_FOUND`, `LINE_NOT_FOUND`, `MEMBER_NOT_FOUND` ..."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not in this channel's state: `CHANNEL_ARCHIVED`, `WRONG_CHANNEL_KIND`, `LAST_OWNER`, `LAST_MEMBER`, `NOT_JOINED`, `CHANNEL_CONFLICT`."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -33055,7 +34335,7 @@
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "The request cannot be done as asked: `VALIDATION_ERROR`."
           }
         },
         "summary": "Answer Question",
@@ -33121,6 +34401,46 @@
             },
             "description": "Successful Response"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A cursor this API did not give."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not allowed: `INSUFFICIENT_PERMISSION`."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not there, or not the reader's to see: `CHANNEL_NOT_FOUND`, `LINE_NOT_FOUND`, `MEMBER_NOT_FOUND` ..."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not in this channel's state: `CHANNEL_ARCHIVED`, `WRONG_CHANNEL_KIND`, `LAST_OWNER`, `LAST_MEMBER`, `NOT_JOINED`, `CHANNEL_CONFLICT`."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -33129,7 +34449,7 @@
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "The request cannot be done as asked: `VALIDATION_ERROR`."
           }
         },
         "summary": "List Deliveries",
@@ -33147,7 +34467,7 @@
     },
     "/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/deliveries/{delivery_id}/retry": {
       "post": {
-        "description": "Try a failed or given-up send again, now: for who wrote the line, or\nmay change the channel.",
+        "description": "Try a failed or given-up send again, now. A send to a place: for who\nwrote the line, or may change the channel -- anybody else who reads the\nline is refused. A push to a member: theirs alone, as only they see it.\nIt is one more try: a send that fails again on its last is given up.",
         "operationId": "channel.delivery.retry",
         "parameters": [
           {
@@ -33202,6 +34522,46 @@
             },
             "description": "Successful Response"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A cursor this API did not give."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not allowed: `INSUFFICIENT_PERMISSION`."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not there, or not the reader's to see: `CHANNEL_NOT_FOUND`, `LINE_NOT_FOUND`, `MEMBER_NOT_FOUND` ..."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not in this channel's state: `CHANNEL_ARCHIVED`, `WRONG_CHANNEL_KIND`, `LAST_OWNER`, `LAST_MEMBER`, `NOT_JOINED`, `CHANNEL_CONFLICT`."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -33210,7 +34570,7 @@
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "The request cannot be done as asked: `VALIDATION_ERROR`."
           }
         },
         "summary": "Retry Delivery",
@@ -33287,6 +34647,46 @@
             },
             "description": "The file's bytes"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A cursor this API did not give."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not allowed: `INSUFFICIENT_PERMISSION`."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not there, or not the reader's to see: `CHANNEL_NOT_FOUND`, `LINE_NOT_FOUND`, `MEMBER_NOT_FOUND` ..."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not in this channel's state: `CHANNEL_ARCHIVED`, `WRONG_CHANNEL_KIND`, `LAST_OWNER`, `LAST_MEMBER`, `NOT_JOINED`, `CHANNEL_CONFLICT`."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -33295,7 +34695,7 @@
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "The request cannot be done as asked: `VALIDATION_ERROR`."
           }
         },
         "summary": "Line File",
@@ -33311,9 +34711,123 @@
         }
       }
     },
+    "/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/share": {
+      "post": {
+        "description": "Share an agent's answer made with your own access with everybody in the\nchannel. Until then only you read it; the others are shown that it was\ngiven. Yours alone to share; sharing it again changes nothing.",
+        "operationId": "channel.message.share",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Channel Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "message_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Message Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelMessageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A cursor this API did not give."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not allowed: `INSUFFICIENT_PERMISSION`."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not there, or not the reader's to see: `CHANNEL_NOT_FOUND`, `LINE_NOT_FOUND`, `MEMBER_NOT_FOUND` ..."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not in this channel's state: `CHANNEL_ARCHIVED`, `WRONG_CHANNEL_KIND`, `LAST_OWNER`, `LAST_MEMBER`, `NOT_JOINED`, `CHANNEL_CONFLICT`."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The request cannot be done as asked: `VALIDATION_ERROR`."
+          }
+        },
+        "summary": "Share Message",
+        "tags": [
+          "Channels"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "channel.message"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "channel.message",
+          "result": "entity",
+          "verb": "share"
+        }
+      }
+    },
     "/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/thread": {
       "get": {
-        "description": "A thread: its first line, and its replies oldest first after `after_seq`.",
+        "description": "A thread: its first line, and a page of its replies, oldest first\nwithin it -- from the start, after `after_seq`, before `before_seq`, or\n(`newest`) the latest.",
         "operationId": "channel.message.thread",
         "parameters": [
           {
@@ -33353,6 +34867,7 @@
             "schema": {
               "anyOf": [
                 {
+                  "maximum": 9223372036854775807,
                   "minimum": 0,
                   "type": "integer"
                 },
@@ -33361,6 +34876,36 @@
                 }
               ],
               "title": "After Seq"
+            }
+          },
+          {
+            "in": "query",
+            "name": "before_seq",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 9223372036854775807,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Before Seq"
+            }
+          },
+          {
+            "description": "The newest page of replies, rather than the first.",
+            "in": "query",
+            "name": "newest",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "The newest page of replies, rather than the first.",
+              "title": "Newest",
+              "type": "boolean"
             }
           },
           {
@@ -33387,6 +34932,46 @@
             },
             "description": "Successful Response"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A cursor this API did not give."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not allowed: `INSUFFICIENT_PERMISSION`."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not there, or not the reader's to see: `CHANNEL_NOT_FOUND`, `LINE_NOT_FOUND`, `MEMBER_NOT_FOUND` ..."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not in this channel's state: `CHANNEL_ARCHIVED`, `WRONG_CHANNEL_KIND`, `LAST_OWNER`, `LAST_MEMBER`, `NOT_JOINED`, `CHANNEL_CONFLICT`."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -33395,7 +34980,7 @@
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "The request cannot be done as asked: `VALIDATION_ERROR`."
           }
         },
         "summary": "List Thread",
@@ -33413,7 +34998,7 @@
     },
     "/pods/{pod_id}/channels/{channel_id}/read": {
       "post": {
-        "description": "The reader has seen the channel up to line `seq`: it never goes back,\nand never past the newest line. Mentions up to it are read too.",
+        "description": "The reader has seen the timeline up to line `seq`: it never goes back,\nand never past the newest line. Lines of the timeline naming them up to\nit are read too; replies naming them are not -- with `thread_root_id`,\nthe reader has seen that thread up to `seq`, and what named them there is\nread, while the timeline's `read_seq` stays where it was.",
         "operationId": "channel.read",
         "parameters": [
           {
@@ -33458,6 +35043,46 @@
             },
             "description": "Successful Response"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A cursor this API did not give."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not allowed: `INSUFFICIENT_PERMISSION`."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not there, or not the reader's to see: `CHANNEL_NOT_FOUND`, `LINE_NOT_FOUND`, `MEMBER_NOT_FOUND` ..."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not in this channel's state: `CHANNEL_ARCHIVED`, `WRONG_CHANNEL_KIND`, `LAST_OWNER`, `LAST_MEMBER`, `NOT_JOINED`, `CHANNEL_CONFLICT`."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -33466,7 +35091,7 @@
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "The request cannot be done as asked: `VALIDATION_ERROR`."
           }
         },
         "summary": "Mark Read",
@@ -33680,6 +35305,26 @@
                 }
               ],
               "title": "Cursor"
+            }
+          },
+          {
+            "description": "Only contacts whose name, email address or number holds this.",
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only contacts whose name, email address or number holds this.",
+              "title": "Q"
             }
           }
         ],
@@ -39283,7 +40928,7 @@
     },
     "/pods/{pod_id}/inbox": {
       "get": {
-        "description": "What is new for the reader across the pod: the badges, the questions\nwaiting on them, and the unread lines naming them -- newest first.",
+        "description": "What is new for the reader across the pod: the badges, the questions\nwaiting on them, the unread lines naming them -- newest first -- and the\ncontacts waiting on a reply.",
         "operationId": "channel.inbox.get",
         "parameters": [
           {
@@ -39308,6 +40953,46 @@
             },
             "description": "Successful Response"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A cursor this API did not give."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not allowed: `INSUFFICIENT_PERMISSION`."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not there, or not the reader's to see: `CHANNEL_NOT_FOUND`, `LINE_NOT_FOUND`, `MEMBER_NOT_FOUND` ..."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not in this channel's state: `CHANNEL_ARCHIVED`, `WRONG_CHANNEL_KIND`, `LAST_OWNER`, `LAST_MEMBER`, `NOT_JOINED`, `CHANNEL_CONFLICT`."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -39316,7 +41001,7 @@
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "The request cannot be done as asked: `VALIDATION_ERROR`."
           }
         },
         "summary": "Get Inbox",
@@ -39928,7 +41613,7 @@
     },
     "/pods/{pod_id}/members/{member}/notices": {
       "post": {
-        "description": "Tell another member of the pod something, in their own channel. The\nsame `Idempotency-Key` from the same member is the same notice.",
+        "description": "Tell another member of the pod something, in their own channel. The\nsame `Idempotency-Key` from the same member is the same notice; sent with\nother text, it is refused (422). A member sends at most\n`NOTICES_PER_MINUTE` a minute (429).",
         "operationId": "agent.notice.send",
         "parameters": [
           {
@@ -39994,6 +41679,16 @@
             },
             "description": "Successful Response"
           },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Nobody in this pod is that member."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -40003,6 +41698,16 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many notices this minute; see Retry-After."
           }
         },
         "summary": "Send Notice",
@@ -42108,6 +43813,46 @@
             },
             "description": "Successful Response"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A cursor this API did not give."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not allowed: `INSUFFICIENT_PERMISSION`."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not there, or not the reader's to see: `CHANNEL_NOT_FOUND`, `LINE_NOT_FOUND`, `MEMBER_NOT_FOUND` ..."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not in this channel's state: `CHANNEL_ARCHIVED`, `WRONG_CHANNEL_KIND`, `LAST_OWNER`, `LAST_MEMBER`, `NOT_JOINED`, `CHANNEL_CONFLICT`."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -42116,7 +43861,7 @@
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "The request cannot be done as asked: `VALIDATION_ERROR`."
           }
         },
         "summary": "Search",
@@ -42129,6 +43874,390 @@
           "resource": "channel",
           "result": "collection",
           "verb": "search"
+        }
+      }
+    },
+    "/pods/{pod_id}/surface-setup/slack/app-creation": {
+      "get": {
+        "description": "The Slack workspaces this pod's organization lets Lemma create apps in.",
+        "operationId": "agent.surface.slack_app_creation.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlackAppWorkspaceListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Slack App Workspaces",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "agent.surface.slack_app_creation",
+          "result": "collection",
+          "verb": "list"
+        }
+      },
+      "put": {
+        "description": "Let Lemma create Slack apps in the workspace this token is for.",
+        "operationId": "agent.surface.slack_app_creation.save",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SlackConfigurationTokenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlackAppWorkspaceResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Save Slack Configuration Token",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.surface.slack_app_creation"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.surface.slack_app_creation",
+          "result": "entity",
+          "verb": "save"
+        }
+      }
+    },
+    "/pods/{pod_id}/surface-setup/slack/app-creation/{team_id}": {
+      "delete": {
+        "description": "Stop Lemma creating apps there. Apps it already made are not touched.\n\nSlack offers no way to revoke a configuration token, so it stays valid at\nSlack: revoke it on api.slack.com/apps as well.",
+        "operationId": "agent.surface.slack_app_creation.forget",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "team_id",
+            "required": true,
+            "schema": {
+              "title": "Team Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Forget Slack Configuration Token",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.surface.slack_app_creation"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.surface.slack_app_creation",
+          "result": "void",
+          "verb": "forget"
+        }
+      }
+    },
+    "/pods/{pod_id}/surface-setup/slack/apps": {
+      "post": {
+        "description": "Create an agent's own Slack app, named after it. What is left is\nauthorising it.\n\nOne app per agent per workspace: until it is authorised, asking again\nanswers with the same app, and so does the same `Idempotency-Key` from the\nsame member for a day.",
+        "operationId": "agent.surface.slack_app.create",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 255,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SlackAppCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlackAppCreateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not set up, the token needs replacing, or busy."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Slack is rate-limiting app creation."
+          }
+        },
+        "summary": "Create Slack App",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.surface.slack_app"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.surface.slack_app",
+          "result": "entity",
+          "verb": "create"
+        }
+      }
+    },
+    "/pods/{pod_id}/surface-setup/slack/manager": {
+      "get": {
+        "description": "The Slack workspaces Lemma's own app manages for this pod's organization.",
+        "operationId": "agent.surface.slack_manager.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlackManagedWorkspaceListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Slack Managed Workspaces",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "agent.surface.slack_manager",
+          "result": "collection",
+          "verb": "list"
+        }
+      },
+      "put": {
+        "description": "Make Lemma's own app this workspace's manager. The workspace becomes the\norganization's, and the person who authorised it is known in Slack.\n\nOnly for a grant this browser finished signed in as the caller: a consent\nlink somebody else completed is refused.",
+        "operationId": "agent.surface.slack_manager.bind",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SlackManagerBindRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlackManagedWorkspaceResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Bind Slack Manager",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.surface.slack_manager"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.surface.slack_manager",
+          "result": "entity",
+          "verb": "bind"
         }
       }
     },
@@ -45128,6 +47257,85 @@
         }
       }
     },
+    "/surface-setup/slack/install": {
+      "get": {
+        "description": "Whether Lemma's own Slack app is set up on this server, so \"Add to\nSlack\" can work -- checked before a person with no organization is given\none for it.",
+        "operationId": "agent.surface.slack_install.availability",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlackInstallAvailabilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Slack Install Availability",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "agent.surface.slack_install",
+          "result": "entity",
+          "verb": "availability"
+        }
+      },
+      "post": {
+        "description": "Add Lemma to a Slack workspace from \"Add to Slack\", for this organization.\n\nAnswers with Slack's consent page for Lemma's own app, asking for its bot\nalone. Refused before anything is made when Slack isn't set up here, or\nthe caller may not add the organization's installs. When the grant comes\nback to this same signed-in browser, the workspace becomes the\norganization's and Lemma's app says hello there; a grant finished anywhere\nelse adopts nothing.",
+        "operationId": "agent.surface.slack_install.start",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SlackInstallRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlackInstallResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Slack Install Flow",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.surface.slack_install"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.surface.slack_install",
+          "result": "entity",
+          "verb": "start"
+        }
+      }
+    },
     "/surface-setup/slack/manifest": {
       "get": {
         "description": "The Slack app manifest to paste when running your own Slack app.\n\nServed rather than copied out of the repo so the URLs always match the\ndeployment answering this request, and the scopes always match the code\nthat will consume the events.\n\nSigned-in access is the only gate, and that is enough: every value in here\nis already public \u2014 this deployment's URLs and the scopes its own code\nasks for. It carries no credential and reveals nothing about a pod: the\nagent name is supplied by the caller and echoed back, never read from one.",
@@ -45187,6 +47395,58 @@
           "resource": "agent.surface",
           "result": "entity",
           "verb": "slack_manifest"
+        }
+      }
+    },
+    "/surface-setup/slack/people/sign-in": {
+      "post": {
+        "description": "Start Sign in with Slack for the signed-in person, to prove they are the\nSlack user their App Home's link was for.\n\nConnects nothing. The callback connects only when it sees this same Lemma\nsession and Slack names this same Slack user and workspace.",
+        "operationId": "agent.surface.slack_person.sign_in",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SlackSignInRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlackSignInResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Slack Sign In",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.surface.slack_person"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.surface.slack_person",
+          "result": "entity",
+          "verb": "sign_in"
         }
       }
     },

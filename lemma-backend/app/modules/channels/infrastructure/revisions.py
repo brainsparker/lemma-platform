@@ -69,6 +69,12 @@ class HeldHead:
     pod_id: UUID
     last_seq: int
     last_rev: int
+    #: The channel's kind, and whether a group shows its agents' answers to
+    #: everybody in it: what a line is posted as (``shared_when_posted``).
+    kind: str
+    answers_shared: bool
+    #: How many of its lines are replies in a thread.
+    replies: int = 0
     #: Each change taken, in order: the line it moved, or ``None``.
     changes: list[UUID | None] = field(default_factory=list)
     channel_changed: bool = False
@@ -139,7 +145,14 @@ async def hold(session: AsyncSession, channel_id: UUID) -> HeldHead | None:
         return existing
     row = (
         await session.execute(
-            select(ChannelModel.pod_id, ChannelModel.last_seq, ChannelModel.last_rev)
+            select(
+                ChannelModel.pod_id,
+                ChannelModel.last_seq,
+                ChannelModel.last_rev,
+                ChannelModel.replies,
+                ChannelModel.kind,
+                ChannelModel.answers_shared,
+            )
             .where(ChannelModel.id == channel_id)
             .with_for_update()
         )
@@ -151,6 +164,9 @@ async def hold(session: AsyncSession, channel_id: UUID) -> HeldHead | None:
         pod_id=row[0],
         last_seq=int(row[1]),
         last_rev=int(row[2]),
+        replies=int(row[3]),
+        kind=str(row[4]),
+        answers_shared=bool(row[5]),
     )
     held[channel_id] = head
     return head

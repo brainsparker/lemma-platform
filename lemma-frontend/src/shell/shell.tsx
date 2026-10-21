@@ -1923,6 +1923,9 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                         <Home
                                             pod={pod}
                                             pods={pods.data ?? []}
+                                            apps={allTabs.filter((each): each is Extract<Tab, { kind: "app" }> => each.kind === "app")}
+                                            onOpenApp={pickTab}
+                                            onOpenApps={() => pickTab("apps")}
                                             onNewPage={newPage}
                                             onOpenRun={openRun}
                                             onOpenConversation={(id) => { setConversationId(id); pickTab("conversation"); }}

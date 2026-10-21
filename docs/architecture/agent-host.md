@@ -795,12 +795,12 @@ that updating Desktop delivers them; a command too large for a frame is not
 sent to it at all (`agent.agent_host_link.command_too_large`), so its run waits
 until the dispatch deadline fails it. Everything smaller reaches it as before.
 
-A Desktop released before transfers also sends images inline and ignores
-`max_bytes`.
+A Desktop released before transfers also sends images inline.
 Its batches of 256 events can pass 1 MiB, and then its link closes with 1009
 and the same batch is sent again on every reconnect: event delivery from that
 computer stalls behind it until Desktop is updated. Its file reads and writes still work, because
-its link session moves the data for it ([Host execution on
+its link session moves the data for it, and its process output is bounded where
+the process starts ([Host execution on
 Desktop](desktop-host-execution.md#4-the-op-frames)).
 
 ### Heartbeat and liveness

@@ -12,12 +12,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, WebSocket
 
-from app.core.authorization.context import ResourceRef
-from app.core.authorization.permissions import Permissions
-from app.core.authorization.service import AuthorizationDataService
 from app.core.domain.errors import DomainError
-from app.core.infrastructure.db.session import async_session_maker
-from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.live.config import live_settings
 from app.core.live.connection import LiveConnection
 from app.core.live.limits import (
@@ -26,15 +21,15 @@ from app.core.live.limits import (
     refresh_socket_slot,
     release_socket_slot,
 )
+from app.core.live.pod_access import (
+    close_code_for,
+    keep_pod_access,
+    require_pod_access,
+)
 from app.core.live.presence import mark_offline, mark_online
 from app.core.live.protocol import CLOSE_TOO_MANY_SOCKETS, ready_frame
 from app.core.live.sessions import SessionWatch, end_for_session
-from app.core.live.socket import (
-    LiveDispatcher,
-    accept_and_authenticate,
-    close_code_for,
-    serve,
-)
+from app.core.live.socket import LiveDispatcher, accept_and_authenticate, serve
 from app.core.live.topics import live_registry
 
 router = APIRouter(tags=["live"])
@@ -44,14 +39,6 @@ router = APIRouter(tags=["live"])
 POD_LIVE_WS_SUFFIX = "/live"
 
 
-async def _require_pod_access(pod_id: UUID, user_id: UUID) -> None:
-    async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
-        ctx = await AuthorizationDataService(uow.session).build_user_context(
-            user_id=user_id, pod_id=pod_id
-        )
-        await ctx.require(Permissions.POD_READ, ResourceRef.pod(pod_id))
-
-
 @router.websocket("/pods/{pod_id}/live")
 async def pod_live_ws(websocket: WebSocket, pod_id: UUID) -> None:
     session = await accept_and_authenticate(websocket)
@@ -59,7 +46,7 @@ async def pod_live_ws(websocket: WebSocket, pod_id: UUID) -> None:
         return
     user_id = session.user_id
     try:
-        await _require_pod_access(pod_id, user_id)
+        await require_pod_access(pod_id, user_id)
     except DomainError as exc:
         await websocket.close(code=close_code_for(exc.status_code), reason=exc.message)
         return
@@ -85,6 +72,8 @@ async def pod_live_ws(websocket: WebSocket, pod_id: UUID) -> None:
     async def keep() -> None:
         if not await watch.still_valid():
             end_for_session(connection)
+            return
+        if not await keep_pod_access(connection):
             return
         await refresh_socket_slot(pod_id, user_id, connection.id)
         await mark_online(pod_id, user_id)

@@ -13,11 +13,12 @@ from app.core.api.dependencies import UoWDep
 from app.core.authorization.dependencies import require_action
 from app.core.authorization.permissions import Permissions
 from app.modules.channels.api.access import (
+    ERRORS,
     CallerDep,
-    conflict,
     decode_cursor,
     encode_cursor,
     visible,
+    wrong_kind,
 )
 from app.modules.channels.api.schemas import (
     AttentionResponse,
@@ -30,7 +31,9 @@ from app.modules.channels.domain.entities import ChannelKind, ContactStatus, Pri
 from app.modules.channels.infrastructure.case_history import cases_of
 from app.modules.channels.infrastructure.names import Names
 
-router = APIRouter(prefix="/pods/{pod_id}/channels", tags=["Channels"])
+router = APIRouter(
+    prefix="/pods/{pod_id}/channels", tags=["Channels"], responses=ERRORS
+)
 
 
 class CaseEventResponse(BaseModel):
@@ -96,7 +99,7 @@ async def list_cases(
     are read from here. Only a contact's channel has cases."""
     channel = await visible(uow, caller, channel_id)
     if channel.kind is not ChannelKind.CONTACT:
-        raise conflict("Only a contact's channel has cases")
+        raise wrong_kind("Only a contact's channel has cases")
     cases = await cases_of(
         uow.session, channel.id, limit=limit, before=decode_cursor(cursor)
     )

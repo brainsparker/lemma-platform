@@ -203,6 +203,12 @@ class SurfaceLifecycleKind(StrEnum):
     JOINED_CHANNEL = "JOINED_CHANNEL"
     # Someone opened the app's own surface (Slack's App Home / agent DM tab).
     HOME_OPENED = "HOME_OPENED"
+    # The app lost its tokens here: uninstalled, or its bot token revoked. Names
+    # no person and is answered by no one -- the token to answer with is gone.
+    # The one kind with no actor, so the one not authorized by who caused it:
+    # the request's signature is the authority, and its verified receivers are
+    # the scope (``services/app_uninstall``).
+    UNINSTALLED = "UNINSTALLED"
 
 
 class ParsedSurfaceLifecycleEvent(BaseModel):
@@ -210,8 +216,9 @@ class ParsedSurfaceLifecycleEvent(BaseModel):
 
     A message becomes a conversation; an interaction resumes a paused run. These
     do neither — nothing here reaches an agent. They are the platform telling us
-    the app's own situation changed, and the only correct response is to
-    configure something or to offer to.
+    the app's own situation changed, and the response is to configure
+    something or to offer to -- or, for UNINSTALLED, to stand down what ran on
+    the app, which nobody is asked about because nobody can answer.
 
     Kept a separate contract on purpose: folding them into the message parser
     would mean every consumer of ``ParsedInboundSurfaceEvent`` grows a branch for
@@ -223,9 +230,14 @@ class ParsedSurfaceLifecycleEvent(BaseModel):
     tenant_id: str | None = None
     external_channel_id: str | None = None
     # Who caused it: the inviter for JOINED_CHANNEL, the viewer for HOME_OPENED.
+    # None for UNINSTALLED: Slack names nobody, and the event is not authorized
+    # by an actor but by the signature of the app it is about.
     actor_external_user_id: str | None = None
     # The group's own name, where the event carries it (Telegram's does).
     channel_title: str | None = None
+    # UNINSTALLED only: the bot users whose tokens went. None means all of the
+    # app's -- an uninstall takes every one, a revocation names the ones it took.
+    revoked_identity_ids: list[str] | None = None
     raw_payload: dict[str, Any] = Field(default_factory=dict)
 
 

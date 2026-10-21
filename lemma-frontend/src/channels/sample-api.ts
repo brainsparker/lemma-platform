@@ -6,7 +6,7 @@ import {
     SAMPLE_SOURCE_SETTINGS,
 } from "@/data/fixtures";
 import type { ChannelApi } from "./api";
-import { readChannelDetail, readChannelPage, readLine, readLinePage, readThreadPage, type Line } from "./model";
+import { readChannelDetail, readChannelPage, readLine, readLinePage, readThreadPage, writeParts, type Line } from "./model";
 import { readSearchPage } from "./search-model";
 import { readInbox } from "./waiting";
 import { readSourceSettings } from "./sources";
@@ -138,18 +138,27 @@ export function sampleChannelApi(_podId: string): ChannelApi {
             save(channelId, { last_line_at: line.created_at, last_seq: line.seq });
             return readLine(line) as Line;
         },
-        async edit(channelId, lineId, text) {
+        async edit(channelId, lineId, text, parts) {
             await wait(200);
             const list = lines.get(channelId) ?? [];
             const was = list.find((line) => line.id === lineId);
             if (!was) throw missing("line");
-            const edited = { ...was, text, edited_at: now() };
+            const edited = { ...was, text, ...(parts ? { parts: writeParts(parts) } : {}), edited_at: now() };
             lines.set(channelId, list.map((line) => (line.id === lineId ? edited : line)));
             return readLine(withReplies(edited)) as Line;
         },
         async remove(channelId, lineId) {
             await wait(200);
             lines.set(channelId, (lines.get(channelId) ?? []).map((line) => (line.id === lineId ? { ...line, text: null, deleted: true } : line)));
+        },
+        async share(channelId, lineId) {
+            await wait(200);
+            const list = lines.get(channelId) ?? [];
+            const was = list.find((line) => line.id === lineId);
+            if (!was) throw missing("line");
+            const shared = { ...was, visibility: "channel", can_share: false, shared_at: now() };
+            lines.set(channelId, list.map((line) => (line.id === lineId ? shared : line)));
+            return readLine(withReplies(shared)) as Line;
         },
         async markRead(channelId, seq) {
             const channel = channels.find((one) => one.id === channelId);
@@ -166,7 +175,7 @@ export function sampleChannelApi(_podId: string): ChannelApi {
                 id: id("sample-channel"), kind: "GROUP", title: body.title, topic: body.topic, person: null,
                 sources: [], source_places: [],
                 visibility: "PUBLIC",
-                members: [{ person: ME, role: "owner" }, ...body.members.map((member) => ({ person: { kind: "MEMBER", id: member, name: null }, role: "member" }))],
+                members: [{ person: ME, role: "owner" }, ...body.members.map((member) => ({ person: { kind: "MEMBER", id: member, name: null }, role: "member" })), ...(body.agents ?? []).map((agent) => ({ person: { kind: "AGENT", id: agent.id, name: null }, role: "member", answers: agent.answers }))],
                 me: { joined: true, notify: "ALL", read_seq: 0, role: "owner", can_manage: true }, unread: { lines: 0, mentions: 0, waiting: 0, read_seq: 0 },
                 created_at: now(), last_line_at: now(), last_seq: 0, joined: true,
             };

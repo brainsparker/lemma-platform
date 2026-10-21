@@ -7,6 +7,7 @@ a channel they cannot open is never counted, listed or found.
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Query
@@ -14,7 +15,10 @@ from fastapi import APIRouter, Query
 from app.core.api.dependencies import UoWDep
 from app.core.authorization.dependencies import require_action
 from app.core.authorization.permissions import Permissions
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.channels.api.access import (
+    ERRORS,
+    Caller,
     CallerDep,
     decode_cursor,
     encode_cursor,
@@ -28,8 +32,14 @@ from app.modules.channels.api.message_schemas import (
     SearchItem,
     SearchResponse,
 )
-from app.modules.channels.api.views import lines_across
-from app.modules.channels.domain.entities import ChannelKind, SenderKind
+from app.modules.channels.api.schemas import UserText
+from app.modules.channels.api.views import channel_rows, lines_across
+from app.modules.channels.domain.entities import (
+    Channel,
+    ChannelKind,
+    ContactStatus,
+    SenderKind,
+)
 from app.modules.channels.infrastructure.inbox import UNREAD_CAP, InboxReads
 from app.modules.channels.infrastructure.line_search import (
     LineSearch,
@@ -41,7 +51,7 @@ from app.modules.channels.infrastructure.questions import QuestionRepository
 from app.modules.channels.infrastructure.repository import ChannelRepository
 
 #: Routes with a fixed segment under the pod; included before the channels'.
-router = APIRouter(prefix="/pods/{pod_id}", tags=["Channels"])
+router = APIRouter(prefix="/pods/{pod_id}", tags=["Channels"], responses=ERRORS)
 
 #: The most items each of the inbox's lists shows.
 INBOX_ITEMS = 50
@@ -55,7 +65,8 @@ INBOX_ITEMS = 50
 )
 async def get_inbox(pod_id: UUID, uow: UoWDep, caller: CallerDep) -> InboxResponse:
     """What is new for the reader across the pod: the badges, the questions
-    waiting on them, and the unread lines naming them -- newest first."""
+    waiting on them, the unread lines naming them -- newest first -- and the
+    contacts waiting on a reply."""
     inbox = InboxReads(uow.session)
     totals = await inbox.totals(caller.viewer)
     waiting = await QuestionRepository(uow.session).waiting_on(
@@ -81,13 +92,41 @@ async def get_inbox(pod_id: UUID, uow: UoWDep, caller: CallerDep) -> InboxRespon
             for channel, message in await lines_across(uow, caller, found)
         ]
 
+    contacts = await _contacts_waiting(uow, caller)
     return InboxResponse(
         totals=InboxTotals(
-            channels=totals.channels, mentions=totals.mentions, waiting=totals.waiting
+            channels=totals.channels,
+            mentions=totals.mentions,
+            waiting=totals.waiting,
+            contacts=len(contacts),
         ),
         waiting=await items([question.message_id for question in waiting]),
         mentions=await items([message_id for _, message_id in mentioned]),
+        contacts=await channel_rows(uow, caller, contacts),
     )
+
+
+async def _contacts_waiting(uow: SqlAlchemyUnitOfWork, caller: Caller) -> list[Channel]:
+    """The contacts waiting on a reply the reader should know of: asking for
+    a person (nobody holds them), and the reader's own whose last word was
+    the contact's -- whether or not the reader is in their channel."""
+    if not caller.viewer.sees_contacts:
+        return []
+    channels = ChannelRepository(uow.session)
+    asking = await channels.list_for(
+        caller.viewer, kind=ChannelKind.CONTACT, needs_person=True, limit=INBOX_ITEMS
+    )
+    theirs = await channels.list_for(
+        caller.viewer,
+        kind=ChannelKind.CONTACT,
+        assignee_user_id=caller.user_id,
+        status=ContactStatus.OPEN,
+        limit=INBOX_ITEMS,
+    )
+    found = {channel.id: channel for channel in [*asking, *theirs]}
+    return sorted(
+        found.values(), key=lambda each: (each.last_line_at, each.id), reverse=True
+    )[:INBOX_ITEMS]
 
 
 @router.get(
@@ -100,7 +139,7 @@ async def search(
     pod_id: UUID,
     uow: UoWDep,
     caller: CallerDep,
-    q: str = Query(min_length=1, max_length=200),
+    q: Annotated[UserText, Query(min_length=1, max_length=200)],
     channel_id: UUID | None = Query(default=None),
     kind: ChannelKind | None = Query(
         default=None, description="Only channels of this kind."

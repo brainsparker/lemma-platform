@@ -3,9 +3,12 @@
 A push delivery stands for every line of one channel the member heard since
 their last push from it (``channels`` coalesces them). ``MemberPushes``
 chooses where the member is reached and sends; this turns what happened into
-the delivery's outcome. Sent is ``SENT``. A member who had the app open in
-the last ``PRESENT_FOR_SECONDS`` read it there: ``SKIPPED`` (``IN_APP``),
-unless it names or asks them. Held by the hourly budget is ``SKIPPED``
+the delivery's outcome. Sent is ``SENT``. Unless it names or asks them, a
+push whose lines the member has read in the channel by then is ``SKIPPED``
+(``IN_APP``); one to a member who had the app open in the last
+``PRESENT_FOR_SECONDS`` is held until its newest line is that old
+(``FOLDED``), and goes then if they still have not read it -- having the app
+open is not reading this channel. Held by the hourly budget is ``SKIPPED``
 (``FOLDED``): its lines go with the member's next push from the channel, no
 sooner than ``HOLD_FOR`` -- the hour's budget is what holds them, so the
 next push says how many came. A platform asked that took none of it ends as
@@ -17,7 +20,7 @@ their screen is not tried again -- and nowhere to reach them is ``SKIPPED``
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
@@ -39,19 +42,23 @@ from app.modules.channels.contracts import (
     DeliveryReasonCode as Code,
     Principal,
     member_of,
+    read_upto,
 )
 
 #: The pushes over one unit of work.
 type PushesFor = Callable[[SqlAlchemyUnitOfWork], MemberPushes]
 
-#: A member who had the app open this recently reads a line there: only what
-#: names or asks them is pushed.
+#: A member who had the app open this recently may read a line there: a push
+#: that does not name or ask them waits until its newest line is this old.
 PRESENT_FOR_SECONDS = 5 * 60
 
 #: How long a push the hourly budget held waits before its lines may go again.
 HOLD_FOR = timedelta(minutes=30)
 
-READ_IN_APP = "They had the app open, and read it there."
+READ_IN_APP = "They read it in the app before it was pushed."
+HELD_WHILE_IN_APP = (
+    "They had the app open: held for a few minutes, and pushed then if still unread."
+)
 
 
 async def push_outcome(
@@ -66,10 +73,16 @@ async def push_outcome(
     recipient = delivery.recipient_user_id
     if recipient is None:  # pragma: no cover - a CHECK holds it to one target
         return Outcome.skipped("This delivery names nobody.", code=Code.UNREACHABLE)
-    if not delivery.urgent and await seen_within(
-        channel.pod_id, [recipient], seconds=PRESENT_FOR_SECONDS
-    ):
-        return Outcome.skipped(READ_IN_APP, code=Code.IN_APP)
+    if not delivery.urgent:
+        async with uow_factory() as uow:
+            read = await read_upto(uow, channel_id=channel.id, user_id=recipient)
+        if read >= delivery.seq:
+            return Outcome.skipped(READ_IN_APP, code=Code.IN_APP)
+        wait = _fresh_for(line)
+        if wait is not None and await seen_within(
+            channel.pod_id, [recipient], seconds=PRESENT_FOR_SECONDS
+        ):
+            return Outcome.folded(HELD_WHILE_IN_APP, hold_for=wait)
     raised: BaseException | None = None
     delivered = Delivered(reason="The push did not go.")
     with track_sends() as sends:
@@ -113,6 +126,15 @@ async def push_outcome(
     return Outcome.skipped(
         delivered.reason or "Nothing could reach them.", code=Code.UNREACHABLE
     )
+
+
+def _fresh_for(line: ChannelMessage) -> timedelta | None:
+    """How much longer the newest line of a push is too fresh to push to a
+    member with the app open; ``None`` once it is not."""
+    left = timedelta(seconds=PRESENT_FOR_SECONDS) - (
+        datetime.now(timezone.utc) - line.created_at
+    )
+    return left if left > timedelta(0) else None
 
 
 __all__ = ["HOLD_FOR", "PRESENT_FOR_SECONDS", "PushesFor", "push_outcome"]

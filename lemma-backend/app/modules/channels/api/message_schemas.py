@@ -13,13 +13,16 @@ from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.modules.channels.api.schemas import (
     AgentNames,
+    ChannelResponse,
     Names,
     PersonRef,
+    UserText,
     agent_ref,
+    no_nul,
     ref,
 )
 from app.modules.channels.domain.entities import (
@@ -33,8 +36,13 @@ from app.modules.channels.domain.entities import (
     QuestionState,
     SenderKind,
 )
+from app.modules.channels.domain.idempotency import client_name_of
 from app.modules.channels.domain.parts import MAX_PARTS, MentionPart, Part
-from app.modules.channels.domain.projection import withheld_from
+from app.modules.channels.domain.projection import (
+    asker_only,
+    shareable_by,
+    withheld_from,
+)
 
 #: How much of a line a preview shows.
 PREVIEW_CHARS = 140
@@ -43,7 +51,7 @@ JsonObject = dict[str, object]
 
 
 class LineDelivery(BaseModel):
-    """Where a line went outside Lemma, as its writer is shown on it."""
+    """Where a line went outside Lemma, as everybody who reads it is shown."""
 
     id: UUID = Field(description="The delivery; retry it by this id.")
     source_id: UUID | None = None
@@ -93,8 +101,33 @@ class ChannelMessageResponse(BaseModel):
             "reader sees that it was given, and for whom, not what it said."
         ),
     )
+    visibility: Literal["asker_only", "channel"] = Field(
+        default="channel",
+        description=(
+            "`asker_only`: an agent's answer made with one member's own access, "
+            "read in full by that member alone; everybody else here is shown "
+            "it `withheld`. `channel`: everybody here reads it."
+        ),
+    )
+    can_share: bool = Field(
+        default=False,
+        description=(
+            "The reader is the member an `asker_only` answer was made for, and "
+            "may share it with the channel (`…/messages/{id}/share`)."
+        ),
+    )
+    shared_at: datetime | None = Field(
+        default=None,
+        description="When the member it was made for shared it with the channel.",
+    )
     parts: list[Part] = Field(default_factory=list)
-    client_message_id: str | None = None
+    client_message_id: str | None = Field(
+        default=None,
+        description=(
+            "On the reader's own line: the name their client gave it, as sent "
+            "(`client_message_id`, or `Idempotency-Key`)."
+        ),
+    )
     source_id: UUID | None = Field(
         default=None,
         description="Where it was said or sent; absent for a line only in Lemma.",
@@ -109,13 +142,20 @@ class ChannelMessageResponse(BaseModel):
     last_reply_at: datetime | None = None
     edited_at: datetime | None = None
     deleted: bool = False
+    removed_by: PersonRef | None = Field(
+        default=None,
+        description=(
+            "On a deleted line: the member who removed it, when that was not "
+            "who wrote it -- somebody who may change the channel."
+        ),
+    )
     question: QuestionResponse | None = None
     delivered: list[LineDelivery] | None = Field(
         default=None,
         description=(
-            "Only on the reader's own line: each place outside Lemma it went "
-            "to, and what became of it. Pushes to members are not listed here "
-            "(`…/deliveries` has every send)."
+            "Each place outside Lemma the line went to, and what became of it "
+            "-- on every line the reader may read. Pushes to members are not "
+            "listed here (`…/deliveries` has the writer's every send)."
         ),
     )
     created_at: datetime
@@ -140,12 +180,32 @@ class ChannelMessagesResponse(BaseModel):
 class ThreadResponse(BaseModel):
     root: ChannelMessageResponse
     items: list[ChannelMessageResponse] = Field(description="Replies, oldest first.")
-    has_more: bool
-    next_after_seq: int | None = None
+    has_more: bool = Field(
+        description=(
+            "Whether there are more replies in the direction read: newer ones, "
+            "or with `before_seq` or `newest`, older ones."
+        )
+    )
+    next_after_seq: int | None = Field(
+        default=None, description="Pass as `after_seq` for the newer page."
+    )
+    next_before_seq: int | None = Field(
+        default=None,
+        description="Reading backwards: pass as `before_seq` for the older page.",
+    )
+
+
+def _parts_without_nul(parts: list[Part] | None) -> list[Part] | None:
+    """Every word of a part is stored, so none may hold a NUL either."""
+    for part in parts or ():
+        for value in part.model_dump().values():
+            if isinstance(value, str):
+                no_nul(value)
+    return parts
 
 
 class ChannelPostRequest(BaseModel):
-    text: str = Field(default="", max_length=20_000)
+    text: UserText = Field(default="", max_length=20_000)
     members_only: bool = Field(
         default=False, description="A note to the pod's members: never sent outside."
     )
@@ -165,24 +225,31 @@ class ChannelPostRequest(BaseModel):
         max_length=MAX_PARTS,
         description="Mentions, files and links. Who a line names is read from here.",
     )
-    client_message_id: str | None = Field(
+    client_message_id: UserText | None = Field(
         default=None,
         min_length=1,
         max_length=64,
-        description="The client's name for this line: sending it again is the same line.",
+        description=(
+            "The client's name for this line: sending it again is the same "
+            "line. Shown back on the line to its writer, as sent."
+        ),
     )
+
+    check_parts = field_validator("parts")(_parts_without_nul)
 
 
 class ChannelEditRequest(BaseModel):
     """Absent is unchanged; ``null`` clears the parts. The text cannot be
     cleared: delete the line instead."""
 
-    text: str | None = Field(default=None, min_length=1, max_length=20_000)
+    text: UserText | None = Field(default=None, min_length=1, max_length=20_000)
     parts: list[Part] | None = Field(
         default=None,
         max_length=MAX_PARTS,
         description="Absent keeps the parts; `null` or `[]` clears them.",
     )
+
+    check_parts = field_validator("parts")(_parts_without_nul)
 
 
 class ChannelAnswerRequest(BaseModel):
@@ -239,6 +306,13 @@ class InboxTotals(BaseModel):
     channels: int = Field(description="Channels with something new.")
     mentions: int = Field(description="Unread lines naming the reader.")
     waiting: int = Field(description="Questions waiting on the reader's answer.")
+    contacts: int = Field(
+        default=0,
+        description=(
+            "Contacts waiting on a reply: asking for a person, or assigned to "
+            "the reader and written to last by the contact."
+        ),
+    )
 
 
 class InboxResponse(BaseModel):
@@ -250,6 +324,14 @@ class InboxResponse(BaseModel):
     mentions: list[InboxItem] = Field(
         default_factory=list,
         description="Unread lines naming the reader, newest first.",
+    )
+    contacts: list[ChannelResponse] = Field(
+        default_factory=list,
+        description=(
+            "Contacts waiting on a reply, most recently active first: those "
+            "asking for a person, and those assigned to the reader the contact "
+            "wrote to last. Only for a reader who may see contacts."
+        ),
     )
 
 
@@ -277,6 +359,8 @@ def message_people(message: ChannelMessage) -> list[Principal]:
         people.append(sender)
     if message.sender.on_behalf_of:
         people.append(message.sender.on_behalf_of)
+    if message.removed_by is not None:
+        people.append(Principal.member(message.removed_by))
     question = message.question
     if question is not None:
         people.append(question.awaits)
@@ -376,10 +460,12 @@ def message_response(
     deliveries: Sequence[Delivery] | None = None,
 ) -> ChannelMessageResponse:
     """One line as the member ``reader_id`` reads it. ``deliveries``: the
-    line's, when it was read with them -- shown to its writer only."""
+    line's, when it was read with them -- where it went outside Lemma is shown
+    to everybody who may read it; a push to a member is that member's."""
     names = names or {}
     behalf = message.sender.on_behalf_of
     hidden = hidden_from(message, channel, reader_id)
+    in_a_direct = channel.kind is ChannelKind.DIRECT
     return ChannelMessageResponse(
         id=message.id,
         channel_id=message.channel_id,
@@ -388,8 +474,13 @@ def message_response(
         on_behalf_of=ref(behalf, names) if behalf else None,
         text=None if hidden or message.is_deleted else message.text,
         withheld=hidden,
+        visibility=(
+            "asker_only" if asker_only(message, in_a_direct=in_a_direct) else "channel"
+        ),
+        can_share=shareable_by(message, user_id=reader_id, in_a_direct=in_a_direct),
+        shared_at=message.shared_at,
         parts=[] if hidden else _parts(message, names, agents or {}),
-        client_message_id=message.client_message_id,
+        client_message_id=client_name_of(message.client_message_id, user_id=reader_id),
         source_id=message.place_id,
         members_only=message.members_only,
         conversation_id=message.conversation_id,
@@ -399,6 +490,11 @@ def message_response(
         last_reply_at=message.last_reply_at,
         edited_at=message.edited_at,
         deleted=message.is_deleted,
+        removed_by=(
+            ref(Principal.member(message.removed_by), names)
+            if message.removed_by is not None
+            else None
+        ),
         question=None if hidden else _question(message, names),
         delivered=(
             [
@@ -412,7 +508,7 @@ def message_response(
                 for delivery in deliveries
                 if delivery.source_id is not None
             ]
-            if deliveries is not None and wrote(message, reader_id)
+            if deliveries is not None and not hidden
             else None
         ),
         created_at=message.created_at,

@@ -63,6 +63,7 @@ from app.modules.agent_surfaces.services.fallback_reply_service import (
     contact_refusal_context,
     to_sender_alone,
 )
+from app.modules.agent_surfaces.services.opt_out_notes import note_opt_out
 from app.modules.agent_surfaces.services.outsider_limits import ContactTurnLimiter
 from app.modules.agent_surfaces.services.sender_handles import (
     SenderHandle,
@@ -251,7 +252,7 @@ class ContactDoor:
                     surface_id=str(surface.id),
                 )
                 return False
-            await self._stop(surface, handle)
+            await self._stop(surface, handle, platform=parsed.platform.value)
             return True
         typed = handle.vouched_for and machine_mail(surface, parsed) is None
         lifted = await heard_from(
@@ -407,7 +408,10 @@ class ContactDoor:
     async def _in_pod(self, user_id: UUID, pod_id: UUID) -> bool:
         return pod_id in set(await self.membership.get_user_pod_ids(user_id))
 
-    async def _stop(self, surface: AgentSurfaceEntity, handle: SenderHandle) -> None:
+    async def _stop(
+        self, surface: AgentSurfaceEntity, handle: SenderHandle, *, platform: str
+    ) -> None:
+        """Opt the handle out; a contact's channel is told, the first time."""
         newly = await opt_out(
             self.uow,
             pod_id=surface.pod_id,
@@ -415,6 +419,20 @@ class ContactDoor:
             value=handle.value,
             reason=SuppressionReason.STOP,
         )
+        contact = (
+            await find_contact(
+                self.uow, pod_id=surface.pod_id, kind=handle.kind, value=handle.value
+            )
+            if newly
+            else None
+        )
+        if contact is not None:
+            await note_opt_out(
+                self.uow,
+                pod_id=surface.pod_id,
+                contact_id=contact.id,
+                platform=platform,
+            )
         logger.info(
             "agent_surfaces.contacts.opted_out_by_message.observed",
             surface_id=str(surface.id),

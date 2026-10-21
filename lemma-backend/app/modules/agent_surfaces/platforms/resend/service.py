@@ -18,6 +18,7 @@ from app.modules.agent_surfaces.domain.reply_targets import (
 )
 
 import base64
+from collections.abc import Mapping
 from email.utils import formataddr
 from typing import Any
 from uuid import uuid4
@@ -73,6 +74,19 @@ def classify_resend_error(exc: Exception) -> DeliveryClassification:
     if isinstance(exc, httpx.RequestError):
         return DeliveryClassification.TRANSIENT
     return DeliveryClassification.PERMANENT
+
+
+def _wants_full_width(metadata: Mapping[str, object] | None) -> bool:
+    """Whether this send asked for a body that fills the window.
+
+    Read off metadata rather than added to every signature between here and the
+    caller, the same seam ``agent_display_name`` and ``attachments`` already
+    travel on. A body is a readable 640px column unless somebody says
+    otherwise, which is right for a reply and wrong for the occasional message
+    whose whole point is a wide table or layout. Only a real ``True`` asks: the
+    metadata is untyped, and ``bool("false")`` would drop the cap.
+    """
+    return (metadata or {}).get("full_width") is True
 
 
 def _idempotency_key(metadata: dict[str, Any] | None) -> str | None:
@@ -181,6 +195,7 @@ class ResendPlatformService:
             references=list(target.references),
             content=message,
             content_type="markdown",
+            full_width=_wants_full_width(metadata),
             attachments=list((metadata or {}).get("attachments") or []),
             from_name=self._sender_name(metadata),
             cc=list(target.cc),
@@ -329,6 +344,7 @@ class ResendPlatformService:
             references=[thread_seed_id],
             content=message,
             content_type="markdown",
+            full_width=_wants_full_width(metadata),
             attachments=[],
             is_reply=False,
             from_name=self._sender_name(metadata),
@@ -365,6 +381,7 @@ class ResendPlatformService:
         content: str,
         content_type: str,
         attachments: list[tuple[str, bytes, str]],
+        full_width: bool = False,
         is_reply: bool = True,
         from_name: str | None = None,
         cc: list[str] | None = None,
@@ -377,6 +394,7 @@ class ResendPlatformService:
         plain_text, html_body = render_email_content(
             content=content,
             content_type=content_type,  # type: ignore[arg-type]
+            full_width=full_width,
         )
         # ``formataddr``, never an f-string. The display name now carries an
         # agent name, which is 255 characters of unvalidated free text: an agent

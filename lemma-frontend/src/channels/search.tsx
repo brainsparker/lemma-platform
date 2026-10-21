@@ -7,7 +7,7 @@ import { useMe } from "@/session/use-me";
 import { channelApi } from "./api";
 import { openAtLine } from "./focus";
 import { channelTitle, senderLabel, sinceShort, type Page } from "./model";
-import { snippet, type SearchHit } from "./search-model";
+import { hitText, snippet, type SearchHit } from "./search-model";
 
 /** Lines found across the channels the reader may see, a page at a time,
  *  each opening its channel at that line. */
@@ -52,7 +52,7 @@ export function SearchResults({ pod, query }: { pod: Pod; query: string }) {
                                     >
                                         <span className="crow__name">{senderLabel(hit.line, me)} <small className="chsearch__where">in {where}{hit.line.threadRootId ? ", in a thread" : ""}</small></span>
                                         <span className="crow__sub">
-                                            {snippet(hit.snippet ?? hit.line.text ?? "", settled).map((piece, index) => piece.match ? <mark key={index}>{piece.text}</mark> : <span key={index}>{piece.text}</span>)}
+                                            {snippet(hitText(hit), settled).map((piece, index) => piece.match ? <mark key={index}>{piece.text}</mark> : <span key={index}>{piece.text}</span>)}
                                         </span>
                                     </button>
                                     <span className="crow__when">{sinceShort(hit.line.createdAt)}</span>

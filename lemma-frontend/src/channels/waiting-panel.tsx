@@ -13,7 +13,7 @@ import { channelApi } from "./api";
 import { openAtLine } from "./focus";
 import { FormAnswer } from "./form-answer";
 import { readInboxEvent, withChannelUnread, withInboxTotals } from "./live";
-import { sinceShort, type Channel, type Page } from "./model";
+import { channelTitle, sinceShort, type Channel, type Page } from "./model";
 import { problemOf } from "./problem";
 import { allChannels, answeredKeys, inboxKey, useChannelList } from "./queries";
 import {
@@ -85,6 +85,13 @@ function patchUnread(cache: QueryClient, podId: string, channelId: string, unrea
         : was);
 }
 
+/** The reader's own channel with the pod, whose new lines the bell -- and
+ *  the sidebar's badge, which counts what the bell does -- count. */
+export function useMyChannel(podId: string): Channel | null {
+    const direct = useChannelList(podId, DIRECT);
+    return allChannels(direct.data)[0] ?? null;
+}
+
 /** The bell is the inbox: the questions waiting on you, the lines naming
  *  you, and what is new in your own channel -- each opening its channel, and
  *  each question answered where it is. Holds the keyboard while open: Escape
@@ -98,8 +105,7 @@ export function WaitingBell({ podId }: { podId: string }) {
     const bell = useRef<HTMLButtonElement | null>(null);
     const inbox = useInbox(podId);
     useInboxLive(podId);
-    const direct = useChannelList(podId, DIRECT);
-    const mine = allChannels(direct.data)[0] ?? null;
+    const mine = useMyChannel(podId);
     const count = bellCount(inbox.data ?? null, mine?.unread.lines ?? 0);
 
     useEffect(() => {
@@ -198,10 +204,10 @@ export function InboxPanel({ podId, inbox, mine, at, panel, onClose }: {
             )}
             {nothing && <p className="notify__quiet">Nothing new for you here.</p>}
             {mine && directNew > 0 && (
-                <section className="notify__group" aria-label="Your channel">
+                <section className="notify__group" aria-label="Sent to you">
                     <button type="button" className="notify__open" onClick={() => open(mine.id)}>
-                        <span>Your channel</span>
-                        <small>{directNew === 1 ? "1 new line" : (directNew > 99 ? "99+" : directNew) + " new lines"}</small>
+                        <span>{channelTitle(mine, "")}</span>
+                        <small>{directNew === 1 ? "1 new message" : (directNew > 99 ? "99+" : directNew) + " new messages"}</small>
                     </button>
                 </section>
             )}
@@ -222,7 +228,7 @@ export function InboxPanel({ podId, inbox, mine, at, panel, onClose }: {
                         {mentioned.map((item) => (
                             <li key={item.id}>
                                 <button type="button" className="notify__open" onClick={() => open(item.channelId, item.id, item.threadRootId)}>
-                                    <span>{item.from} <small>{item.channelKind === "DIRECT" ? "in your channel" : "in " + (item.channelTitle ?? "a channel")} · {sinceShort(item.at)}</small></span>
+                                    <span>{item.from} <small>{item.channelKind === "DIRECT" ? "sent to you" : "in " + (item.channelTitle ?? "a shared chat")} · {sinceShort(item.at)}</small></span>
                                     {item.text && <small className="notify__said">{item.text.replace(/\s+/g, " ").slice(0, 140)}</small>}
                                 </button>
                             </li>

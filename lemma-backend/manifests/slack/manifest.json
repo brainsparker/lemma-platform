@@ -119,6 +119,7 @@
             "bot_events": [
                 "app_home_opened",
                 "app_mention",
+                "app_uninstalled",
                 "channel_left",
                 "channel_shared",
                 "channel_unshared",
@@ -128,7 +129,8 @@
                 "message.channels",
                 "message.groups",
                 "message.im",
-                "message.mpim"
+                "message.mpim",
+                "tokens_revoked"
             ]
         },
         "interactivity": {

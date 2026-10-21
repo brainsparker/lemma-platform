@@ -357,5 +357,8 @@ class AgentSurfaceResponse(BaseModel):
     status: AgentSurfaceStatus = AgentSurfaceStatus.ACTIVE
     #: Set while nobody in the space looks after the contacts this bot answers.
     contacts_warning: str | None = None
+    #: Why the surface cannot do its work: the platform refused its webhook
+    #: (``ERROR``) or its credentials. Absent while it works.
+    problem: str | None = None
 
     model_config = ConfigDict(from_attributes=True)

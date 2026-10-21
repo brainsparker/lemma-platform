@@ -13,7 +13,14 @@ pushed to a member, and the newest few still to go to both. Each statement is
 explained again with the parameters it ran with (as
 ``test_channel_read_budgets_e2e``): no sequential scan of the deliveries or
 the lines, the lines not read at all, and the deliveries read bounded by the
-few still due.
+rows still due -- never by the history.
+
+Which index the planner walks over a handful of due rows is its call, and it
+changes with whatever else the database holds: the deployment's due index is
+shared, and other tests leave rows in it. So the bound is not a count of rows
+this plan happens to read but what any plan over the due rows can: each once,
+and again by each candidate's "anything older to this target?" probe. The
+history is in no due index, so walking it reads thousands -- far past that.
 """
 
 from __future__ import annotations
@@ -38,9 +45,6 @@ pytestmark = pytest.mark.e2e
 HISTORY = 3_000
 #: The newest lines, still to go to both.
 STILL_DUE = 3
-#: Rows of deliveries a statement may touch: the still-due ones of a target,
-#: and the row it is about.
-ROWS_CEILING = 4 * STILL_DUE
 
 _TABLES = ("channel_message_deliveries", "channel_messages")
 
@@ -136,25 +140,29 @@ async def _plans(
     return await explain(engine, statements)
 
 
-async def _others_still_due(channel_id: UUID) -> int:
-    """Deliveries other tests left still to go: ``due`` is the deployment's
-    sweep, so it passes over theirs as well as ours."""
+async def _due_ceiling() -> int:
+    """The most deliveries any plan over the deployment's due rows reads: each
+    once, and again by each candidate's probe of the same rows."""
     async with async_session_maker() as session:
-        return int(
+        due = int(
             await session.scalar(
                 text(
-                    "SELECT count(*) FROM channel_message_deliveries WHERE "
-                    "status IN ('PENDING', 'FAILED') AND channel_id <> :c"
-                ),
-                {"c": channel_id},
+                    "SELECT count(*) FROM channel_message_deliveries "
+                    "WHERE status IN ('PENDING', 'FAILED')"
+                )
             )
             or 0
         )
+    ceiling = due * (due + 2)
+    # Otherwise the bound could not tell a probe from a walk of the history.
+    assert ceiling < HISTORY // 2, (
+        f"{due} deliveries are due in this database: too many for the history "
+        f"of {HISTORY} to stand out -- raise HISTORY"
+    )
+    return ceiling
 
 
-def _assert_probes(
-    name: str, plans: list[Plan], *, ceiling: int = ROWS_CEILING
-) -> None:
+def _assert_probes(name: str, plans: list[Plan], *, ceiling: int) -> None:
     for plan in plans:
         tree = f"{name}: {' '.join(plan.sql.split())[:160]}\n{plan.tree()}"
         print(f"\n  {tree}")
@@ -187,10 +195,7 @@ async def test_a_claim_probes_the_targets_due_rows_not_the_channels_history(
     claimable = await _plans(engine, lambda deliveries: deliveries.claim(oldest))
     behind = await _plans(engine, lambda deliveries: deliveries.claim(newest))
     sweep = await _plans(engine, lambda deliveries: deliveries.due(limit=100))
-    # Each row the sweep passes is read once, and again by each candidate's
-    # "anything older to this target?" probe; the sent history is never in
-    # the index it walks, which the checks below hold exactly.
-    others = await _others_still_due(channel_id)
+    ceiling = await _due_ceiling()
 
     async with async_session_maker() as session:
         repository = DeliveryRepository(session)
@@ -198,8 +203,11 @@ async def test_a_claim_probes_the_targets_due_rows_not_the_channels_history(
         last = await repository.get(newest)
         assert first is not None and last is not None
         assert first.source_id == source_id and last.recipient_user_id == member
-        # The oldest of each target goes; the rest wait behind it.
-        assert sorted(await repository.due(limit=100)) == sorted(due[:2])
+        # The oldest of each target goes; the rest wait behind it. (The sweep
+        # is the deployment's: other tests' rows may be due too.)
+        ours = set(due)
+        handed = [d for d in await repository.due(limit=100) if d in ours]
+        assert sorted(handed) == sorted(due[:2])
     following = await _plans(
         engine, lambda deliveries: deliveries.next_for_target(first)
     )
@@ -208,8 +216,8 @@ async def test_a_claim_probes_the_targets_due_rows_not_the_channels_history(
     for name, plans in (
         ("claim", claimable),
         ("claim behind an older one", behind),
+        ("due", sweep),
         ("next for a place", following),
         ("next for a member", pushes),
     ):
-        _assert_probes(name, plans)
-    _assert_probes("due", sweep, ceiling=ROWS_CEILING + others * (len(due) + 1))
+        _assert_probes(name, plans, ceiling=ceiling)

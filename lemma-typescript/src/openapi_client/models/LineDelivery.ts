@@ -4,7 +4,7 @@
 /* eslint-disable */
 import type { DeliveryStatus } from './DeliveryStatus.js';
 /**
- * Where a line went outside Lemma, as its writer is shown on it.
+ * Where a line went outside Lemma, as everybody who reads it is shown.
  */
 export type LineDelivery = {
     /**

@@ -18,7 +18,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.channels.domain.entities import AccountKey, ExternalAccount
-from app.modules.channels.infrastructure.models import ExternalAccountModel
+from app.modules.channels.infrastructure.models import (
+    ChannelSourceModel,
+    ExternalAccountModel,
+)
 from app.modules.channels.infrastructure.rows import account_entity, now
 
 
@@ -135,3 +138,17 @@ class AccountRepository:
             )
         )
         return {row[0]: row[1] for row in rows}
+
+    async def surface_heard_from(self, surface_id: UUID) -> bool:
+        """Whether anybody has written to this surface's bot at any place."""
+        source = ChannelSourceModel
+        found = await self.session.scalar(
+            select(source.id)
+            .join(ExternalAccountModel, ExternalAccountModel.id == source.account_id)
+            .where(
+                ExternalAccountModel.surface_id == surface_id,
+                source.last_inbound_at.is_not(None),
+            )
+            .limit(1)
+        )
+        return found is not None

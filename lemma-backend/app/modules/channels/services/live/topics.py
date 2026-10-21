@@ -39,9 +39,9 @@ from app.core.live.signals import publish_signal
 from app.core.live.topics import LiveContribution
 from app.modules.channels.api.schemas import ref
 from app.modules.channels.domain.entities import ChannelKind, Principal
-from app.modules.channels.infrastructure.members import MemberRepository
 from app.modules.channels.infrastructure.names import Names
 from app.modules.channels.services.live.readers import require_caller, visible_channel
+from app.modules.channels.services.reading import NotInChannel, read_to
 
 if TYPE_CHECKING:
     from app.modules.channels.services.live.hub import ChannelsHub
@@ -65,8 +65,16 @@ class _ChannelParams(BaseModel):
     channel_id: UUID
 
 
+#: The largest line number a channel stores (``BIGINT``).
+_MAX_SEQ = 2**63 - 1
+
+
 class _ReadParams(_ChannelParams):
-    seq: int = Field(ge=0)
+    #: Bounded as stored: a number past it is the caller's mistake, answered
+    #: ``invalid``, not a failed write answered ``unavailable`` and retried.
+    seq: int = Field(ge=0, le=_MAX_SEQ)
+    #: Read in this thread, not the timeline (``services.reading``).
+    thread_root_id: UUID | None = None
 
 
 class _TypingParams(_ChannelParams):
@@ -162,8 +170,9 @@ class TypingCall:
 
 
 class ReadCall:
-    """``read {channel_id, seq}``: ``POST /channels/{c}/read``, the same rule
-    and the same write. The reader's other sockets hear ``read.updated``."""
+    """``read {channel_id, seq, thread_root_id?}``: ``POST
+    /channels/{c}/read``, the same rule and the same write. The reader's
+    other sockets hear ``read.updated``."""
 
     name = "read"
 
@@ -179,9 +188,18 @@ class ReadCall:
                 uow, pod_id=connection.pod_id, user_id=connection.user_id
             )
             channel = await visible_channel(uow, caller, parsed.channel_id)
-            read_seq = await MemberRepository(uow.session).mark_read(
-                channel_id=channel.id, user_id=caller.user_id, seq=parsed.seq
-            )
+            try:
+                read_seq = await read_to(
+                    uow,
+                    channel,
+                    user_id=caller.user_id,
+                    seq=parsed.seq,
+                    thread_root_id=parsed.thread_root_id,
+                )
+            except NotInChannel:
+                raise LiveAccessDenied(
+                    LiveErrorCode.NOT_FOUND, "Line not found"
+                ) from None
             await uow.commit()
         return {"channel_id": str(channel.id), "read_seq": read_seq}
 

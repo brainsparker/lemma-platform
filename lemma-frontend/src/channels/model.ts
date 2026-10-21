@@ -134,12 +134,24 @@ export interface Line {
     createdAt: string;
     editedAt: string | null;
     deleted: boolean;
+    /** On a deleted line: the member who removed it, when that was not who
+     *  wrote it -- somebody who may change the channel. */
+    removedBy: PersonRef | null;
     withheld: boolean;
+    /** `asker_only`: an agent's answer made with one member's own access,
+     *  which only that member reads in full. */
+    visibility: "asker_only" | "channel";
+    /** The reader is that member, and may share it with the channel. */
+    canShare: boolean;
     membersOnly: boolean;
     /** Where it was said; null for a line written in Lemma. */
     sourceId: string | null;
     threadRootId: string | null;
+    /** The line this one answers: an agent's answer points at its question. */
+    replyToId: string | null;
     replyCount: number;
+    /** On a thread's first line: when its newest reply was written. */
+    lastReplyAt: string | null;
     interaction: Interaction | null;
     parts: Part[];
     /** The composer's name for it, when it was written in Lemma. */
@@ -347,11 +359,16 @@ export function readLine(raw: unknown): Line | null {
         createdAt: String(row.created_at ?? ""),
         editedAt: words(row.edited_at),
         deleted,
+        removedBy: deleted ? readPerson(row.removed_by) : null,
         withheld,
+        visibility: row.visibility === "asker_only" ? "asker_only" : "channel",
+        canShare: row.can_share === true && !deleted,
         membersOnly: row.members_only === true,
         sourceId: words(row.source_id),
         threadRootId: words(row.thread_root_id),
+        replyToId: words(row.reply_to_id),
         replyCount: count(row.reply_count),
+        lastReplyAt: words(row.last_reply_at),
         interaction: readQuestion(row.question),
         parts: deleted || withheld ? [] : readParts(row.parts),
         clientMessageId: words(row.client_message_id),
@@ -384,6 +401,20 @@ export function readParts(raw: unknown): Part[] {
         }
         return [];
     });
+}
+
+/** Parts as the API takes them back -- `readParts` the other way: a file by
+ *  its path, which the server reads again as the writer. */
+export function writeParts(parts: readonly Part[]): Record<string, unknown>[] {
+    return parts.map((part) => part.type === "mention"
+        ? { type: "mention", id: part.id, kind: part.kind, ...(part.name ? { name: part.name } : {}) }
+        : part.type === "file"
+            ? {
+                type: "file", path: part.path, name: part.name,
+                ...(part.mimeType ? { mime_type: part.mimeType } : {}),
+                ...(part.size !== null ? { size: part.size } : {}),
+            }
+            : { type: "link", url: part.url, ...(part.label ? { label: part.label } : {}) });
 }
 
 /** A page of a timeline, or a thread's replies. The page before it is asked
@@ -459,12 +490,30 @@ export function personName(person: PersonRef | null, me: string | null): string 
     return person.kind === "AGENT" ? "An agent" : person.kind === "CONTACT" ? "A contact" : "A member";
 }
 
-/** A channel's name. The reader's own is them and the space; a contact's is
- *  the contact; a group is what it was called, or where it is. */
-export function channelTitle(channel: Pick<Channel, "kind" | "title" | "person" | "sources">, space: string): string {
-    if (channel.kind === "DIRECT") return "You and " + space;
-    if (channel.kind === "CONTACT") return channel.person?.name ?? channel.title ?? "A contact";
-    return channel.title ?? channel.sources.find((source) => source.title)?.title ?? "Untitled channel";
+/** A contact nobody has named, by how they came: somebody on the
+ *  website's chat is a visitor; anybody else, a contact. */
+export function nameless(channel: Pick<Channel, "sources">): string {
+    return channel.sources.some((source) => source.platform === "WEB") ? "A website visitor" : "A contact";
+}
+
+/** A chat's name. The reader's default chat -- their private line with the
+ *  teammate -- is named by where they reach it ("WhatsApp"), or "Notices"
+ *  when it is only what the teammate sends them; a contact's is the
+ *  contact; a group is what it was called, or where it is. `space` is kept
+ *  for callers that name things after the space. */
+export function channelTitle(channel: Pick<Channel, "kind" | "title" | "person" | "sources">, _space: string): string {
+    if (channel.kind === "DIRECT") {
+        const names = [...new Set(channel.sources.map((source) => platformName(source.platform)))];
+        return names.length ? sayList(names) : "Notices";
+    }
+    if (channel.kind === "CONTACT") return channel.person?.name ?? channel.title ?? nameless(channel);
+    return channel.title ?? channel.sources.find((source) => source.title)?.title ?? "Untitled chat";
+}
+
+/** "A", "A and B", "A, B and C". */
+export function sayList(items: readonly string[]): string {
+    if (items.length <= 1) return items[0] ?? "";
+    return items.slice(0, -1).join(", ") + " and " + items.at(-1);
 }
 
 /** The platforms feeding a channel, each once, in the order they came. */
@@ -513,13 +562,20 @@ export function badge(count: number): string | null {
     return count > 99 ? "99+" : String(count);
 }
 
-/** What the sidebar's badge counts and says: questions first, since only the
- *  reader can answer them; then mentions; then channels with anything new. */
-export function inboxBadge(totals: { channels: number; mentions: number; waiting: number }): { count: number; tone: "waiting" | "mention" | "new"; said: string } | null {
-    if (totals.waiting > 0) return { count: totals.waiting, tone: "waiting", said: totals.waiting === 1 ? "1 question waiting on you" : totals.waiting + " questions waiting on you" };
-    if (totals.mentions > 0) return { count: totals.mentions, tone: "mention", said: totals.mentions === 1 ? "1 mention of you" : totals.mentions + " mentions of you" };
-    if (totals.channels > 0) return { count: totals.channels, tone: "new", said: totals.channels === 1 ? "1 channel with something new" : totals.channels + " channels with something new" };
-    return null;
+/** What the sidebar's badge counts and says: what the bell counts -- the
+ *  questions waiting on the reader, the lines naming them, and the new lines
+ *  in their own channel -- so the two never disagree. Its tone is the most
+ *  pressing of them: a question, which only the reader can answer, then a
+ *  mention. A group with new lines and nothing for the reader is shown on
+ *  its row, not counted here: every public group would count otherwise. */
+export function inboxBadge(totals: { mentions: number; waiting: number }, directLines = 0): { count: number; tone: "waiting" | "mention" | "new"; said: string } | null {
+    const count = totals.waiting + totals.mentions + directLines;
+    if (count <= 0) return null;
+    const parts: string[] = [];
+    if (totals.waiting) parts.push(totals.waiting === 1 ? "1 question waiting on you" : totals.waiting + " questions waiting on you");
+    if (totals.mentions) parts.push(totals.mentions === 1 ? "1 mention of you" : totals.mentions + " mentions of you");
+    if (directLines) parts.push(directLines === 1 ? "1 new message for you" : directLines + " new messages for you");
+    return { count, tone: totals.waiting ? "waiting" : totals.mentions ? "mention" : "new", said: parts.join(", ") };
 }
 
 /** When something happened, short enough for a column: 12 min, 2 h,
@@ -550,8 +606,10 @@ export function sinceShort(iso: string | null | undefined, now = new Date()): st
 export function senderLabel(line: Pick<Line, "sender" | "onBehalfOf">, me: string | null): string {
     const name = personName(line.sender, me);
     if (line.sender.kind !== "AGENT" || !line.onBehalfOf) return name;
+    /* Answering the reader goes without saying; answering somebody else is
+       worth a word, since it answered with their access. */
     const whom = personName(line.onBehalfOf, me);
-    return name + ", for " + (whom === "You" ? "you" : whom);
+    return whom === "You" ? name : name + ", answering " + whom;
 }
 
 /** Where a line was said: "#acme (Slack)", "WhatsApp". Nothing for a line
@@ -575,15 +633,19 @@ export function clockTime(iso: string): string {
     return Number.isNaN(at.getTime()) ? "" : at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-/** What stands where a withheld line's text would be: whom the agent
- *  answered with their own access, and so that only they can read it. */
-export function withheldNote(line: Pick<Line, "withheld" | "onBehalfOf">, me: string | null): string | null {
+/** What stands where a withheld line's text would be: which agent answered
+ *  whom, privately -- with that person's own access, so only they read it. */
+export function withheldNote(line: Pick<Line, "withheld" | "onBehalfOf" | "sender">, me: string | null): string | null {
     if (!line.withheld) return null;
+    const agent = line.sender.kind === "AGENT" && line.sender.name ? line.sender.name : "An agent";
     const whom = line.onBehalfOf ? personName(line.onBehalfOf, me) : null;
     return whom && whom !== "You"
-        ? "Answered " + whom + " — only they can read it"
-        : "Answered someone with their own access — only they can read it";
+        ? agent + " answered " + whom + " privately"
+        : agent + " answered someone privately";
 }
+
+/** What the asker reads under an answer only they can see. */
+export const ASKER_ONLY_NOTE = "Only you can see this — it used your access";
 
 /** Whether the reader may change or delete a line: their own, still there. */
 export function isMine(line: Pick<Line, "sender" | "deleted" | "withheld">, me: string | null): boolean {
@@ -623,12 +685,22 @@ export function sayQuestion(state: QuestionState): string | null {
 }
 
 /** What an answer said, in a few words: the choice, the words, or the
- *  decision. A form's fields are not repeated on the timeline. */
+ *  decision. An agent's question is answered as `{answers: {header:
+ *  value}}` -- each value the words or the choices picked -- and shows
+ *  those. A form's fields are not repeated on the timeline. */
 export function answerSummary(answer: Record<string, unknown> | null): string | null {
     if (!answer) return null;
     if (typeof answer.choice === "string" && answer.choice) return answer.choice;
     if (typeof answer.text === "string" && answer.text.trim()) return answer.text.trim();
     if (typeof answer.decision === "string") return answer.decision === "DENY" ? "Denied" : "Approved";
+    if (typeof answer.approved === "boolean") return answer.approved ? "Approved" : "Denied";
+    if (answer.answers && typeof answer.answers === "object" && !Array.isArray(answer.answers)) {
+        const said = Object.values(answer.answers as Record<string, unknown>).flatMap((value) => {
+            const one = Array.isArray(value) ? value.filter((pick): pick is string => typeof pick === "string" && Boolean(pick.trim())).join(", ") : typeof value === "string" ? value.trim() : "";
+            return one ? [one] : [];
+        });
+        return said.length ? said.join("; ") : null;
+    }
     return null;
 }
 
@@ -689,10 +761,10 @@ export function composerChoices(detail: Pick<ChannelDetail, "places">): { notes:
  *  pod's agent answers every line; anywhere else an agent answers only when
  *  @mentioned, and not at all while a member has stepped in. */
 export function whoAnswers(channel: Pick<Channel, "kind" | "assignee" | "agentsAnswer" | "handBackAfterHours">, space: string, me: string | null): string {
-    if (channel.kind === "CONTACT" && !channel.agentsAnswer) return "Its agent is off: only members answer them.";
+    if (channel.kind === "CONTACT" && !channel.agentsAnswer) return "The agent is off here: only people answer them.";
     if (channel.assignee) {
         const name = personName(channel.assignee, me);
-        const back = "its agent answers again " + channel.handBackAfterHours + " hours after " + (name === "You" ? "your" : "their") + " last line.";
+        const back = "its agent answers again " + channel.handBackAfterHours + " hours after " + (name === "You" ? "your" : "their") + " last message.";
         return (name === "You" ? "You are answering here; " : name + " is answering here; ") + back;
     }
     if (channel.kind === "DIRECT") return space + " answers everything you write here.";

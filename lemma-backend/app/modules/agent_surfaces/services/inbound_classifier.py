@@ -40,6 +40,9 @@ from app.modules.agent_surfaces.platforms.slack.group_updates import (
 from app.modules.agent_surfaces.platforms.slack.line_changes import (
     SLACK_LINE_CHANGE_SUBTYPES,
 )
+from app.modules.agent_surfaces.platforms.slack.uninstall import (
+    UNINSTALL_EVENT_TYPES as SLACK_UNINSTALL_EVENTS,
+)
 from app.modules.agent_surfaces.platforms.teams.line_changes import (
     TEAMS_LINE_CHANGE_ACTIVITIES,
 )
@@ -127,6 +130,11 @@ _SLACK_IGNORED_SUBTYPES = frozenset(
 )
 #: Events about the app rather than a message (``app_event_handler``).
 _SLACK_LIFECYCLE = frozenset({"app_home_opened", "member_joined_channel"})
+#: Everything for ``surface.platform_update``: the app's own situation, a
+#: channel's (``group_updates``), and the app removed (``app_uninstall``).
+_SLACK_PLATFORM_UPDATES = (
+    _SLACK_LIFECYCLE | SLACK_GROUP_UPDATE_EVENTS | SLACK_UNINSTALL_EVENTS
+)
 
 
 def _slack_envelope(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -148,7 +156,7 @@ def classify_slack(payload: Mapping[str, Any]) -> Verdict:
         return drop(f"slack_{kind or 'untyped'}")
     event = _dict(envelope.get("event"))
     event_type = event.get("type")
-    if event_type in _SLACK_LIFECYCLE or event_type in SLACK_GROUP_UPDATE_EVENTS:
+    if event_type in _SLACK_PLATFORM_UPDATES:
         return Verdict(platform_update=True)
     if event_type not in {"message", "app_mention"}:
         # reaction_added, user_change, channel_created, file_shared, ...

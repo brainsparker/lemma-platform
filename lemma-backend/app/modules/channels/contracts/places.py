@@ -24,6 +24,7 @@ from app.modules.channels.infrastructure.accounts import AccountRepository
 from app.modules.channels.infrastructure.members import MemberRepository
 from app.modules.channels.infrastructure.repository import ChannelRepository
 from app.modules.channels.infrastructure.rows import now
+from app.modules.channels.infrastructure.surface_places import shared_places_page
 from app.modules.channels.infrastructure.source_repository import (
     GROUP_SETTINGS,
     SourceRepository,
@@ -58,6 +59,8 @@ __all__ = [
     "places_of",
     "reply_address",
     "shared_places_of_pod",
+    "shared_places_of_surfaces",
+    "surface_heard_from",
     "surfaces_hearing",
 ]
 
@@ -182,6 +185,19 @@ async def shared_places_of_pod(
     )
 
 
+async def shared_places_of_surfaces(
+    uow: SqlAlchemyUnitOfWork,
+    surface_ids: Collection[UUID],
+    *,
+    after: UUID | None = None,
+    limit: int = 200,
+) -> list[Source]:
+    """Every group and shared channel these surfaces' bots are in, a page at a
+    time: pass the last one's id as ``after`` for the next. Through the
+    surfaces' own accounts, so another app in the same workspace is not read."""
+    return await shared_places_page(uow.session, surface_ids, after=after, limit=limit)
+
+
 async def conversation_at(
     uow: SqlAlchemyUnitOfWork,
     source_id: UUID,
@@ -209,6 +225,12 @@ async def place_by_request(
     return await SourceRepository(uow.session).by_request_on_surfaces(
         request_id=request_id, surface_ids=surface_ids, platform=platform
     )
+
+
+async def surface_heard_from(uow: SqlAlchemyUnitOfWork, surface_id: UUID) -> bool:
+    """Whether anybody has written to this surface's bot: what it receives
+    arrives."""
+    return await AccountRepository(uow.session).surface_heard_from(surface_id)
 
 
 async def surfaces_hearing(

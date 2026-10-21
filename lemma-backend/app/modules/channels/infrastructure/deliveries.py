@@ -362,12 +362,13 @@ class DeliveryRepository:
         platform: str,
         external_message_id: str | None,
         provider_status: str | None = None,
+        reason: str | None = None,
     ) -> None:
         await self._settle(
             delivery_id,
             DeliveryStatus.SENT,
             code=None,
-            reason=None,
+            reason=reason,
             platform=platform,
             provider_status=provider_status,
             external_message_id=func.coalesce(
@@ -445,7 +446,10 @@ class DeliveryRepository:
         )
 
     async def retry(self, delivery_id: UUID) -> Delivery | None:
-        """A member asked to try a failed or given-up delivery again, now."""
+        """A member asked to try a failed or given-up delivery again, now: one
+        more try, counted with the others (its tries are its attempt rows), so
+        failing again on the last gives it up. Why it failed is cleared until
+        this try says."""
         row = await self.session.scalar(
             update(_D)
             .where(
@@ -455,7 +459,7 @@ class DeliveryRepository:
             .values(
                 status=DeliveryStatus.PENDING.value,
                 reason_code=None,
-                attempts=0,
+                reason=None,
                 claimed_at=None,
                 next_attempt_at=func.now(),
                 updated_at=func.now(),
@@ -563,14 +567,16 @@ class DeliveryRepository:
         else:
             await touch_lines(self.session, lines)
 
-    async def of_messages(self, message_ids: Sequence[UUID]) -> list[Delivery]:
+    async def of_messages(
+        self, message_ids: Sequence[UUID], *, to_places: bool = False
+    ) -> list[Delivery]:
+        """These lines' sends -- ``to_places``: not pushes to members."""
         if not message_ids:
             return []
-        rows = await self.session.scalars(
-            select(_D)
-            .where(_D.message_id.in_(list(message_ids)[:MAX_LINES]))
-            .order_by(_D.created_at)
-        )
+        statement = select(_D).where(_D.message_id.in_(list(message_ids)[:MAX_LINES]))
+        if to_places:
+            statement = statement.where(_D.source_id.is_not(None))
+        rows = await self.session.scalars(statement.order_by(_D.created_at))
         return [delivery_entity(row) for row in rows]
 
     async def due(self, *, limit: int) -> list[UUID]:

@@ -33,3 +33,35 @@ export function newSince(lines: readonly Pick<Line, "seq" | "sender">[], sinceSe
 export function sayNewLines(count: number): string {
     return count === 1 ? "1 new line" : count + " new lines";
 }
+
+/** How long after one message the same person's next is drawn as part of
+ *  it -- no face, no name -- the way a chat groups a run of messages. */
+export const GROUP_WITHIN_MS = 5 * 60_000;
+
+/** Whether `line` carries on from `before`: the same sender, for the same
+ *  person, within a few minutes, and nothing between them worth a new head --
+ *  a deletion, a note, a question, a thread. */
+export function continues(
+    before: Pick<Line, "sender" | "onBehalfOf" | "createdAt" | "deleted" | "membersOnly" | "interaction" | "replyCount"> | undefined,
+    line: Pick<Line, "sender" | "onBehalfOf" | "createdAt" | "deleted" | "membersOnly">,
+): boolean {
+    if (!before || before.deleted || line.deleted) return false;
+    if (before.interaction || before.replyCount > 0) return false;
+    if (before.sender.kind !== line.sender.kind || before.sender.id !== line.sender.id || before.sender.name !== line.sender.name) return false;
+    if ((before.onBehalfOf?.id ?? null) !== (line.onBehalfOf?.id ?? null)) return false;
+    if (before.membersOnly !== line.membersOnly) return false;
+    const gap = Date.parse(line.createdAt) - Date.parse(before.createdAt);
+    return Number.isFinite(gap) && gap >= 0 && gap < GROUP_WITHIN_MS;
+}
+
+/** The line an answer answers, when it is not the line just above it --
+ *  somebody wrote in between -- so the answer can say what it is answering.
+ *  Nothing for an answer right under its question, or one in a thread. */
+export function answeredOutOfPlace<T extends Pick<Line, "id" | "replyToId" | "threadRootId">>(
+    line: T,
+    above: Pick<Line, "id"> | undefined,
+    byId: ReadonlyMap<string, T>,
+): T | null {
+    if (!line.replyToId || line.threadRootId || above?.id === line.replyToId) return null;
+    return byId.get(line.replyToId) ?? null;
+}

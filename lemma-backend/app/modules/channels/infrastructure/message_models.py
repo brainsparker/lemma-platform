@@ -68,10 +68,9 @@ class ChannelMessageModel(UUIDAuditBase):
         # hang from: the line *and its channel*, so the database refuses one
         # in another channel, and a fold moving the line carries them.
         UniqueConstraint("id", "channel_id", name="uq_channel_messages_id_channel"),
-        # The same with the line's number, for its mentions: an unread mention
-        # is one past the reader's ``last_read_seq``, counted from the
-        # mention's own index without visiting the line. The number is the
-        # line's, cascaded, never a copy anybody keeps.
+        # The same with the line's number, for its mentions: counted and
+        # ordered from the mention's own index without visiting the line. The
+        # number is the line's, cascaded, never a copy anybody keeps.
         UniqueConstraint(
             "id", "channel_id", "seq", name="uq_channel_messages_id_channel_seq"
         ),
@@ -175,6 +174,11 @@ class ChannelMessageModel(UUIDAuditBase):
             postgresql_where=text("on_behalf_contact_id IS NOT NULL"),
         ),
         Index(
+            "ix_channel_messages_deleted_by",
+            "deleted_by_user_id",
+            postgresql_where=text("deleted_by_user_id IS NOT NULL"),
+        ),
+        Index(
             "ix_channel_messages_run",
             "agent_run_id",
             postgresql_where=text("agent_run_id IS NOT NULL"),
@@ -205,7 +209,8 @@ class ChannelMessageModel(UUIDAuditBase):
     #: The line's place in its channel's timeline, gapless from 1.
     seq: Mapped[int] = mapped_column(BigInteger, nullable=False)
     #: What a client named the line it wrote, so a retry is the same line.
-    client_message_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    #: A member's is kept in their own namespace (``domain.idempotency``).
+    client_message_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     #: Where it was heard: the place a person said it, on a platform.
     source_id: Mapped[UUID | None] = mapped_column(nullable=True)
     #: Where a line written in Lemma was carried: the place it went to.
@@ -235,9 +240,16 @@ class ChannelMessageModel(UUIDAuditBase):
     parts: Mapped[list[dict[str, object]]] = mapped_column(
         JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
     )
+    #: Each word stemmed (``english``: "running" is "run") and as written
+    #: (``simple``), so a word being typed is found by its start either way
+    #: (``line_search``).
     search: Mapped[str] = mapped_column(
         TSVECTOR,
-        Computed("to_tsvector('simple', coalesce(body, ''))", persisted=True),
+        Computed(
+            "to_tsvector('english', coalesce(body, ''))"
+            " || to_tsvector('simple', coalesce(body, ''))",
+            persisted=True,
+        ),
         nullable=True,
     )
     members_only: Mapped[bool] = mapped_column(
@@ -261,6 +273,16 @@ class ChannelMessageModel(UUIDAuditBase):
     )
     deleted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+    #: An agent's answer made with a member's own access, shared by that
+    #: member with everybody in the channel (``domain.projection``).
+    shared_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    #: The member who deleted it: its writer, or somebody who may change the
+    #: channel removing it. Absent when its platform said it was deleted.
+    deleted_by_user_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
 
 
@@ -292,13 +314,15 @@ class ChannelMentionModel(UUIDAuditBase):
             text("coalesce(user_id, contact_id, agent_id)"),
             unique=True,
         ),
+        # A member's unread mentions, and only those: reading one takes it
+        # out, so counting them never visits what was read.
         Index(
             "ix_channel_mentions_user",
             "user_id",
             "pod_id",
             "channel_id",
             "seq",
-            postgresql_where=text("user_id IS NOT NULL"),
+            postgresql_where=text("user_id IS NOT NULL AND read_at IS NULL"),
         ),
         Index(
             "ix_channel_mentions_contact",
@@ -316,8 +340,7 @@ class ChannelMentionModel(UUIDAuditBase):
     channel_id: Mapped[UUID] = mapped_column(nullable=False)
     #: The line's pod, for a member's mentions across it; never changes.
     pod_id: Mapped[UUID] = mapped_column(nullable=False)
-    #: The line's ``seq``, held to it by ``fk_channel_mentions_line``: a
-    #: mention is unread while it is past the member's ``last_read_seq``.
+    #: The line's ``seq``, held to it by ``fk_channel_mentions_line``.
     seq: Mapped[int] = mapped_column(BigInteger, nullable=False)
     user_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), nullable=True
@@ -327,4 +350,10 @@ class ChannelMentionModel(UUIDAuditBase):
     )
     agent_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("agents.id", ondelete="CASCADE"), nullable=True
+    )
+    #: When the member named read it where it was said: a top-level line's
+    #: by reading the timeline past it, a reply's by reading its thread
+    #: (``members.mark_read``). Unread while ``NULL``.
+    read_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )

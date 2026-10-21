@@ -6,7 +6,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEve
 import { EmailPassword, ThirdParty } from "./supertokens";
 import { authFailure, isExistingAccount, sayProblem, type Attempt } from "./errors";
 import { DEFAULT_LANDING, PORTAL_PATH, siteOrigin } from "./config";
-import { authLink, rememberDestination, pendingDestination, destinationFrom, asksForDestination, installsTemplate } from "./redirects";
+import { authLink, rememberDestination, pendingDestination, destinationFrom, asksForDestination, installsTemplate, addsToSlack } from "./redirects";
 import { accountAccess, completeAuth, completionDestination } from "./completion";
 import { forgetReturns, noteReturn, wouldLoop } from "./return-loop";
 import { captureSignInLoop } from "@/site/analytics/client";
@@ -404,7 +404,8 @@ export function SignInUp({ mode }: { mode: "in" | "up" }) {
 
     const attempt: Attempt = signingIn ? "sign-in" : "sign-up";
     const other = authLink(mode === "in" ? PORTAL_PATH + "/signup" : PORTAL_PATH);
-    const installing = installsTemplate(pendingDestination(window.location.search), siteOrigin());
+    const arriving = pendingDestination(window.location.search);
+    const installing = installsTemplate(arriving, siteOrigin()) || addsToSlack(arriving, siteOrigin());
 
     useEffect(() => {
         let live = true;

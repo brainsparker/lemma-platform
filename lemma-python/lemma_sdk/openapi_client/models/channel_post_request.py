@@ -23,6 +23,7 @@ class ChannelPostRequest:
     """
     Attributes:
         client_message_id (None | str | Unset): The client's name for this line: sending it again is the same line.
+            Shown back on the line to its writer, as sent.
         members_only (bool | Unset): A note to the pod's members: never sent outside. Default: False.
         parts (list[FilePart | LinkPart | MentionPart] | Unset): Mentions, files and links. Who a line names is read
             from here.

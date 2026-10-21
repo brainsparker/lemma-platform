@@ -80,7 +80,8 @@ class _Socket:
 
 
 async def _groups(db_session, pod: Pod, readers: Sequence[UUID]) -> list[UUID]:
-    """``MANY`` public groups, every reader in each, a line said in each."""
+    """``MANY`` public groups, every one of ``readers`` in each, a line said
+    in each."""
     pod_id = UUID(pod.id)
     ids = [uuid4() for _ in range(MANY)]
     await db_session.execute(
@@ -136,16 +137,23 @@ async def _say_in(db_session, channel_ids: Sequence[UUID], *, writer: UUID) -> N
 
 
 async def _drain_cost(
-    db_manager, db_session, pod: Pod, readers: Sequence[UUID], moved: list[UUID]
+    db_manager,
+    db_session,
+    pod: Pod,
+    readers: Sequence[UUID],
+    moved: list[UUID],
+    *,
+    outsiders: Sequence[UUID] = (),
 ) -> int:
-    """Statements one drain issues for ``readers`` after ``moved`` changed --
-    every reader told of every channel."""
+    """Statements one drain issues for ``readers`` and ``outsiders`` after
+    ``moved`` changed -- every reader told of every channel, and no outsider
+    (in none of them) told anything."""
     pod_id = UUID(pod.id)
     feed = InboxFeed(pod_id)
     sockets: list[_Socket] = []
     async with db_manager.session_factory() as session:
         uow = SqlAlchemyUnitOfWork(session)
-        for user_id in readers:
+        for user_id in [*readers, *outsiders]:
             caller = await caller_for(uow, pod_id=pod_id, user_id=user_id)
             assert caller is not None
             socket = _Socket(user_id)
@@ -168,6 +176,9 @@ async def _drain_cost(
                 everything=False,
             )
     for socket in sockets:
+        if socket.user_id in outsiders:
+            assert socket.events == [], f"outsider {socket.user_id} was told"
+            continue
         told = "".join(socket.events)
         missed = [channel for channel in moved if str(channel) not in told]
         assert not missed, f"reader {socket.user_id} was not told of {missed}"
@@ -205,6 +216,32 @@ async def test_one_more_reader_costs_the_same_however_many_channels_moved(
         f"moves and {per_reader[MANY]:g} when {MANY} do: the recompute reads "
         "per channel for every reader, where it should read every moved "
         "channel's counts for a reader at once"
+    )
+
+
+async def test_a_reader_whose_counts_did_not_move_costs_less_and_is_sent_nothing(
+    pod: Pod, db_session, db_manager
+):
+    """Lines in groups a reader is not in move none of their counts: they are
+    sent no frame, and their totals -- a read across the whole pod -- are not
+    worked out again for it."""
+    owner = UUID(pod.owner["id"])
+    others = [UUID(person["id"]) for person in (pod.editor, pod.user, pod.viewer)]
+    theirs = await _groups(db_session, pod, [owner, *others])
+    not_theirs = await _groups(db_session, pod, [owner])
+
+    alone = await _drain_cost(db_manager, db_session, pod, [owner], theirs)
+    insiders = await _drain_cost(db_manager, db_session, pod, [owner, *others], theirs)
+    alone_again = await _drain_cost(db_manager, db_session, pod, [owner], not_theirs)
+    outsiders = await _drain_cost(
+        db_manager, db_session, pod, [owner], not_theirs, outsiders=others
+    )
+    insider = (insiders - alone) / len(others)
+    outsider = (outsiders - alone_again) / len(others)
+    print(f"\n  statements per reader: told {insider:g}, nothing moved {outsider:g}")
+    assert outsider < insider, (
+        f"a reader none of whose counts moved cost {outsider:g} statements, "
+        f"one told cost {insider:g}: their totals are read again for nothing"
     )
 
 

@@ -13,7 +13,14 @@ from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, StringConstraints
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    StringConstraints,
+)
 
 from app.modules.channels.contracts.people import PersonRef
 from app.modules.channels.contracts.source_settings import SourceSettingsResponse
@@ -38,16 +45,41 @@ Names = Mapping[Principal, str | None]
 #: What to call each agent a page names.
 AgentNames = Mapping[UUID, str]
 
+
+def no_nul(value: str) -> str:
+    """Text a person sends is stored as Postgres text, which cannot hold a NUL
+    character: refused here, as the request's fault, not the database's."""
+    if "\x00" in value:
+        raise ValueError("Text cannot contain a NUL character")
+    return value
+
+
+#: Any text a person sends: kept whole, but never with a NUL in it.
+UserText = Annotated[str, AfterValidator(no_nul)]
+
 Title = Annotated[
-    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)
-]
-Topic = Annotated[str, StringConstraints(strip_whitespace=True, max_length=500)]
-Platform = Annotated[
     str,
-    StringConstraints(
-        strip_whitespace=True, to_upper=True, min_length=1, max_length=20
-    ),
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=255),
+    AfterValidator(no_nul),
 ]
+Topic = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, max_length=500),
+    AfterValidator(no_nul),
+]
+
+
+def _upper(value: object) -> object:
+    return value.strip().upper() if isinstance(value, str) else value
+
+
+#: Where a member may ask to be told outside the app: email, or a platform.
+Platform = Annotated[
+    Literal["EMAIL", "SLACK", "TEAMS", "WHATSAPP", "TELEGRAM", "RESEND"],
+    BeforeValidator(_upper),
+]
+#: A line's number, as Postgres keeps it (``bigint``).
+MAX_SEQ = 2**63 - 1
 
 
 # -- reading --------------------------------------------------------------------
@@ -98,8 +130,11 @@ class LinePreview(BaseModel):
     id: UUID
     seq: int
     sender: PersonRef
-    text: str = Field(description="The start of what was said; empty when withheld.")
+    text: str = Field(
+        description="The start of what was said; empty when withheld or deleted."
+    )
     withheld: bool = False
+    deleted: bool = Field(default=False, description="Its writer deleted it.")
     created_at: datetime
 
 
@@ -193,6 +228,14 @@ class MyMembershipResponse(BaseModel):
 
 
 class ChannelDetailResponse(ChannelResponse):
+    opted_out: bool | None = Field(
+        default=None,
+        description=(
+            "A contact's channel: whether they asked the pod to stop writing "
+            "to a handle of theirs -- lines to it are not sent until they "
+            "write from it again (the contact's `identities` say which)."
+        ),
+    )
     source_places: list[ChannelSourceResponse] = Field(default_factory=list)
     members: list[ChannelMemberResponse] = Field(default_factory=list)
     me: MyMembershipResponse = Field(default_factory=MyMembershipResponse)
@@ -278,6 +321,8 @@ NOT_CLEARABLE = frozenset(
 
 
 class MembersAddRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     people: list[UUID] = Field(
         default_factory=list, max_length=200, description="Members, by user id."
     )
@@ -299,7 +344,16 @@ class MyMembershipUpdate(BaseModel):
 
 
 class ReadRequest(BaseModel):
-    seq: int = Field(ge=0, description="The newest line the reader has seen.")
+    seq: int = Field(
+        ge=0, le=MAX_SEQ, description="The newest line the reader has seen."
+    )
+    thread_root_id: UUID | None = Field(
+        default=None,
+        description=(
+            "Read in this thread: its replies (and its first line) up to `seq` "
+            "are seen. Without it, the timeline is: thread replies are not."
+        ),
+    )
 
 
 # -- mappers --------------------------------------------------------------------

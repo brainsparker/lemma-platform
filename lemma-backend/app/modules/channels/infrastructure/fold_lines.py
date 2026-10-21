@@ -145,6 +145,26 @@ async def carry_read_state(
     )
 
 
+async def recount_read_replies(session: AsyncSession, *, channel_id: UUID) -> None:
+    """How many replies each reader of the folded channel has read: those up
+    to their read number, as the lines are numbered now."""
+    state, line = ChannelReadStateModel, ChannelMessageModel
+    await session.execute(
+        update(state)
+        .where(state.channel_id == channel_id)
+        .values(
+            read_replies=select(func.count())
+            .where(
+                line.channel_id == channel_id,
+                line.seq <= state.last_read_seq,
+                line.thread_root_id.is_not(None),
+            )
+            .scalar_subquery()
+        )
+        .execution_options(synchronize_session=False)
+    )
+
+
 async def renumber_deliveries(
     session: AsyncSession, *, merged_id: UUID, survivor_id: UUID
 ) -> None:
@@ -210,6 +230,7 @@ async def merge_lines(
 
 __all__ = [
     "carry_read_state",
+    "recount_read_replies",
     "defer_place_checks",
     "merge_lines",
     "renumber_deliveries",

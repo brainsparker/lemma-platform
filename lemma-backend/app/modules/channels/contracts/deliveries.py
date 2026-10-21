@@ -117,12 +117,16 @@ async def delivery_sent(
     platform: str,
     external_message_id: str | None,
     provider_status: str | None = None,
+    reason: str | None = None,
 ) -> None:
+    """It went. ``reason``: what a member should know of where it waits --
+    a web chat holds it until the visitor is back."""
     await DeliveryRepository(uow.session).sent(
         delivery_id,
         platform=platform,
         external_message_id=external_message_id,
         provider_status=provider_status,
+        reason=reason,
     )
 
 

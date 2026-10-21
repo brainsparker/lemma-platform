@@ -77,7 +77,9 @@ async def test_a_line_shares_only_a_file_its_writer_may_read(pod: Pod):
         assert refused.status_code == 422, (path, refused.text)
 
 
-async def test_ones_own_line_says_where_it_went(pod: Pod, db_session: AsyncSession):
+async def test_a_line_says_where_it_went_to_everyone_who_reads_it(
+    pod: Pod, db_session: AsyncSession
+):
     source, _ = await contact_place(db_session, pod)
     channel = f"{pod.base}/{source.channel_id}"
     said = await pod.client(pod.editor).post(
@@ -93,7 +95,7 @@ async def test_ones_own_line_says_where_it_went(pod: Pod, db_session: AsyncSessi
     line = said.json()["id"]
     [as_owner] = [m for m in read_by_owner.json()["items"] if m["id"] == line]
     [as_writer] = [m for m in mine.json()["items"] if m["id"] == line]
-    assert as_owner["delivered"] is None
+    assert as_owner["delivered"] == as_writer["delivered"]
     assert as_writer["delivered"][0]["id"] == went["id"]
 
 

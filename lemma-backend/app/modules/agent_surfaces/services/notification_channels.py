@@ -335,6 +335,10 @@ class NotificationChannelResolver:
         domain sent us looking in the wrong place.
         """
         if not email_is_configured() or self.surface_provisioner is None:
+            logger.warning(
+                "agent_surfaces.notification_channels.email_not_configured.degraded",
+                fix="Set RESEND_API_KEY and RESEND_INBOUND_DOMAIN.",
+            )
             return None, UndeliverableReason.EMAIL_NOT_CONFIGURED
         # The assistant's mailbox is the pod's own: `acme@`, not
         # `pod-default.acme@`. The name travelling with a notification is the

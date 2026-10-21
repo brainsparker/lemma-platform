@@ -334,8 +334,8 @@ async def test_a_reply_goes_where_its_thread_is(pod: Pod, db_session: AsyncSessi
     retry = f"{sends}/{delivery['id']}/retry"
     assert (await pod.client().post(retry)).status_code == 409
     deliveries = DeliveryRepository(db_session)
-    claimed = await deliveries.get(UUID(delivery["id"]))
-    assert claimed is not None
+    claimed = await deliveries.claim(UUID(delivery["id"]))
+    assert claimed is not None and claimed.attempts == 1
     await deliveries.failed(
         claimed,
         code=DeliveryReasonCode.TRANSIENT,
@@ -343,10 +343,16 @@ async def test_a_reply_goes_where_its_thread_is(pod: Pod, db_session: AsyncSessi
         platform="TELEGRAM",
     )
     await db_session.commit()
-    assert (await pod.client(pod.user).post(retry)).status_code == 403
+    # The user reads the line but did not write it: refused, not hidden.
+    refused = await pod.client(pod.user).post(retry)
+    assert refused.status_code == 403, refused.text
     retried = await pod.client().post(retry)
     assert retried.status_code == 200, retried.text
+    # One more try, counted with the first; why the first failed is not
+    # shown as if it were this one's.
     assert retried.json()["status"] == "PENDING"
+    assert retried.json()["attempts"] == 1
+    assert retried.json()["reason"] is None
 
 
 async def test_a_deleted_line_cannot_be_edited(pod: Pod):

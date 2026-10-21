@@ -128,6 +128,7 @@ _NAME_TO_MODULE = {
     'ChannelMemberListResponse': 'channel_member_list_response',
     'ChannelMemberResponse': 'channel_member_response',
     'ChannelMessageResponse': 'channel_message_response',
+    'ChannelMessageResponseVisibility': 'channel_message_response_visibility',
     'ChannelMessagesResponse': 'channel_messages_response',
     'ChannelPostRequest': 'channel_post_request',
     'ChannelRef': 'channel_ref',
@@ -372,6 +373,7 @@ _NAME_TO_MODULE = {
     'MessageResponseSchema': 'message_response_schema',
     'MyMembershipResponse': 'my_membership_response',
     'MyMembershipUpdate': 'my_membership_update',
+    'MyMembershipUpdateNotifyViaType0Item': 'my_membership_update_notify_via_type_0_item',
     'MyUsageLimitsResponse': 'my_usage_limits_response',
     'MyUsageLimitsResponsePlanTypeType0': 'my_usage_limits_response_plan_type_type_0',
     'NavigationOrganizationResponse': 'navigation_organization_response',
@@ -538,6 +540,19 @@ _NAME_TO_MODULE = {
     'SignedUrlListResponse': 'signed_url_list_response',
     'SignedUrlRevokeResponse': 'signed_url_revoke_response',
     'SignedUrlSummary': 'signed_url_summary',
+    'SlackAppCreateRequest': 'slack_app_create_request',
+    'SlackAppCreateResponse': 'slack_app_create_response',
+    'SlackAppWorkspaceListResponse': 'slack_app_workspace_list_response',
+    'SlackAppWorkspaceResponse': 'slack_app_workspace_response',
+    'SlackConfigurationTokenRequest': 'slack_configuration_token_request',
+    'SlackInstallAvailabilityResponse': 'slack_install_availability_response',
+    'SlackInstallRequest': 'slack_install_request',
+    'SlackInstallResponse': 'slack_install_response',
+    'SlackManagedWorkspaceListResponse': 'slack_managed_workspace_list_response',
+    'SlackManagedWorkspaceResponse': 'slack_managed_workspace_response',
+    'SlackManagerBindRequest': 'slack_manager_bind_request',
+    'SlackSignInRequest': 'slack_sign_in_request',
+    'SlackSignInResponse': 'slack_sign_in_response',
     'SourceKind': 'source_kind',
     'SourceSettingsDetailResponse': 'source_settings_detail_response',
     'SourceSettingsResponse': 'source_settings_response',
@@ -819,6 +834,7 @@ if TYPE_CHECKING:
     from .channel_member_list_response import ChannelMemberListResponse
     from .channel_member_response import ChannelMemberResponse
     from .channel_message_response import ChannelMessageResponse
+    from .channel_message_response_visibility import ChannelMessageResponseVisibility
     from .channel_messages_response import ChannelMessagesResponse
     from .channel_post_request import ChannelPostRequest
     from .channel_ref import ChannelRef
@@ -1063,6 +1079,7 @@ if TYPE_CHECKING:
     from .message_response_schema import MessageResponseSchema
     from .my_membership_response import MyMembershipResponse
     from .my_membership_update import MyMembershipUpdate
+    from .my_membership_update_notify_via_type_0_item import MyMembershipUpdateNotifyViaType0Item
     from .my_usage_limits_response import MyUsageLimitsResponse
     from .my_usage_limits_response_plan_type_type_0 import MyUsageLimitsResponsePlanTypeType0
     from .navigation_organization_response import NavigationOrganizationResponse
@@ -1229,6 +1246,19 @@ if TYPE_CHECKING:
     from .signed_url_list_response import SignedUrlListResponse
     from .signed_url_revoke_response import SignedUrlRevokeResponse
     from .signed_url_summary import SignedUrlSummary
+    from .slack_app_create_request import SlackAppCreateRequest
+    from .slack_app_create_response import SlackAppCreateResponse
+    from .slack_app_workspace_list_response import SlackAppWorkspaceListResponse
+    from .slack_app_workspace_response import SlackAppWorkspaceResponse
+    from .slack_configuration_token_request import SlackConfigurationTokenRequest
+    from .slack_install_availability_response import SlackInstallAvailabilityResponse
+    from .slack_install_request import SlackInstallRequest
+    from .slack_install_response import SlackInstallResponse
+    from .slack_managed_workspace_list_response import SlackManagedWorkspaceListResponse
+    from .slack_managed_workspace_response import SlackManagedWorkspaceResponse
+    from .slack_manager_bind_request import SlackManagerBindRequest
+    from .slack_sign_in_request import SlackSignInRequest
+    from .slack_sign_in_response import SlackSignInResponse
     from .source_kind import SourceKind
     from .source_settings_detail_response import SourceSettingsDetailResponse
     from .source_settings_response import SourceSettingsResponse
@@ -1523,6 +1553,7 @@ __all__ = [
     'ChannelMemberListResponse',
     'ChannelMemberResponse',
     'ChannelMessageResponse',
+    'ChannelMessageResponseVisibility',
     'ChannelMessagesResponse',
     'ChannelPostRequest',
     'ChannelRef',
@@ -1767,6 +1798,7 @@ __all__ = [
     'MessageResponseSchema',
     'MyMembershipResponse',
     'MyMembershipUpdate',
+    'MyMembershipUpdateNotifyViaType0Item',
     'MyUsageLimitsResponse',
     'MyUsageLimitsResponsePlanTypeType0',
     'NavigationOrganizationResponse',
@@ -1933,6 +1965,19 @@ __all__ = [
     'SignedUrlListResponse',
     'SignedUrlRevokeResponse',
     'SignedUrlSummary',
+    'SlackAppCreateRequest',
+    'SlackAppCreateResponse',
+    'SlackAppWorkspaceListResponse',
+    'SlackAppWorkspaceResponse',
+    'SlackConfigurationTokenRequest',
+    'SlackInstallAvailabilityResponse',
+    'SlackInstallRequest',
+    'SlackInstallResponse',
+    'SlackManagedWorkspaceListResponse',
+    'SlackManagedWorkspaceResponse',
+    'SlackManagerBindRequest',
+    'SlackSignInRequest',
+    'SlackSignInResponse',
     'SourceKind',
     'SourceSettingsDetailResponse',
     'SourceSettingsResponse',

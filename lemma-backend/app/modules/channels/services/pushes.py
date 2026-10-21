@@ -9,7 +9,7 @@ what is due now goes as one delivery each, the rest when its window ends.
 
 A member hears of a line, outside the app, for: a line naming them; a
 question waiting on them; a line in their own channel they did not write; a
-contact's line in a channel assigned to them; and, set to ``ALL``, any line
+contact's line in a channel assigned to them (seated or not); and, set to ``ALL``, any line
 written in Lemma in a group they are in. Never an agent's line at a platform
 (seen there) or answering in a thread (seen in the app), nor a line withheld
 from them (they could not read it). ``MENTIONS`` -- a group seat's default --
@@ -88,6 +88,8 @@ async def fan_out(
     told = await _seated_who_hear(uow, channel, line, named=named, awaited=awaited)
     for user_id in await _called_not_seated(uow, channel, line, called):
         told[user_id] = True
+    for user_id in await _assignee_not_seated(uow, channel, line):
+        told.setdefault(user_id, False)
     await _fold(uow, channel, line, told)
 
 
@@ -212,6 +214,27 @@ async def _called_not_seated(
         if await member_sees(uow, channel, user_id):
             told.append(user_id)
     return told
+
+
+async def _assignee_not_seated(
+    uow: SqlAlchemyUnitOfWork, channel: Channel, message: ChannelMessage
+) -> list[UUID]:
+    """Who answers the contact, when the contact writes and they are not in
+    the channel (they left it, or were assigned before an assignment seated
+    them): told all the same, when they may still see it."""
+    assignee = channel.assignee_user_id
+    if (
+        channel.kind is not ChannelKind.CONTACT
+        or assignee is None
+        or message.sender.kind is not SenderKind.CONTACT
+        or message.members_only
+    ):
+        return []
+    if await MemberRepository(uow.session).users_in(channel.id, {assignee}):
+        return []
+    if await member_sees(uow, channel, assignee):
+        return [assignee]
+    return []
 
 
 def _muted(member: Member, at: datetime) -> bool:

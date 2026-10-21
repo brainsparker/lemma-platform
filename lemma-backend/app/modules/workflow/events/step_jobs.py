@@ -160,7 +160,17 @@ async def notify_form(ctx: JobContext, payload: WaitWork) -> None:
             schema=wait.payload.get("input_schema"),
             actor_user_id=run.user_id,
             expires_at=expires_at(wait, now=datetime.now(UTC)),
+            node_label=_node_label(flow, wait.node_id),
         )
+
+
+def _node_label(flow: object, node_id: str) -> str | None:
+    """The label the workflow's author gave the form's step, if any."""
+    for node in getattr(flow, "nodes", None) or ():
+        if getattr(node, "id", None) == node_id:
+            label = getattr(node, "label", None)
+            return label if isinstance(label, str) and label.strip() else None
+    return None
 
 
 def register_step_jobs(

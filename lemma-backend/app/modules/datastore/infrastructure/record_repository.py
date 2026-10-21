@@ -185,11 +185,9 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
         )
 
         async with self.schema_manager.session_factory() as session:
-            if ctx.enable_rls:
-                await self.schema_manager.set_rls_context(
-                    session,
-                    RowPrincipal.for_user(user_id, is_pod_admin=not enforce_user_scope),
-                )
+            principal = ctx.row_principal(user_id, is_pod_admin=not enforce_user_scope)
+            if principal is not None:
+                await self.schema_manager.set_rls_context(session, principal)
             result = await session.execute(text(sql), params)
             row = result.fetchone()
 
@@ -278,13 +276,11 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
 
         try:
             async with self.schema_manager.session_factory() as session:
-                if ctx.enable_rls:
-                    await self.schema_manager.set_rls_context(
-                        session,
-                        RowPrincipal.for_user(
-                            user_id, is_pod_admin=not enforce_user_scope
-                        ),
-                    )
+                principal = ctx.row_principal(
+                    user_id, is_pod_admin=not enforce_user_scope
+                )
+                if principal is not None:
+                    await self.schema_manager.set_rls_context(session, principal)
 
                 rows, total = await rows_and_total(
                     session,

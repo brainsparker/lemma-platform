@@ -28,7 +28,6 @@ from sqlalchemy.exc import DBAPIError
 
 from app.modules.datastore.changes.capture import ChangeCapture
 from app.core.log.log import get_logger
-from app.modules.datastore.domain.row_security import RowPrincipal
 from app.modules.datastore.domain.errors import DatastoreRecordNotFoundError
 from app.modules.datastore.infrastructure.record_bulk_sql import (
     chunk_rows,
@@ -171,11 +170,9 @@ async def _bulk_update_logged(
     await changes.prepare()
     try:
         async with schema_manager.session_factory() as session:
-            if ctx.enable_rls:
-                await schema_manager.set_rls_context(
-                    session,
-                    RowPrincipal.for_user(user_id, is_pod_admin=not enforce_user_scope),
-                )
+            principal = ctx.row_principal(user_id, is_pod_admin=not enforce_user_scope)
+            if principal is not None:
+                await schema_manager.set_rls_context(session, principal)
             await changes.begin(session)
             if "U" in changes.snapshot:
                 grouped = _with_prior_image(

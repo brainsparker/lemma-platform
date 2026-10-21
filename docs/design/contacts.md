@@ -109,7 +109,8 @@ passes the pod-membership check.
    from a contact's run. It runs as the **function's own workload** with the
    function's grants, never as a member: the run has no user, carries the
    contact, and authenticates with a `function-run` token that reaches only its
-   pod's data. Its reads of contact-owned tables see that contact's rows only.
+   pod's data. Its reads of contact-owned tables see that contact's rows only,
+   and the rows it adds there are written as that contact.
    The platform writes `contact_id` into its input, replacing whatever the
    model sent. Identity strength is not passed yet (see Step-up).
 

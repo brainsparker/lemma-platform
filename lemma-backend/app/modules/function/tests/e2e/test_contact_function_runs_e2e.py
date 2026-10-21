@@ -54,6 +54,7 @@ from app.modules.test_support.e2e.function_helpers import (
     create_table,
     replace_function_resource_grants,
 )
+from app.modules.test_support.e2e.row_bound_records import row_bound_records
 from app.modules.test_support.e2e_authz import (
     add_pod_member,
     auth_headers,
@@ -377,7 +378,9 @@ async def test_a_runs_token_sees_only_its_contacts_rows_of_a_contact_owned_table
 
     Record reads run where the contact policy does not hold, so they are
     refused; a query reads under the policy and sees this contact's rows only;
-    a row the run adds names its contact whatever the input said.
+    a row the run adds names its contact whatever the input said -- and is
+    written as that contact, under a role the policy binds, as a deployment's
+    is.
     """
     pod_id = test_pod["id"]
     function = await _seed_function(
@@ -414,30 +417,32 @@ async def test_a_runs_token_sees_only_its_contacts_rows_of_a_contact_owned_table
             }
         ],
     )
-    theirs = await authenticated_client.post(
-        f"/pods/{pod_id}/datastore/tables/{orders}/records",
-        json={"data": {"item": "theirs", "contact_id": str(someone_else)}},
-    )
-    assert theirs.status_code == status.HTTP_201_CREATED, theirs.text
     _claims, headers = _token(function, run_id, contact_id)
 
-    mine = await async_client.post(
-        f"/pods/{pod_id}/datastore/tables/{orders}/records",
-        json={"data": {"item": "mine", "contact_id": str(someone_else)}},
-        headers=headers,
-    )
-    assert mine.status_code == status.HTTP_201_CREATED, mine.text
+    async with row_bound_records(UUID(pod_id)):
+        mine = await async_client.post(
+            f"/pods/{pod_id}/datastore/tables/{orders}/records",
+            json={"data": {"item": "mine", "contact_id": str(someone_else)}},
+            headers=headers,
+        )
+        assert mine.status_code == status.HTTP_201_CREATED, mine.text
 
-    listed = await async_client.get(
-        f"/pods/{pod_id}/datastore/tables/{orders}/records", headers=headers
-    )
-    assert listed.status_code == status.HTTP_403_FORBIDDEN, listed.text
+        theirs = await authenticated_client.post(
+            f"/pods/{pod_id}/datastore/tables/{orders}/records",
+            json={"data": {"item": "theirs", "contact_id": str(someone_else)}},
+        )
+        assert theirs.status_code == status.HTTP_201_CREATED, theirs.text
 
-    queried = await async_client.post(
-        f"/pods/{pod_id}/datastore/query",
-        json={"query": f"SELECT item, contact_id FROM {orders}"},
-        headers=headers,
-    )
+        listed = await async_client.get(
+            f"/pods/{pod_id}/datastore/tables/{orders}/records", headers=headers
+        )
+        assert listed.status_code == status.HTTP_403_FORBIDDEN, listed.text
+
+        queried = await async_client.post(
+            f"/pods/{pod_id}/datastore/query",
+            json={"query": f"SELECT item, contact_id FROM {orders}"},
+            headers=headers,
+        )
     assert queried.status_code == status.HTTP_200_OK, queried.text
     assert queried.json()["items"] == [{"item": "mine", "contact_id": str(contact_id)}]
 

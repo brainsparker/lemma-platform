@@ -65,6 +65,17 @@ NOTE_IN_DM_KEY = "private_note_in_dm"
 #: message starts.
 WRITTEN_IN_LEMMA_KEY = "written_in_lemma"
 
+#: What a turn started by a line written in one of Lemma's own channels says
+#: it came from, on the message.
+LEMMA_CHANNEL = "lemma_channel"
+
+#: Stamped on a run a line in Lemma's own channels started, and on every run
+#: that continues it. One conversation serves a person across every place of
+#: a channel -- Lemma and the platforms alike -- so the conversation cannot
+#: say where a turn was asked; only the run can. A run asked in Lemma is
+#: answered in Lemma: no platform's guidance, tools, files or progress.
+ASKED_IN_LEMMA_KEY = "asked_in_lemma"
+
 WrittenIn = Literal["group", "outsiders"]
 IN_GROUP: WrittenIn = "group"
 IN_OUTSIDERS_THREAD: WrittenIn = "outsiders"
@@ -145,6 +156,8 @@ def run_metadata_for(message_metadata: Mapping[str, object] | None) -> JsonObjec
     metadata: JsonObject = {"source": "user_message"}
     if is_private_note(message_metadata):
         metadata[PRIVATE_NOTE_KEY] = True
+    if (message_metadata or {}).get("source") == LEMMA_CHANNEL:
+        metadata[ASKED_IN_LEMMA_KEY] = True
     if written_in := _written_in(message_metadata):
         metadata[WRITTEN_IN_LEMMA_KEY] = written_in
     return metadata
@@ -153,6 +166,17 @@ def run_metadata_for(message_metadata: Mapping[str, object] | None) -> JsonObjec
 def run_is_private(run_metadata: Mapping[str, object] | None) -> bool:
     """Whether this run's answer stays in Lemma rather than going to the platform."""
     return bool(run_metadata and run_metadata.get(PRIVATE_NOTE_KEY) is True)
+
+
+def asked_in_lemma(run_metadata: Mapping[str, object] | None) -> bool:
+    """Whether a line in Lemma's own channels started this run."""
+    return bool(run_metadata and run_metadata.get(ASKED_IN_LEMMA_KEY) is True)
+
+
+def run_delivers_to_surface(run_metadata: Mapping[str, object] | None) -> bool:
+    """Whether anything of this run -- progress, files, its answer -- goes to
+    the chat platform its conversation also lives on."""
+    return not run_is_private(run_metadata) and not asked_in_lemma(run_metadata)
 
 
 def answers_lemma_message(run_metadata: Mapping[str, object] | None) -> bool:
@@ -183,6 +207,8 @@ def privacy_of(run_metadata: Mapping[str, object] | None) -> JsonObject:
     marks: JsonObject = {}
     if run_is_private(run_metadata):
         marks[PRIVATE_NOTE_KEY] = True
+    if asked_in_lemma(run_metadata):
+        marks[ASKED_IN_LEMMA_KEY] = True
     if written_in := _written_in(run_metadata):
         marks[WRITTEN_IN_LEMMA_KEY] = written_in
     return marks

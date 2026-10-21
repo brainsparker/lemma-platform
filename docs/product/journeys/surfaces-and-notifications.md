@@ -700,7 +700,8 @@ remember where the bot is, who is in there, or what is waiting on them.
   company addresses the bot, the system shall answer them for the pod from what
   it made Public, as in any group opened to people outside the pod.
 - The system shall never answer somebody from the pod's own Slack workspace as
-  an outsider; one who is not in the pod is told how to join it instead.
+  an outsider; one who is not in the pod is told how to join it instead --
+  unless the pod's organization holds the workspace (PS-SURF-053).
 
 **Contracts:** `surface.webhook.handle_platform`, `channel.list`
 
@@ -957,6 +958,45 @@ Public, the way a group's people from outside it are.
 
 **Contracts:** `agent.surface.slack_manager.list`,
 `agent.surface.slack_manager.bind`, `agent.surface.slack_person.sign_in`
+
+---
+
+### PS-SURF-053 — A Slack workspace the organization holds: its people are contacts
+**Status:** planned
+
+> Proven at module level by
+> `agent_surfaces/tests/e2e/test_slack_workspace_contacts_e2e.py`. A scenario
+> needs the forged Slack workspace PS-SURF-052 does.
+
+- Where Lemma's own app holds a Slack workspace for the pod's organization, when
+  somebody in that workspace who is not a member of the pod writes privately to
+  one of the pod's teammates there, and the teammate answers contacts, the
+  system shall answer them as a contact of the pod, known by their Slack
+  account, without asking them to sign up first.
+- The system shall answer a Slack guest -- somebody let into a channel or two,
+  not into the workspace -- as a contact in a group open to people outside the
+  pod.
+- If a Slack guest writes privately to one of the pod's teammates, then the
+  system shall not answer them as a contact.
+- If Slack does not say whether a person who writes privately is a guest, then
+  the system shall not answer them as a contact.
+- Where a group a teammate is in is open to people outside the pod, the system
+  shall answer the workspace's people there as its contacts; where it is not,
+  shall tell them privately how to join, as before.
+- The system shall route a person Slack proved to be a member as that member,
+  whatever their Slack profile email says.
+- If another Slack user's profile carries a proven member's email, then the
+  system shall not route that user as the member.
+- When a teammate's own app is added to such a workspace, the system shall set
+  it to answer anyone, looked after by whoever connected it, unless somebody
+  set its contacts already.
+- Where the workspace is held by another organization, the system shall treat
+  the pod's teammate there as it treats any bot in a workspace nobody holds.
+- When a member forgets such a contact, the system shall forget the Slack
+  profile it kept for them.
+
+**Contracts:** `surface.webhook.handle_platform`, `agent.surface.create`,
+`contact.delete`
 
 ---
 

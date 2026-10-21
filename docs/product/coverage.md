@@ -14,9 +14,9 @@ only a promise marked `covered` with no test is.
 | `covered` | 175 |
 | `gap` | 4 |
 | `manual` | 24 |
-| `planned` | 23 |
+| `planned` | 24 |
 | `withdrawn` | 0 |
-| **total** | **226** |
+| **total** | **227** |
 
 Scenario tests declaring a promise: 449.
 
@@ -313,6 +313,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-SURF-051` People outside the pod add rows to a table it opened to them | `planned` | — |
 | `PS-SURF-047` Contacts cost the organization, never a member | `planned` | — |
 | `PS-SURF-052` Lemma's own Slack app sets a workspace's teammates up, and answers nobody | `planned` | — |
+| `PS-SURF-053` A Slack workspace the organization holds: its people are contacts | `planned` | — |
 
 ## [Working with data](journeys/working-with-data.md)
 

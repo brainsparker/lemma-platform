@@ -31,6 +31,7 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
 from app.modules.agent.contracts.contact_conversations import FOLLOW_UP_LINE_KEY
 from app.modules.agent.domain.entities import Message, MessageKind, MessageRole
+from app.modules.agent.domain.private_notes import LEMMA_CHANNEL
 from app.modules.channels.contracts.backgrounds import (
     BACKGROUND_KEY,
     BackgroundRefs,
@@ -40,8 +41,6 @@ from app.modules.channels.contracts.backgrounds import (
 
 logger = get_logger(__name__)
 
-#: What a turn started by a line in Lemma says it came from.
-LEMMA_CHANNEL = "lemma_channel"
 #: What the prompt reads for a member's line deleted since it was answered.
 DELETED_LINE = "(This message was deleted by its author.)"
 
@@ -152,7 +151,6 @@ def _uuid(value: object) -> UUID | None:
 
 __all__ = [
     "DELETED_LINE",
-    "LEMMA_CHANNEL",
     "is_follow_up",
     "with_channel_background",
 ]

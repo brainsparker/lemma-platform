@@ -181,6 +181,9 @@ class AgentToolDispatcher:
                 # `final_answer`, and it has no capability to carry these; the
                 # approval executor runs an approved answer to one of them.
                 include_question_tools=(include_final_answer or include_question_tools),
+                # Decided per run, as the runner decides it: a run asked in
+                # Lemma has no platform's tools.
+                surface_platform=getattr(ctx, "surface_platform", None),
             )
         run_ctx = self._run_context(ctx, agent_run_id)
         prepared: dict[str, PreparedTool] = {}

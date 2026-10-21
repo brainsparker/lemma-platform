@@ -11,8 +11,9 @@ addresses the bot gets an answer, and this module is how:
   organisation who was never added. They are all the same to the pod -- nobody
   it may grant anything to.
 * **Who they are.** A contact of the pod, by the handle the platform vouched for
-  (``sender_handles.group_handle``) -- opened the first time they put the bot
-  to work in one of its groups.
+  (``sender_handles.group_handle``; on Slack, also anybody in a workspace the
+  pod's organization holds, ``slack_workspace_people``) -- opened the first
+  time they put the bot to work in one of its groups.
 * **Where it runs.** In a conversation of their own in that group, looked after
   by the member who answers for it and naming the contact, so every run in it
   authorizes as that contact and reads only what is Public and what is theirs
@@ -50,7 +51,13 @@ from app.modules.agent.contracts.audience import Audience
 from app.modules.agent_surfaces.services.chat_context_builder import build_chat_context
 from app.modules.agent_surfaces.services.conversation_binder import ConversationBinder
 from app.modules.agent_surfaces.services.outsider_limits import OutsiderTurnLimiter
-from app.modules.agent_surfaces.services.sender_handles import group_handle
+from app.modules.agent_surfaces.services.sender_handles import (
+    SenderHandle,
+    group_handle,
+)
+from app.modules.agent_surfaces.services.slack_workspace_people import (
+    WorkspacePeople,
+)
 from app.modules.agent_surfaces.services.workspace_channels import (
     answers_slack_outsider,
 )
@@ -109,9 +116,11 @@ class OutsiderDoor:
         membership: SurfacePodMembershipPort,
         limiter: OutsiderTurnLimiter | None = None,
         contacts: ContactOpener = open_contact,
+        people: WorkspacePeople | None = None,
     ) -> None:
         self.uow = uow
         self.open_contact = contacts
+        self.people = people or WorkspacePeople(uow)
         self.groups = SurfaceGroupRepository(uow.session)
         self.membership = membership
         self.limiter = limiter or OutsiderTurnLimiter()
@@ -140,7 +149,7 @@ class OutsiderDoor:
         group = await self.groups.get(
             surface_id=surface.id, external_channel_id=parsed.external_channel_id
         )
-        return await self._welcoming(surface, parsed, group)
+        return await self._welcoming(surface, parsed, sender, group)
 
     async def surface_for(
         self,
@@ -165,7 +174,7 @@ class OutsiderDoor:
             )
         }
         for surface in outside:
-            if await self._welcoming(surface, parsed, groups.get(surface.id)):
+            if await self._welcoming(surface, parsed, sender, groups.get(surface.id)):
                 return surface
         return None
 
@@ -178,6 +187,7 @@ class OutsiderDoor:
         self,
         surface: AgentSurfaceEntity,
         parsed: ParsedInboundSurfaceEvent,
+        sender: ResolvedSurfaceUser,
         group: SurfaceGroup | None,
     ) -> SurfaceGroup | None:
         """The group, if it answers people outside the pod at all."""
@@ -186,8 +196,9 @@ class OutsiderDoor:
         # The bot's own switch, over every group it is in.
         if not surface.config.groups.answers_outsiders:
             return None
-        if parsed.platform is SurfacePlatform.SLACK and not answers_slack_outsider(
-            group.shared_externally, parsed
+        if parsed.platform is SurfacePlatform.SLACK and not (
+            answers_slack_outsider(group.shared_externally, parsed)
+            or await self._outsider_handle_of(surface, parsed, sender) is not None
         ):
             return None
         # A member who has left the pod answers for nobody: every question
@@ -198,6 +209,26 @@ class OutsiderDoor:
         ):
             return None
         return group
+
+    async def _outsider_handle_of(
+        self,
+        surface: AgentSurfaceEntity,
+        parsed: ParsedInboundSurfaceEvent,
+        sender: ResolvedSurfaceUser,
+    ) -> SenderHandle | None:
+        """The handle a group sender from outside the pod is a contact by.
+
+        Somebody in a Slack workspace the pod's organization holds -- a guest
+        too: the group let them in -- is one of its people, asked only now,
+        after resolution, so a member it has not recognised yet is never
+        opened as a contact (``GroupLog`` asks only ``group_handle``).
+        """
+        handle = group_handle(parsed)
+        if handle is not None:
+            return handle
+        return await self.people.colleague_handle(
+            surface, parsed, sender, private=False
+        )
 
     async def prepare(
         self,
@@ -211,7 +242,7 @@ class OutsiderDoor:
     ) -> SurfaceChatContext | None:
         """The run for a stranger's question, or None when it should not run."""
         owner = group.owner_user_id
-        handle = group_handle(parsed)
+        handle = await self._outsider_handle_of(surface, parsed, sender)
         if owner is None or not sender.external_user_id or handle is None:
             return None
         if not await self.limiter.allow(

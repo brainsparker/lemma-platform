@@ -45,7 +45,7 @@ from app.modules.agent.contracts.run_replies import (
     run_reply_material,
 )
 from app.modules.agent.domain.pod_asks import HANDED_BACK_SOURCES
-from app.modules.agent.domain.private_notes import PRIVATE_NOTE_KEY
+from app.modules.agent.domain.private_notes import LEMMA_CHANNEL, PRIVATE_NOTE_KEY
 from app.modules.agent.domain.queued_messages import (
     DURING_ACTIVE_RUN,
     STEERED_INTO_RUN,
@@ -63,7 +63,6 @@ from app.modules.agent.services.channel_answer_lines import (
     post_why_unanswered,
     say_refused,
 )
-from app.modules.agent.services.channel_background import LEMMA_CHANNEL
 from app.modules.agent.services.live_conversation import CONVERSATION_STREAM
 from app.modules.agent.services.service_factories import build_conversation_service
 from app.modules.channels.contracts import (
@@ -87,7 +86,11 @@ from app.modules.channels.contracts.backgrounds import (
     refs_of,
 )
 from app.modules.channels.contracts.live import announce_answering
-from app.modules.channels.contracts.lines import line_by_id, member_background
+from app.modules.channels.contracts.lines import (
+    last_heard_line,
+    line_by_id,
+    member_background,
+)
 
 logger = get_logger(__name__)
 
@@ -477,15 +480,14 @@ async def _post_handed_back(
     conversation in a channel of Lemma: after the line the conversation took
     up last, in its thread -- where the member asked it to ask them.
 
-    Only a conversation a member opened by writing in Lemma: one on a
-    platform is answered there by ``agent_surfaces``, and Lemma's own chat
-    shows its answers itself.
+    Only where the member last spoke to it in Lemma: one who last wrote on a
+    platform is answered there by ``agent_surfaces``, by the same rule
+    (``last_heard_line``) -- their conversation is the same one either way.
     """
-    if (
-        conversation.user_id is None
-        or conversation.contact_id is not None
-        or (conversation.conversation_metadata or {}).get("source") != LEMMA_CHANNEL
-    ):
+    if conversation.user_id is None or conversation.contact_id is not None:
+        return None
+    heard = await last_heard_line(uow, conversation.id)
+    if heard is None or heard.source_id is not None:
         return None
     line_id = await line_answered_in(uow, conversation.id)
     line = await line_by_id(uow, line_id) if line_id else None
@@ -503,7 +505,6 @@ async def _post_handed_back(
 __all__ = [
     "COULD_NOT_ANSWER",
     "IN_APP_CONTEXT_LINES",
-    "LEMMA_CHANNEL",
     "LineWaits",
     "STOPPED_BEFORE_ANSWERING",
     "answer_client_id",

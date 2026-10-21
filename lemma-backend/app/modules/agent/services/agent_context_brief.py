@@ -236,6 +236,7 @@ class AgentContextBriefBuilder:
         pod_id: UUID,
         toolsets: Collection[AgentToolset] = (),
         run_source: str | None = None,
+        platform: str | None = None,
     ) -> ContextBrief:
         # The pod default assistant runs with the user's permissions and sees the
         # whole pod; named agents see only what they're granted. This is the one
@@ -270,7 +271,7 @@ class AgentContextBriefBuilder:
                     user_id=user_id,
                 )
             per_run = (
-                run_framing(conversation, run_source=run_source),
+                run_framing(conversation, run_source=run_source, platform=platform),
                 "\n".join(asks),
                 cached.files,
                 memory,

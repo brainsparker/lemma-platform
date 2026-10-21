@@ -7,9 +7,10 @@ written here, so the two harnesses cannot drift apart -- the in-process one
 receives it through ``SurfacePlatformCapability`` and the remote ones through
 ``build_system_prompt``, and both call :func:`surface_platform_guidance`.
 
-Pure string assembly, no I/O: safe on the prompt-build hot path, and stable per
-conversation (a conversation never changes platform), so it rides in the cached
-system-prompt prefix.
+Pure string assembly, no I/O: safe on the prompt-build hot path. The platform
+is the run's (``surface_context_for_run``), not the conversation's: a member's
+conversation in a channel spans Lemma and every platform of it, and a run asked
+in Lemma gets no fragment at all.
 """
 
 from __future__ import annotations

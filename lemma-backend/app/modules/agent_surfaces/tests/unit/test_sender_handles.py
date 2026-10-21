@@ -12,6 +12,7 @@ from app.modules.agent_surfaces.domain.entities import (
 from app.modules.agent_surfaces.services.sender_handles import (
     group_handle,
     private_handle,
+    workspace_handle,
 )
 from app.modules.contacts.contracts import IdentityKind
 
@@ -86,7 +87,48 @@ def test_a_slack_sender_from_the_other_company_is_known_by_their_team_and_user()
     ids=["a-colleague", "no-team", "not-marked-external"],
 )
 def test_a_slack_sender_from_the_pods_own_workspace_is_never_a_contact(metadata):
+    """Not by ``group_handle``, which the group log asks before anybody knows
+    whether the sender is in the pod."""
     assert group_handle(_event(SurfacePlatform.SLACK, is_dm=False, **metadata)) is None
+
+
+@pytest.mark.parametrize("is_dm", [True, False])
+def test_a_slack_colleague_is_named_by_their_own_team_and_user(is_dm):
+    event = _event(SurfacePlatform.SLACK, is_dm=is_dm, sender_team_id="T0HOME")
+
+    handle = workspace_handle(event)
+
+    assert handle is not None
+    assert (handle.kind, handle.value, handle.vouched_for) == (
+        IdentityKind.SLACK,
+        "T0HOME:U777",
+        True,
+    )
+
+
+def test_one_person_is_one_handle_whether_external_or_not():
+    """The other company's person in a shared channel and in a DM are one."""
+    shared = _event(
+        SurfacePlatform.SLACK,
+        is_dm=False,
+        sender_is_external=True,
+        sender_team_id="T999",
+    )
+    private = _event(SurfacePlatform.SLACK, is_dm=True, sender_team_id="T999")
+
+    assert workspace_handle(private) == group_handle(shared)
+
+
+@pytest.mark.parametrize(
+    ("platform", "metadata"),
+    [
+        (SurfacePlatform.SLACK, {}),
+        (SurfacePlatform.TEAMS, {"sender_team_id": "T0HOME"}),
+    ],
+    ids=["slack-names-no-team", "not-slack"],
+)
+def test_no_workspace_handle_without_a_slack_team(platform, metadata):
+    assert workspace_handle(_event(platform, is_dm=True, **metadata)) is None
 
 
 def test_a_private_message_on_slack_is_a_colleagues_not_a_contacts():

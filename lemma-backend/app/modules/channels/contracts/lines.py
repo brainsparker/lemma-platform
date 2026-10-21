@@ -18,6 +18,7 @@ from app.modules.channels.domain.entities import (
     ChannelMessage,
     Source,
 )
+from app.modules.channels.infrastructure.line_answers import LineAnswers
 from app.modules.channels.infrastructure.line_search import LineSearch, SearchFilter
 from app.modules.channels.infrastructure.lines import LineRepository
 from app.modules.channels.infrastructure.members import MemberRepository
@@ -77,7 +78,7 @@ async def last_heard_line(
 ) -> ChannelMessage | None:
     """The latest line a person said in this conversation -- in Lemma or on a
     platform -- which is where its answer belongs."""
-    return await LineRepository(uow.session).last_heard(conversation_id)
+    return await LineAnswers(uow.session).last_heard(conversation_id)
 
 
 async def thread_root_at(

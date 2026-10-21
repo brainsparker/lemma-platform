@@ -234,6 +234,51 @@ Flipping to plain `http` and dropping the old series is a deliberate follow-up â
 do it once the dashboards read the new names, not as a side effect of this. A
 deployment can set the variable itself to pin either behaviour.
 
+
+### The edge: load-balancer trace, location, caller
+
+`app/core/observability/edge.py`, applied by `RequestObserverMiddleware`.
+
+**Trace continuation.** The global propagator is W3C `traceparent`, then
+baggage, then Google's `X-Cloud-Trace-Context: TRACE_ID/SPAN_ID;o=1`, which the
+external HTTPS load balancer sends. The Cloud Trace header is read only when
+no `traceparent` produced a context, so W3C wins. It is extract-only: outbound
+calls and outbox events still carry `traceparent` alone. Whatever the
+propagator does, the root server span also records the header's trace id as
+`gcp.lb.trace_id`, so a load-balancer log line can always be matched.
+
+**Server span attributes** (span only, never metric labels):
+
+| Attribute | From |
+|---|---|
+| `gcp.lb.trace_id` | `X-Cloud-Trace-Context`, as 32 hex characters |
+| `client.geo.region` | `X-Client-Geo-Region` (country code) |
+| `client.geo.city` | `X-Client-Geo-City` |
+| `client.geo.lat_long` | `X-Client-Geo-Location` |
+| `user_agent.original` | `User-Agent`, first 256 characters |
+| `lemma.caller.kind` | see below |
+
+`lemma.caller.kind`, first rule that applies:
+
+| Kind | When |
+|---|---|
+| `agent-sandbox` | authenticated with a delegated workload or function-run token |
+| `webhook` | a surface (`/surfaces/webhooks/...`) or connector (`/webhooks/...`) route |
+| `cli` / `sdk` / `browser` | `X-Lemma-Client` names `lemma-cli`; `lemma-sdk-py`/`-ts`; `lemma-web`/`-desktop`/`-app` |
+| `browser` | a SuperTokens session cookie, or a `Mozilla/` user agent without a bearer token |
+| `sdk` | a bearer token, or a programmatic user agent (`python-httpx`, `python-requests`, `node`, `axios`, `curl`) |
+| `unknown` | none of the above |
+
+Metric `lemma.http.requests_by_country` (`lemma_http_requests_by_country_total`),
+labels `country` (an ISO 3166 two-letter code from `X-Client-Geo-Region`, else
+`unknown`) and `status_class` (`2xx`...`5xx`).
+
+**Trust.** Any caller can send all of these headers. The geo headers are
+trustworthy only because the load balancer adds or overwrites them. Nothing
+authorizes on any of them. A forged trace header chooses which trace id a
+request joins, and -- because the sampler is parent-based -- can ask for its
+own request to be sampled, exactly as a forged `traceparent` always could.
+
 ## Exemplars: click the spike, see the request
 
 Every explicit-bucket histogram keeps, per bucket and per export interval, the

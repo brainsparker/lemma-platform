@@ -123,6 +123,15 @@ GENERAL_SPAN_ATTRIBUTE_KEYS = frozenset(
         # reading the trace recognises, and is a span attribute rather than
         # part of the span name because agents are named per pod, so the set
         # of names grows with the customer count.
+        # The edge (``app.core.observability.edge``): which load-balancer
+        # trace this request continues, where the caller is, and what it is.
+        # Span-only; ``country`` below is the one bounded metric form.
+        "gcp.lb.trace_id",
+        "client.geo.region",
+        "client.geo.city",
+        "client.geo.lat_long",
+        "user_agent.original",
+        "lemma.caller.kind",
         "lemma.agent_id",
         "lemma.agent_name",
         "lemma.run_kind",
@@ -217,6 +226,10 @@ METRIC_ATTRIBUTE_KEYS = frozenset(
         "kind",
         "model",
         "tool_kind",
+        # Inbound requests by client country: an ISO 3166 code from the load
+        # balancer or ``unknown``, and the status class.
+        "country",
+        "status_class",
         # The work runtime's class (bounded by the WorkClass enum), kind
         # (bounded by the handlers registered in the code) and why an item went
         # dead (bounded by the runtime's own reasons). Never the namespace: a

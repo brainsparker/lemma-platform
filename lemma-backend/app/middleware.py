@@ -21,6 +21,7 @@ from starlette.types import Scope
 
 from app.core.config import settings
 from app.version import API_VERSION
+from app.core.observability.edge import annotate_server_span
 from app.core.origin import origin_for_path, origin_scope, resolve_client_identity
 from app.core.log.log import get_logger
 
@@ -203,6 +204,12 @@ class RequestObserverMiddleware:
                 duration_ms = round((finished_at - started_at) * 1000, 1)
                 route = self._route_template(scope)
                 _name_server_span_route(route)
+                annotate_server_span(
+                    trace.get_current_span(),
+                    scope,
+                    headers=headers,
+                    status_code=status_code,
+                )
                 attributes = {
                     "http.request.method": str(scope.get("method", "UNKNOWN")),
                     "http.route": route,

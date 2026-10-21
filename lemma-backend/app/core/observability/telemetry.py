@@ -51,6 +51,7 @@ from openinference.semconv.trace import OpenInferenceSpanKindValues, SpanAttribu
 
 from app.core.log.log import get_logger
 from app.core.observability.exemplars import metric_view
+from app.core.observability.edge import install_propagators
 from app.core.observability.otel_logging import (
     quiet_otlp_export_logs,
     setup_otel_logs,
@@ -815,6 +816,7 @@ def init_telemetry(service_name: str = "lemma-api") -> None:
     resolved_service_name = _resolve_service_name(service_name)
     _validate_telemetry_config()
     try:
+        install_propagators()  # before any server span reads a header
         quiet_otlp_export_logs()
         if settings.observability_enabled:
             _trace_provider = _setup_tracing(resolved_service_name)

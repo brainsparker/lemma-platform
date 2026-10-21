@@ -74,6 +74,8 @@ class ContactRef(BaseModel):
     id: UUID
     pod_id: UUID
     display_name: str | None
+    #: What to call them: their name, else a handle, else what they are.
+    label: str
     is_anonymous: bool = False
     #: Whether an agent has answered them yet: what the contact limit counts.
     answered: bool = False
@@ -90,6 +92,7 @@ def _as_ref(contact: Contact) -> ContactRef:
         id=contact.id,
         pod_id=contact.pod_id,
         display_name=contact.display_name,
+        label=contact.label,
         is_anonymous=contact.is_anonymous,
         answered=contact.answered_at is not None,
     )

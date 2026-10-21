@@ -113,10 +113,13 @@ def workspace_channel_title(
 def answers_slack_outsider(
     group_shared: bool, parsed: ParsedInboundSurfaceEvent
 ) -> bool:
-    """Whether a Slack sender outside the pod is an outsider to answer.
+    """Whether a Slack sender outside the pod is the other company's outsider.
 
     Only in a channel shared with another company, and only a sender from that
     company. A colleague in the pod's own workspace who is not in the pod is
-    somebody to invite, and gets the private nudge to join instead.
+    somebody to invite, and gets the private nudge to join instead -- unless
+    the pod's organization holds the workspace, which the door asks
+    separately (``slack_workspace_people``): then they are its people, and
+    answered as contacts.
     """
     return group_shared and bool(parsed.metadata.get("sender_is_external"))

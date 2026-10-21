@@ -87,8 +87,8 @@ def _sharing(
         "is_ext_shared_channel": shared or None,
         "sender_is_external": external or None,
         # Their own workspace, which with their user id is the handle the pod
-        # knows them by as a contact.
-        "sender_team_id": theirs if external else None,
+        # knows them by as a contact -- whichever company they are from.
+        "sender_team_id": theirs or None,
     }
 
 

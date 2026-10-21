@@ -10,8 +10,9 @@ web page. A contact is opened on the first thing they *write* -- a message, a
 row, a function call -- and never for reading something.
 
 Most are known by a handle something trustworthy vouched for: a WhatsApp number
-in a payload Meta signed, a Telegram user id, a Slack user from another company
-in an event Slack signed, an email address the receiving mail service
+in a payload Meta signed, a Telegram user id, a Slack user -- from another
+company, or a colleague in a workspace the pod's organization holds -- in an
+event Slack signed, an email address the receiving mail service
 authenticated. A web visitor nobody has vouched for is an **anonymous**
 contact, known only by the browser's chat session (`WEB`, `SESSION`); proving a
 handle later -- a code sent to an email, the host's signed token -- makes them
@@ -67,7 +68,9 @@ the merge moves it too.
 
 - **Deciding who is a contact.** `agent_surfaces` does: a private message on a
   bot that is the pod's own, from somebody who is not a member, when the bot's
-  `contacts.answer` is `known` or `anyone` (`services/contacts.py`); somebody
+  `contacts.answer` is `known` or `anyone` (`services/contacts.py`) -- on
+  Slack, only a full member of a workspace the pod's organization holds
+  (`services/slack_workspace_people.py`); somebody
   outside the pod who puts the bot to work in a group it is open to outsiders
   in (`services/outsiders.py`); a web visitor's first message or row
   (`services/web_chat.py`). Somebody writing privately to Lemma's shared bot is

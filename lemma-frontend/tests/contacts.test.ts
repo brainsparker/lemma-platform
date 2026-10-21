@@ -56,8 +56,8 @@ test("a website visitor nobody vouched for reads as one, never as a session id",
     assert.equal(vouchedBy(visitor.handles[0]), "Not confirmed yet");
 });
 
-test("someone from another company in a shared Slack channel says so", () => {
-    assert.equal(handleText({ kind: "SLACK", value: "T9:U7", strength: "CHANNEL" }), "Slack, from another company");
+test("a Slack handle says Slack, whether a colleague's or another company's", () => {
+    assert.equal(handleText({ kind: "SLACK", value: "T9:U7", strength: "CHANNEL" }), "Slack");
 });
 
 test("a widget reads as the app shows it, unknown answers as off", () => {

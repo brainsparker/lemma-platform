@@ -19,6 +19,12 @@ provider that dedupes on it (Resend) never sends one push twice.
 A plain line in a group is not worth an email: it goes to a chat app the
 member uses, or waits in Lemma. Email is for their own channel, a contact's,
 and what names them or asks them something -- or for a member who chose it.
+
+A push reads on its own. It names who said it -- a contact by what the pod
+calls them, never "Somebody" -- and where; and one from anywhere but the
+member's own channel links to it in Lemma. The chat app it lands in is the
+member's chat with the pod: replying there talks to the pod, not to whoever
+wrote, so the link is how they answer the line itself.
 """
 
 from __future__ import annotations
@@ -27,6 +33,7 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from app.core.authorization.delegation import effective_agent_id
+from app.core.config import settings
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent_surfaces.domain.ports import (
     SurfaceNotificationEgressPort,
@@ -61,8 +68,10 @@ from app.modules.channels.contracts import (
     ChannelKind,
     ChannelMessage,
     Member,
+    Sender,
     SenderKind,
 )
+from app.modules.contacts.contracts import contact_by_id
 
 #: The most a title -- an email subject -- carries.
 MAX_TITLE_CHARS = 120
@@ -87,6 +96,12 @@ def _and_more(text: str, lines: int) -> str:
         return text
     more = "1 more line" if lines == 2 else f"{lines - 1} more lines"
     return f"{text}\n\n(and {more} waiting in Lemma)"
+
+
+def channel_link(channel: Channel) -> str:
+    """Where the channel opens in Lemma's web app."""
+    base = settings.frontend_url.rstrip("/")
+    return f"{base}/t/{channel.pod_id}/channel/{channel.id}"
 
 
 def _channel_named(via: str) -> str:
@@ -174,7 +189,7 @@ class MemberPushes:
                 key=push.key,
             ),
             channels=channels,
-            message=_and_more(await self._text(push), push.lines),
+            message=await self._message(push),
             agent_name=sender.display_name if agent_id else None,
             uow=self.uow,
             egress=self.egress,
@@ -218,6 +233,14 @@ class MemberPushes:
                 return channels, ""
         return [], reason
 
+    async def _message(self, push: Push) -> str:
+        """The push as the member reads it: the line, how many more wait,
+        and -- from anywhere but their own channel -- where to answer it."""
+        text = _and_more(await self._text(push), push.lines)
+        if push.channel.kind is ChannelKind.DIRECT:
+            return text
+        return f"{text}\n\nOpen in Lemma: {channel_link(push.channel)}"
+
     async def _text(self, push: Push) -> str:
         """The line as it reads out of Lemma: who said it, and where, unless it
         is the pod speaking to them in their own channel."""
@@ -230,16 +253,30 @@ class MemberPushes:
                     return line.text
                 name = await self.membership.get_user_display_name(behalf.user_id)
                 return f"On behalf of {name}:\n\n{line.text}" if name else line.text
-        name = await self._name_of(line)
-        where = f" in {channel.title}" if channel.title else ""
-        return f"{name}{where}:\n\n{line.text}"
+        return f"{await self._said_by(push)}:\n\n{line.text}"
 
-    async def _name_of(self, line: ChannelMessage) -> str:
-        sender = line.sender
+    async def _said_by(self, push: Push) -> str:
+        """Who said the line, and where: "Priya in Launch", "Meera (contact)"."""
+        sender, channel = push.line.sender, push.channel
+        if sender.kind is SenderKind.CONTACT:
+            contact = (
+                await contact_by_id(
+                    self.uow, pod_id=channel.pod_id, contact_id=sender.contact_id
+                )
+                if sender.contact_id is not None
+                else None
+            )
+            name = contact.label if contact is not None else sender.display_name
+            who = f"{name or 'A contact'} (contact)"
+        else:
+            who = await self._member_or_agent_name(sender)
+        return f"{who} in {channel.title}" if channel.title else who
+
+    async def _member_or_agent_name(self, sender: Sender) -> str:
         if sender.display_name:
             return sender.display_name
         if sender.user_id is not None:
             name = await self.membership.get_user_display_name(sender.user_id)
             if name:
                 return name
-        return "Somebody"
+        return "A member" if sender.kind is SenderKind.MEMBER else "An agent"

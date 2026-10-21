@@ -691,6 +691,7 @@ async def test_a_member_assigned_a_contact_is_told_when_they_write(
     fixed_test_org,
     fixed_test_user,
     fake_resend,
+    message_store,
     monkeypatch,
 ):
     """Handed a contact, an editor hears from them as soon as they write --
@@ -746,6 +747,18 @@ async def test_a_member_assigned_a_contact_is_told_when_they_write(
         if line["text"] == "Is anybody looking at this?"
     ]
     assert editor["id"] in await pushed(theirs["id"])
+    # The push reads on its own: who wrote -- by what the pod calls her, never
+    # "Somebody" -- and where to answer her, since a reply to the push itself
+    # would go to the pod, not to her.
+    await send_deliveries()
+    [told] = [
+        mail
+        for mail in message_store.get_all("RESEND")
+        if mail["to"] == [editor["email"]] and "Is anybody looking" in mail["text"]
+    ]
+    assert f"{theirs['sender']['name'] or CUSTOMER} (contact)" in told["text"]
+    assert "Somebody" not in told["text"]
+    assert f"/t/{pod_id}/channel/{channel_id}" in told["text"]
     said = [
         line for line in timeline["items"] if line["text"] == "A person will reply."
     ]

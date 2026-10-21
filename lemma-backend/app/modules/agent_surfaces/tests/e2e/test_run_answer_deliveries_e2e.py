@@ -30,8 +30,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.core.infrastructure.work import WorkRegistry, facts
+from app.core.infrastructure.work import WorkClass, WorkRegistry, facts
+from app.core.infrastructure.work.testing import make_due, run_until_idle
 from app.modules.agent.contracts.run_facts import AgentRunFinished
+from app.modules.agent.events.channel_answer_work import register_channel_answer_work
+from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
 from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 from app.modules.agent_surfaces.domain.ingress_request import (
@@ -66,7 +69,7 @@ from app.modules.agent_surfaces.tests.e2e.surface_work_support import (
     scalar,
     surface_registry,
 )
-from app.modules.channels.contracts import DeliveryStatus
+from app.modules.channels.contracts import DeliveryStatus, NewLine, Sender, post
 from app.modules.channels.contracts.deliveries import claim_delivery, delivery_noted
 from app.modules.channels.infrastructure.deliveries import CLAIM_LEASE, INTERRUPTED
 from app.modules.channels.infrastructure.models import (
@@ -469,3 +472,84 @@ async def test_a_streamed_slack_answer_is_one_line_sent_as_the_stream(
     ]
     assert posted == [], "the streamed answer was posted a second time"
     assert len(message_store.get_all("SLACK_STREAM_STOP")) == 1
+
+
+# ------------------------------------------- asked in Lemma, heard on a platform
+
+
+async def test_an_answer_asked_in_lemma_is_not_sent_to_the_platform(
+    authenticated_client,
+    db_session,
+    test_pod,
+    fixed_test_user,
+    fake_telegram,
+    message_store,
+    monkeypatch,
+):
+    """The member wrote to the bot on Telegram, then named it in Lemma, in
+    their own channel: one conversation, since it is one person and one
+    agent. The answer to the line in Lemma is said in Lemma -- the Telegram
+    chat, which never saw the question, is sent nothing."""
+    monkeypatch.setattr(surface_settings, "enable_telegram_polling_mode", False)
+    monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
+    conversation_id, _ = await _a_finished_run(
+        authenticated_client,
+        db_session,
+        test_pod,
+        fixed_test_user,
+        fake_telegram,
+        "lemma-too-bot",
+    )
+    await drain(surface_registry(), due=True)
+    assert len(_telegram_answers(message_store)) == 1
+
+    channel_id = await scalar(
+        "SELECT channel_id FROM channel_messages WHERE conversation_id = :c LIMIT 1",
+        c=conversation_id,
+    )
+    agent_id = await scalar(
+        "SELECT agent_id FROM agent_conversations WHERE id = :c", c=conversation_id
+    )
+    async with async_session_maker() as session:
+        uow = SqlAlchemyUnitOfWork(session)
+        line = await post(
+            uow,
+            channel_id=channel_id,
+            line=NewLine(
+                sender=Sender.member(UUID(fixed_test_user["id"])),
+                text="And what is due next week?",
+            ),
+            mentioned_agents=[agent_id],
+        )
+        await uow.commit()
+    assert line is not None
+    answers = WorkRegistry()
+    register_channel_answer_work(answers)
+    await make_due(async_session_maker)
+    with suppress_agent_run_enqueue():
+        await run_until_idle(
+            async_session_maker, registry=answers, classes=[WorkClass.INTERACTIVE]
+        )
+    asked_in = await scalar(
+        "SELECT conversation_id FROM channel_line_answers WHERE message_id = :m",
+        m=line.id,
+    )
+    assert asked_in == conversation_id, "the member's one conversation with it"
+    run_id = await scalar(
+        "SELECT agent_run_id FROM channel_line_answers WHERE message_id = :m",
+        m=line.id,
+    )
+    async with async_session_maker() as session:
+        await session.execute(
+            text(
+                "UPDATE agent_runs SET status = 'COMPLETED', "
+                "output_data = jsonb_build_object('answer', CAST(:a AS text)) "
+                "WHERE id = :r"
+            ),
+            {"r": run_id, "a": ANSWER},
+        )
+        await session.commit()
+    await _finished(run_id, conversation_id, UUID(test_pod["id"]))
+    await drain(surface_registry(), due=True)
+
+    assert len(_telegram_answers(message_store)) == 1, message_store.get_all("TELEGRAM")

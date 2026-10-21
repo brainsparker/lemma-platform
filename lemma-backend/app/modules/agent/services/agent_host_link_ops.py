@@ -30,6 +30,7 @@ from pydantic import ValidationError
 from redis.exceptions import RedisError
 
 from app.core.config import settings
+from app.core.server_limits import WS_MAX_BYTES
 from app.core.domain.realtime import RealtimeChannel
 from app.core.infrastructure.redis.client import get_redis
 from app.core.log.log import get_logger
@@ -308,24 +309,40 @@ class LinkOpRelay:
             task.cancel()
 
 
+#: The most one byte of a process's output can cost in an old host's
+#: ``process.read`` answer: every chunk is ``{"sequence":…,"stream":…,"data":…}``
+#: with its data base64'd, and a process that flushes a byte at a time makes a
+#: chunk of each. 72 covers a 20-digit sequence, ``stderr`` and JSON spacing.
+_OLD_HOST_WORST_BYTES_PER_OUTPUT_BYTE = 72
+#: The answer's own envelope -- ``op_ok``, its id, the state, the cursors.
+_OLD_HOST_REPLY_HEADROOM = 4 * 1024
+#: What a host released before transfers keeps of a process's output between
+#: two reads: as much as still fits the message ceiling in the worst case.
+OLD_HOST_OUTPUT_LIMIT_BYTES = (
+    WS_MAX_BYTES - _OLD_HOST_REPLY_HEADROOM
+) // _OLD_HOST_WORST_BYTES_PER_OUTPUT_BYTE
+
+
 def old_host_params(method: str, params: JsonObject) -> JsonObject:
     """An op's params as a host released before transfers is sent them.
 
     Such a host ignores ``process.read``'s ``max_bytes`` and answers a read
-    with up to 1 MiB of what its process printed -- 1.33 MiB once base64'd,
-    past the API's message ceiling, so the link closes with 1009 mid-run. What
-    it keeps between two reads is bounded by the ``output_limit_bytes`` it is
-    started with (newest kept, the rest reported dropped), so starting it with
-    no more than ``LINK_INLINE_DATA_BYTES`` keeps every read inside the ceiling.
+    with everything its process kept since the last one, a JSON object per
+    chunk. What it keeps is bounded by the ``output_limit_bytes`` it is started
+    with (newest kept, the rest reported dropped), and only in raw bytes -- so
+    the bound is the one that keeps even a byte-per-chunk answer inside the
+    API's message ceiling (``OLD_HOST_OUTPUT_LIMIT_BYTES``). Past it the link
+    would close with 1009 mid-run; under it a burst between two reads loses
+    its oldest part, which the reader is told (``process_output``).
     """
     if method != "process.start":
         return params
     asked = params.get("output_limit_bytes")
-    limit = LINK_INLINE_DATA_BYTES
+    limit = OLD_HOST_OUTPUT_LIMIT_BYTES
     # ``True`` is an ``int`` in Python; it is not a byte count.
     if isinstance(asked, int) and not isinstance(asked, bool) and asked > 0:
         limit = asked
-    return {**params, "output_limit_bytes": min(limit, LINK_INLINE_DATA_BYTES)}
+    return {**params, "output_limit_bytes": min(limit, OLD_HOST_OUTPUT_LIMIT_BYTES)}
 
 
 def op_transfer(params: JsonObject) -> JsonObject | None:

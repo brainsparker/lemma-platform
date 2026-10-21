@@ -36,6 +36,7 @@ from app.modules.agent.domain.agent_host_transfer import (
 from app.modules.agent.infrastructure.agent_host.transfers import (
     AgentHostTransferStore,
 )
+from app.modules.agent.services.agent_host_link_ops import OLD_HOST_OUTPUT_LIMIT_BYTES
 from app.modules.agent.tests.e2e.agent_host_helpers import (
     app_of,
     connected_host,
@@ -211,10 +212,10 @@ async def test_an_old_hosts_process_keeps_no_more_output_than_one_message_holds(
 ):
     """A host released before transfers ignores ``process.read``'s
     ``max_bytes`` and answers with what its process kept since the last read.
-    Started with no more than ``LINK_INLINE_DATA_BYTES`` kept, no read of it
-    can pass the message ceiling; a current host is started as asked."""
+    Started with no more than ``OLD_HOST_OUTPUT_LIMIT_BYTES`` kept, no read of
+    it can pass the message ceiling; a current host is started as asked."""
     for name, host_execution, kept in (
-        ("old", _OLD, LINK_INLINE_DATA_BYTES),
+        ("old", _OLD, OLD_HOST_OUTPUT_LIMIT_BYTES),
         ("current", _ON, 1024 * 1024),
     ):
         machine = await pair(authenticated_client, async_client, display_name=name)

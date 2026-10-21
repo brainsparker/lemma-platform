@@ -17,6 +17,8 @@ from ..openapi_client.api.agent_surfaces import (
     agent_surface_slack_app_creation_forget,
     agent_surface_slack_app_creation_list,
     agent_surface_slack_app_creation_save,
+    agent_surface_slack_install_availability,
+    agent_surface_slack_install_start,
     agent_surface_slack_manager_bind,
     agent_surface_slack_manager_list,
     agent_surface_slack_manifest,
@@ -58,6 +60,11 @@ from ..openapi_client.models.slack_managed_workspace_response import (
 from ..openapi_client.models.slack_manager_bind_request import (
     SlackManagerBindRequest,
 )
+from ..openapi_client.models.slack_install_availability_response import (
+    SlackInstallAvailabilityResponse,
+)
+from ..openapi_client.models.slack_install_request import SlackInstallRequest
+from ..openapi_client.models.slack_install_response import SlackInstallResponse
 from ..openapi_client.models.slack_sign_in_request import SlackSignInRequest
 from ..openapi_client.models.slack_sign_in_response import SlackSignInResponse
 from ..openapi_client.models.surface_create_request import SurfaceCreateRequest
@@ -244,6 +251,24 @@ class PodSurfaces(BoundResource):
             agent_surface_slack_person_sign_in,
             body=request,
             body_model=SlackSignInRequest,
+        )
+
+    def slack_install_availability(self) -> SlackInstallAvailabilityResponse:
+        """Whether Lemma's own Slack app is set up on this server, so "Add to
+        Slack" can work. Ask before giving anybody an organization for it."""
+        return self._call(agent_surface_slack_install_availability)
+
+    def start_slack_install(
+        self, request: SlackInstallRequest | dict
+    ) -> SlackInstallResponse:
+        """Add Lemma's own Slack app to a workspace for an organization
+        (``organization_id``): Slack's consent page, bot scopes only. Open the
+        returned ``authorization_url`` in a browser signed in as the caller --
+        a grant finished anywhere else adopts nothing."""
+        return self._call(
+            agent_surface_slack_install_start,
+            body=request,
+            body_model=SlackInstallRequest,
         )
 
     def start_telegram_bot_setup(

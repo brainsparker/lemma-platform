@@ -545,6 +545,9 @@ _NAME_TO_MODULE = {
     'SlackAppWorkspaceListResponse': 'slack_app_workspace_list_response',
     'SlackAppWorkspaceResponse': 'slack_app_workspace_response',
     'SlackConfigurationTokenRequest': 'slack_configuration_token_request',
+    'SlackInstallAvailabilityResponse': 'slack_install_availability_response',
+    'SlackInstallRequest': 'slack_install_request',
+    'SlackInstallResponse': 'slack_install_response',
     'SlackManagedWorkspaceListResponse': 'slack_managed_workspace_list_response',
     'SlackManagedWorkspaceResponse': 'slack_managed_workspace_response',
     'SlackManagerBindRequest': 'slack_manager_bind_request',
@@ -1248,6 +1251,9 @@ if TYPE_CHECKING:
     from .slack_app_workspace_list_response import SlackAppWorkspaceListResponse
     from .slack_app_workspace_response import SlackAppWorkspaceResponse
     from .slack_configuration_token_request import SlackConfigurationTokenRequest
+    from .slack_install_availability_response import SlackInstallAvailabilityResponse
+    from .slack_install_request import SlackInstallRequest
+    from .slack_install_response import SlackInstallResponse
     from .slack_managed_workspace_list_response import SlackManagedWorkspaceListResponse
     from .slack_managed_workspace_response import SlackManagedWorkspaceResponse
     from .slack_manager_bind_request import SlackManagerBindRequest
@@ -1964,6 +1970,9 @@ __all__ = [
     'SlackAppWorkspaceListResponse',
     'SlackAppWorkspaceResponse',
     'SlackConfigurationTokenRequest',
+    'SlackInstallAvailabilityResponse',
+    'SlackInstallRequest',
+    'SlackInstallResponse',
     'SlackManagedWorkspaceListResponse',
     'SlackManagedWorkspaceResponse',
     'SlackManagerBindRequest',

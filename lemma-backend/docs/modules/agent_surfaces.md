@@ -84,6 +84,7 @@ impossible to leave stale.
 | `/surfaces/teams/admin-consent/callback` | Teams tenant consent completion |
 | `/pods/{pod_id}/members/{member}/notices` | `POST {text}`: tell another member something, as a line in their own channel, pushed to them like any line of theirs (`services/direct_messages.py`). `member` is a pod member id, user id or email; takes `channel.write`; the same `Idempotency-Key` from the same caller is the same notice |
 | `/pods/{pod_id}/surface-setup/slack/manager` | `GET` the workspaces Lemma's own Slack app manages for the pod's organization; `PUT {account_id}` binds one from a grant of Lemma's app this browser finished |
+| `/surface-setup/slack/install` | "Add to Slack" from outside the app: `GET` whether Lemma's own Slack app is set up on this server (asked before a person with no organization is given one), `POST {organization_id}` Slack's consent page for it, bot scopes only, refused before anything is made when Slack isn't set up (`SLACK_NOT_SET_UP`) or the caller may not add the organization's installs |
 | `/surface-setup/slack/people/sign-in` | `POST {team_id, slack_user_id}`: start Sign in with Slack for the signed-in person; its callback (`.../sign-in/callback`, not in the client spec) records the proof |
 | `/pods/{pod_id}/channels/{c}/sources/{s}`, `/channels/whatsapp-groups`, `/channels/telegram-links` | A group source's settings (who answers its outsiders, and whether), starting a WhatsApp group (`Idempotency-Key`, `services/group_start_keys.py`) and minting a Telegram add-to-group link -- under the channel the group is, but here, since they talk to the platforms. The bot's settings page lists its groups with `GET /channels?source_surface=`, through the lister `api/controllers/source_controller.py` registers (`channels.contracts.source_settings`) |
 
@@ -644,6 +645,31 @@ answered with who does answer.
   (new and renewed grants) feeds `surface.slack_app_allowed`, which makes the
   teammate's surface for the pending row's agent and deletes the row. An
   ordinary Slack connect has no purpose and is never one.
+- **"Add to Slack" adopts a workspace on its own** (`services/slack_install.py`).
+  The web page `/slack/install` signs the person in the ordinary way, takes the
+  organization they pick (or the first one main's `POST /users/me/first-
+  workspace` gives them, once `GET .../install` says Slack is set up here), and
+  starts a grant of Lemma's app on the organization's `SYSTEM_DEFAULT` install
+  -- the one the web app's Connect makes, found or made by
+  `own_apps.ensure_system_install`, which reads the winner when two starts
+  race. The connect request carries the purpose `slack_workspace_install` and
+  omits Slack's `user_scope`: the installer is named by `authed_user` without
+  it. `surface.slack_workspace_installed` subscribes to
+  `ConnectorAccountConnected` for that purpose **and** `browser_bound` only, so
+  an ordinary Slack connect for tools never adopts or says anything, and a
+  consent link somebody else completed is not even queued. It runs
+  `bind_manager`, the reach sheet's binding: one organization per workspace,
+  conflict-tolerant, and the installer proven `INSTALL`. A refusal (another
+  organization holds it, the person may no longer add installs) is a DM from
+  the app just installed, keyed `install-refused:<account id>`. Someone who
+  already connected Slack is renewed rather than told "already connected"
+  (connectors renews any request with a purpose in place). An Enterprise Grid
+  org-wide install names no workspace and is refused the same way.
+- **A new binding owes one welcome**, staged by `bind_manager` in the
+  transaction that inserts the `slack_manager_installs` row and keyed
+  `welcome:<install id>`: "Lemma is in <workspace>" with an "Add" button for
+  the first teammate the installer may add. A reauthorisation of the same
+  binding says nothing; one made again after Lemma was removed is new.
 - **Its messages are Slack-native**, not channel lines: the manager belongs to
   an organization, not a pod, and has no channel to deliver through. Views,
   modals and ephemerals answer whoever just acted; a message that is owed ("X

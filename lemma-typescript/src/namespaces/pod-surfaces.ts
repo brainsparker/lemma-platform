@@ -7,6 +7,7 @@ import type { SlackAppCreateRequest } from "../openapi_client/models/SlackAppCre
 import type { SlackConfigurationTokenRequest } from "../openapi_client/models/SlackConfigurationTokenRequest.js";
 import type { SlackManagerBindRequest } from "../openapi_client/models/SlackManagerBindRequest.js";
 import type { SlackSignInRequest } from "../openapi_client/models/SlackSignInRequest.js";
+import type { SlackInstallRequest } from "../openapi_client/models/SlackInstallRequest.js";
 import { AgentSurfacesService } from "../openapi_client/services/AgentSurfacesService.js";
 
 /**
@@ -223,6 +224,29 @@ export class PodSurfacesNamespace {
   startSlackSignIn(request: SlackSignInRequest) {
     return this.client.request(() =>
       AgentSurfacesService.agentSurfaceSlackPersonSignIn(request),
+    );
+  }
+
+  /**
+   * Whether Lemma's own Slack app is set up on this server, so "Add to Slack"
+   * can work. Ask before giving anybody an organization for it.
+   */
+  slackInstallAvailability() {
+    return this.client.request(() =>
+      AgentSurfacesService.agentSurfaceSlackInstallAvailability(),
+    );
+  }
+
+  /**
+   * Add Lemma's own Slack app to a workspace for an organization, from "Add
+   * to Slack" rather than from a pod. Answers with Slack's consent page (bot
+   * scopes only), refused before anything is made when Slack isn't set up
+   * here or the caller may not add the organization's installs. A grant
+   * finished in a browser not signed in as the caller adopts nothing.
+   */
+  startSlackInstall(request: SlackInstallRequest) {
+    return this.client.request(() =>
+      AgentSurfacesService.agentSurfaceSlackInstallStart(request),
     );
   }
 }

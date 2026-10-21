@@ -188,6 +188,8 @@ class FakeSlackServer:
         self.unknown_channels: set[str] = set()
         #: The next ``conversations.invite`` fails with this Slack error, once.
         self.invite_error: str | None = None
+        #: What ``oauth.v2.access`` answers a code with; ``None`` refuses it.
+        self.oauth_access: dict[str, Any] | None = None
 
     async def start(self) -> None:
         app = web.Application()
@@ -220,6 +222,7 @@ class FakeSlackServer:
             "/api/assistant.threads.setSuggestedPrompts",
             self._assistant_threads_set_suggested_prompts,
         )
+        app.router.add_route("*", "/api/oauth.v2.access", self._oauth_v2_access)
         app.router.add_route("*", "/api/views.open", self._views_open)
         app.router.add_route("*", "/api/views.publish", self._views_publish)
         app.router.add_route("*", "/api/views.update", self._views_update)
@@ -488,6 +491,12 @@ class FakeSlackServer:
         return web.json_response(
             {"ok": True, "view": self._view_envelope(params.get("view"), view_id)}
         )
+
+    async def _oauth_v2_access(self, request: web.Request) -> web.Response:
+        self._store.add("SLACK_OAUTH_ACCESS", await self._collect_params(request))
+        if self.oauth_access is None:
+            return web.json_response({"ok": False, "error": "invalid_code"})
+        return web.json_response({"ok": True, **self.oauth_access})
 
     async def _views_publish(self, request: web.Request) -> web.Response:
         params = await self._collect_params(request)

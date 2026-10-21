@@ -21,6 +21,10 @@ from pydantic import SecretStr
 
 from app.modules.connectors.api.dependencies import get_connector_service
 from app.modules.connectors.domain.auth_config import AuthConfigSource
+from app.modules.connectors.domain.errors import (
+    ConnectorConflictError,
+    ConnectorNotFoundError,
+)
 from app.modules.connectors.services.connect_request_lifecycle import (
     was_browser_bound,
 )
@@ -112,6 +116,7 @@ async def start_authorization(
     auth_config_id: UUID,
     return_to: str | None = None,
     purpose: str | None = None,
+    omit_authorize_params: frozenset[str] = frozenset(),
 ) -> str:
     """Begin authorising an account against this install; the consent page's URL.
 
@@ -119,7 +124,10 @@ async def start_authorization(
     Slack -- and so has no browser of ours to call the connect-request route.
     The callback that ends it is the ordinary one. ``purpose`` is carried to
     the ``ConnectorAccountConnected`` the grant emits, so a subscriber acts
-    only on the grants it started.
+    only on the grants it started; a grant with a purpose also renews an
+    account its person already has connected, rather than refusing it as a
+    duplicate. ``omit_authorize_params`` asks the consent page for less than
+    the catalog does (the provider's own parameter names).
     """
     request = await get_connector_service(uow).initiate_connect_request(
         user_id=user_id,
@@ -128,8 +136,56 @@ async def start_authorization(
         auth_config_id=auth_config_id,
         return_to=return_to,
         purpose=purpose,
+        omit_authorize_params=omit_authorize_params,
     )
     return str(request.authorization_url or "")
+
+
+async def ensure_system_install(
+    uow, *, user_id: UUID, organization_id: UUID, connector_id: str
+) -> UUID:
+    """The organization's install of Lemma's own app for this connector, made
+    if it has none -- the same install the web app's Connect makes on first
+    use, and with the same name (the connector id) when that name is free.
+
+    Only ``SYSTEM_DEFAULT``: an install the organization brought is its own
+    app, never Lemma's. Made through ``create_auth_config``, so the role check
+    and validation are every install's, and -- as from the web -- the first
+    install of a connector in an organization becomes its default. Commits.
+
+    Install names are unique per organization, so two of these at once (or
+    the web's Connect beside one) both miss and one create is refused; that
+    one reads the install the other made instead of failing.
+    """
+    service = get_connector_service(uow)
+    repository = service.auth_config_repository
+
+    async def held() -> UUID | None:
+        found = await repository.get_active_by_org_app_and_source(
+            organization_id, connector_id, AuthConfigSource.SYSTEM_DEFAULT.value
+        )
+        return found.id if found is not None else None
+
+    if (existing := await held()) is not None:
+        return existing
+    name_taken = (
+        await repository.get_active_by_org_and_name(organization_id, connector_id)
+        is not None
+    )
+    try:
+        made = await service.create_auth_config(
+            user_id=user_id,
+            organization_id=organization_id,
+            connector_id=connector_id,
+            config_source=AuthConfigSource.SYSTEM_DEFAULT.value,
+            # Taken by an install the organization brought: Lemma's beside it.
+            name=f"{connector_id}-lemma" if name_taken else None,
+        )
+    except ConnectorConflictError:
+        if (raced := await held()) is not None:
+            return raced
+        raise
+    return made.id
 
 
 async def grant_is_browser_bound(uow, *, account_id: UUID) -> bool:
@@ -166,7 +222,10 @@ async def lemma_app_client(uow, connector_id: str) -> LemmaAppClient | None:
     deployment has one -- for a flow on that app the connect requests do not
     cover, such as signing a person in with it."""
     service = get_connector_service(uow)
-    connector = await service.get_connector(connector_id)
+    try:
+        connector = await service.get_connector(connector_id)
+    except ConnectorNotFoundError:
+        return None  # Not in this deployment's catalog at all: no app either.
     config = service.system_oauth_config.get_default_oauth_config(connector)
     if config is None or not config.client_id or not config.client_secret:
         return None

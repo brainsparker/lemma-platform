@@ -20,6 +20,11 @@ from pydantic import BaseModel, ConfigDict, SecretStr
 #: The connect-request purpose of a teammate's Allow started from Lemma's Home
 #: tab in Slack: the grant it ends in becomes the teammate's surface.
 SLACK_TEAMMATE_APP_PURPOSE = "slack_teammate_app"
+#: The connect-request purpose of "Add to Slack" for Lemma's own app, started
+#: from the web (``services/slack_install``): the grant it ends in makes Lemma's
+#: app the manager of the workspace it names. An ordinary Slack connect has no
+#: purpose and never does.
+SLACK_WORKSPACE_INSTALL_PURPOSE = "slack_workspace_install"
 
 
 class ManagerInputKind(StrEnum):
@@ -129,6 +134,7 @@ class InboundVerification:
 
 __all__ = [
     "SLACK_TEAMMATE_APP_PURPOSE",
+    "SLACK_WORKSPACE_INSTALL_PURPOSE",
     "AddForm",
     "ManagerInput",
     "ManagerInputKind",

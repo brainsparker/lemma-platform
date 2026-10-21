@@ -77,6 +77,10 @@ class SlackManagerMessagePayload(BaseModel):
     text: str
     blocks: list[dict[str, JsonValue]] | None = None
     refresh_home: bool = False
+    #: Send as this grant of Lemma's app rather than the workspace's manager:
+    #: for an install that did not become the manager (refused), where the
+    #: workspace has no binding of this organization's to send through.
+    account_id: UUID | None = None
 
 
 class SlackTeammateHelloPayload(BaseModel):

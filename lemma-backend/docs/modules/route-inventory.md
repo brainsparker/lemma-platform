@@ -72,6 +72,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/public/web/{public_key}/rows` | `public.web.rows.read` | Web Read Rows |
 | GET | `/public/web/{public_key}/stream` | `public.web.stream.read` | Web Stream Answers |
 | GET | `/public/web/{public_key}/table` | `public.web.table.read` | Web Read Table |
+| GET | `/surface-setup/slack/install` | `agent.surface.slack_install.availability` | Slack Install Availability |
 | GET | `/surface-setup/slack/manifest` | `agent.surface.slack_manifest` | Get Slack App Manifest |
 | GET | `/surfaces/me` | `agent.surface.list_mine` | List My Surfaces |
 | GET | `/surfaces/teams/admin-consent/callback` | `agent.surface.teams_admin_consent_callback` | Teams Admin Consent Callback |
@@ -96,6 +97,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/public/web/{public_key}/messages` | `public.web.message.send` | Web Send Message |
 | POST | `/public/web/{public_key}/rows` | `public.web.row.add` | Web Add Row |
 | POST | `/public/web/{public_key}/session` | `public.web.session.start` | Web Start Session |
+| POST | `/surface-setup/slack/install` | `agent.surface.slack_install.start` | Start Slack Install Flow |
 | POST | `/surface-setup/slack/people/sign-in` | `agent.surface.slack_person.sign_in` | Start Slack Sign In |
 | POST | `/surfaces/webhooks/telegram-manager` | `surface.webhook.handle_telegram_manager` | Handle Telegram manager-bot webhook |
 | POST | `/surfaces/webhooks/whatsapp/numbers/{phone_number_id}` | `surface.webhook.handle_whatsapp_number` | Handle a webhook delivered to one pooled WhatsApp number |

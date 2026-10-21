@@ -1127,6 +1127,20 @@ export const liveSource: PodSource = {
         return started.authorization_url;
     },
 
+    async slackInstallAvailable(): Promise<boolean> {
+        return (await lemma().podSurfaces.slackInstallAvailability()).available;
+    },
+
+    async ensureFirstWorkspace(): Promise<{ orgId: string }> {
+        const workspace = await lemma().users.ensureFirstWorkspace({ with_pod: true });
+        return { orgId: String(workspace.organization_id) };
+    },
+
+    async startSlackInstall(orgId: string): Promise<string> {
+        const started = await lemma().podSurfaces.startSlackInstall({ organization_id: orgId });
+        return started.authorization_url;
+    },
+
     async addCustomApp(
         orgId: string,
         connectorId: string,

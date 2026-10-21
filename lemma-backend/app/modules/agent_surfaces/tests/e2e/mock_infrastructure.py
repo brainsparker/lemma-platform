@@ -184,6 +184,12 @@ class FakeSlackServer:
         self.conversations_open_error: str | None = None
         #: Channels ``conversations.info`` answers as private (``is_private``).
         self.private_channels: set[str] = set()
+        #: Channels ``conversations.info`` cannot answer for (``channel_not_found``).
+        self.unknown_channels: set[str] = set()
+        #: The next ``conversations.invite`` fails with this Slack error, once.
+        self.invite_error: str | None = None
+        #: What ``oauth.v2.access`` answers a code with; ``None`` refuses it.
+        self.oauth_access: dict[str, Any] | None = None
 
     async def start(self) -> None:
         app = web.Application()
@@ -216,8 +222,16 @@ class FakeSlackServer:
             "/api/assistant.threads.setSuggestedPrompts",
             self._assistant_threads_set_suggested_prompts,
         )
+        app.router.add_route("*", "/api/oauth.v2.access", self._oauth_v2_access)
         app.router.add_route("*", "/api/views.open", self._views_open)
         app.router.add_route("*", "/api/views.publish", self._views_publish)
+        app.router.add_route("*", "/api/views.update", self._views_update)
+        # A button's ``response_url``: Slack's, here so a test can read it.
+        app.router.add_route("POST", "/response/{key}", self._response_url)
+        app.router.add_route(
+            "*", "/api/conversations.invite", self._conversations_invite
+        )
+        app.router.add_route("*", "/api/conversations.leave", self._conversations_leave)
         app.router.add_route("*", "/api/conversations.info", self._conversations_info)
         app.router.add_route(
             "*", "/api/files.getUploadURLExternal", self._files_get_upload_url_external
@@ -478,6 +492,12 @@ class FakeSlackServer:
             {"ok": True, "view": self._view_envelope(params.get("view"), view_id)}
         )
 
+    async def _oauth_v2_access(self, request: web.Request) -> web.Response:
+        self._store.add("SLACK_OAUTH_ACCESS", await self._collect_params(request))
+        if self.oauth_access is None:
+            return web.json_response({"ok": False, "error": "invalid_code"})
+        return web.json_response({"ok": True, **self.oauth_access})
+
     async def _views_publish(self, request: web.Request) -> web.Response:
         params = await self._collect_params(request)
         self._store.add("SLACK_VIEWS_PUBLISH", params)
@@ -485,6 +505,37 @@ class FakeSlackServer:
         return web.json_response(
             {"ok": True, "view": self._view_envelope(params.get("view"), view_id)}
         )
+
+    async def _views_update(self, request: web.Request) -> web.Response:
+        params = await self._collect_params(request)
+        self._store.add("SLACK_VIEWS_UPDATE", params)
+        view_id = str(params.get("view_id") or "V-UPDATED")
+        return web.json_response(
+            {"ok": True, "view": self._view_envelope(params.get("view"), view_id)}
+        )
+
+    async def _conversations_invite(self, request: web.Request) -> web.Response:
+        params = await self._collect_params(request)
+        params["token"] = request.headers.get("Authorization", "")
+        if self.invite_error is not None:
+            error, self.invite_error = self.invite_error, None
+            self._store.add("SLACK_INVITE_FAILED", {"error": error, **params})
+            return web.json_response({"ok": False, "error": error})
+        self._store.add("SLACK_INVITE", params)
+        return web.json_response({"ok": True, "channel": {"id": params.get("channel")}})
+
+    async def _conversations_leave(self, request: web.Request) -> web.Response:
+        params = await self._collect_params(request)
+        params["token"] = request.headers.get("Authorization", "")
+        self._store.add("SLACK_LEAVE", params)
+        return web.json_response({"ok": True})
+
+    async def _response_url(self, request: web.Request) -> web.Response:
+        self._store.add(
+            "SLACK_RESPONSE",
+            {"key": request.match_info["key"], **(await request.json())},
+        )
+        return web.Response(text="ok")
 
     def _view_envelope(self, raw_view: Any, view_id: str) -> dict[str, Any]:
         return {
@@ -517,6 +568,8 @@ class FakeSlackServer:
         params = await self._collect_params(request)
         self._store.add("SLACK_CHANNEL_INFO", params)
         channel_id = str(params.get("channel") or "C-SURFACE-E2E")
+        if channel_id in self.unknown_channels:
+            return web.json_response({"ok": False, "error": "channel_not_found"})
         private = channel_id in self.private_channels
         return web.json_response(
             {

@@ -18210,6 +18210,285 @@
         "title": "SignedUrlSummary",
         "type": "object"
       },
+      "SlackAppCreateRequest": {
+        "properties": {
+          "agent_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The agent the app answers as; the pod's own agent when omitted. The app is named after it.",
+            "title": "Agent Id"
+          },
+          "team_id": {
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Team Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "team_id"
+        ],
+        "title": "SlackAppCreateRequest",
+        "type": "object"
+      },
+      "SlackAppCreateResponse": {
+        "description": "The app Slack made, and the install to authorise it against.",
+        "properties": {
+          "app_id": {
+            "title": "App Id",
+            "type": "string"
+          },
+          "auth_config_id": {
+            "format": "uuid",
+            "title": "Auth Config Id",
+            "type": "string"
+          },
+          "reused": {
+            "default": false,
+            "description": "An app made earlier for the same agent and workspace (or the same Idempotency-Key), not a new one.",
+            "title": "Reused",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "app_id",
+          "auth_config_id"
+        ],
+        "title": "SlackAppCreateResponse",
+        "type": "object"
+      },
+      "SlackAppWorkspaceListResponse": {
+        "properties": {
+          "can_manage": {
+            "description": "Whether the caller may save tokens and create apps: an owner or editor of the organization. Others are shown no workspace.",
+            "title": "Can Manage",
+            "type": "boolean"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SlackAppWorkspaceResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "can_manage",
+          "items"
+        ],
+        "title": "SlackAppWorkspaceListResponse",
+        "type": "object"
+      },
+      "SlackAppWorkspaceResponse": {
+        "description": "A Slack workspace Lemma can create apps in. Carries no token.",
+        "properties": {
+          "needs_new_token": {
+            "default": false,
+            "description": "Slack no longer accepts the saved token, or Lemma can no longer read it: paste a new one before Lemma can create apps here.",
+            "title": "Needs New Token",
+            "type": "boolean"
+          },
+          "saved_at": {
+            "format": "date-time",
+            "title": "Saved At",
+            "type": "string"
+          },
+          "slack_user_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The Slack user whose configuration token this is. Slack creates every app as them, and the token can change every app they collaborate on.",
+            "title": "Slack User Id"
+          },
+          "team_id": {
+            "title": "Team Id",
+            "type": "string"
+          },
+          "team_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Team Name"
+          }
+        },
+        "required": [
+          "team_id",
+          "saved_at"
+        ],
+        "title": "SlackAppWorkspaceResponse",
+        "type": "object"
+      },
+      "SlackConfigurationTokenRequest": {
+        "properties": {
+          "refresh_token": {
+            "description": "The refresh token of an app configuration token, from api.slack.com/apps. Lemma rotates it at once, which proves it works and names the workspace it is for.",
+            "format": "password",
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "Refresh Token",
+            "type": "string",
+            "writeOnly": true
+          }
+        },
+        "required": [
+          "refresh_token"
+        ],
+        "title": "SlackConfigurationTokenRequest",
+        "type": "object"
+      },
+      "SlackInstallAvailabilityResponse": {
+        "description": "Whether \"Add to Slack\" can work on this server, asked before anything\nis made for it.",
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "available"
+        ],
+        "title": "SlackInstallAvailabilityResponse",
+        "type": "object"
+      },
+      "SlackInstallRequest": {
+        "description": "Which organization Lemma's app joins the workspace for.",
+        "properties": {
+          "organization_id": {
+            "format": "uuid",
+            "title": "Organization Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "organization_id"
+        ],
+        "title": "SlackInstallRequest",
+        "type": "object"
+      },
+      "SlackInstallResponse": {
+        "description": "Slack's consent page for Lemma's own app, to send the browser to.",
+        "properties": {
+          "authorization_url": {
+            "title": "Authorization Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "authorization_url"
+        ],
+        "title": "SlackInstallResponse",
+        "type": "object"
+      },
+      "SlackManagedWorkspaceListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SlackManagedWorkspaceResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "SlackManagedWorkspaceListResponse",
+        "type": "object"
+      },
+      "SlackManagedWorkspaceResponse": {
+        "description": "A Slack workspace Lemma's own app manages for this organization.",
+        "properties": {
+          "team_id": {
+            "title": "Team Id",
+            "type": "string"
+          },
+          "team_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Team Name"
+          }
+        },
+        "required": [
+          "team_id"
+        ],
+        "title": "SlackManagedWorkspaceResponse",
+        "type": "object"
+      },
+      "SlackManagerBindRequest": {
+        "properties": {
+          "account_id": {
+            "description": "The account made by authorising Lemma's own Slack app.",
+            "format": "uuid",
+            "title": "Account Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "account_id"
+        ],
+        "title": "SlackManagerBindRequest",
+        "type": "object"
+      },
+      "SlackSignInRequest": {
+        "description": "Whom the App Home link was for.",
+        "properties": {
+          "slack_user_id": {
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Slack User Id",
+            "type": "string"
+          },
+          "team_id": {
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Team Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "team_id",
+          "slack_user_id"
+        ],
+        "title": "SlackSignInRequest",
+        "type": "object"
+      },
+      "SlackSignInResponse": {
+        "description": "Where to send the browser: Slack's own sign-in page.",
+        "properties": {
+          "authorization_url": {
+            "title": "Authorization Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "authorization_url"
+        ],
+        "title": "SlackSignInResponse",
+        "type": "object"
+      },
       "SourceKind": {
         "enum": [
           "PERSON",
@@ -43536,6 +43815,390 @@
         }
       }
     },
+    "/pods/{pod_id}/surface-setup/slack/app-creation": {
+      "get": {
+        "description": "The Slack workspaces this pod's organization lets Lemma create apps in.",
+        "operationId": "agent.surface.slack_app_creation.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlackAppWorkspaceListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Slack App Workspaces",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "agent.surface.slack_app_creation",
+          "result": "collection",
+          "verb": "list"
+        }
+      },
+      "put": {
+        "description": "Let Lemma create Slack apps in the workspace this token is for.",
+        "operationId": "agent.surface.slack_app_creation.save",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SlackConfigurationTokenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlackAppWorkspaceResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Save Slack Configuration Token",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.surface.slack_app_creation"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.surface.slack_app_creation",
+          "result": "entity",
+          "verb": "save"
+        }
+      }
+    },
+    "/pods/{pod_id}/surface-setup/slack/app-creation/{team_id}": {
+      "delete": {
+        "description": "Stop Lemma creating apps there. Apps it already made are not touched.\n\nSlack offers no way to revoke a configuration token, so it stays valid at\nSlack: revoke it on api.slack.com/apps as well.",
+        "operationId": "agent.surface.slack_app_creation.forget",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "team_id",
+            "required": true,
+            "schema": {
+              "title": "Team Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Forget Slack Configuration Token",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.surface.slack_app_creation"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.surface.slack_app_creation",
+          "result": "void",
+          "verb": "forget"
+        }
+      }
+    },
+    "/pods/{pod_id}/surface-setup/slack/apps": {
+      "post": {
+        "description": "Create an agent's own Slack app, named after it. What is left is\nauthorising it.\n\nOne app per agent per workspace: until it is authorised, asking again\nanswers with the same app, and so does the same `Idempotency-Key` from the\nsame member for a day.",
+        "operationId": "agent.surface.slack_app.create",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 255,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SlackAppCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlackAppCreateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not set up, the token needs replacing, or busy."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Slack is rate-limiting app creation."
+          }
+        },
+        "summary": "Create Slack App",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.surface.slack_app"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.surface.slack_app",
+          "result": "entity",
+          "verb": "create"
+        }
+      }
+    },
+    "/pods/{pod_id}/surface-setup/slack/manager": {
+      "get": {
+        "description": "The Slack workspaces Lemma's own app manages for this pod's organization.",
+        "operationId": "agent.surface.slack_manager.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlackManagedWorkspaceListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Slack Managed Workspaces",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "agent.surface.slack_manager",
+          "result": "collection",
+          "verb": "list"
+        }
+      },
+      "put": {
+        "description": "Make Lemma's own app this workspace's manager. The workspace becomes the\norganization's, and the person who authorised it is known in Slack.\n\nOnly for a grant this browser finished signed in as the caller: a consent\nlink somebody else completed is refused.",
+        "operationId": "agent.surface.slack_manager.bind",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SlackManagerBindRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlackManagedWorkspaceResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Bind Slack Manager",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.surface.slack_manager"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.surface.slack_manager",
+          "result": "entity",
+          "verb": "bind"
+        }
+      }
+    },
     "/pods/{pod_id}/surface-setup/{platform}": {
       "get": {
         "description": "The static pre-creation checklist for a platform (env/OAuth\nprerequisites) \u2014 works before any surface of this platform exists.",
@@ -46532,6 +47195,85 @@
         }
       }
     },
+    "/surface-setup/slack/install": {
+      "get": {
+        "description": "Whether Lemma's own Slack app is set up on this server, so \"Add to\nSlack\" can work -- checked before a person with no organization is given\none for it.",
+        "operationId": "agent.surface.slack_install.availability",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlackInstallAvailabilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Slack Install Availability",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "agent.surface.slack_install",
+          "result": "entity",
+          "verb": "availability"
+        }
+      },
+      "post": {
+        "description": "Add Lemma to a Slack workspace from \"Add to Slack\", for this organization.\n\nAnswers with Slack's consent page for Lemma's own app, asking for its bot\nalone. Refused before anything is made when Slack isn't set up here, or\nthe caller may not add the organization's installs. When the grant comes\nback to this same signed-in browser, the workspace becomes the\norganization's and Lemma's app says hello there; a grant finished anywhere\nelse adopts nothing.",
+        "operationId": "agent.surface.slack_install.start",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SlackInstallRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlackInstallResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Slack Install Flow",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.surface.slack_install"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.surface.slack_install",
+          "result": "entity",
+          "verb": "start"
+        }
+      }
+    },
     "/surface-setup/slack/manifest": {
       "get": {
         "description": "The Slack app manifest to paste when running your own Slack app.\n\nServed rather than copied out of the repo so the URLs always match the\ndeployment answering this request, and the scopes always match the code\nthat will consume the events.\n\nSigned-in access is the only gate, and that is enough: every value in here\nis already public \u2014 this deployment's URLs and the scopes its own code\nasks for. It carries no credential and reveals nothing about a pod: the\nagent name is supplied by the caller and echoed back, never read from one.",
@@ -46591,6 +47333,58 @@
           "resource": "agent.surface",
           "result": "entity",
           "verb": "slack_manifest"
+        }
+      }
+    },
+    "/surface-setup/slack/people/sign-in": {
+      "post": {
+        "description": "Start Sign in with Slack for the signed-in person, to prove they are the\nSlack user their App Home's link was for.\n\nConnects nothing. The callback connects only when it sees this same Lemma\nsession and Slack names this same Slack user and workspace.",
+        "operationId": "agent.surface.slack_person.sign_in",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SlackSignInRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlackSignInResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Slack Sign In",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.surface.slack_person"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.surface.slack_person",
+          "result": "entity",
+          "verb": "sign_in"
         }
       }
     },

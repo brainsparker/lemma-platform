@@ -76,20 +76,26 @@ async def adopt_connected_channel(
     surface: AgentSurfaceEntity,
     channel_id: str,
     owner_user_id: UUID | None,
-) -> None:
-    """A channel somebody just connected, as one of the pod's groups.
+    is_private: bool = True,
+) -> tuple[UUID, bool] | None:
+    """A channel somebody just connected, as one of the pod's groups: its
+    group's id, and whether the group was made now.
 
     For a platform whose bot is added to channels by configuration (Slack),
     not by joining. The person who connected it answers for its people outside
-    the pod unless somebody already does.
+    the pod unless somebody already does. ``is_private``: what the platform
+    said of the channel, when the caller asked it; private unless it said
+    public, since nothing turns a mirror public later.
     """
     if not channel_id:
-        return
+        return None
     groups = SurfaceGroupRepository(uow.session)
-    # Private until heard: whether the platform opens it to the whole
-    # workspace is only known from what is said there.
-    group = await groups.ensure(
-        pod_id=surface.pod_id, surface=surface, external_channel_id=channel_id
+    group, created = await groups.ensure_noting_creation(
+        pod_id=surface.pod_id,
+        surface=surface,
+        external_channel_id=channel_id,
+        is_private=is_private,
     )
     if group.owner_user_id is None and owner_user_id is not None:
         await groups.set_owner(group.id, owner_user_id)
+    return group.id, created

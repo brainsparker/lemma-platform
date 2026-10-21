@@ -15736,6 +15736,149 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * List Slack App Workspaces
+     * The Slack workspaces this pod's organization lets Lemma create apps in.
+     * @param podId
+     * @returns SlackAppWorkspaceListResponse Successful Response
+     * @throws ApiError
+     */
+    static agentSurfaceSlackAppCreationList(podId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/surface-setup/slack/app-creation",
+        path: {
+          "pod_id": podId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Save Slack Configuration Token
+     * Let Lemma create Slack apps in the workspace this token is for.
+     * @param podId
+     * @param requestBody
+     * @returns SlackAppWorkspaceResponse Successful Response
+     * @throws ApiError
+     */
+    static agentSurfaceSlackAppCreationSave(podId, requestBody) {
+      return request(OpenAPI, {
+        method: "PUT",
+        url: "/pods/{pod_id}/surface-setup/slack/app-creation",
+        path: {
+          "pod_id": podId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Forget Slack Configuration Token
+     * Stop Lemma creating apps there. Apps it already made are not touched.
+     *
+     * Slack offers no way to revoke a configuration token, so it stays valid at
+     * Slack: revoke it on api.slack.com/apps as well.
+     * @param podId
+     * @param teamId
+     * @returns void
+     * @throws ApiError
+     */
+    static agentSurfaceSlackAppCreationForget(podId, teamId) {
+      return request(OpenAPI, {
+        method: "DELETE",
+        url: "/pods/{pod_id}/surface-setup/slack/app-creation/{team_id}",
+        path: {
+          "pod_id": podId,
+          "team_id": teamId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Create Slack App
+     * Create an agent's own Slack app, named after it. What is left is
+     * authorising it.
+     *
+     * One app per agent per workspace: until it is authorised, asking again
+     * answers with the same app, and so does the same `Idempotency-Key` from the
+     * same member for a day.
+     * @param podId
+     * @param requestBody
+     * @param idempotencyKey
+     * @returns SlackAppCreateResponse Successful Response
+     * @throws ApiError
+     */
+    static agentSurfaceSlackAppCreate(podId, requestBody, idempotencyKey) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/surface-setup/slack/apps",
+        path: {
+          "pod_id": podId
+        },
+        headers: {
+          "Idempotency-Key": idempotencyKey
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          409: `Not set up, the token needs replacing, or busy.`,
+          422: `Validation Error`,
+          429: `Slack is rate-limiting app creation.`
+        }
+      });
+    }
+    /**
+     * List Slack Managed Workspaces
+     * The Slack workspaces Lemma's own app manages for this pod's organization.
+     * @param podId
+     * @returns SlackManagedWorkspaceListResponse Successful Response
+     * @throws ApiError
+     */
+    static agentSurfaceSlackManagerList(podId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/surface-setup/slack/manager",
+        path: {
+          "pod_id": podId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Bind Slack Manager
+     * Make Lemma's own app this workspace's manager. The workspace becomes the
+     * organization's, and the person who authorised it is known in Slack.
+     *
+     * Only for a grant this browser finished signed in as the caller: a consent
+     * link somebody else completed is refused.
+     * @param podId
+     * @param requestBody
+     * @returns SlackManagedWorkspaceResponse Successful Response
+     * @throws ApiError
+     */
+    static agentSurfaceSlackManagerBind(podId, requestBody) {
+      return request(OpenAPI, {
+        method: "PUT",
+        url: "/pods/{pod_id}/surface-setup/slack/manager",
+        path: {
+          "pod_id": podId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * Get Surface Setup Guide
      * The static pre-creation checklist for a platform (env/OAuth
      * prerequisites) — works before any surface of this platform exists.
@@ -16107,6 +16250,45 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * Slack Install Availability
+     * Whether Lemma's own Slack app is set up on this server, so "Add to
+     * Slack" can work -- checked before a person with no organization is given
+     * one for it.
+     * @returns SlackInstallAvailabilityResponse Successful Response
+     * @throws ApiError
+     */
+    static agentSurfaceSlackInstallAvailability() {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/surface-setup/slack/install"
+      });
+    }
+    /**
+     * Start Slack Install Flow
+     * Add Lemma to a Slack workspace from "Add to Slack", for this organization.
+     *
+     * Answers with Slack's consent page for Lemma's own app, asking for its bot
+     * alone. Refused before anything is made when Slack isn't set up here, or
+     * the caller may not add the organization's installs. When the grant comes
+     * back to this same signed-in browser, the workspace becomes the
+     * organization's and Lemma's app says hello there; a grant finished anywhere
+     * else adopts nothing.
+     * @param requestBody
+     * @returns SlackInstallResponse Successful Response
+     * @throws ApiError
+     */
+    static agentSurfaceSlackInstallStart(requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/surface-setup/slack/install",
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * Get Slack App Manifest
      * The Slack app manifest to paste when running your own Slack app.
      *
@@ -16129,6 +16311,28 @@ var LemmaClient = (() => {
         query: {
           "agent_name": agentName
         },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Start Slack Sign In
+     * Start Sign in with Slack for the signed-in person, to prove they are the
+     * Slack user their App Home's link was for.
+     *
+     * Connects nothing. The callback connects only when it sees this same Lemma
+     * session and Slack names this same Slack user and workspace.
+     * @param requestBody
+     * @returns SlackSignInResponse Successful Response
+     * @throws ApiError
+     */
+    static agentSurfaceSlackPersonSignIn(requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/surface-setup/slack/people/sign-in",
+        body: requestBody,
+        mediaType: "application/json",
         errors: {
           422: `Validation Error`
         }
@@ -16234,6 +16438,102 @@ var LemmaClient = (() => {
     slackManifest(agentName) {
       return this.client.request(
         () => AgentSurfacesService.agentSurfaceSlackManifest(agentName)
+      );
+    }
+    /**
+     * The Slack workspaces this pod's organization lets Lemma create apps in --
+     * one per saved app configuration token. Carries no token. `can_manage` says
+     * whether the caller may save tokens and create apps (an organization owner
+     * or editor); others are shown no workspace.
+     */
+    slackAppWorkspaces(podId) {
+      return this.client.request(
+        () => AgentSurfacesService.agentSurfaceSlackAppCreationList(podId)
+      );
+    }
+    /**
+     * Let Lemma create Slack apps in a workspace, from the refresh token of an
+     * app configuration token (api.slack.com/apps → Your App Configuration
+     * Tokens). Lemma rotates it at once, which proves it works and names the
+     * workspace. Needs the right to manage the org's connector installs.
+     */
+    saveSlackConfigurationToken(podId, request2) {
+      return this.client.request(
+        () => AgentSurfacesService.agentSurfaceSlackAppCreationSave(podId, request2)
+      );
+    }
+    /**
+     * Stop Lemma creating apps in that workspace. Apps it made are untouched,
+     * and the token stays valid at Slack until revoked there.
+     */
+    forgetSlackConfigurationToken(podId, teamId) {
+      return this.client.request(
+        () => AgentSurfacesService.agentSurfaceSlackAppCreationForget(podId, teamId)
+      );
+    }
+    /**
+     * Create an agent's own Slack app (the pod's own agent unless `agent_id` is
+     * given), named after it, and register its credentials as the org's own
+     * install. Authorise that install (`auth_config_id`) to finish. Asking again
+     * for the same agent and workspace answers with the same app until it is
+     * authorised, and so does the same `idempotencyKey` for a day.
+     */
+    createSlackApp(podId, request2, idempotencyKey) {
+      return this.client.request(
+        () => AgentSurfacesService.agentSurfaceSlackAppCreate(podId, request2, idempotencyKey)
+      );
+    }
+    /**
+     * The Slack workspaces Lemma's own app manages for this pod's organization.
+     * Lemma's app answers nobody: it is where a workspace sees its teammates,
+     * adds one, and hands one a channel.
+     */
+    slackManagedWorkspaces(podId) {
+      return this.client.request(
+        () => AgentSurfacesService.agentSurfaceSlackManagerList(podId)
+      );
+    }
+    /**
+     * Make Lemma's own app the manager of the workspace an account authorised it
+     * in. The workspace becomes the organization's, and the person who
+     * authorised it is known in Slack from then on. Only for a grant this
+     * browser finished signed in as the caller.
+     */
+    bindSlackManager(podId, request2) {
+      return this.client.request(
+        () => AgentSurfacesService.agentSurfaceSlackManagerBind(podId, request2)
+      );
+    }
+    /**
+     * Start Sign in with Slack for the signed-in person, to prove they are the
+     * Slack user their App Home's "Connect your Lemma account" link was for.
+     * Returns Slack's sign-in page; the callback connects only when it sees this
+     * same Lemma session and Slack names that same Slack user and workspace.
+     */
+    startSlackSignIn(request2) {
+      return this.client.request(
+        () => AgentSurfacesService.agentSurfaceSlackPersonSignIn(request2)
+      );
+    }
+    /**
+     * Whether Lemma's own Slack app is set up on this server, so "Add to Slack"
+     * can work. Ask before giving anybody an organization for it.
+     */
+    slackInstallAvailability() {
+      return this.client.request(
+        () => AgentSurfacesService.agentSurfaceSlackInstallAvailability()
+      );
+    }
+    /**
+     * Add Lemma's own Slack app to a workspace for an organization, from "Add
+     * to Slack" rather than from a pod. Answers with Slack's consent page (bot
+     * scopes only), refused before anything is made when Slack isn't set up
+     * here or the caller may not add the organization's installs. A grant
+     * finished in a browser not signed in as the caller adopts nothing.
+     */
+    startSlackInstall(request2) {
+      return this.client.request(
+        () => AgentSurfacesService.agentSurfaceSlackInstallStart(request2)
       );
     }
   };

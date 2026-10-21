@@ -13,7 +13,16 @@ from ..openapi_client.api.agent_surfaces import (
     agent_surface_send,
     agent_surface_setup,
     agent_surface_setup_guide,
+    agent_surface_slack_app_create,
+    agent_surface_slack_app_creation_forget,
+    agent_surface_slack_app_creation_list,
+    agent_surface_slack_app_creation_save,
+    agent_surface_slack_install_availability,
+    agent_surface_slack_install_start,
+    agent_surface_slack_manager_bind,
+    agent_surface_slack_manager_list,
     agent_surface_slack_manifest,
+    agent_surface_slack_person_sign_in,
     agent_surface_telegram_managed_get,
     agent_surface_telegram_managed_start,
     agent_surface_update,
@@ -31,6 +40,33 @@ from ..openapi_client.models.available_surfaces_response import (
     AvailableSurfacesResponse,
 )
 from ..openapi_client.models.set_default_surface_request import SetDefaultSurfaceRequest
+from ..openapi_client.models.slack_app_create_request import SlackAppCreateRequest
+from ..openapi_client.models.slack_app_create_response import SlackAppCreateResponse
+from ..openapi_client.models.slack_app_workspace_list_response import (
+    SlackAppWorkspaceListResponse,
+)
+from ..openapi_client.models.slack_app_workspace_response import (
+    SlackAppWorkspaceResponse,
+)
+from ..openapi_client.models.slack_configuration_token_request import (
+    SlackConfigurationTokenRequest,
+)
+from ..openapi_client.models.slack_managed_workspace_list_response import (
+    SlackManagedWorkspaceListResponse,
+)
+from ..openapi_client.models.slack_managed_workspace_response import (
+    SlackManagedWorkspaceResponse,
+)
+from ..openapi_client.models.slack_manager_bind_request import (
+    SlackManagerBindRequest,
+)
+from ..openapi_client.models.slack_install_availability_response import (
+    SlackInstallAvailabilityResponse,
+)
+from ..openapi_client.models.slack_install_request import SlackInstallRequest
+from ..openapi_client.models.slack_install_response import SlackInstallResponse
+from ..openapi_client.models.slack_sign_in_request import SlackSignInRequest
+from ..openapi_client.models.slack_sign_in_response import SlackSignInResponse
 from ..openapi_client.models.surface_create_request import SurfaceCreateRequest
 from ..openapi_client.models.surface_platform_setup_guide import (
     SurfacePlatformSetupGuide,
@@ -138,6 +174,102 @@ class PodSurfaces(BoundResource):
         client id that connects the account a surface is built on.
         """
         return self._call(agent_surface_slack_manifest)
+
+    def slack_app_workspaces(self) -> SlackAppWorkspaceListResponse:
+        """The Slack workspaces this pod's organization lets Lemma create apps in.
+
+        ``can_manage`` says whether the caller may save tokens and create apps
+        (an organization owner or editor); others are shown no workspace.
+        """
+        return self._call(agent_surface_slack_app_creation_list, self._pod_uuid())
+
+    def save_slack_configuration_token(
+        self, request: SlackConfigurationTokenRequest | dict
+    ) -> SlackAppWorkspaceResponse:
+        """Let Lemma create Slack apps in a workspace, from the refresh token of
+        an app configuration token (api.slack.com/apps). Lemma rotates it at
+        once, which proves it works and names the workspace."""
+        return self._call(
+            agent_surface_slack_app_creation_save,
+            self._pod_uuid(),
+            body=request,
+            body_model=SlackConfigurationTokenRequest,
+        )
+
+    def forget_slack_configuration_token(self, team_id: str) -> None:
+        """Stop Lemma creating apps in that workspace. Apps it made are kept,
+        and the token stays valid at Slack until revoked there."""
+        self._call(agent_surface_slack_app_creation_forget, self._pod_uuid(), team_id)
+
+    def create_slack_app(
+        self,
+        request: SlackAppCreateRequest | dict,
+        *,
+        idempotency_key: str | None = None,
+    ) -> SlackAppCreateResponse:
+        """Create an agent's own Slack app (the pod's own agent unless
+        ``agent_id`` is given), named after it. Authorise the returned install
+        (``auth_config_id``) to finish. Asking again for the same agent and
+        workspace answers with the same app until it is authorised."""
+        kwargs: dict[str, Any] = {}
+        if idempotency_key is not None:
+            kwargs["idempotency_key"] = idempotency_key
+        return self._call(
+            agent_surface_slack_app_create,
+            self._pod_uuid(),
+            body=request,
+            body_model=SlackAppCreateRequest,
+            **kwargs,
+        )
+
+    def slack_managed_workspaces(self) -> SlackManagedWorkspaceListResponse:
+        """The Slack workspaces Lemma's own app manages for this pod's
+        organization. Lemma's app answers nobody: it is where a workspace sees
+        its teammates, adds one, and hands one a channel."""
+        return self._call(agent_surface_slack_manager_list, self._pod_uuid())
+
+    def bind_slack_manager(
+        self, request: SlackManagerBindRequest | dict
+    ) -> SlackManagedWorkspaceResponse:
+        """Make Lemma's own app the manager of the workspace an account
+        (``account_id``) authorised it in. Only for a grant finished in a
+        browser signed in as the caller."""
+        return self._call(
+            agent_surface_slack_manager_bind,
+            self._pod_uuid(),
+            body=request,
+            body_model=SlackManagerBindRequest,
+        )
+
+    def start_slack_sign_in(
+        self, request: SlackSignInRequest | dict
+    ) -> SlackSignInResponse:
+        """Start Sign in with Slack, proving the signed-in person is the Slack
+        user (``team_id``, ``slack_user_id``) their App Home's link was for.
+        Open the returned ``authorization_url`` in the same browser session."""
+        return self._call(
+            agent_surface_slack_person_sign_in,
+            body=request,
+            body_model=SlackSignInRequest,
+        )
+
+    def slack_install_availability(self) -> SlackInstallAvailabilityResponse:
+        """Whether Lemma's own Slack app is set up on this server, so "Add to
+        Slack" can work. Ask before giving anybody an organization for it."""
+        return self._call(agent_surface_slack_install_availability)
+
+    def start_slack_install(
+        self, request: SlackInstallRequest | dict
+    ) -> SlackInstallResponse:
+        """Add Lemma's own Slack app to a workspace for an organization
+        (``organization_id``): Slack's consent page, bot scopes only. Open the
+        returned ``authorization_url`` in a browser signed in as the caller --
+        a grant finished anywhere else adopts nothing."""
+        return self._call(
+            agent_surface_slack_install_start,
+            body=request,
+            body_model=SlackInstallRequest,
+        )
 
     def start_telegram_bot_setup(
         self,

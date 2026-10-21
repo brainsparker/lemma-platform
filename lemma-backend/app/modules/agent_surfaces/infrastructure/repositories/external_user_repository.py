@@ -246,6 +246,30 @@ class ExternalSurfaceUserRepository:
         instance = result.scalar_one_or_none()
         return instance.to_entity() if instance else None
 
+    async def clear_others_resolved_to(
+        self,
+        *,
+        platform: str,
+        tenant_id: str,
+        resolved_user_id: UUID,
+        keep_external_user_id: str,
+    ) -> int:
+        """Forget that any other sender in this tenant is this person.
+
+        For a platform proof of one sender: an older match (a profile email a
+        workspace admin can edit) no longer speaks for them."""
+        result = await self.session.execute(
+            update(AgentSurfaceExternalUser)
+            .where(
+                AgentSurfaceExternalUser.platform == platform,
+                AgentSurfaceExternalUser.tenant_id == tenant_id,
+                AgentSurfaceExternalUser.resolved_user_id == resolved_user_id,
+                AgentSurfaceExternalUser.external_user_id != keep_external_user_id,
+            )
+            .values(resolved_user_id=None)
+        )
+        return int(getattr(result, "rowcount", 0) or 0)
+
     async def clear_resolved_user(self, resolved_user_id) -> int:
         """Clear cached platform identities after a Lemma profile phone change."""
         result = await self.session.execute(

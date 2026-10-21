@@ -8,6 +8,19 @@ import type { AvailableSurfaceChannelsResponse } from '../models/AvailableSurfac
 import type { AvailableSurfacesResponse } from '../models/AvailableSurfacesResponse.js';
 import type { NoticeRequest } from '../models/NoticeRequest.js';
 import type { NoticeResponse } from '../models/NoticeResponse.js';
+import type { SlackAppCreateRequest } from '../models/SlackAppCreateRequest.js';
+import type { SlackAppCreateResponse } from '../models/SlackAppCreateResponse.js';
+import type { SlackAppWorkspaceListResponse } from '../models/SlackAppWorkspaceListResponse.js';
+import type { SlackAppWorkspaceResponse } from '../models/SlackAppWorkspaceResponse.js';
+import type { SlackConfigurationTokenRequest } from '../models/SlackConfigurationTokenRequest.js';
+import type { SlackInstallAvailabilityResponse } from '../models/SlackInstallAvailabilityResponse.js';
+import type { SlackInstallRequest } from '../models/SlackInstallRequest.js';
+import type { SlackInstallResponse } from '../models/SlackInstallResponse.js';
+import type { SlackManagedWorkspaceListResponse } from '../models/SlackManagedWorkspaceListResponse.js';
+import type { SlackManagedWorkspaceResponse } from '../models/SlackManagedWorkspaceResponse.js';
+import type { SlackManagerBindRequest } from '../models/SlackManagerBindRequest.js';
+import type { SlackSignInRequest } from '../models/SlackSignInRequest.js';
+import type { SlackSignInResponse } from '../models/SlackSignInResponse.js';
 import type { SurfaceCreateRequest } from '../models/SurfaceCreateRequest.js';
 import type { SurfacePlatformSetupGuide } from '../models/SurfacePlatformSetupGuide.js';
 import type { SurfaceSendRequest } from '../models/SurfaceSendRequest.js';
@@ -85,6 +98,166 @@ export class AgentSurfacesService {
                 404: `Nobody in this pod is that member.`,
                 422: `Validation Error`,
                 429: `Too many notices this minute; see Retry-After.`,
+            },
+        });
+    }
+    /**
+     * List Slack App Workspaces
+     * The Slack workspaces this pod's organization lets Lemma create apps in.
+     * @param podId
+     * @returns SlackAppWorkspaceListResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentSurfaceSlackAppCreationList(
+        podId: string,
+    ): CancelablePromise<SlackAppWorkspaceListResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/surface-setup/slack/app-creation',
+            path: {
+                'pod_id': podId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Save Slack Configuration Token
+     * Let Lemma create Slack apps in the workspace this token is for.
+     * @param podId
+     * @param requestBody
+     * @returns SlackAppWorkspaceResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentSurfaceSlackAppCreationSave(
+        podId: string,
+        requestBody: SlackConfigurationTokenRequest,
+    ): CancelablePromise<SlackAppWorkspaceResponse> {
+        return __request(OpenAPI, {
+            method: 'PUT',
+            url: '/pods/{pod_id}/surface-setup/slack/app-creation',
+            path: {
+                'pod_id': podId,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Forget Slack Configuration Token
+     * Stop Lemma creating apps there. Apps it already made are not touched.
+     *
+     * Slack offers no way to revoke a configuration token, so it stays valid at
+     * Slack: revoke it on api.slack.com/apps as well.
+     * @param podId
+     * @param teamId
+     * @returns void
+     * @throws ApiError
+     */
+    public static agentSurfaceSlackAppCreationForget(
+        podId: string,
+        teamId: string,
+    ): CancelablePromise<void> {
+        return __request(OpenAPI, {
+            method: 'DELETE',
+            url: '/pods/{pod_id}/surface-setup/slack/app-creation/{team_id}',
+            path: {
+                'pod_id': podId,
+                'team_id': teamId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Create Slack App
+     * Create an agent's own Slack app, named after it. What is left is
+     * authorising it.
+     *
+     * One app per agent per workspace: until it is authorised, asking again
+     * answers with the same app, and so does the same `Idempotency-Key` from the
+     * same member for a day.
+     * @param podId
+     * @param requestBody
+     * @param idempotencyKey
+     * @returns SlackAppCreateResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentSurfaceSlackAppCreate(
+        podId: string,
+        requestBody: SlackAppCreateRequest,
+        idempotencyKey?: (string | null),
+    ): CancelablePromise<SlackAppCreateResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/pods/{pod_id}/surface-setup/slack/apps',
+            path: {
+                'pod_id': podId,
+            },
+            headers: {
+                'Idempotency-Key': idempotencyKey,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                409: `Not set up, the token needs replacing, or busy.`,
+                422: `Validation Error`,
+                429: `Slack is rate-limiting app creation.`,
+            },
+        });
+    }
+    /**
+     * List Slack Managed Workspaces
+     * The Slack workspaces Lemma's own app manages for this pod's organization.
+     * @param podId
+     * @returns SlackManagedWorkspaceListResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentSurfaceSlackManagerList(
+        podId: string,
+    ): CancelablePromise<SlackManagedWorkspaceListResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/surface-setup/slack/manager',
+            path: {
+                'pod_id': podId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Bind Slack Manager
+     * Make Lemma's own app this workspace's manager. The workspace becomes the
+     * organization's, and the person who authorised it is known in Slack.
+     *
+     * Only for a grant this browser finished signed in as the caller: a consent
+     * link somebody else completed is refused.
+     * @param podId
+     * @param requestBody
+     * @returns SlackManagedWorkspaceResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentSurfaceSlackManagerBind(
+        podId: string,
+        requestBody: SlackManagerBindRequest,
+    ): CancelablePromise<SlackManagedWorkspaceResponse> {
+        return __request(OpenAPI, {
+            method: 'PUT',
+            url: '/pods/{pod_id}/surface-setup/slack/manager',
+            path: {
+                'pod_id': podId,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
             },
         });
     }
@@ -513,6 +686,47 @@ export class AgentSurfacesService {
         });
     }
     /**
+     * Slack Install Availability
+     * Whether Lemma's own Slack app is set up on this server, so "Add to
+     * Slack" can work -- checked before a person with no organization is given
+     * one for it.
+     * @returns SlackInstallAvailabilityResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentSurfaceSlackInstallAvailability(): CancelablePromise<SlackInstallAvailabilityResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/surface-setup/slack/install',
+        });
+    }
+    /**
+     * Start Slack Install Flow
+     * Add Lemma to a Slack workspace from "Add to Slack", for this organization.
+     *
+     * Answers with Slack's consent page for Lemma's own app, asking for its bot
+     * alone. Refused before anything is made when Slack isn't set up here, or
+     * the caller may not add the organization's installs. When the grant comes
+     * back to this same signed-in browser, the workspace becomes the
+     * organization's and Lemma's app says hello there; a grant finished anywhere
+     * else adopts nothing.
+     * @param requestBody
+     * @returns SlackInstallResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentSurfaceSlackInstallStart(
+        requestBody: SlackInstallRequest,
+    ): CancelablePromise<SlackInstallResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/surface-setup/slack/install',
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
      * Get Slack App Manifest
      * The Slack app manifest to paste when running your own Slack app.
      *
@@ -537,6 +751,30 @@ export class AgentSurfacesService {
             query: {
                 'agent_name': agentName,
             },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Start Slack Sign In
+     * Start Sign in with Slack for the signed-in person, to prove they are the
+     * Slack user their App Home's link was for.
+     *
+     * Connects nothing. The callback connects only when it sees this same Lemma
+     * session and Slack names this same Slack user and workspace.
+     * @param requestBody
+     * @returns SlackSignInResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentSurfaceSlackPersonSignIn(
+        requestBody: SlackSignInRequest,
+    ): CancelablePromise<SlackSignInResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/surface-setup/slack/people/sign-in',
+            body: requestBody,
+            mediaType: 'application/json',
             errors: {
                 422: `Validation Error`,
             },

@@ -540,6 +540,19 @@ _NAME_TO_MODULE = {
     'SignedUrlListResponse': 'signed_url_list_response',
     'SignedUrlRevokeResponse': 'signed_url_revoke_response',
     'SignedUrlSummary': 'signed_url_summary',
+    'SlackAppCreateRequest': 'slack_app_create_request',
+    'SlackAppCreateResponse': 'slack_app_create_response',
+    'SlackAppWorkspaceListResponse': 'slack_app_workspace_list_response',
+    'SlackAppWorkspaceResponse': 'slack_app_workspace_response',
+    'SlackConfigurationTokenRequest': 'slack_configuration_token_request',
+    'SlackInstallAvailabilityResponse': 'slack_install_availability_response',
+    'SlackInstallRequest': 'slack_install_request',
+    'SlackInstallResponse': 'slack_install_response',
+    'SlackManagedWorkspaceListResponse': 'slack_managed_workspace_list_response',
+    'SlackManagedWorkspaceResponse': 'slack_managed_workspace_response',
+    'SlackManagerBindRequest': 'slack_manager_bind_request',
+    'SlackSignInRequest': 'slack_sign_in_request',
+    'SlackSignInResponse': 'slack_sign_in_response',
     'SourceKind': 'source_kind',
     'SourceSettingsDetailResponse': 'source_settings_detail_response',
     'SourceSettingsResponse': 'source_settings_response',
@@ -1233,6 +1246,19 @@ if TYPE_CHECKING:
     from .signed_url_list_response import SignedUrlListResponse
     from .signed_url_revoke_response import SignedUrlRevokeResponse
     from .signed_url_summary import SignedUrlSummary
+    from .slack_app_create_request import SlackAppCreateRequest
+    from .slack_app_create_response import SlackAppCreateResponse
+    from .slack_app_workspace_list_response import SlackAppWorkspaceListResponse
+    from .slack_app_workspace_response import SlackAppWorkspaceResponse
+    from .slack_configuration_token_request import SlackConfigurationTokenRequest
+    from .slack_install_availability_response import SlackInstallAvailabilityResponse
+    from .slack_install_request import SlackInstallRequest
+    from .slack_install_response import SlackInstallResponse
+    from .slack_managed_workspace_list_response import SlackManagedWorkspaceListResponse
+    from .slack_managed_workspace_response import SlackManagedWorkspaceResponse
+    from .slack_manager_bind_request import SlackManagerBindRequest
+    from .slack_sign_in_request import SlackSignInRequest
+    from .slack_sign_in_response import SlackSignInResponse
     from .source_kind import SourceKind
     from .source_settings_detail_response import SourceSettingsDetailResponse
     from .source_settings_response import SourceSettingsResponse
@@ -1939,6 +1965,19 @@ __all__ = [
     'SignedUrlListResponse',
     'SignedUrlRevokeResponse',
     'SignedUrlSummary',
+    'SlackAppCreateRequest',
+    'SlackAppCreateResponse',
+    'SlackAppWorkspaceListResponse',
+    'SlackAppWorkspaceResponse',
+    'SlackConfigurationTokenRequest',
+    'SlackInstallAvailabilityResponse',
+    'SlackInstallRequest',
+    'SlackInstallResponse',
+    'SlackManagedWorkspaceListResponse',
+    'SlackManagedWorkspaceResponse',
+    'SlackManagerBindRequest',
+    'SlackSignInRequest',
+    'SlackSignInResponse',
     'SourceKind',
     'SourceSettingsDetailResponse',
     'SourceSettingsResponse',

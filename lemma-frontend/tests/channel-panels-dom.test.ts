@@ -103,17 +103,17 @@ function nameOf(control: Element): string {
     return by?.textContent?.trim() ?? "";
 }
 
-test("making a channel asks for the pod's members again, and names each checkbox for its person", async () => {
-    const { NewChannel } = await import("../src/channels/new-channel.tsx");
+test("starting a shared chat asks for the pod's members again, and names each checkbox for its person", async () => {
+    const { NewSharedChat } = await import("../src/channels/new-channel.tsx");
     const view = await page();
     let reads = 0;
     try {
         /* The shell's roster, read when the space opened. */
         await view.cache.prefetchQuery({ queryKey: ["pod-detail", "pod"], queryFn: async () => { reads += 1; return { members: [] }; }, staleTime: 5 * 60_000 });
-        await view.draw(createElement(NewChannel, { pod: pod as never, onClose: () => {}, onMade: () => {} }));
+        await view.draw(createElement(NewSharedChat, { pod: pod as never, onClose: () => {}, onMade: () => {} }));
         await view.flush();
         assert.equal(view.cache.getQueryState(["pod-detail", "pod"])?.isInvalidated, true, "the roster held is asked for again");
-        const boxes = [...view.dom.window.document.querySelectorAll("input[type=checkbox]")];
+        const boxes = [...view.dom.window.document.querySelectorAll("fieldset input[type=checkbox]")];
         assert.deepEqual(boxes.map(nameOf), ["Sam Okonkwo-Fairweather", "Lee"]);
         assert.ok(reads >= 1);
     } finally {
@@ -134,17 +134,18 @@ const detail = {
 };
 const may = { manage: true, write: true, writeRefused: null, contactOps: false, delete: true, rename: true, archive: true, visibility: true };
 
-test("the About panel puts each picker under its own list, and a long name can be read in full", async () => {
-    const { ChannelPanel } = await import("../src/channels/channel-panel.tsx");
+test("a chat's details list each person in full, and offer only the tabs the reader can use", async () => {
+    const { ChatDetails } = await import("../src/channels/chat-details.tsx");
     const view = await page();
     try {
-        await view.draw(createElement(ChannelPanel, { pod: pod as never, channel: detail as never, may: may as never, onClose: () => {}, onLeft: () => {} }));
+        await view.draw(createElement(ChatDetails, { pod: pod as never, channel: detail as never, may: may as never, at: "members", onAt: () => {}, onClose: () => {}, onLeft: () => {} }));
         await view.flush();
         const doc = view.dom.window.document;
-        const order = [...doc.querySelectorAll("h4.gside__label, .cside__add select")].map((one) => one.tagName === "H4" ? "heading:" + one.textContent : "picker:" + nameOf(one));
-        assert.deepEqual(order, ["picker:Add someone from Bolt", "heading:Agents", "picker:Add an agent"]);
-        const sam = [...doc.querySelectorAll(".gpeople__who > span")].find((one) => one.textContent?.startsWith("Sam"));
+        const tabs = [...doc.querySelectorAll("[role=tab]")].map((one) => one.textContent);
+        assert.deepEqual(tabs, ["About", "Members2", "Agents1", "Settings"]);
+        const sam = [...doc.querySelectorAll(".cdet__name")].find((one) => one.textContent?.startsWith("Sam"));
         assert.equal(sam?.getAttribute("title"), "Sam Okonkwo-Fairweather");
+        assert.ok([...doc.querySelectorAll("button")].some((one) => one.textContent === "Add people"), "whoever may change it can add people");
     } finally {
         await view.close();
     }

@@ -76,10 +76,7 @@ from app.modules.agent_surfaces.services.delivery_outcome import (
 )
 from app.modules.agent_surfaces.services.push_sends import PushesFor, push_outcome
 from app.modules.agent_surfaces.services.surface_problems import heed_send
-from app.modules.agent_surfaces.services.place_threads import (
-    at_place_level,
-    in_thread,
-)
+from app.modules.agent_surfaces.services.place_aim import aimed_at
 from app.modules.agent_surfaces.services.run_answer_sends import (
     EgressFor,
     RunAnswerSends,
@@ -95,14 +92,12 @@ from app.modules.channels.contracts import (
     DeliveryReasonCode as Code,
     SenderKind,
     Source,
-    SourceKind,
     channel_by_id,
     source_by_id,
 )
 from app.modules.channels.contracts.deliveries import (
     announce_next_for_target,
     claim_delivery,
-    deliveries_of,
     delivery_dead,
     delivery_failed,
     delivery_folded,
@@ -337,7 +332,7 @@ class ChannelDeliveries:
         receipt, outcome = await self._send(
             work.delivery,
             conversation_id,
-            await self._aimed(line, source),
+            await aimed_at(self.uow_factory, line, source),
             text=ready.text,
             metadata=ready.metadata,
         )
@@ -430,37 +425,6 @@ class ChannelDeliveries:
             text=ready.text,
             metadata=ready.metadata,
         )
-
-    async def _aimed(self, line: ChannelMessage, source: Source) -> Source:
-        """The place, aimed where in it the line was written."""
-        ref = source.delivery_ref
-        if ref is None:
-            return source
-        if line.thread_root_id is None:
-            if source.kind is not SourceKind.CHAT:
-                return source
-            aimed = at_place_level(ref, source.platform)
-        else:
-            async with self.uow_factory() as uow:
-                root = await line_by_id(uow, line.thread_root_id)
-                sent_as = await self._sent_as(uow, root.id, source.id) if root else None
-            if root is not None and root.source_id == source.id and root.reply_ref:
-                # Heard there: its own event answers in its thread.
-                aimed = dict(root.reply_ref)
-            elif sent_as is not None:
-                aimed = in_thread(ref, source.platform, root_message_id=sent_as)
-            else:
-                aimed = at_place_level(ref, source.platform)
-        return source.model_copy(update={"delivery_ref": aimed})
-
-    async def _sent_as(
-        self, uow: SqlAlchemyUnitOfWork, line_id: UUID, source_id: UUID
-    ) -> str | None:
-        """The platform's id for a line written in Lemma and sent to a place."""
-        for delivery in await deliveries_of(uow, [line_id]):
-            if delivery.source_id == source_id and delivery.external_message_id:
-                return delivery.external_message_id
-        return None
 
     async def _send(
         self,

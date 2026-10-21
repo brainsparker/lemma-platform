@@ -1834,6 +1834,7 @@ export function conversationRefOf(conversation: unknown): ConversationRef {
         id: row.id,
         title: (row.title ?? "").trim() || "Untitled",
         at: listStamp(at),
+        activityAt: at ?? null,
         kind: row.type ?? "CHAT",
         boundTo: typeof bound === "string" ? bound : null,
         origin: originOf(row.metadata, row.type),

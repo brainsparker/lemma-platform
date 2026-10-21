@@ -147,7 +147,11 @@ export interface Line {
     /** Where it was said; null for a line written in Lemma. */
     sourceId: string | null;
     threadRootId: string | null;
+    /** The line this one answers: an agent's answer points at its question. */
+    replyToId: string | null;
     replyCount: number;
+    /** On a thread's first line: when its newest reply was written. */
+    lastReplyAt: string | null;
     interaction: Interaction | null;
     parts: Part[];
     /** The composer's name for it, when it was written in Lemma. */
@@ -362,7 +366,9 @@ export function readLine(raw: unknown): Line | null {
         membersOnly: row.members_only === true,
         sourceId: words(row.source_id),
         threadRootId: words(row.thread_root_id),
+        replyToId: words(row.reply_to_id),
         replyCount: count(row.reply_count),
+        lastReplyAt: words(row.last_reply_at),
         interaction: readQuestion(row.question),
         parts: deleted || withheld ? [] : readParts(row.parts),
         clientMessageId: words(row.client_message_id),
@@ -484,12 +490,30 @@ export function personName(person: PersonRef | null, me: string | null): string 
     return person.kind === "AGENT" ? "An agent" : person.kind === "CONTACT" ? "A contact" : "A member";
 }
 
-/** A channel's name. The reader's own is them and the space; a contact's is
- *  the contact; a group is what it was called, or where it is. */
-export function channelTitle(channel: Pick<Channel, "kind" | "title" | "person" | "sources">, space: string): string {
-    if (channel.kind === "DIRECT") return "You and " + space;
-    if (channel.kind === "CONTACT") return channel.person?.name ?? channel.title ?? "A contact";
-    return channel.title ?? channel.sources.find((source) => source.title)?.title ?? "Untitled channel";
+/** A contact nobody has named, by how they came: somebody on the
+ *  website's chat is a visitor; anybody else, a contact. */
+export function nameless(channel: Pick<Channel, "sources">): string {
+    return channel.sources.some((source) => source.platform === "WEB") ? "A website visitor" : "A contact";
+}
+
+/** A chat's name. The reader's default chat -- their private line with the
+ *  teammate -- is named by where they reach it ("WhatsApp"), or "Notices"
+ *  when it is only what the teammate sends them; a contact's is the
+ *  contact; a group is what it was called, or where it is. `space` is kept
+ *  for callers that name things after the space. */
+export function channelTitle(channel: Pick<Channel, "kind" | "title" | "person" | "sources">, _space: string): string {
+    if (channel.kind === "DIRECT") {
+        const names = [...new Set(channel.sources.map((source) => platformName(source.platform)))];
+        return names.length ? sayList(names) : "Notices";
+    }
+    if (channel.kind === "CONTACT") return channel.person?.name ?? channel.title ?? nameless(channel);
+    return channel.title ?? channel.sources.find((source) => source.title)?.title ?? "Untitled chat";
+}
+
+/** "A", "A and B", "A, B and C". */
+export function sayList(items: readonly string[]): string {
+    if (items.length <= 1) return items[0] ?? "";
+    return items.slice(0, -1).join(", ") + " and " + items.at(-1);
 }
 
 /** The platforms feeding a channel, each once, in the order they came. */
@@ -550,7 +574,7 @@ export function inboxBadge(totals: { mentions: number; waiting: number }, direct
     const parts: string[] = [];
     if (totals.waiting) parts.push(totals.waiting === 1 ? "1 question waiting on you" : totals.waiting + " questions waiting on you");
     if (totals.mentions) parts.push(totals.mentions === 1 ? "1 mention of you" : totals.mentions + " mentions of you");
-    if (directLines) parts.push(directLines === 1 ? "1 new line in your channel" : directLines + " new lines in your channel");
+    if (directLines) parts.push(directLines === 1 ? "1 new message for you" : directLines + " new messages for you");
     return { count, tone: totals.waiting ? "waiting" : totals.mentions ? "mention" : "new", said: parts.join(", ") };
 }
 
@@ -582,8 +606,10 @@ export function sinceShort(iso: string | null | undefined, now = new Date()): st
 export function senderLabel(line: Pick<Line, "sender" | "onBehalfOf">, me: string | null): string {
     const name = personName(line.sender, me);
     if (line.sender.kind !== "AGENT" || !line.onBehalfOf) return name;
+    /* Answering the reader goes without saying; answering somebody else is
+       worth a word, since it answered with their access. */
     const whom = personName(line.onBehalfOf, me);
-    return name + ", for " + (whom === "You" ? "you" : whom);
+    return whom === "You" ? name : name + ", answering " + whom;
 }
 
 /** Where a line was said: "#acme (Slack)", "WhatsApp". Nothing for a line
@@ -735,10 +761,10 @@ export function composerChoices(detail: Pick<ChannelDetail, "places">): { notes:
  *  pod's agent answers every line; anywhere else an agent answers only when
  *  @mentioned, and not at all while a member has stepped in. */
 export function whoAnswers(channel: Pick<Channel, "kind" | "assignee" | "agentsAnswer" | "handBackAfterHours">, space: string, me: string | null): string {
-    if (channel.kind === "CONTACT" && !channel.agentsAnswer) return "Its agent is off: only members answer them.";
+    if (channel.kind === "CONTACT" && !channel.agentsAnswer) return "The agent is off here: only people answer them.";
     if (channel.assignee) {
         const name = personName(channel.assignee, me);
-        const back = "its agent answers again " + channel.handBackAfterHours + " hours after " + (name === "You" ? "your" : "their") + " last line.";
+        const back = "its agent answers again " + channel.handBackAfterHours + " hours after " + (name === "You" ? "your" : "their") + " last message.";
         return (name === "You" ? "You are answering here; " : name + " is answering here; ") + back;
     }
     if (channel.kind === "DIRECT") return space + " answers everything you write here.";

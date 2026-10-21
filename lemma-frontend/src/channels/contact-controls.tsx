@@ -41,7 +41,7 @@ export function ContactControls({ pod, channel, compact = false }: { pod: Pod; c
                         change.mutate({ assignee: picked === "" ? null : picked === me ? "me" : picked });
                     }}
                 >
-                    <option value="">Nobody</option>
+                    <option value="">{compact ? "Unassigned" : "Nobody"}</option>
                     {me && <option value={me}>You</option>}
                     {people.filter((member) => member.userId !== me).map((member) => <option key={member.userId} value={member.userId}>{member.name}</option>)}
                     {channel.assignee?.id && !people.some((member) => member.userId === channel.assignee?.id) && channel.assignee.id !== me && (

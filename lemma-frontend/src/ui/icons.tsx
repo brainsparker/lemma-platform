@@ -4,7 +4,7 @@ export {
     CaretDown as ChevronDownIcon, CaretRight as ChevronRightIcon, CaretUp as ChevronUpIcon, CaretLeft as ChevronLeftIcon,
     ArrowUp as SendIcon, ArrowDown as ArrowDownIcon, ArrowUpRight as ExternalIcon, ArrowLeft as BackIcon,
     ArrowRight as ArrowRightIcon, Check as CheckIcon, Copy as CopyIcon,
-    EnvelopeSimple as EmailIcon, LinkSimple as LinkIcon, UserCircle as UserIcon,
+    EnvelopeSimple as EmailIcon, LinkSimple as LinkIcon, UserCircle as UserIcon, User as PersonIcon,
     SignOut as SignOutIcon, ArrowClockwise as RefreshIcon, ChatCircle as ChatIcon,
     IdentificationCard as ProfileIcon, ClockCounterClockwise as HistoryIcon,
     SquaresFour as AppsIcon, AppWindow as AppIcon, Folder as FolderIcon, Books as LibraryIcon, FileText as FileIcon, Table as TableIcon,

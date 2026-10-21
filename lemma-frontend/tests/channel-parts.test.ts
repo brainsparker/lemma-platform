@@ -135,7 +135,7 @@ test("the bell counts what the inbox lists: questions, mentions and your own cha
         mentions: [{ channel: { id: "c2", kind: "GROUP", title: "launch" }, message: { id: "m1", seq: 9, sender: { kind: "MEMBER", name: "Priya" }, text: "@Dana look", created_at: "x" } }],
     });
     assert.deepEqual(inbox.mentioned.map((item) => [item.channelId, item.from, item.text]), [["c2", "Priya", "@Dana look"]]);
-    assert.deepEqual(bellCount(inbox, 4), { badge: "7", said: "1 question waiting on you, 2 mentions of you, 4 new lines in your channel" });
+    assert.deepEqual(bellCount(inbox, 4), { badge: "7", said: "1 question waiting on you, 2 mentions of you, 4 new messages for you" });
     assert.deepEqual(bellCount(null, 0), { badge: null, said: "Nothing new for you" });
 });
 
@@ -168,5 +168,5 @@ test("Tab goes round inside a panel: past the last to the first, and back", () =
 
 test("making a private group public is asked first, saying its history goes with it", () => {
     assert.match(publicWarning("launch", "Acme"), /^Everyone in Acme will be able to find launch and read everything said in it, including what was said before/);
-    assert.match(publicWarning(null, "Acme"), /find this channel/);
+    assert.match(publicWarning(null, "Acme"), /find this chat/);
 });

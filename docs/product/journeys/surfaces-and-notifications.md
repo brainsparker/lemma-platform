@@ -965,19 +965,26 @@ Public, the way a group's people from outside it are.
   system shall answer them as a contact of the pod, known by their Slack
   account, without asking them to sign up first.
 - The system shall answer a Slack guest -- somebody let into a channel or two,
-  not into the workspace -- as a contact only in a group open to people outside
-  the pod, never privately, and nobody privately whom Slack would not describe.
+  not into the workspace -- as a contact in a group open to people outside the
+  pod.
+- If a Slack guest writes privately to one of the pod's teammates, then the
+  system shall not answer them as a contact.
+- If Slack does not say whether a person who writes privately is a guest, then
+  the system shall not answer them as a contact.
 - Where a group a teammate is in is open to people outside the pod, the system
   shall answer the workspace's people there as its contacts; where it is not,
   shall tell them privately how to join, as before.
 - The system shall route a person Slack proved to be a member as that member,
-  whatever their Slack profile email says, and shall not take another Slack
-  user carrying that member's email for them.
+  whatever their Slack profile email says.
+- If another Slack user's profile carries a proven member's email, then the
+  system shall not route that user as the member.
 - When a teammate's own app is added to such a workspace, the system shall set
   it to answer anyone, looked after by whoever connected it, unless somebody
   set its contacts already.
 - Where the workspace is held by another organization, the system shall treat
   the pod's teammate there as it treats any bot in a workspace nobody holds.
+- When a member forgets such a contact, the system shall forget the Slack
+  profile it kept for them.
 
 **Contracts:** `surface.webhook.handle_platform`, `agent.surface.create`,
 `contact.delete`

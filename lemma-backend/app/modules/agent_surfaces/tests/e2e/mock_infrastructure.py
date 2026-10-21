@@ -188,6 +188,12 @@ class FakeSlackServer:
         self.unknown_channels: set[str] = set()
         #: The next ``conversations.invite`` fails with this Slack error, once.
         self.invite_error: str | None = None
+        #: ``users.info`` answers for these users with these fields instead of
+        #: the test user's: ``email`` and ``display_name`` go on the profile,
+        #: anything else (``is_restricted``, ``team_id``) on the user.
+        self.user_overrides: dict[str, dict[str, Any]] = {}
+        #: Users ``users.info`` cannot answer for (``user_not_found``).
+        self.unknown_users: set[str] = set()
         #: What ``oauth.v2.access`` answers a code with; ``None`` refuses it.
         self.oauth_access: dict[str, Any] | None = None
 
@@ -286,15 +292,24 @@ class FakeSlackServer:
 
     async def _users_info(self, request: web.Request) -> web.Response:
         params = await self._collect_params(request)
+        user_id = params.get("user")
+        if user_id in self.unknown_users:
+            return web.json_response({"ok": False, "error": "user_not_found"})
+        override = dict(self.user_overrides.get(str(user_id), {}))
+        profile = {
+            "email": override.pop("email", self._test_user_email),
+            "display_name": override.pop("display_name", "Surface Test User"),
+        }
         return web.json_response(
             {
                 "ok": True,
                 "user": {
-                    "id": params.get("user"),
-                    "profile": {
-                        "email": self._test_user_email,
-                        "display_name": "Surface Test User",
-                    },
+                    "id": user_id,
+                    # A full member, as Slack says of everyone who is not a guest.
+                    "is_restricted": False,
+                    "is_ultra_restricted": False,
+                    **override,
+                    "profile": profile,
                 },
             }
         )

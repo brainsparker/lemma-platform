@@ -273,6 +273,9 @@ async def create_surface(
         credential_mode=request.credential_mode,
         account_id=request.account_id,
         ctx=ctx,
+        # Sent or not, which the resolved config cannot tell: "off" is also
+        # what an omitted policy resolves to.
+        contacts_chosen="contacts" in request.config.model_fields_set,
     )
     if request.platform is SurfacePlatform.TELEGRAM:
         await service.sync_telegram_mini_app(surface)

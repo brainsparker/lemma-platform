@@ -279,6 +279,11 @@ class ResolvedSurfaceUser(BaseModel):
     email: str | None = None
     phone: str | None = None
     display_name: str | None = None
+    #: Whether Slack calls them a guest (``is_restricted`` or
+    #: ``is_ultra_restricted``): in the workspace, let in from outside it.
+    #: ``None`` where Slack said neither -- no profile, another platform -- and
+    #: then they are not known *not* to be one.
+    is_guest: bool | None = None
 
 
 class AgentSurfaceStatus(StrEnum):

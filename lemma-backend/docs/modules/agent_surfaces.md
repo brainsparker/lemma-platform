@@ -365,7 +365,8 @@ is answered *for the pod*, in a group the pod has opened to them.
   Slack says the channel is Slack Connect (`is_ext_shared_channel`). There, and
   only there, a sender whose workspace is not the installing one is an outsider
   and answered from what is Public; everyone in the pod's own workspace is a
-  colleague, and one who is not in the pod gets the invite nudge. A Teams group
+  colleague, and one who is not in the pod gets the invite nudge -- unless the
+  pod's organization holds the workspace (below, "Its workspace's people"). A Teams group
   chat (`conversationType: groupChat`) is a group DM too, not a DM. What is said
   in all of them is logged as the channel's lines, a platform thread as a
   thread; a run still reads a Slack or Teams channel's history from the
@@ -452,7 +453,12 @@ is answered *for the pod*, in a group the pod has opened to them.
 - **Who they are**: a contact of the pod, by the handle the platform vouched
   for (`services/sender_handles.group_handle`): their Telegram id, their
   WhatsApp number, or `{team}:{user}` for a Slack sender from the other company
-  in a shared channel. Opened the first time they put the bot to work there.
+  in a shared channel -- or from a workspace the pod's organization holds
+  (`workspace_handle`, their own team, never the installing one). Opened the
+  first time they put the bot to work there, and only by the door, after the
+  sender is resolved: the group log runs before that and only finds a Slack
+  colleague's contact, never opens one, so a member not recognised yet is never
+  made a contact.
 - **Where their turn runs**: in a conversation of their own in that group,
   looked after by the group's owner and naming the contact in its
   `contact_id` column, in the group's channel. The agent module runs every turn in it as that contact: a context
@@ -676,6 +682,31 @@ answered with who does answer.
   already connected Slack is renewed rather than told "already connected"
   (connectors renews any request with a purpose in place). An Enterprise Grid
   org-wide install names no workspace and is refused the same way.
+- **Its workspace's people are the organization's** (`services/slack_workspace_people.py`).
+  One predicate, `held_for_pods` -- Lemma's app holds the workspace for the
+  organization of the bot's pod -- answers for all four places that ask: a
+  teammate's `ContactDoor` and `OutsiderDoor`, onboarding, and a new bot's
+  default. There, a sender whose own team (`sender_team_id`) is the workspace
+  and who resolution says is not in the pod is a `SLACK` contact
+  `{team}:{user}`, vouched for by Slack's signature: answered privately when the
+  bot answers contacts, and in a group that welcomes outsiders. Privately only
+  a full member -- `users.info` must say `is_restricted` and
+  `is_ultra_restricted` are both false (`ResolvedSurfaceUser.is_guest`, read
+  off each message's profile); a guest, or somebody Slack would not describe,
+  is refused as before. Nobody unknown there is asked to sign up by email code
+  (`onboarding_transport.among_the_workspaces_people`, asked where onboarding
+  would open a signup): ordinary routing takes the message. A teammate made in
+  such a workspace answers `anyone`, looked after by whoever connected it if
+  they hold `contact.read`, unless its contacts were set. A Slack "stop" is no
+  opt-out: nothing reaches a Slack handle but an answer. A bot of another
+  organization in that workspace is untouched by all of it. Proof is identity
+  across the workspace: written through to the cache, read again by
+  `identity_resolution_service._slack_proof` when the cache row was cleared,
+  and a Slack user with no proof whose profile email is a proven person's does
+  not resolve to them (`_unless_proven_elsewhere`). Each colleague answered
+  counts toward the organization's `max_contacts` and budget like any contact,
+  and their private chats are their own `CONTACT` channel, which the pod's
+  editors and admins read.
 - **A new binding owes one welcome**, staged by `bind_manager` in the
   transaction that inserts the `slack_manager_installs` row and keyed
   `welcome:<install id>`: "Lemma is in <workspace>" with an "Add" button for

@@ -77,6 +77,9 @@ from app.modules.agent_surfaces.services.ingress_service import (
     AgentSurfaceIngressService,
 )
 from app.modules.agent_surfaces.services.member_reach import MemberReach
+from app.modules.agent_surfaces.services.slack_workspace_people import (
+    WorkspacePeople,
+)
 from app.modules.agent_surfaces.services.channel_deliveries import ChannelDeliveries
 from app.modules.agent_surfaces.services.direct_messages import DirectMessages
 from app.modules.agent_surfaces.services.member_pushes import MemberPushes
@@ -116,6 +119,7 @@ def build_surface_service(uow: SqlAlchemyUnitOfWork) -> AgentSurfaceService:
         account_port=account_adapter,
         auth_config_port=SqlAlchemySurfaceAuthConfigAdapter(uow),
         credential_resolver=SurfaceCredentialResolver(uow=uow),
+        workspace_people=WorkspacePeople(uow),
     )
 
 

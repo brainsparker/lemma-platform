@@ -847,6 +847,7 @@ class FakeSurfaceService:
         credential_mode,
         account_id,
         surface_identity_email=None,
+        contacts_chosen=None,
         ctx=None,
     ):
         from types import SimpleNamespace

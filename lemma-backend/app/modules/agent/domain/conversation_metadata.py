@@ -84,3 +84,23 @@ def origin_metadata(*, source: str, workflow_run_id: UUID | None) -> dict[str, o
     if workflow_run_id is not None:
         stamped[WORKFLOW_RUN_ID_KEY] = str(workflow_run_id)
     return stamped
+
+
+def surface_of(metadata: object) -> str:
+    """Where a conversation started, in the product-metrics vocabulary.
+
+    No ``source`` means a person opened it in the app (or through the API,
+    which writes the same rows and is not told apart here). An external
+    surface names its platform in ``surface_platform``; the label is folded
+    onto a fixed set by ``product_metrics.surface_label``.
+    """
+    if not isinstance(metadata, Mapping):
+        return "app"
+    if metadata.get(WORKFLOW_RUN_ID_KEY) is not None:
+        return "workflow"
+    source = source_of(metadata)
+    if source is None:
+        return "app"
+    if source == "agent_surfaces":
+        return _text(metadata.get("surface_platform")) or "other"
+    return source

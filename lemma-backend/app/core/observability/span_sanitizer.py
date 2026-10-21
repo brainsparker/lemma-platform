@@ -205,6 +205,33 @@ METRIC_ATTRIBUTE_KEYS = frozenset(
         "execution_mode",
         "runtime_profile",
         "cold",
+        # Product counters (``app.core.observability.product_metrics``). Each
+        # value is folded onto a fixed set there before it is recorded:
+        # ``surface`` (app, slack, ... other), ``direction`` (in/out),
+        # ``kind`` (api/job), ``window`` (5m/1h/24h). ``connector`` is a slug
+        # from the global connectors catalog, bounded by the catalog.
+        "surface",
+        "direction",
+        "kind",
+        "connector",
+        "window",
+        # ``lemma.channels.deliveries``: platform (the SurfacePlatform enum),
+        # result (the delivery result enum) and target (member/place). These
+        # were emitted and silently stripped here, collapsing the metric into
+        # one series.
+        "platform",
+        "result",
+        "target",
+        # Spend attribution on ``lemma.llm.tokens`` / ``lemma.llm.cost_usd``
+        # only. Deliberately NOT ``lemma.organization_id``: that key rides on
+        # spans everywhere and allowlisting it would put the tenant on every
+        # metric that happens to carry it. This distinct key is written by the
+        # usage service alone (asserted in test_otel_safety), so the per-org
+        # series exist on two counters and nowhere else. Bounded by the number
+        # of organizations, acceptable at current scale; if that grows, drop
+        # the key from this set and spend falls back to per-model series with
+        # no code change at the call site.
+        "billing.organization_id",
     }
 )
 

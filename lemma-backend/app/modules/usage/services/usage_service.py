@@ -7,7 +7,6 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum
 from uuid import UUID
 
-from opentelemetry import metrics
 
 from app.modules.usage.contracts import AgentRunUsage, ModelPricing
 from app.modules.usage.domain.entities import (
@@ -32,11 +31,8 @@ from app.modules.usage.domain.query_types import (
 from app.modules.usage.infrastructure.repositories import UsageRepository
 from app.modules.usage.services.pricing import UsagePricing
 from app.modules.usage.services.usage_reporting import UsageReporting
+from app.modules.usage.services.usage_metrics import record_usage_metrics
 from app.modules.usage.services.usage_context import UsageExecutionContext
-
-meter = metrics.get_meter(__name__)
-token_counter = meter.create_counter("lemma.llm.tokens")
-cost_counter = meter.create_counter("lemma.llm.cost_usd")
 
 
 class UsageService(UsagePricing, UsageReporting):
@@ -227,7 +223,8 @@ class UsageService(UsagePricing, UsageReporting):
             metadata=metadata,
         )
         saved = await self.usage_repository.create(record)
-        self._record_usage_metrics(
+        record_usage_metrics(
+            organization_id=ctx.organization_id,
             model_name=model_name,
             usage_kind=usage_data.usage_kind,
             input_tokens=usage_data.input_tokens,
@@ -243,26 +240,6 @@ class UsageService(UsagePricing, UsageReporting):
             )
         self._collect_recorded_event(saved)
         return saved
-
-    @staticmethod
-    def _record_usage_metrics(
-        *,
-        model_name: str,
-        usage_kind: str,
-        input_tokens: int,
-        output_tokens: int,
-        cost_usd: float | None,
-    ) -> None:
-        labels = {
-            "gen_ai.request.model": model_name,
-            "operation": usage_kind,
-        }
-        if input_tokens > 0:
-            token_counter.add(input_tokens, {**labels, "gen_ai.token.type": "input"})
-        if output_tokens > 0:
-            token_counter.add(output_tokens, {**labels, "gen_ai.token.type": "output"})
-        if cost_usd:
-            cost_counter.add(cost_usd, labels)
 
     async def record_pydantic_ai_result_usage(
         self,

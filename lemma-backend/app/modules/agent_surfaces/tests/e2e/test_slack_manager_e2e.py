@@ -77,6 +77,7 @@ from app.modules.channels.infrastructure.models import (
     ChannelModel,
     ChannelSourceModel,
 )
+from app.modules.connectors.domain.account import AccountStatus
 from app.modules.connectors.contracts.facts import ConnectorAccountConnected
 from app.modules.connectors.contracts.own_apps import LemmaAppClient
 from app.modules.connectors.infrastructure.models.account import Account
@@ -635,7 +636,8 @@ async def test_removing_lemma_frees_the_workspace_and_retires_its_token(
         status = await session.scalar(
             select(Account.status).where(Account.id == account.id)
         )
-    assert str(status) != "CONNECTED"
+    # Retired so a reconnect can bring it back, not merely "not connected".
+    assert AccountStatus(status) is AccountStatus.REAUTH_REQUIRED
 
 
 # -- handing a channel over -------------------------------------------------------

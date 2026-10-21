@@ -2,7 +2,7 @@
 
 The reset (``truncate_all``) failing on its own ``DELETE`` says nothing about
 the session that left a transaction open; ``describe_lock_holders`` is what the
-``db_manager`` fixture attaches to that error. Against Postgres, because the
+``db_manager`` fixture warns with on each lock timeout it retries. Against Postgres, because the
 answer comes from ``pg_stat_activity`` and ``pg_locks``.
 """
 
@@ -12,7 +12,11 @@ import pytest
 from sqlalchemy import text
 
 from app.modules.test_support.e2e import fixtures as e2e_fixtures
-from app.modules.test_support.lock_holders import describe_lock_holders
+from app.modules.test_support.lock_holders import (
+    DatabaseResetWaited,
+    describe_lock_holders,
+    warn_lock_holders,
+)
 
 pytestmark = [pytest.mark.e2e]
 
@@ -43,6 +47,10 @@ async def test_a_session_left_in_a_transaction_is_named(
         assert "state=idle in transaction" in line
         assert "advisory:ExclusiveLock" in line
         assert "pg_advisory_xact_lock(4242)" in line
+
+        # What a reset that waited says, in the run's warnings summary.
+        with pytest.warns(DatabaseResetWaited, match="the-leak"):
+            warn_lock_holders(described)
         await leak.rollback()
 
     assert "the-leak" not in await describe_lock_holders(e2e_settings.database_url)

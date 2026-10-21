@@ -13,6 +13,8 @@ is one stuck on a call while it holds what it wrote.
 
 from __future__ import annotations
 
+import warnings
+
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import NullPool
@@ -58,4 +60,18 @@ async def describe_lock_holders(database_url: str) -> str:
         f"open_for={row['open_for']} waiting_on={row['waiting_on'] or '-'} "
         f"locks=[{row['locks'] or ''}] last_query={row['query']!r}"
         for row in rows
+    )
+
+
+class DatabaseResetWaited(UserWarning):
+    """A test's database reset waited on a lock another session held."""
+
+
+def warn_lock_holders(described: str) -> None:
+    """Say who the reset waited on, in the run's warnings summary: shown for a
+    test that later passed (and only ran slow) as much as for one that failed."""
+    warnings.warn(
+        f"database reset hit a lock timeout; {described}",
+        DatabaseResetWaited,
+        stacklevel=2,
     )

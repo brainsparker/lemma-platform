@@ -1,0 +1,26 @@
+<style>
+  /* The sentence the chart proves: read first, so it leads in ink, not chrome. */
+  .cv__finding { margin: 0; font-size: 15px; line-height: 1.4; color: var(--w-ink, #1a1a1a); }
+</style>
+<p class="cv__finding" id="cv-finding" hidden></p>
+<script>
+  (function () {
+    var d = lemma.data || {}, c = d.chart || {}, el = document.getElementById("cv-body");
+    if (c.finding) {
+      var f = document.getElementById("cv-finding");
+      f.textContent = c.finding; f.hidden = false;
+      el.parentNode.insertBefore(f, el);
+    }
+    try {
+      var rows = c.rows || [];
+      if (c.shape === "bars") lemma.bars(el, rows, { label: c.x, value: c.y, format: c.format });
+      else if (c.shape === "line") lemma.line(el, rows, { x: c.x, y: c.y, format: c.format });
+      else if (c.shape === "scatter") lemma.scatter(el, rows, { x: c.x, y: c.y, label: c.x });
+      else if (c.shape === "stats") lemma.stats(el, rows.map(function (r) { return Object.assign({ format: c.format }, r); }));
+      else {
+        var keys = Object.keys(rows[0] || {});
+        lemma.table(el, rows, { columns: keys.map(function (k) { return { key: k, label: k }; }) });
+      }
+    } catch (error) { window.canvasFailed(error && error.message || "invalid chart"); }
+  })();
+</script>

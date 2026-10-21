@@ -245,6 +245,7 @@ class RunToolAssembler:
                 await self._surface_toolsets(conversation, surface_platform)
             )
         toolsets.extend(self._outside_toolsets(conversation, audience))
+        toolsets.extend(_call_toolsets(conversation))
         toolsets.extend(
             self._final_answer_toolsets(
                 agent=agent,
@@ -315,6 +316,24 @@ def _add_view_image(
 
     if view_image_toolset not in toolsets:
         toolsets.append(view_image_toolset)
+
+
+def _call_toolsets(
+    conversation: Conversation | None,
+) -> list[AbstractToolset[ConversationContext]]:
+    """The canvas for every run in a live call, and the voice for its coordinator.
+
+    By the conversation's call mark rather than a declared toolset: an agent
+    gets these by being called, whatever it was configured with.
+    """
+    from app.modules.agent.domain.calls import call_mark
+
+    mark = call_mark(conversation.metadata if conversation is not None else None)
+    if mark is None:
+        return []
+    from app.modules.agent.tools.call.pydantic_adapter import call_toolset
+
+    return [cast(AbstractToolset[ConversationContext], call_toolset(mark.role))]
 
 
 def _in_a_group(conversation: Conversation | None) -> bool:

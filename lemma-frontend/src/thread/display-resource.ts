@@ -24,6 +24,11 @@ export interface DisplayResource {
     liveUrl?: string;
     /** When that address stops working (ISO), so an old card stops offering it. */
     liveUntil?: string;
+    /** A call canvas item the server draws from its own template: a widget with
+     *  no source of its own here, served by its tool call. */
+    drawn?: boolean;
+    /** The one line a canvas item says about itself. */
+    caption?: string;
 }
 
 const TYPES = new Set<DisplayResourceType>([
@@ -49,7 +54,29 @@ function str(value: unknown): string | undefined {
 /** Through the one tool-name reading, so a third-party `display_resource`
  *  is not drawn as one of Lemma's resource cards. */
 export function isDisplayResourceTool(toolName: unknown, metadata?: Record<string, unknown> | null): boolean {
-    return toolKey(toolName, metadata) === "display_resource";
+    const key = toolKey(toolName, metadata);
+    return key === "display_resource" || key === "show_on_canvas";
+}
+
+const CANVAS_DRAWN = new Set(["diagram", "chart", "note", "image"]);
+
+/** A `show_on_canvas` call as the resource it shows: a pod file as itself,
+ *  everything else as a widget the server draws. A call the tool refused shows
+ *  nothing. */
+function canvasResource(request: Record<string, unknown>, result: unknown): DisplayResource | null {
+    if (record(result).success === false) return null;
+    const kind = str(request.kind);
+    const name = str(request.title);
+    const caption = str(request.caption);
+    if (kind === "file") {
+        const path = str(request.path);
+        return path ? { type: "FILE", path, name, caption } : null;
+    }
+    if (kind === "widget") {
+        const content = str(request.html);
+        return content ? { type: "WIDGET", name, content, caption, drawn: true } : null;
+    }
+    return kind && CANVAS_DRAWN.has(kind) ? { type: "WIDGET", name, caption, drawn: true } : null;
 }
 
 export function parseDisplayResource(args: unknown, result?: unknown): DisplayResource | null {
@@ -57,6 +84,7 @@ export function parseDisplayResource(args: unknown, result?: unknown): DisplayRe
     /* Some callers nest everything under `request`. */
     const request = Object.keys(record(outer.request)).length > 0 ? record(outer.request) : outer;
 
+    if (str(request.kind)) return canvasResource(request, result);
     const raw = str(request.type)?.toUpperCase();
     if (!raw || !TYPES.has(raw as DisplayResourceType)) return null;
 

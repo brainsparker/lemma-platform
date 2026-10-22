@@ -63,8 +63,7 @@ def _forbidden_nodes() -> tuple[type[exp.Expression], ...]:
 # per-table read check below. The query role can use every pod's schema, so
 # ``table_to_xml('pod_<other>.t', ...)`` read another pod's rows -- another
 # organization's -- and ``query_to_xml('select nspname from pg_namespace', ...)``
-# listed the schemas to aim at. ``ts_stat`` and ``ts_rewrite`` take a query as
-# text too. The others reach the server's files, large objects, other sessions
+# listed the schemas to aim at. ``ts_stat`` takes a query as text too. The others reach the server's files, large objects, other sessions
 # or the app's notification channels, none of which a pod query has any use for.
 _FORBIDDEN_FUNCTIONS = frozenset(
     {
@@ -84,7 +83,6 @@ _FORBIDDEN_FUNCTIONS = frozenset(
         "database_to_xmlschema",
         "database_to_xml_and_xmlschema",
         "ts_stat",
-        "ts_rewrite",
         "pg_read_file",
         "pg_read_binary_file",
         "pg_ls_dir",
@@ -95,6 +93,10 @@ _FORBIDDEN_FUNCTIONS = frozenset(
     }
 )
 _FORBIDDEN_FUNCTION_PREFIXES = ("dblink", "lo_", "pg_advisory")
+# Overloaded: only the forms with this many arguments run a query given as text.
+# ``ts_rewrite(query, select)`` does; ``ts_rewrite(query, target, substitute)``
+# only rewrites a tsquery, and stays allowed.
+_FORBIDDEN_FUNCTION_ARITIES = {"ts_rewrite": 2}
 
 
 # Read-only statement roots permitted as the top-level expression.
@@ -182,8 +184,10 @@ def analyze_query(sql: str) -> QueryAnalysis:
             else function.sql_name()
         )
         lowered = name.lower()
-        if lowered in _FORBIDDEN_FUNCTIONS or lowered.startswith(
-            _FORBIDDEN_FUNCTION_PREFIXES
+        if (
+            lowered in _FORBIDDEN_FUNCTIONS
+            or lowered.startswith(_FORBIDDEN_FUNCTION_PREFIXES)
+            or _FORBIDDEN_FUNCTION_ARITIES.get(lowered) == len(function.expressions)
         ):
             raise DatastoreQueryError(f"{name}() is not allowed in datastore queries")
 

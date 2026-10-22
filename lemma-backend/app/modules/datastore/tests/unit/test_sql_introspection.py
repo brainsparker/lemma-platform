@@ -195,6 +195,8 @@ class TestFunctionsThatReadByStringAreRejected:
             "SELECT xmlelement(name e, name) FROM expenses",
             "SELECT id FROM expenses WHERE note = 'table_to_xml'",
             "SELECT to_tsvector(name) @@ to_tsquery('lunch') FROM expenses",
+            # The three-argument overload rewrites a tsquery; it runs no SQL text.
+            "SELECT ts_rewrite('a & b'::tsquery, 'a'::tsquery, 'c'::tsquery)",
         ],
     )
     def test_ordinary_queries_still_pass(self, query):

@@ -83,16 +83,15 @@ _FORBIDDEN_FUNCTIONS = frozenset(
         "database_to_xmlschema",
         "database_to_xml_and_xmlschema",
         "ts_stat",
-        "pg_read_file",
-        "pg_read_binary_file",
-        "pg_ls_dir",
         "pg_stat_file",
         "pg_notify",
         "pg_cancel_backend",
         "pg_terminate_backend",
     }
 )
-_FORBIDDEN_FUNCTION_PREFIXES = ("dblink", "lo_", "pg_advisory")
+# Whole families, so a member added to one in a later PostgreSQL (or reachable
+# once the role is granted more, e.g. pg_ls_logdir under pg_monitor) is covered.
+_FORBIDDEN_FUNCTION_PREFIXES = ("dblink", "lo_", "pg_advisory", "pg_ls_", "pg_read_")
 # Overloaded: only the forms with this many arguments run a query given as text.
 # ``ts_rewrite(query, select)`` does; ``ts_rewrite(query, target, substitute)``
 # only rewrites a tsquery, and stays allowed.

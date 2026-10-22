@@ -518,11 +518,10 @@
     overflow: hidden;
     background: var(--chrome);
 }
-.attached__thumb img {
+.attached__thumb canvas {
     display: block;
     width: 100%;
     height: 100%;
-    object-fit: cover;
 }
 /* The hairline is drawn over the picture, not under it, or a white
    screenshot on white paper has no edge. */
@@ -534,7 +533,7 @@
     box-shadow: inset 0 0 0 1px var(--line-2);
     pointer-events: none;
 }
-.attached__thumb[data-status="uploading"] img {
+.attached__thumb[data-status="uploading"] canvas {
     opacity: 0.55;
 }
 .attached__thumb[data-status="failed"]::after {

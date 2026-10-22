@@ -447,6 +447,50 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha || github.ref }}
+      # Pulled once for the whole run by `service-images`, which either found
+      # this key or created it -- so a miss here is a broken assumption, not
+      # something to paper over by pulling in every shard again.
+      - name: Restore service images
+        uses: actions/cache/restore@v6
+        with:
+          path: /tmp/e2e-service-images.tar
+          key: ${{ needs.service-images.outputs.key }}
+          fail-on-cache-miss: true
+      # Only the sandbox shards need the real workspace + function-runner
+      # images, and by here they always exist: `sandbox-images` built them once
+      # for the whole run, or found them already cached. Content-addressed by
+      # the same inputs app/modules/test_support/e2e/runtime.py fingerprints
+      # (_SANDBOX_BUILD_INPUTS). `make sandbox-images` tags with
+      # SANDBOX_TAG=dev rather than that fingerprint, so the tags are resolved
+      # and handed to the fixtures explicitly via
+      # WORKSPACE_E2E_IMAGE/FUNCTION_E2E_IMAGE -- the same two-step approach
+      # sandbox-function-benchmark.yml already uses.
+      - name: Restore sandbox images
+        if: matrix.shard.needs_sandbox_images
+        uses: actions/cache/restore@v6
+        with:
+          path: /tmp/e2e-sandbox-images.tar
+          key: ${{ needs.changes.outputs.sandbox_images_key }}
+          # The `sandbox-images` job either found this key or created it, so a
+          # miss here is a broken assumption rather than something to paper
+          # over by building -- which is the duplication this split removed.
+          fail-on-cache-miss: true
+      # Loaded in the background while dependencies and the browser install:
+      # each tar is a 15-50s `docker load` that used to run after them, on the
+      # critical path. `Wait for the images` below joins them before any test.
+      - name: Start loading the images
+        run: |
+          load() {
+            # The status is written whatever happens: under the step's `-e`, a
+            # failing load would otherwise end the subshell before it, and the
+            # wait below would run to the job's timeout.
+            ( if docker load -i "$1" > "/tmp/$2-load.log" 2>&1; then rc=0; else rc=$?; fi
+              echo "$rc" > "/tmp/$2-load.rc" ) &
+          }
+          load /tmp/e2e-service-images.tar service
+          if [ -f /tmp/e2e-sandbox-images.tar ]; then
+            load /tmp/e2e-sandbox-images.tar sandbox
+          fi
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
@@ -481,45 +525,31 @@ jobs:
         if: matrix.shard.catch_all || contains(matrix.shard.args, 'app/modules/apps')
         working-directory: lemma-frontend
         run: npx --no-install playwright install --with-deps chromium
-      # Pulled once for the whole run by `service-images`, which either found
-      # this key or created it -- so a miss here is a broken assumption, not
-      # something to paper over by pulling in every shard again.
-      - name: Restore service images
-        uses: actions/cache/restore@v6
-        with:
-          path: /tmp/e2e-service-images.tar
-          key: ${{ needs.service-images.outputs.key }}
-          fail-on-cache-miss: true
-      - name: Load service images
-        run: docker load -i /tmp/e2e-service-images.tar
       - name: Restore the local embedding model
         uses: actions/cache/restore@v6
         with:
           path: ~/.cache/lemma/fastembed
           key: fastembed-${{ hashFiles('lemma-backend/app/core/config.py') }}
           restore-keys: fastembed-
-      # Only the sandbox shards need the real workspace + function-runner
-      # images, and by here they always exist: `sandbox-images` built them once
-      # for the whole run, or found them already cached. Content-addressed by
-      # the same inputs app/modules/test_support/e2e/runtime.py fingerprints
-      # (_SANDBOX_BUILD_INPUTS). `make sandbox-images` tags with
-      # SANDBOX_TAG=dev rather than that fingerprint, so the tags are resolved
-      # and handed to the fixtures explicitly via
-      # WORKSPACE_E2E_IMAGE/FUNCTION_E2E_IMAGE -- the same two-step approach
-      # sandbox-function-benchmark.yml already uses.
-      - name: Restore sandbox images
-        if: matrix.shard.needs_sandbox_images
-        uses: actions/cache/restore@v6
-        with:
-          path: /tmp/e2e-sandbox-images.tar
-          key: ${{ needs.changes.outputs.sandbox_images_key }}
-          # The `sandbox-images` job either found this key or created it, so a
-          # miss here is a broken assumption rather than something to paper
-          # over by building -- which is the duplication this split removed.
-          fail-on-cache-miss: true
-      - name: Load sandbox images
-        if: matrix.shard.needs_sandbox_images
-        run: docker load -i /tmp/e2e-sandbox-images.tar
+      - name: Wait for the images
+        run: |
+          for name in service sandbox; do
+            [ "$name" = sandbox ] && [ ! -f /tmp/e2e-sandbox-images.tar ] && continue
+            # Bounded: a load that never reports fails here, naming itself,
+            # rather than running the job to its timeout.
+            waited=0
+            while [ ! -f "/tmp/$name-load.rc" ]; do
+              waited=$((waited + 1))
+              if [ "$waited" -gt 600 ]; then
+                cat "/tmp/$name-load.log" || true
+                echo "::error::loading the $name images did not finish in 10 minutes"
+                exit 1
+              fi
+              sleep 1
+            done
+            cat "/tmp/$name-load.log"
+            [ "$(cat "/tmp/$name-load.rc")" = 0 ] || { echo "::error::loading the $name images failed"; exit 1; }
+          done
       - name: Resolve sandbox image tags
         if: matrix.shard.needs_sandbox_images
         run: |

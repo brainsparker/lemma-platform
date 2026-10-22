@@ -92,6 +92,14 @@ class LiveSettings(BaseSettings):
             "``LIVE_AUTHZ_CHECK_SECONDS``."
         ),
     )
+    live_run_access_check_seconds: float = Field(
+        default=5.0,
+        gt=0,
+        description=(
+            "How often a watched agent run's subscription compares its pod's "
+            "grants epoch. Env: ``LIVE_RUN_ACCESS_CHECK_SECONDS``."
+        ),
+    )
     live_authz_recheck_seconds: float = Field(
         default=60.0,
         gt=0,

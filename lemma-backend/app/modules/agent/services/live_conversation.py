@@ -118,8 +118,6 @@ IDLE_CHECK_SECONDS = 15.0
 
 #: A run's own events that end it.
 _ENDINGS = frozenset({"completed", "error", "stopped"})
-#: How often a subscription looks at the pod's grants epoch.
-ACCESS_CHECK_SECONDS = 5.0
 
 
 class _Params(BaseModel):
@@ -251,7 +249,9 @@ async def _check_access(sub: _ConversationSub, access: AccessClock) -> None:
 async def _forward(sub: _ConversationSub, listening: asyncio.Event) -> None:
     """Hand each of the conversation's events to the subscriber, until it goes
     or loses the right to them."""
-    access = AccessClock(live_settings, check_seconds=ACCESS_CHECK_SECONDS)
+    access = AccessClock(
+        live_settings, check_seconds=live_settings.live_run_access_check_seconds
+    )
     access.start(sub.epoch)
     try:
         async with conversation_events(str(sub.conversation_id)) as events:

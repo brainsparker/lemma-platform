@@ -55,6 +55,7 @@ pytestmark = [
 ]
 
 
+@pytest.mark.slow  # prints latencies and asserts no budget: nightly, not a PR gate
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("configure_workspace_api_url")
 async def test_api_function_concurrent_hot_runs_reports_average_execution_time(

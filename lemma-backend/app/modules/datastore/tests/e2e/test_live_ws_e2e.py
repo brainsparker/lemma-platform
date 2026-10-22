@@ -195,8 +195,8 @@ async def test_rls_rows_reach_only_their_owner(
 
     await other.until("changes", "p")
     await owner.until("changes", "p")
-    await owner.quiet(1.0)
-    await other.quiet(1.0)
+    await owner.quiet()
+    await other.quiet()
     assert owner.record_ids("p") == [owners["id"]]
     assert other.record_ids("p") == [editors["id"]]
     [row] = [
@@ -226,7 +226,7 @@ async def test_removed_member_is_unsubscribed(
     ended = await live.until("unsubscribed", "t", timeout=20)
     assert ended["reason"] == "access_revoked"
     await live_pod.create_record("tickets", {"body": "after removal"})
-    assert [f for f in await live.quiet(1.5) if f["type"] == "changes"] == []
+    assert [f for f in await live.quiet() if f["type"] == "changes"] == []
 
 
 async def test_reconnect_with_since_is_gap_free(
@@ -416,7 +416,7 @@ async def test_restricted_table_is_refused_and_never_streamed(
     await live_pod.create_record("vault", {"body": "restricted secret"})
     visible = await live_pod.create_record("tickets", {"body": "open row"})
     await live.until("changes", "all")
-    await live.quiet(1.5)
+    await live.quiet()
     assert live.record_ids("v") == []
     assert live.record_ids("all") == [visible["id"]]
     assert "restricted secret" not in json.dumps(live.frames)
@@ -658,7 +658,7 @@ async def test_table_read_without_record_read_streams_no_rows(
     visible = await live_pod.create_record("tickets", {"body": "open row"})
     while visible["id"] not in live.record_ids("all"):
         await live.until("changes", "all")
-    await live.quiet(1.5)
+    await live.quiet()
     assert live.record_ids("v") == []
     assert live.record_ids("all") == [visible["id"]]
     assert "restricted secret" not in json.dumps(live.frames)

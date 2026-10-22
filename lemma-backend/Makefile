@@ -205,7 +205,7 @@ test-e2e-shard-ci:
 # Real runtime suite only (real model + Docker), serial. Subset of test-e2e-real.
 # The real-model agent suite. Every `real_llm` test lives here and, until this
 # target existed, ran in no lane at all: the PR lane uses the mock, and the
-# weekly protected lane sets E2E_REAL=1 *and* E2E_LLM_MODE=mock, which
+# nightly protected lane sets E2E_REAL=1 *and* E2E_LLM_MODE=mock, which
 # conftest reads first -- so they skipped there too.
 #
 # Reads the key from lemma-backend/.env like every other local target. Runs

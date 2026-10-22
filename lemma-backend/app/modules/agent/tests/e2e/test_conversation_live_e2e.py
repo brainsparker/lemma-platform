@@ -83,7 +83,7 @@ async def test_run_tokens_reach_who_may_read_the_conversation(
         heard = await _publish_until_heard(owner, "v", conversation_id, payload)
         # The SSE stream's own frame, unchanged.
         assert heard == payload
-        await outsider.quiet(1.0)
+        await outsider.quiet()
         assert "Hel" not in str(outsider.frames)
 
         # Run events are not kept: a resumed subscriber refetches.
@@ -193,5 +193,5 @@ async def test_a_member_taken_out_of_the_pod_stops_hearing_their_conversation(
         await publish_conversation_event(
             conversation_id, token_payload(uuid4(), "after", kind="text")
         )
-        await live.quiet(1.0)
+        await live.quiet()
         assert live.events("v", "token") == []

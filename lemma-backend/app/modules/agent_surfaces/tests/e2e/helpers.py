@@ -648,9 +648,13 @@ async def _conversation_by_external_thread(
     # -- a soft, negative-existence read is the intended contract for this
     # helper, not just an unhandled edge case. Only the terminus differs;
     # the poll shape is otherwise identical to `eventually()`.
+    #
+    # Always read at least once: a negative check made after the outcome is
+    # settled passes ``timeout_seconds=0`` and reads exactly once, instead of
+    # waiting out a window for something that cannot arrive.
     params = {"agent_name": agent_name} if agent_name else {}
     deadline = asyncio.get_running_loop().time() + timeout_seconds
-    while asyncio.get_running_loop().time() < deadline:
+    while True:
         response = await client.get(
             f"/pods/{pod_id}/conversations",
             params=params,
@@ -660,8 +664,9 @@ async def _conversation_by_external_thread(
             metadata = item.get("metadata") or {}
             if metadata.get("external_thread_id") == external_thread_id:
                 return item
+        if asyncio.get_running_loop().time() >= deadline:
+            return None
         await asyncio.sleep(0.1)
-    return None
 
 
 async def _messages_for_conversation(

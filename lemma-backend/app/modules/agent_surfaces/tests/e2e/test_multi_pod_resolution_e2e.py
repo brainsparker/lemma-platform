@@ -277,7 +277,7 @@ async def test_shared_bot_multi_org_routing_is_deterministic_and_sticky(
         authenticated_client,
         pod_id=other_pod,
         external_thread_id="900900900",
-        timeout_seconds=1.0,
+        timeout_seconds=0,  # the message is already routed, to ``here``
     )
     assert there is None
 

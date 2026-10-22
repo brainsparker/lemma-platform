@@ -763,6 +763,7 @@ async def test_function_record_write_requires_record_write_not_table_update(
     assert output["read_title"] == "granted", output
 
 
+@pytest.mark.slow  # prints latencies and asserts no budget: nightly, not a PR gate
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("configure_workspace_api_url")
 async def test_api_function_datastore_read_write_latency_sequence(

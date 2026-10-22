@@ -33,7 +33,16 @@ from app.modules.test_support.e2e import fixtures as e2e_fixtures
 from app.modules.test_support.e2e.waiters import eventually
 from app.modules.test_support.e2e.worker_process import production_worker_process
 
-pytestmark = [pytest.mark.e2e, pytest.mark.worker, pytest.mark.drives_work]
+# A real worker process's whole life -- boot, periodic ticks at their real
+# cadence, a lease reaped, metrics exported, a SIGTERM drain -- is ~20s on a CI
+# runner and cannot be shortened without testing something else. Nightly; every
+# PR still boots the same worker through the session `worker` fixture.
+pytestmark = [
+    pytest.mark.e2e,
+    pytest.mark.worker,
+    pytest.mark.drives_work,
+    pytest.mark.slow,
+]
 
 postgres_container = e2e_fixtures.postgres_container
 supertokens_container = e2e_fixtures.supertokens_container

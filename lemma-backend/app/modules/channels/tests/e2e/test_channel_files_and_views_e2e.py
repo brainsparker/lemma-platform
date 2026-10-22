@@ -77,6 +77,10 @@ async def test_a_line_shares_only_a_file_its_writer_may_read(pod: Pod):
         assert refused.status_code == 422, (path, refused.text)
 
 
+# Two reads must see the same delivery: the session worker is held, or it can
+# send it between them and the second read sees it SKIPPED where the first saw
+# it PENDING.
+@pytest.mark.drives_work
 async def test_a_line_says_where_it_went_to_everyone_who_reads_it(
     pod: Pod, db_session: AsyncSession
 ):

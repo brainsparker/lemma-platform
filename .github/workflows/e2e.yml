@@ -535,7 +535,18 @@ jobs:
         run: |
           for name in service sandbox; do
             [ "$name" = sandbox ] && [ ! -f /tmp/e2e-sandbox-images.tar ] && continue
-            while [ ! -f "/tmp/$name-load.rc" ]; do sleep 1; done
+            # Bounded: a load that never reports fails here, naming itself,
+            # rather than running the job to its timeout.
+            waited=0
+            while [ ! -f "/tmp/$name-load.rc" ]; do
+              waited=$((waited + 1))
+              if [ "$waited" -gt 600 ]; then
+                cat "/tmp/$name-load.log" || true
+                echo "::error::loading the $name images did not finish in 10 minutes"
+                exit 1
+              fi
+              sleep 1
+            done
             cat "/tmp/$name-load.log"
             [ "$(cat "/tmp/$name-load.rc")" = 0 ] || { echo "::error::loading the $name images failed"; exit 1; }
           done

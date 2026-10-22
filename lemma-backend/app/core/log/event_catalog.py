@@ -1101,6 +1101,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'work.config.entry_ignored': EventSpec('warning', frozenset({'entry', 'setting'})),
     'work.config.unparseable': EventSpec('warning', frozenset({'setting'})),
     'work.dispatcher.released': EventSpec('info', frozenset({'released', 'work_class'})),
+    'work.gauges.sampler_failed.degraded': EventSpec('warning', frozenset({'error_type', 'sampler'})),
     'work.heartbeat.failed': EventSpec('warning', frozenset({'item_id', 'kind'})),
     'work.item.coalesced': EventSpec('info', frozenset({'dedup_key', 'item_id', 'kind'})),
     'work.item.dead': EventSpec('warning', frozenset({'attempts', 'error_class', 'item_id', 'kind', 'lease_losses', 'ns'})),

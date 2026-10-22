@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -19,6 +19,10 @@ from app.modules.schedule.repositories.schedule_run_repository import (
     ScheduleRunRepository,
 )
 from app.core.log.log import get_logger
+from app.core.observability.product_metrics import (
+    record_schedule_run,
+    record_schedule_run_duration,
+)
 from app.modules.schedule.services.paused_notice import stage_paused_notice
 
 logger = get_logger(__name__)
@@ -80,6 +84,16 @@ class ScheduleRunOutcomeService:
             ]
         )
 
+        started_at = getattr(schedule_run, "started_at", None)
+        if started_at is not None:
+            finished = getattr(schedule_run, "completed_at", None) or datetime.now(
+                timezone.utc
+            )
+            record_schedule_run_duration(
+                schedule.schedule_type,
+                status.value,
+                (finished - started_at).total_seconds(),
+            )
         await self._apply_breaker(schedule)
         return True
 
@@ -99,7 +113,7 @@ class ScheduleRunOutcomeService:
         failure, so the breaker is left alone. Returns whether a row was
         written; a redelivered event writes nothing the second time.
         """
-        return await self.run_repository.insert_filtered(
+        written = await self.run_repository.insert_filtered(
             schedule_id=schedule.id,
             user_id=user_id,
             source_event_id=source_event_id,
@@ -107,6 +121,9 @@ class ScheduleRunOutcomeService:
             metadata=metadata,
             llm_output=llm_output,
         )
+        if written:
+            record_schedule_run(schedule.schedule_type, "filtered")
+        return written
 
     async def record_pre_dispatch_failure(
         self,
@@ -155,6 +172,7 @@ class ScheduleRunOutcomeService:
             return False
 
         await self.run_repository.dead_letter(run.id, error_type=error_type)
+        record_schedule_run(schedule.schedule_type, "failed")
         await self.recompute_breaker(schedule.id)
         return True
 
@@ -163,6 +181,7 @@ class ScheduleRunOutcomeService:
         locked = await self.schedule_repository.get_for_update(schedule.id)
         if locked is None:
             raise LookupError(f"Schedule {schedule.id} disappeared during dispatch")
+        record_schedule_run(schedule.schedule_type, "failed")
         await self._apply_breaker(locked)
 
     async def recompute_breaker(self, schedule_id: UUID) -> None:
@@ -222,6 +241,7 @@ class ScheduleRunOutcomeService:
             consecutive_failures=count,
             work=self.work,
         )
+        record_schedule_run(schedule.schedule_type, "breaker_tripped")
         logger.warning(
             "schedule.breaker.tripped",
             schedule_id=str(schedule.id),

@@ -114,6 +114,14 @@ class RunOutcome:
     terminal_seen: bool = False
 
 
+_STATUS_OF_TERMINAL_EVENT = {
+    AgentEventType.ERROR: ConversationStatus.FAILED,
+    AgentEventType.REJECTED: ConversationStatus.FAILED,
+    AgentEventType.WAITING: ConversationStatus.WAITING,
+    AgentEventType.STOPPED: ConversationStatus.STOPPED,
+}
+
+
 class RunEventPump:
     """Applies harness events to persistence and the realtime channel."""
 
@@ -138,6 +146,21 @@ class RunEventPump:
         outcome: RunOutcome,
     ) -> bool:
         """True when this event was terminal and the run has been finalized."""
+        terminal = await self._apply(event=event, run=run, outcome=outcome)
+        # These finalize without a final status of their own, and the run
+        # metrics read it: unset, every one of them was counted completed. Set
+        # after finishing, so what was finalized is unchanged.
+        if terminal and event.type in _STATUS_OF_TERMINAL_EVENT:
+            outcome.final_status = _STATUS_OF_TERMINAL_EVENT[event.type]
+        return terminal
+
+    async def _apply(
+        self,
+        *,
+        event: AgentEvent,
+        run: RunIdentity,
+        outcome: RunOutcome,
+    ) -> bool:
         if event.type != AgentEventType.TOKEN:
             # Anything that is not a token ends the text stream that was being
             # classified, so whatever the splitter was holding back is now
@@ -400,6 +423,7 @@ async def drive_harness(
     observer: Any,
     conversation: Any,
     ctx: Any,
+    on_first_token: Callable[[float], None] | None = None,
 ) -> None:
     """Pump a harness's events; on a shutdown yield, close the harness too.
 
@@ -408,7 +432,7 @@ async def drive_harness(
     """
     try:
         await pump.drive(
-            observe_first_output(events),
+            observe_first_output(events, on_first_token=on_first_token),
             run=run,
             outcome=outcome,
             observer=observer,

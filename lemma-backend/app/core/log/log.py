@@ -10,6 +10,7 @@ import sys
 from typing import Any, Protocol
 from uuid import UUID
 
+from app.core.log.cloud_trace import cloud_trace_fields
 from opentelemetry import trace
 import structlog
 
@@ -232,6 +233,7 @@ def _add_trace_context(_: Any, __: str, event_dict: dict[str, Any]) -> dict[str,
     if span_context and span_context.is_valid:
         event_dict.setdefault("trace_id", format(span_context.trace_id, "032x"))
         event_dict.setdefault("span_id", format(span_context.span_id, "016x"))
+        event_dict.update(cloud_trace_fields(span_context))
     return event_dict
 
 

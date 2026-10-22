@@ -15,6 +15,7 @@ from app.core.authorization.pod_liveness import (
     _refuse_a_deleted_pod,
 )
 from app.core.authorization.context import Context, Person, ResourceRef, ResourceType
+from app.core.authorization.permissions import Permissions
 from app.core.authorization.current import set_current_context
 from app.core.authorization.delegation import (
     DESTRUCTIVE_ACTIONS,
@@ -285,10 +286,9 @@ def assert_pod_membership(ctx: Context, action_label: str = "browse this pod") -
         return
     if any(ref.type == "POD_MEMBER" for ref in ctx.principal_refs):
         return
-    # Org owners hold authority over every pod in their organization without
-    # necessarily having a membership row — the same shortcut
-    # Authorizer._is_org_owner_of_pod applies.
-    if "ORG_OWNER" in ctx.role_names:
+    # Org owners hold every pod's admin permissions through their org role,
+    # without a membership row; the authorizer counts them as members too.
+    if ctx.has_permission(Permissions.POD_READ):
         return
     from app.core.domain.errors import DomainError
 

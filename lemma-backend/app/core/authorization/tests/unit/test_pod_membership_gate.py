@@ -24,6 +24,7 @@ from app.core.authorization.context import (
     WorkloadKind,
 )
 from app.core.authorization.dependencies import require_pod_membership
+from app.core.authorization.permissions import ORG_OWNER_PERMISSIONS
 from app.core.domain.errors import DomainError
 
 POD_ID = uuid4()
@@ -34,6 +35,7 @@ def _ctx(
     actor: Actor | None = None,
     is_pod_member: bool = False,
     role_names: frozenset[str] = frozenset(),
+    permission_ids: frozenset[str] = frozenset(),
     is_superuser: bool = False,
 ) -> Context:
     principal_refs = set()
@@ -46,6 +48,7 @@ def _ctx(
         user_id=user_id,
         pod_id=POD_ID,
         role_names=frozenset(role_names),
+        permission_ids=frozenset(permission_ids),
         principal_refs=frozenset(principal_refs),
         is_superuser=is_superuser,
         authorizer=object(),
@@ -112,9 +115,16 @@ async def test_allows_pod_member():
 
 @pytest.mark.asyncio
 async def test_allows_org_owner_without_membership_row():
-    # Org owners hold authority over every pod in their org without necessarily
-    # having a pod_member row; gating them would break the pods they own.
-    await _run(_ctx(role_names=frozenset({"ORG_OWNER"})))
+    # Org owners hold every pod's admin permissions through their org role,
+    # without a pod_member row; gating them would break the pods they own.
+    await _run(_ctx(permission_ids=ORG_OWNER_PERMISSIONS))
+
+
+@pytest.mark.asyncio
+async def test_an_org_owner_role_name_alone_is_not_membership():
+    """It is the permissions that count, never the name."""
+    with pytest.raises(DomainError):
+        await _run(_ctx(role_names=frozenset({"ORG_OWNER"})))
 
 
 @pytest.mark.asyncio

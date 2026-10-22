@@ -268,3 +268,147 @@ async def test_H8_a_named_agent_cannot_hold_a_live_socket(backend_server, world)
     )
 
     assert outcome == CLOSE_FORBIDDEN
+
+
+# --- Checkpoint B: membership first, org owners as admins, workloads per pod ---
+
+
+async def _member_of(
+    authenticated_client: AsyncClient,
+    async_client: AsyncClient,
+    *,
+    org_id: str,
+    pod_id: str,
+    role: str,
+) -> tuple[dict, dict]:
+    from app.modules.test_support.e2e_authz import (
+        add_pod_member,
+        invite_org_member,
+        signup_user,
+    )
+
+    user = await signup_user(async_client, "conformance-member")
+    org_member = await invite_org_member(
+        authenticated_client, async_client, org_id=org_id, user=user
+    )
+    pod_member = await add_pod_member(
+        authenticated_client,
+        pod_id=pod_id,
+        organization_member_id=org_member["id"],
+        role=role,
+    )
+    return user, pod_member
+
+
+def _bearer(user: dict) -> dict[str, str]:
+    return {"Authorization": f"Bearer {user['token']}"}
+
+
+async def _table(client: AsyncClient, pod_id: str, headers, **extra) -> str:
+    name = f"t_{uuid4().hex[:8]}"
+    response = await client.post(
+        f"/pods/{pod_id}/datastore/tables",
+        headers=headers,
+        json={
+            "name": name,
+            "enable_rls": False,
+            "columns": [{"name": "note", "type": "TEXT"}],
+            **extra,
+        },
+    )
+    assert response.status_code == status.HTTP_201_CREATED, response.text
+    return name
+
+
+async def test_H12_a_member_removed_from_the_pod_loses_what_they_created(
+    authenticated_client: AsyncClient, async_client: AsyncClient, world
+):
+    """H12: the owner branch had no membership check, so a removed member kept
+    reading, changing and deleting what they had made."""
+    user, pod_member = await _member_of(
+        authenticated_client,
+        async_client,
+        org_id=world["org_id"],
+        pod_id=world["pod_id"],
+        role="POD_EDITOR",
+    )
+    table = await _table(async_client, world["pod_id"], _bearer(user))
+    removed = await authenticated_client.delete(
+        f"/pods/{world['pod_id']}/members/{pod_member['pod_member_id']}"
+    )
+    assert removed.status_code in (200, 204), removed.text
+
+    path = f"/pods/{world['pod_id']}/datastore/tables/{table}"
+    read = await async_client.get(path, headers=_bearer(user))
+    delete = await async_client.delete(path, headers=_bearer(user))
+    still_there = await authenticated_client.get(path)
+
+    assert read.status_code in (403, 404), read.text
+    assert delete.status_code in (403, 404), delete.text
+    assert still_there.status_code == status.HTTP_200_OK, still_there.text
+
+
+async def test_M4_an_org_owner_does_not_read_a_members_personal_table(
+    authenticated_client: AsyncClient, async_client: AsyncClient, world
+):
+    """M4: an org-owner shortcut ran before the owner and visibility checks."""
+    user, _ = await _member_of(
+        authenticated_client,
+        async_client,
+        org_id=world["org_id"],
+        pod_id=world["pod_id"],
+        role="POD_EDITOR",
+    )
+    table = await _table(
+        async_client, world["pod_id"], _bearer(user), visibility="PERSONAL"
+    )
+
+    as_owner = await authenticated_client.get(
+        f"/pods/{world['pod_id']}/datastore/tables/{table}"
+    )
+
+    assert as_owner.status_code in (403, 404), as_owner.text
+
+
+async def test_H10_a_check_without_a_resource_needs_the_workloads_own_grant(
+    world, db_session, fixed_test_user
+):
+    """H10: a named agent was decided on its person's permissions alone when a
+    check named no resource -- every saved site login, with no grant."""
+    from app.core.authorization.permissions import Permissions
+    from app.core.authorization.service import AuthorizationDataService
+
+    service = AuthorizationDataService(db_session)
+    kwargs = {
+        "user_id": UUID(fixed_test_user["id"]),
+        "principal_type": "AGENT",
+        "pod_id": UUID(world["pod_id"]),
+    }
+    agent = await service.build_delegated_workload_context(
+        principal_id=uuid7(), **kwargs
+    )
+    assistant = await service.build_delegated_workload_context(
+        principal_id=DEFAULT_POD_AGENT_ID, is_default_pod_agent=True, **kwargs
+    )
+
+    assert not await agent.can(Permissions.WEB_LOGIN_USE)
+    assert await assistant.can(Permissions.WEB_LOGIN_USE)
+
+
+async def test_M3_a_workload_is_refused_a_deleted_pod(
+    authenticated_client: AsyncClient,
+    async_client: AsyncClient,
+    fixed_test_org,
+    fixed_test_user,
+):
+    """M3: only a person's context carried the deleted flag."""
+    pod_id = await _pod(authenticated_client, fixed_test_org["id"])
+    headers = await _workload_headers(
+        user_id=fixed_test_user["id"], pod_id=pod_id, default_agent=False
+    )
+    deleted = await authenticated_client.delete(f"/pods/{pod_id}")
+    assert deleted.status_code in (200, 202, 204), deleted.text
+
+    response = await async_client.get(f"/pods/{pod_id}/agents", headers=headers)
+
+    assert response.status_code in (403, 404), response.text

@@ -230,7 +230,7 @@ async def _invoker_ceiling_decision(
     decision is reached, and this one runs *inside* another decision, half-way
     through the caller's own transaction.
     """
-    invoker = _invoking_user_context(authorizer, ctx)
+    invoker = invoking_person_context(authorizer, ctx)
     if invoker is None:
         return None
     if (await authorizer.authorize(invoker, permission_id, resource)).allowed:
@@ -244,7 +244,7 @@ async def _invoker_ceiling_decision(
     )
 
 
-def _invoking_user_context(authorizer: "Authorizer", ctx: Context) -> Context | None:
+def invoking_person_context(authorizer: "Authorizer", ctx: Context) -> Context | None:
     """``ctx`` as the invoking person alone, or ``None`` for a headless run.
 
     Built from the person's own half of the delegated context — the

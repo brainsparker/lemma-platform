@@ -23,7 +23,7 @@ from app.core.authorization.context import (
     Workload,
     WorkloadKind,
 )
-from app.core.authorization.workload_authority import _invoking_user_context
+from app.core.authorization.workload_authority import invoking_person_context
 
 POD_ID = uuid4()
 ORG_ID = uuid4()
@@ -63,11 +63,11 @@ def test_a_run_with_no_invoker_has_no_ceiling():
     # context here would deny every schedule and webhook run instead.
     ctx = _delegated_ctx(user_id=None)
 
-    assert _invoking_user_context(object(), ctx) is None
+    assert invoking_person_context(object(), ctx) is None
 
 
 def test_the_ceiling_is_the_person_and_not_the_workload():
-    invoker = _invoking_user_context(object(), _delegated_ctx())
+    invoker = invoking_person_context(object(), _delegated_ctx())
 
     assert invoker is not None
     assert invoker.principal_refs == INVOKER_REFS
@@ -81,7 +81,7 @@ def test_the_ceiling_is_the_person_and_not_the_workload():
 def test_the_ceiling_cannot_re_enter_the_delegated_path():
     # Authorizing the mirror runs the ordinary USER evaluation. If it looked
     # like a workload it would recurse into the very check that built it.
-    invoker = _invoking_user_context(object(), _delegated_ctx())
+    invoker = invoking_person_context(object(), _delegated_ctx())
 
     assert invoker is not None
     assert invoker.actor == Person(user_id=USER_ID)

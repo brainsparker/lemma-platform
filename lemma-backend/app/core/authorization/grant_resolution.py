@@ -321,7 +321,10 @@ class GrantResolutionMixin:
 
     @staticmethod
     def _normalize_visibility(value: str | None) -> ResourceVisibility:
-        # An unreadable value falls back to POD here (rather than raising) so a
-        # malformed row degrades to pod-scoped — the safe direction — instead of
-        # 500ing the whole request.
-        return normalize_resource_visibility(value) or ResourceVisibility.POD
+        # An unreadable value degrades rather than 500ing the request -- to
+        # PERSONAL, its owner alone. POD was called the safe direction, but it is
+        # the wide one: every member of the pod could read a row whose real
+        # level nobody could tell. A missing value is still POD, the default.
+        if value is None:
+            return ResourceVisibility.POD
+        return normalize_resource_visibility(value) or ResourceVisibility.PERSONAL

@@ -456,6 +456,12 @@ ORG_EDITOR_PERMISSIONS: frozenset[str] = frozenset(
 )
 ORG_OWNER_PERMISSIONS: frozenset[str] = frozenset(
     set(ORG_EDITOR_PERMISSIONS)
+    # An org owner administers every pod in the organization. Held as a role's
+    # permissions, like anyone else's, so the per-request check and the SQL
+    # listings see the same thing -- it used to be a shortcut in the authorizer
+    # that the listings never knew about, and that also overrode a member's
+    # PERSONAL resources. Personal stays personal; see break-glass.
+    | set(POD_ADMIN_PERMISSIONS)
     | {
         Permissions.ORG_BILLING_MANAGE,
     }

@@ -27,6 +27,7 @@ from app.core.authorization.grants import (
 )
 from app.core.authorization.permissions import (
     ORG_EDITOR_PERMISSIONS,
+    ORG_OWNER_PERMISSIONS,
     PERMISSION_DEFINITIONS,
     POD_ADMIN_PERMISSIONS,
     POD_EDITOR_PERMISSIONS,
@@ -41,6 +42,10 @@ from app.core.authorization.authorizer import Authorizer
 from app.core.domain.errors import BadRequestError
 from app.core.registry.assembly import configure_resource_names
 from app.core.registry.installed import OSS_MODULES
+
+
+#: A pod member's own principal: what a real context for a member carries.
+_MEMBER = frozenset({PrincipalRef("POD_MEMBER", uuid4())})
 
 
 @pytest.fixture(autouse=True)
@@ -236,6 +241,7 @@ async def test_context_caches_authorization_decisions():
     )
     user_id = uuid4()
     ctx = Context(
+        principal_refs=_MEMBER,
         actor=Person(user_id=user_id),
         actor_id=str(uuid4()),
         user_id=user_id,
@@ -426,6 +432,7 @@ async def test_resource_grant_can_satisfy_specific_resource_without_broad_permis
     )
     function_id = uuid4()
     ctx = Context(
+        principal_refs=_MEMBER,
         actor=Workload(kind=WorkloadKind.FUNCTION, workload_id=function_id),
         actor_id=f"function:{function_id}",
         user_id=uuid4(),
@@ -478,6 +485,7 @@ async def test_named_delegated_workload_needs_its_grant_and_its_invoker(
     )
     invoker_id = uuid4()
     ctx = Context(
+        invoker_principal_refs=_MEMBER,
         actor=_named_workload(workload_principal_refs, invoker_id),
         actor_id=f"{workload_type.lower()}:{next(iter(workload_principal_refs)).id}",
         user_id=invoker_id,
@@ -527,6 +535,7 @@ async def test_named_delegated_workload_cannot_exceed_its_invoker(
     )
     invoker_id = uuid4()
     ctx = Context(
+        invoker_principal_refs=_MEMBER,
         actor=_named_workload(workload_principal_refs, invoker_id),
         actor_id=f"{workload_type.lower()}:{next(iter(workload_principal_refs)).id}",
         user_id=invoker_id,
@@ -576,6 +585,7 @@ async def test_named_delegated_workload_requires_workload_grant_for_pod_visible_
     )
     invoker_id = uuid4()
     ctx = Context(
+        invoker_principal_refs=_MEMBER,
         actor=_named_workload(workload_principal_refs, invoker_id),
         actor_id=f"function:{next(iter(workload_principal_refs)).id}",
         user_id=invoker_id,
@@ -723,6 +733,7 @@ async def test_delegation_scope_is_implication_expanded(monkeypatch):
     def make_ctx():
         invoker_id = uuid4()
         return Context(
+            invoker_principal_refs=_MEMBER,
             actor=_named_workload(
                 workload_principal_refs,
                 invoker_id,
@@ -786,6 +797,7 @@ async def test_personal_resource_owned_by_other_denied_despite_workload_grant(
     )
     invoker_id = uuid4()
     ctx = Context(
+        invoker_principal_refs=_MEMBER,
         actor=_named_workload(workload_principal_refs, invoker_id),
         actor_id=f"agent:{next(iter(workload_principal_refs)).id}",
         user_id=invoker_id,
@@ -824,6 +836,7 @@ async def test_default_pod_agent_delegation_runs_as_user_without_workload_grants
     )
     user_id = uuid4()
     ctx = Context(
+        principal_refs=_MEMBER,
         actor=Assistant(user_id=user_id),
         actor_id=f"agent:{uuid4()}",
         user_id=user_id,
@@ -866,6 +879,7 @@ def _default_pod_agent_ctx(
         actor_id=f"agent:{uuid4()}",
         user_id=user_id,
         pod_id=pod_id,
+        principal_refs=_MEMBER,
         role_names=role_names,
         permission_ids=frozenset(permission_ids),
         authorizer=authorizer,
@@ -881,45 +895,21 @@ def test_is_pod_scoped_permission_distinguishes_pod_and_org_actions():
     assert not Authorizer._is_pod_scoped_permission(Permissions.POD_CREATE)
 
 
-def test_org_owner_shortcut_covers_pod_scoped_child_resources():
-    pod_id = uuid4()
-    ctx = _default_pod_agent_ctx(
-        pod_id=pod_id,
-        permission_ids=frozenset(),  # authority comes ONLY from org-owner shortcut
-        role_names=frozenset({"ORG_OWNER"}),
-    )
-    # The pod entity itself (the original shortcut case).
-    assert Authorizer._is_org_owner_of_pod(
-        ctx, Permissions.APP_UPDATE, ResourceRef.pod(pod_id)
-    )
-    # A pod-scoped CHILD resource (an app) — the previously-missing case that broke
-    # the bundle upload after app.create.
-    app_ref = ResourceRef.app(pod_id, uuid4())
-    assert Authorizer._is_org_owner_of_pod(ctx, Permissions.APP_UPDATE, app_ref)
-    # Org-scoped actions are NOT covered by the pod-owner shortcut.
-    assert not Authorizer._is_org_owner_of_pod(
-        ctx, Permissions.ORG_UPDATE, ResourceRef.pod(pod_id)
-    )
-    # A different pod is not covered.
-    assert not Authorizer._is_org_owner_of_pod(
-        ctx, Permissions.APP_UPDATE, ResourceRef.app(uuid4(), uuid4())
-    )
-    # Non-org-owners get nothing from this shortcut.
-    non_owner = _default_pod_agent_ctx(pod_id=pod_id, permission_ids=frozenset())
-    assert not Authorizer._is_org_owner_of_pod(
-        non_owner, Permissions.APP_UPDATE, app_ref
-    )
+def test_an_org_owner_holds_every_pod_admin_permission_through_their_role():
+    """Org owners administer every pod. That used to be a shortcut in the
+    authorizer which the SQL listings never knew about; it is the role's own
+    permission set now, so both read it the same way."""
+    assert POD_ADMIN_PERMISSIONS <= ORG_OWNER_PERMISSIONS
+    assert not POD_ADMIN_PERMISSIONS <= ORG_EDITOR_PERMISSIONS
 
 
 @pytest.mark.asyncio
-async def test_default_pod_agent_org_owner_can_update_app_via_shortcut():
-    """Regression: org owner's default pod agent deploys an app it owns no explicit
-    pod-role permission for — app.update on the APP resource resolves through the
-    org-owner-of-pod shortcut instead of 403-ing after app.create."""
+async def test_an_org_owners_assistant_updates_an_app_it_holds_no_pod_role_for():
+    """Regression: the org owner's default pod agent deploys an app after
+    app.create. Its authority comes from the org owner role's pod permissions,
+    which the assistant mirrors."""
     authorizer = Authorizer(session=None)  # type: ignore[arg-type]
     pod_id = uuid4()
-    # visibility is set so authorize() skips DB hydration; owner is someone else so
-    # the plain owner shortcut does not fire.
     app_ref = ResourceRef(
         resource_type=ResourceType.APP,
         resource_id=uuid4(),
@@ -929,7 +919,7 @@ async def test_default_pod_agent_org_owner_can_update_app_via_shortcut():
     )
     ctx = _default_pod_agent_ctx(
         pod_id=pod_id,
-        permission_ids=frozenset(),  # no explicit app.update
+        permission_ids=ORG_OWNER_PERMISSIONS,
         role_names=frozenset({"ORG_OWNER"}),
         authorizer=authorizer,
     )
@@ -937,7 +927,28 @@ async def test_default_pod_agent_org_owner_can_update_app_via_shortcut():
     decision = await authorizer.authorize(ctx, Permissions.APP_UPDATE, app_ref)
 
     assert decision.allowed
-    assert decision.reason_code == "ORG_OWNER_POD"
+    assert decision.reason_code == "POD_VISIBLE"
+
+
+@pytest.mark.asyncio
+async def test_an_org_owner_does_not_read_a_members_personal_resource():
+    """Personal stays personal: the old shortcut ran before the owner and
+    visibility checks and let an org owner read, change and delete anyone's."""
+    authorizer = Authorizer(session=None)  # type: ignore[arg-type]
+    pod_id = uuid4()
+    table = ResourceRef.hydrated_table(
+        pod_id, uuid4(), visibility="PERSONAL", owner_user_id=uuid4()
+    )
+    ctx = _default_pod_agent_ctx(
+        pod_id=pod_id,
+        permission_ids=ORG_OWNER_PERMISSIONS,
+        role_names=frozenset({"ORG_OWNER"}),
+        authorizer=authorizer,
+    )
+
+    decision = await authorizer.authorize(ctx, Permissions.DATASTORE_TABLE_READ, table)
+
+    assert not decision.allowed
 
 
 @pytest.mark.asyncio
@@ -1024,6 +1035,7 @@ async def test_resource_grant_does_not_bypass_someone_else_personal_resource(
     )
     function_id = uuid4()
     ctx = Context(
+        principal_refs=_MEMBER,
         actor=Workload(kind=WorkloadKind.FUNCTION, workload_id=function_id),
         actor_id=f"function:{function_id}",
         user_id=uuid4(),
@@ -1151,6 +1163,7 @@ async def test_named_workload_destructive_explicit_grant_is_standing_authority(
     )
     invoker_id = uuid4()
     ctx = Context(
+        invoker_principal_refs=_MEMBER,
         actor=_named_workload(workload_principal_refs, invoker_id),
         actor_id=f"agent:{next(iter(workload_principal_refs)).id}",
         user_id=invoker_id,
@@ -1199,6 +1212,7 @@ async def test_named_workload_destructive_without_grant_needs_session_approval(
     )
     invoker_id = uuid4()
     ctx = Context(
+        invoker_principal_refs=_MEMBER,
         actor=_named_workload(
             workload_principal_refs,
             invoker_id,
@@ -1250,6 +1264,7 @@ async def test_a_session_approval_does_not_lift_the_invoker_ceiling(monkeypatch)
     )
     invoker_id = uuid4()
     ctx = Context(
+        invoker_principal_refs=_MEMBER,
         actor=_named_workload(
             workload_principal_refs,
             invoker_id,
@@ -1290,6 +1305,7 @@ async def test_user_actor_destructive_action_is_ungated(monkeypatch):
     )
     user_id = uuid4()
     ctx = Context(
+        principal_refs=_MEMBER,
         actor=Person(user_id=user_id),
         actor_id=str(uuid4()),
         user_id=user_id,

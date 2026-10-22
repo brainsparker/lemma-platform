@@ -153,8 +153,8 @@ class ResourceHydrationMixin:
             resource_type=resource.resource_type,
             resource_id=resource.resource_id,
             organization_id=resource.organization_id,
-            pod_id=resource.pod_id or row[0],
-            owner_user_id=resource.owner_user_id or row[1],
+            pod_id=row[0] or resource.pod_id,
+            owner_user_id=row[1],
             visibility=visibility,
         )
 
@@ -182,10 +182,10 @@ class ResourceHydrationMixin:
             resource_type=resource.resource_type,
             resource_id=resource.resource_id,
             organization_id=resource.organization_id,
-            pod_id=resource.pod_id or row[0],
-            owner_user_id=resource.owner_user_id or row[1],
-            visibility=resource.visibility or self._normalize_visibility(row[2]),
-            path=resource.path or row[3],
+            pod_id=row[0] or resource.pod_id,
+            owner_user_id=row[1],
+            visibility=self._normalize_visibility(row[2]),
+            path=row[3],
         )
 
     async def _hydrate_connector(self, resource: ResourceRef) -> ResourceRef:
@@ -225,9 +225,9 @@ class ResourceHydrationMixin:
         return ResourceRef(
             resource_type=resource.resource_type,
             resource_id=resource.resource_id,
-            organization_id=resource.organization_id or row[0],
+            organization_id=row[0] or resource.organization_id,
             pod_id=pod_id,
-            owner_user_id=resource.owner_user_id or row[1],
+            owner_user_id=row[1],
             visibility=(
                 await self._visibility_from_optional_grants(
                     pod_id=pod_id,
@@ -251,8 +251,8 @@ class ResourceHydrationMixin:
         return ResourceRef(
             resource_type=resource.resource_type,
             resource_id=resource.resource_id,
-            organization_id=resource.organization_id or row[0],
+            organization_id=row[0] or resource.organization_id,
             pod_id=resource.pod_id,
-            owner_user_id=resource.owner_user_id or row[1],
+            owner_user_id=row[1],
             visibility=resource.visibility,
         )

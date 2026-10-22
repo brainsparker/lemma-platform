@@ -156,6 +156,19 @@ class Authorizer(ResourceHydrationMixin, GrantResolutionMixin):
                 False, "DELEGATED_POD_SCOPE_ONLY", permission_id, resource
             )
 
+        if resource is None and ctx.is_named_workload:
+            # A check that names no resource still has a workload half. Deciding
+            # it on the person's permissions alone gave every named agent the
+            # whole of its invoker's capability -- their saved site logins, say
+            # -- with no grant at all. Asked of the pod instead, it needs a grant
+            # on the pod like any other workload check, intersected with the
+            # person's own access.
+            if ctx.pod_id is None:
+                return AuthorizationDecision(
+                    False, "WORKLOAD_NEEDS_A_RESOURCE", permission_id, None
+                )
+            resource = ResourceRef.pod(ctx.pod_id, ctx.organization_id)
+
         if resource is None:
             # Destructive capability checks (no specific resource) must still be
             # gated for delegated workloads, before the user-mirror allows them.
@@ -198,6 +211,9 @@ class Authorizer(ResourceHydrationMixin, GrantResolutionMixin):
         # returns None (proceed) only when the user approved the action for the
         # session or a named workload holds an explicit grant (standing
         # authority); otherwise it denies.
+        outside = self._outside_the_pod_decision(ctx, permission_id, hydrated)
+        if outside is not None:
+            return outside
         destructive = await self._destructive_delegated_decision(
             ctx, permission_id, hydrated
         )
@@ -207,8 +223,6 @@ class Authorizer(ResourceHydrationMixin, GrantResolutionMixin):
             return AuthorizationDecision(
                 True, "FUNCTION_SELF_READ", permission_id, hydrated
             )
-        if self._is_org_owner_of_pod(ctx, permission_id, hydrated):
-            return AuthorizationDecision(True, "ORG_OWNER_POD", permission_id, hydrated)
         if ctx.is_named_workload:
             return await authorize_delegated_workload(
                 self,
@@ -441,28 +455,36 @@ class Authorizer(ResourceHydrationMixin, GrantResolutionMixin):
         definition = PERMISSION_BY_ID.get(permission_id)
         return definition is not None and definition.scope == PermissionScope.POD
 
-    @staticmethod
-    def _is_org_owner_of_pod(
-        ctx: Context, permission_id: str, resource: ResourceRef
-    ) -> bool:
-        """Org owners have full authority over a pod and everything inside it.
+    def _outside_the_pod_decision(
+        self, ctx: Context, permission_id: str, resource: ResourceRef
+    ) -> AuthorizationDecision | None:
+        """Refuse a person -- or their software -- who no longer belongs to the pod.
 
-        The pod read/list/delete services already treat the organization owner as
-        able to manage any pod in their organization. This mirrors that intent at
-        the authorization layer for the pod entity AND its pod-scoped child
-        resources (apps, agents, functions, ...), so an org owner whose pod
-        authority comes only from the org-owner shortcut can create/deploy/update
-        them instead of hitting a 403 the service would have allowed (e.g. the
-        app bundle upload that follows app.create). Org-level actions are not
-        covered: they still require the org permission itself.
+        Membership is the first layer (PS-ACCESS): a person removed from a pod
+        loses it on their next request. Ownership used to outlive it -- the
+        owner branch below has no membership check -- so a removed member, or a
+        schedule or agent running as them, could still read, change and delete
+        what they had created. Checked before any of that, for every actor that
+        acts as a person.
+
+        A member is someone holding a role here: a pod role, or an org role
+        that reaches every pod (an org owner's). Outside the pod a person still
+        reads what is Public, as before.
         """
-        if not isinstance(ctx.actor, (Person, Assistant)):
-            return False
-        if not Authorizer._is_pod_scoped_permission(permission_id):
-            return False
-        if ctx.pod_id is None or resource.pod_id != ctx.pod_id:
-            return False
-        return "ORG_OWNER" in ctx.role_names
+        if ctx.pod_is_deleted and resource.pod_id == ctx.pod_id:
+            # A soft-deleted pod keeps its rows and memberships, so nothing
+            # else would refuse it. Every actor, not only those a route checked.
+            return AuthorizationDecision(False, "POD_DELETED", permission_id, resource)
+        if not (isinstance(ctx.actor, (Person, Assistant)) or ctx.is_named_workload):
+            return None
+        if resource.pod_id is None or ctx.pod_id is None:
+            return None
+        if resource.pod_id == ctx.pod_id and ctx.belongs_to_its_pod():
+            return None
+        visibility = self._visibility_read_decision(ctx, permission_id, resource)
+        if visibility is not None and visibility.allowed:
+            return visibility
+        return AuthorizationDecision(False, "NOT_A_POD_MEMBER", permission_id, resource)
 
     @staticmethod
     def _is_function_self_read(

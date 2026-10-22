@@ -610,48 +610,51 @@ class AuthorizationDataService:
                 organization_id=None,
                 pod_id=pod_id,
             )
-        organization_id: UUID | None = None
         if cached is None:
-            # Miss: deriving the snapshot needs the organization.
-            pod = await self.session.get(Pod, pod_id)
-            organization_id = pod.organization_id if pod is not None else None
-        if cached is not None:
-            return Context(
-                actor=Workload(
-                    kind, principal_id, principal_refs=cached.principal_refs
-                ),
-                actor_id=str(principal_id),
-                organization_id=cached.organization_id,
-                pod_id=cached.pod_id,
-                role_ids=cached.role_ids,
-                role_names=cached.role_names,
-                permission_ids=cached.permission_ids,
-                principal_refs=cached.principal_refs,
-                grant_principal_sets=cached.grant_principal_sets,
-                authorizer=authorizer,
-                request_id=request_id,
+            cached = await self._derive_workload_snapshot(
+                normalized_principal_type, principal_id, pod_id
             )
+        return Context(
+            actor=Workload(kind, principal_id, principal_refs=cached.principal_refs),
+            actor_id=str(principal_id),
+            organization_id=cached.organization_id,
+            pod_id=cached.pod_id,
+            role_ids=cached.role_ids,
+            role_names=cached.role_names,
+            permission_ids=cached.permission_ids,
+            principal_refs=cached.principal_refs,
+            grant_principal_sets=cached.grant_principal_sets,
+            pod_is_deleted=cached.pod_is_deleted,
+            authorizer=authorizer,
+            request_id=request_id,
+        )
 
+    async def _derive_workload_snapshot(
+        self, principal_type: str, principal_id: UUID, pod_id: UUID
+    ) -> RoleSnapshot:
+        """A workload's role snapshot from the database, cached on the way out.
+
+        Carries whether the pod was deleted, as a person's does, so a workload
+        is refused a deleted pod without a read on every request.
+        """
+        pod = await self.session.get(Pod, pod_id)
+        organization_id = pod.organization_id if pod is not None else None
         role_ids: set[UUID] = set()
         role_names: set[str] = set()
         permission_ids: set[str] = set()
-        principal_refs: set[PrincipalRef] = {
-            PrincipalRef(normalized_principal_type, principal_id)
-        }
+        principal_refs: set[PrincipalRef] = {PrincipalRef(principal_type, principal_id)}
         if organization_id is not None:
             await self.ensure_pod_system_roles(
-                organization_id=organization_id,
-                pod_id=pod_id,
+                organization_id=organization_id, pod_id=pod_id
             )
             role_data = await self._load_principal_roles(
-                principal_type=normalized_principal_type,
+                principal_type=principal_type,
                 principal_id=principal_id,
                 organization_id=organization_id,
                 pod_id=pod_id,
             )
             self._merge_role_data(role_data, role_ids, role_names, permission_ids)
-        for role_id in role_ids:
-            principal_refs.add(PrincipalRef("ROLE", role_id))
+        principal_refs.update(PrincipalRef("ROLE", role_id) for role_id in role_ids)
         snapshot = RoleSnapshot(
             organization_id=organization_id,
             pod_id=pod_id,
@@ -660,21 +663,10 @@ class AuthorizationDataService:
             permission_ids=frozenset(permission_ids),
             principal_refs=frozenset(principal_refs),
             grant_principal_sets=(frozenset(principal_refs),),
+            pod_is_deleted=pod is not None and bool(pod.is_deleted),
         )
         await self._cache_snapshot_without_holding(principal_id, snapshot)
-        return Context(
-            actor=Workload(kind, principal_id, principal_refs=snapshot.principal_refs),
-            actor_id=str(principal_id),
-            organization_id=organization_id,
-            pod_id=pod_id,
-            role_ids=snapshot.role_ids,
-            role_names=snapshot.role_names,
-            permission_ids=snapshot.permission_ids,
-            principal_refs=snapshot.principal_refs,
-            grant_principal_sets=snapshot.grant_principal_sets,
-            authorizer=authorizer,
-            request_id=request_id,
-        )
+        return snapshot
 
     async def build_delegated_workload_context(
         self,
@@ -742,6 +734,7 @@ class AuthorizationDataService:
             grant_principal_sets=grant_principal_sets,
             invoker_principal_refs=user_ctx.principal_refs,
             invoker_role_names=user_ctx.role_names,
+            pod_is_deleted=user_ctx.pod_is_deleted,
             authorizer=Authorizer(self.session),
             request_id=request_id,
         )

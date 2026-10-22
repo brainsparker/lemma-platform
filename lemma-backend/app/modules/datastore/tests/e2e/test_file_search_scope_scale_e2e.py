@@ -160,6 +160,10 @@ async def _seed_platform(session, pod_id: UUID, owner: UUID, stranger: UUID) -> 
     assert present.scalar_one_or_none(), "the folder-visibility index is missing"
 
 
+#: What a pod member's own context carries.
+_A_MEMBER = frozenset({PrincipalRef("POD_MEMBER", uuid4())})
+
+
 def _function_for(function: PrincipalRef, owner: UUID) -> Workload:
     """The function, run by ``owner``: its own grants are the ones that count."""
     return Workload(
@@ -226,6 +230,7 @@ async def platform(db_session, pod_api: DatastoreApi) -> dict:
         pod_id=pod_id,
         permission_ids=frozenset({Permissions.FOLDER_READ}),
         principal_refs=frozenset({function}),
+        invoker_principal_refs=_A_MEMBER,
     )
     member_id = uuid4()
     member = Context(
@@ -235,7 +240,7 @@ async def platform(db_session, pod_api: DatastoreApi) -> dict:
         user_id=member_id,
         pod_id=pod_id,
         permission_ids=frozenset({Permissions.FOLDER_READ}),
-        principal_refs=frozenset({PrincipalRef("ROLE", uuid4())}),
+        principal_refs=frozenset({PrincipalRef("ROLE", uuid4())}) | _A_MEMBER,
     )
     return {
         "pod_id": pod_id,
@@ -539,7 +544,11 @@ async def test_a_scope_that_runs_out_of_time_post_filters_instead_of_failing(
         authorizer=None,
         user_id=owner,
         pod_id=pod_id,
+        # The person running it is a member who reads folders; a delegated
+        # run reads only what its person could too.
+        permission_ids=frozenset({Permissions.FOLDER_READ}),
         principal_refs=frozenset({function}),
+        invoker_principal_refs=_A_MEMBER,
     )
     paths = {"/t1/s1/d1.md", "/t3/s1/d1.md"}
     ids = dict(

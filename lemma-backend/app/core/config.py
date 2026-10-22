@@ -972,6 +972,15 @@ class Settings(BaseSettings):
             "``OTEL_TRACES_SAMPLER_ARG``."
         ),
     )
+    otel_always_sample_user_ids: str = Field(
+        default="",
+        description=(
+            "User ids (comma-separated) whose API requests are always traced, "
+            "whatever the sample ratio. Read from the access token's unverified "
+            "``sub`` at span start; affects sampling only, never authorization. "
+            "Env: ``OTEL_ALWAYS_SAMPLE_USER_IDS``."
+        ),
+    )
     analytics_write_key: Optional[SecretStr] = Field(
         default=None,
         description=(

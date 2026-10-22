@@ -105,3 +105,19 @@ def test_only_routes_sharing_the_first_segment_are_tried() -> None:
         "/pods/{pod_id}/agents"
     )
     assert tried == ["/pods/{pod_id}/agents"]
+
+
+def test_a_parameter_route_registered_first_wins_as_the_router_would() -> None:
+    from app.middleware import _template_for_unrouted
+
+    app = FastAPI()
+
+    @app.get("/{account}")
+    async def account(account: str) -> None:
+        return None
+
+    @app.get("/health")
+    async def health() -> None:
+        return None
+
+    assert _template_for_unrouted(_scope(app, "/health")) == "/{account}"

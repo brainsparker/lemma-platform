@@ -240,6 +240,30 @@ do it once the dashboards read the new names, not as a side effect of this. A
 deployment can set the variable itself to pin either behaviour.
 
 
+### Always tracing chosen accounts
+
+Once production samples below 100%, an operator can still keep every request
+from particular accounts -- your own, a customer you are debugging with -- by
+naming their user ids:
+
+```shell
+OTEL_ALWAYS_SAMPLE_USER_IDS=0199a1b2-...,0199c3d4-...   # comma-separated
+```
+
+A request whose access token (the `sAccessToken` cookie or a bearer token)
+carries one of those ids as `sub` is sampled. Everything it causes is sampled too: child spans and outbox work follow the
+sampled parent. Removing the id (and restarting) stops it. With the setting
+empty nothing is installed.
+
+The decision has to be made when the server span starts, before
+authentication, so the `sub` is read from the token **without verifying it**
+(a base64 decode, no database or network call;
+`app/core/observability/forced_sampling.py`). That is acceptable only because
+it decides nothing but sampling: a forged token can get a request traced --
+as a forged sampled `traceparent` always could -- and is still rejected by
+authentication. Find the user id with `SELECT id FROM users WHERE email = ...`
+or from any of that user's spans (`lemma.user_id`).
+
 ### The edge: load-balancer trace, location, caller
 
 `app/core/observability/edge.py`, applied by `RequestObserverMiddleware`.

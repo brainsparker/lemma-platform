@@ -52,6 +52,7 @@ from openinference.semconv.trace import OpenInferenceSpanKindValues, SpanAttribu
 from app.core.log.log import get_logger
 from app.core.observability.exemplars import metric_view
 from app.core.observability.edge import install_propagators
+from app.core.observability import forced_sampling
 from app.core.observability.otel_logging import (
     quiet_otlp_export_logs,
     setup_otel_logs,
@@ -564,7 +565,7 @@ def _setup_tracing(service_name: str) -> TracerProvider | None:
         return None
     provider = TracerProvider(
         resource=_build_resource(service_name),
-        sampler=_build_sampler(settings),
+        sampler=forced_sampling.ForcibleSampler(_build_sampler(settings)),
         span_limits=GENERAL_SPAN_LIMITS,  # truncate at record time
     )
 
@@ -935,6 +936,7 @@ def instrument_fastapi_app(app: FastAPI) -> None:
         meter_provider=metrics.get_meter_provider(),
         excluded_urls="/health,/health/live,/health/ready,/livez",
     )
+    forced_sampling.wrap_outermost(app, settings.otel_always_sample_user_ids)
     _instrumented_app_ids.add(app_id)
 
 

@@ -350,7 +350,14 @@ def _template_for_unrouted(scope: Scope) -> str:
     by_segment = _routes_by_first_segment(routes)
     first = _first_segment(str(scope.get("path") or ""))
     partial: str | None = None
-    for candidate in (*by_segment.get(first, ()), *by_segment.get(None, ())):
+    # Back in registration order across both buckets: the router takes the
+    # first route that matches, so a `/{account}` registered before `/health`
+    # is what `/health` reaches, and the label has to agree.
+    candidates = sorted(
+        (*by_segment.get(first, ()), *by_segment.get(None, ())),
+        key=lambda entry: entry[0],
+    )
+    for _, candidate in candidates:
         match, _ = candidate.matches(scope)
         if match is Match.FULL:
             return candidate.path_format
@@ -362,7 +369,7 @@ def _template_for_unrouted(scope: Scope) -> str:
 #: Route index per route table, keyed by the list's identity and length so a
 #: route added after start-up rebuilds it.
 _ROUTE_INDEX: dict[
-    tuple[int, int], dict[str | None, list[Route]]
+    tuple[int, int], dict[str | None, list[tuple[int, Route]]]
 ] = {}  # memory: bounded cleared to one route table on every rebuild
 
 
@@ -370,17 +377,22 @@ def _first_segment(path: str) -> str:
     return path.lstrip("/").split("/", 1)[0]
 
 
-def _routes_by_first_segment(routes: list[BaseRoute]) -> dict[str | None, list[Route]]:
-    """Plain routes by their literal first segment; ``None`` for a parameter."""
+def _routes_by_first_segment(
+    routes: list[BaseRoute],
+) -> dict[str | None, list[tuple[int, Route]]]:
+    """Plain routes, with their registration position, by their literal first
+    segment; ``None`` for a parameter."""
     key = (id(routes), len(routes))
     index = _ROUTE_INDEX.get(key)
     if index is None:
         index = {}
-        for route in routes:
+        for position, route in enumerate(routes):
             if not isinstance(route, Route):
                 continue
             first = _first_segment(route.path_format)
-            index.setdefault(None if first.startswith("{") else first, []).append(route)
+            index.setdefault(None if first.startswith("{") else first, []).append(
+                (position, route)
+            )
         _ROUTE_INDEX.clear()
         _ROUTE_INDEX[key] = index
     return index

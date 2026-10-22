@@ -23,6 +23,7 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.work.context import DeadContext
 from app.core.infrastructure.work.registry import HandlerSpec, WorkRegistry
 from app.core.infrastructure.work.retry import AttemptState, Dead, Decision, Requeue
+from app.core.infrastructure.work.trace_carry import split_trace
 from app.core.infrastructure.work.types import ClaimedItem, WorkClass
 from app.core.infrastructure.work.writer import WorkWriter, wake_channel
 from app.core.log.log import get_logger
@@ -194,6 +195,7 @@ async def _rearm_periodic(
             periodic.payload,
             dedup_key=periodic.dedup_key,
             delay=periodic.every,
+            trace="link",
         )
 
 
@@ -381,12 +383,13 @@ async def lock_expired(session: AsyncSession, item_id: object) -> ClaimedItem | 
 def item_from_row(row: Row[tuple[object, ...]]) -> ClaimedItem:
     """Map a ``work_items`` row selected with the claimed-item columns."""
     mapping = row._mapping
+    payload, traceparent, trace_link = split_trace(mapping["payload"] or {})
     return ClaimedItem(
         id=mapping["id"],
         ns=mapping["ns"],
         cls=WorkClass(mapping["class"]),
         kind=mapping["kind"],
-        payload=mapping["payload"],
+        payload=payload,
         dedup_key=mapping["dedup_key"],
         attempts=mapping["attempts"],
         lease_losses=mapping["lease_losses"],
@@ -394,4 +397,6 @@ def item_from_row(row: Row[tuple[object, ...]]) -> ClaimedItem:
         run_at=mapping["run_at"],
         created_at=mapping["created_at"],
         lease_epoch=mapping["lease_epoch"],
+        traceparent=traceparent,
+        trace_link=trace_link,
     )

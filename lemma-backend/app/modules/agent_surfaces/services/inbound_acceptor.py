@@ -33,6 +33,8 @@ from dataclasses import dataclass, field, replace
 from typing import Literal
 from uuid import UUID
 
+from app.core.observability.product_metrics import record_surface_message
+
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.infrastructure.work import SYSTEM_NAMESPACE, WorkWriter, pod_namespace
@@ -151,6 +153,27 @@ class InboundAcceptor:
                 async with self.uow_factory() as uow:
                     await after_store(uow)
             return AcceptResult("dropped", verdict)
+        surface = platform.value if platform else None
+        try:
+            result = await self._accept_kept(
+                delivery, platform, verdict, after_store=after_store
+            )
+        except Exception:
+            if verdict.message:
+                record_surface_message(surface, direction="in", succeeded=False)
+            raise
+        if verdict.message:
+            record_surface_message(surface, direction="in", succeeded=True)
+        return result
+
+    async def _accept_kept(
+        self,
+        delivery: InboundDelivery,
+        platform: SurfacePlatform | None,
+        verdict: Verdict,
+        *,
+        after_store: AfterStore | None,
+    ) -> AcceptResult:
         if await self._handled_synchronously(delivery, platform, verdict):
             if after_store is not None:
                 async with self.uow_factory() as uow:

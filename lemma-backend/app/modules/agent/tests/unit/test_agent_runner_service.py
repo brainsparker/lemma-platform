@@ -212,6 +212,8 @@ async def test_execute_re_raises_cancelled_error(monkeypatch) -> None:
         organization_id=UUID("00000000-0000-0000-0000-000000000011"),
         pod_id=UUID("00000000-0000-0000-0000-000000000012"),
         agent_id=UUID("00000000-0000-0000-0000-000000000013"),
+        metadata=None,
+        parent_id=None,
     )
     agent = SimpleNamespace(name="test-agent")
     agent_run = SimpleNamespace(

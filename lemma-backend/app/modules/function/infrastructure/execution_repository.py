@@ -11,6 +11,7 @@ from sqlalchemy import func, select, text
 from app.core.infrastructure.db.transaction_locks import mark_transaction_scoped_lock
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.work import facts
+from app.core.observability.product_metrics import record_function_run
 from app.modules.function.config import execution_budget_seconds
 from app.modules.function.contracts.run_facts import FunctionRunFinished
 from app.modules.function.application.dispatch_failures import PodAtCapacity
@@ -445,6 +446,7 @@ class FunctionExecutionRepository:
         Whatever waits on the run -- a workflow step -- gets its work item
         committed with the outcome, so nothing can be lost between the two.
         """
+        await self._record_finished(run)
         await facts.emit(
             self.uow,
             FunctionRunFinished(
@@ -452,6 +454,23 @@ class FunctionExecutionRepository:
                 pod_id=pod_id,
                 function_id=run.function_id,
                 status=FunctionRunStatus(run.status).value,
+            ),
+        )
+
+    async def _record_finished(self, run: FunctionRunModel) -> None:
+        function_type = await self.session.scalar(
+            select(FunctionModel.type).where(FunctionModel.id == run.function_id)
+        )
+        started = run.started_at
+        record_function_run(
+            FunctionType(function_type).value if function_type else "other",
+            FunctionRunStatus(run.status).value,
+            (
+                (
+                    (run.completed_at or datetime.now(timezone.utc)) - started
+                ).total_seconds()
+                if started is not None
+                else None
             ),
         )
 

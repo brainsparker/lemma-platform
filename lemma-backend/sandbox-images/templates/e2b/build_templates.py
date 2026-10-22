@@ -82,6 +82,34 @@ def _install_uv_command() -> str:
     )
 
 
+#: The Go toolchain the streamer is built with in the template, pinned and
+#: checksummed like Node and the GitHub CLI. Removed again after the build:
+#: the sandbox runs the binary, not the compiler.
+GO_VERSION = "1.26.10"
+GO_LINUX_AMD64_SHA256 = (
+    "ccfe7ae822d2c2f41f4fe7c956199967a4dac22d0ee0d2b2bfdb440aab3b20c5"
+)
+
+
+def _install_go_command() -> str:
+    archive = f"go{GO_VERSION}.linux-amd64.tar.gz"
+    return (
+        f"curl -fsSL https://go.dev/dl/{archive} -o /tmp/go.tgz && "
+        f"echo '{GO_LINUX_AMD64_SHA256}  /tmp/go.tgz' | sha256sum -c - && "
+        "tar -C /usr/local -xzf /tmp/go.tgz && rm /tmp/go.tgz"
+    )
+
+
+def _build_streamer_command() -> str:
+    """The WebRTC streamer, built here as `Dockerfile.workspace` builds it."""
+    return (
+        "cd /tmp/lemma-streamer-src && CGO_ENABLED=1 /usr/local/go/bin/go build "
+        "-trimpath -ldflags='-s -w' -o /usr/local/bin/lemma-streamer "
+        "./cmd/lemma-streamer && "
+        "rm -rf /tmp/lemma-streamer-src /usr/local/go /root/go /root/.cache/go-build"
+    )
+
+
 def workspace_template():
     return (
         Template(file_context_path=REPOSITORY_ROOT)
@@ -146,6 +174,12 @@ def workspace_template():
                 # WebRTC streamer uses. See Dockerfile.workspace.
                 "tigervnc-scraping-server",
                 "xclip",
+                # Building the WebRTC streamer in the template, against this
+                # template's own libraries; see `_install_streamer_commands`.
+                "gcc",
+                "libc6-dev",
+                "libvpx-dev",
+                "libx264-dev",
                 "xz-utils",
                 "xvfb",
             ],
@@ -435,6 +469,9 @@ def workspace_template():
             "/usr/local/bin/start-vnc-bridge",
             mode=0o755,
         )
+        .run_cmd(_install_go_command(), user="root")
+        .copy("lemma-backend/sandbox-images/streamer", "/tmp/lemma-streamer-src")
+        .run_cmd(_build_streamer_command(), user="root")
         .copy(
             "lemma-backend/sandbox-images/scripts/start-streamer.sh",
             "/usr/local/bin/start-streamer",

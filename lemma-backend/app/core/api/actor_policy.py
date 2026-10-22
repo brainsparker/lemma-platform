@@ -97,6 +97,16 @@ WORKLOAD_ROUTES: frozenset[tuple[str, str]] = frozenset(
         # Which models an agent may be configured with.
         ("GET", "/organizations/{organization_id}/agent-runtime/profiles"),
         ("GET", "/organizations/{organization_id}/agent-runtime/profiles/{profile_id}"),
+        # A function's own runtime: fetching its code and reporting how its run
+        # ended. The controller holds the token to that function and run.
+        (
+            "GET",
+            (
+                "/internal/function-runtime/functions/{function_id}"
+                "/artifacts/{revision_hash}"
+            ),
+        ),
+        ("POST", "/internal/function-runtime/runs/{run_id}:terminal"),
         # Tools the sandbox calls back for.
         ("POST", "/tools/web-search"),
         ("POST", "/tools/report-feedback"),

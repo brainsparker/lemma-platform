@@ -227,10 +227,14 @@ PACKED_SHARDS = 3
 # 420s, still comfortably underneath it.
 PACKED_WORKERS = 2
 
-# The catch-all shard collects these roots and ignores every directory that was
-# explicitly assigned, so a new module's e2e tests land somewhere by default
-# instead of being silently skipped.
-CATCH_ALL_ROOTS = ["app/modules", "app/core"]
+# The catch-all shard collects every e2e directory on disk that no other shard
+# owns outright, and ignores what was assigned elsewhere, so a new test file in
+# any e2e directory lands somewhere by default. It used to collect these whole
+# trees instead -- `app/modules app/core` -- which made pytest import all ~1,000
+# unit-test files just to deselect them: about 40s of collection on a CI runner,
+# on the shard that is the wall. A brand-new e2e *directory* is caught by
+# `--verify` ("collected by no shard"), which `make quality` runs.
+CATCH_ALL_TREES = ("app/modules", "app/core")
 
 # Captures the e2e directory *and* the test module inside it. It used to stop
 # at `.tests.e2e`, which threw the module away and left the packer able to
@@ -916,7 +920,10 @@ def main() -> int:
     for index, bin_ in enumerate(bins):
         heaviest = max(bin_, key=measured.weight)
         name = SHARD_ALIASES.get(_module_of(heaviest), _module_of(heaviest))
-        planned.append((name, bin_, CATCH_ALL_ROOTS if index == 0 else [], None))
+        roots = _topmost(
+            d for d in on_disk_dirs if d.startswith(CATCH_ALL_TREES)
+        ) if index == 0 else []
+        planned.append((name, bin_, roots, None))
 
 
 
@@ -952,6 +959,9 @@ def main() -> int:
             if other is not group and not other.get("overlay")
             for directory in other["dirs"]
         }
+        # A root another shard owns outright is not collected at all, rather
+        # than collected and then ignored.
+        roots = [root for root in roots if root not in claimed]
         # Reduced to its topmost entries: ignoring a directory already ignores
         # its files, and listing both makes the args longer without changing
         # what runs.

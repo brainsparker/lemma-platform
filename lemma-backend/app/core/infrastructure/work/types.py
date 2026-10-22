@@ -103,6 +103,10 @@ class ClaimedItem:
     #: Which claim this is. Every fenced write matches it, so a run whose
     #: lease was taken over -- by another process or by this one -- cannot.
     lease_epoch: int
+    #: The enqueuer's W3C ``traceparent``, and a periodic's link to the run
+    #: that re-armed it (``trace_carry``). Never part of ``payload``.
+    traceparent: str | None = None
+    trace_link: str | None = None
 
 
 class UnavailableEvidence(StrEnum):

@@ -21,7 +21,7 @@ from app.core.test_utils import create_postgres_database, get_postgres_url
 from app.modules.test_support.e2e import fixtures as e2e_fixtures
 
 # Walking the Alembic chain from the base costs every one of these tests
-# ten-odd seconds, so they run in the weekly protected lane. The pull-request
+# ten-odd seconds, so they run in the nightly protected lane. The pull-request
 # lane keeps one round trip, `app/core/tests/e2e/test_work_migration_e2e.py`.
 pytestmark = [pytest.mark.e2e, pytest.mark.slow]
 

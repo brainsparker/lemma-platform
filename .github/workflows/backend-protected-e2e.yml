@@ -3,7 +3,7 @@ name: Backend protected E2E
 on:
   # Every release gate asks for a successful run against the *exact* commit
   # being released, within seven days. The cron runs against whatever main's
-  # head was at 02:41 on a Wednesday, which is almost never the commit a tag
+  # head was at 02:41 that night, which is almost never the commit a tag
   # points at -- so cutting a release meant dispatching this by hand first and
   # waiting, and forgetting to meant a release build that failed at its first
   # step after everything else was ready.
@@ -11,7 +11,10 @@ on:
     tags:
       - "v*"
   schedule:
-    - cron: "41 2 * * 3"
+    # Nightly: the pull-request lane leaves `slow` tests (chain-walking
+    # migrations, real worker lifecycles, scale budgets) to this run, so it
+    # comes round every day rather than once a week.
+    - cron: "41 2 * * *"
   workflow_dispatch:
 
 permissions:

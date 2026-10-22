@@ -78,13 +78,13 @@ way a scenario says, do not edit the scenario.
 | Scenarios (all local lanes) | `make scenarios-all` | Locally; runs non-live journeys, sandbox cases and client conformance, then writes one report |
 | Scenarios (sandbox) | `make scenarios-sandbox` | Same, after building the workspace images |
 | Scenarios (live) | `make scenarios-live` | Locally, before a release. See [LIVE.md](../tests/scenarios/LIVE.md) |
-| Protected e2e | `make test-e2e-runtime` | Weekly and on every `v*` tag, via `backend-protected-e2e.yml`. Where `@pytest.mark.slow` tests go, and what every Desktop release gate reads. It builds nothing, so a test needing a compiled artifact belongs in the lane that builds it. |
+| Protected e2e | `make test-e2e-runtime` | Nightly and on every `v*` tag, via `backend-protected-e2e.yml`. Where `@pytest.mark.slow` tests go, and what every Desktop release gate reads. It builds nothing, so a test needing a compiled artifact belongs in the lane that builds it. |
 | Sandbox function benchmark | `make benchmark-functions-docker` | Nightly on Docker, weekly on E2B, via `sandbox-function-benchmark.yml`. Owns `@pytest.mark.benchmark`: wall-clock budgets are trended here and gate nothing. |
 | Real-LLM e2e | `make test-e2e-real-llm` | Locally whenever a change touches the model or pause path. Not in CI. |
 
 The real-LLM lane is worth one paragraph, because its absence used to be
 invisible. Every `@pytest.mark.real_llm` test ran in **no** lane at all: the
-pull-request lane uses the deterministic model, and the weekly protected lane
+pull-request lane uses the deterministic model, and the nightly protected lane
 sets `E2E_REAL=1` *together with* `E2E_LLM_MODE=mock` — and `conftest.py` reads
 the explicit mode first, so they skipped there too. A test that runs nowhere
 still looks like coverage in a listing.

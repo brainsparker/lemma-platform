@@ -148,7 +148,7 @@ class _Socket:
 
         return await asyncio.wait_for(_next(), timeout)
 
-    async def quiet(self, seconds: float = 2.0) -> None:
+    async def quiet(self, seconds: float = 0.6) -> None:
         try:
             async with asyncio.timeout(seconds):
                 while True:

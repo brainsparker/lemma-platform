@@ -22,6 +22,7 @@ from opentelemetry import metrics
 from opentelemetry.metrics import CallbackOptions, Observation
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.infrastructure.work.db import AbstractSessionContext
 from app.core.infrastructure.work.types import WorkClass
@@ -88,6 +89,53 @@ type TransactionAgeProbe = Callable[[], Awaitable[float]]
 _transaction_age_probes: dict[
     str, TransactionAgeProbe
 ] = {}  # memory: bounded one per database (main, datastore)
+
+
+#: Reads something off the main database with the gauges' session and keeps
+#: it for an observable gauge to report. A module registers one here rather
+#: than running a loop of its own.
+type GaugeSampler = Callable[[AsyncSession], Awaitable[None]]
+
+
+@dataclass(frozen=True)
+class _Sampler:
+    sample: GaugeSampler
+    #: Sample on every Nth tick: a heavier read can run at a slower cadence.
+    every: int
+    #: Called when a reading fails, so the gauge reports nothing rather than
+    #: a stale value that reads as a steady state.
+    forget: Callable[[], None]
+
+
+_samplers: dict[str, _Sampler] = {}  # memory: bounded one per registering module
+
+
+def register_gauge_sampler(
+    name: str,
+    sample: GaugeSampler,
+    *,
+    forget: Callable[[], None],
+    every: int = 1,
+) -> None:
+    """Run ``sample`` with the work gauges, every ``every`` ticks."""
+    _samplers[name] = _Sampler(sample=sample, every=max(every, 1), forget=forget)
+
+
+async def _run_samplers(open_session: SessionOpener, tick: int) -> None:
+    for name, sampler in _samplers.items():
+        if tick % sampler.every:
+            continue
+        try:
+            async with open_session() as session:
+                await sampler.sample(session)
+        except (SQLAlchemyError, OSError) as exc:
+            # One module's reading failing must not cost the work gauges theirs.
+            sampler.forget()
+            logger.warning(
+                "work.gauges.sampler_failed.degraded",
+                sampler=name,
+                error_type=type(exc).__name__,
+            )
 
 
 def register_transaction_age_probe(database: str, probe: TransactionAgeProbe) -> None:
@@ -223,13 +271,22 @@ def _log_busiest(rows: Iterable[object]) -> None:
         )
 
 
+def _forget_samplers() -> None:
+    """Clear every registered sampler's reading. A failed main sample skips
+    them, so without this their last values would stand for the whole outage."""
+    for sampler in _samplers.values():
+        sampler.forget()
+
+
 async def gauge_loop(open_session: SessionOpener, interval_seconds: float) -> None:
     while True:
         try:
             await sample(open_session)
             _incident.record_success()
+            await _run_samplers(open_session, _snapshot.samples)
         except (SQLAlchemyError, OSError) as exc:
             _snapshot.forget()
+            _forget_samplers()
             _incident.record_failure(error_type=type(exc).__name__)
         await asyncio.sleep(interval_seconds)
 

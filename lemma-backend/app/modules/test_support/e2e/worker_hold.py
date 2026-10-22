@@ -159,7 +159,29 @@ async def worker_held() -> AsyncIterator[None]:
             await _stop_between_transactions(held)
         yield
     finally:
-        # Also after a failed attempt, which may leave them stopped.
-        for worker in held:
-            if _alive(worker.pid):
-                os.kill(worker.pid, signal.SIGCONT)
+        try:
+            if held:
+                await _forget_queued_work(held[0].database_url)
+        finally:
+            # Also after a failed attempt, which may leave them stopped.
+            for worker in held:
+                if _alive(worker.pid):
+                    os.kill(worker.pid, signal.SIGCONT)
+
+
+async def _forget_queued_work(database_url: str) -> None:
+    """Delete what the test left queued before the worker resumes.
+
+    The next test's reset deletes it anyway. Left in place, a resumed worker
+    ran it first -- the test's leftovers, against the next test's reset, whose
+    delete then waited on the worker's transactions and retried. Only queued
+    rows: a worker is stopped between transactions, not between jobs, and a
+    job it holds the lease of must find its ``running`` row to complete.
+    """
+    for database in _database_names(database_url):
+        url = _libpq_url(database_url).rsplit("/", 1)[0] + "/" + database
+        async with await psycopg.AsyncConnection.connect(url, autocommit=True) as conn:
+            cursor = await conn.execute("SELECT to_regclass('work_items')")
+            row = await cursor.fetchone()
+            if row and row[0]:
+                await conn.execute("DELETE FROM work_items WHERE state = 'queued'")

@@ -57,3 +57,17 @@ def test_a_refused_delivery_is_retried_on_the_platform_clock_a_bounded_number_of
     """The pump's retries of one row: three waits, then FAILED -- never a loop."""
     assert len(RETRY_DELAYS) == MAX_ATTEMPTS
     assert MAX_SEND_ATTEMPTS == 1 + len(RETRY_DELAYS)
+
+
+def test_the_backoff_scale_shrinks_only_the_exponential_wait(monkeypatch) -> None:
+    from app.modules.agent_surfaces.config import surface_settings
+
+    policy = RetryPolicy()
+    # Set, not assumed: an e2e session in the same process shrinks it.
+    monkeypatch.setattr(surface_settings, "surface_send_backoff_scale", 1.0)
+    assert policy.backoff(1) == 0.5
+    monkeypatch.setattr(surface_settings, "surface_send_backoff_scale", 0.1)
+    assert policy.backoff(1) == 0.05
+    assert policy.backoff(5) == 0.8  # the 8s cap, scaled
+    # What a platform asks for is honoured in full.
+    assert policy.backoff(1, retry_after=3) == 3

@@ -27,6 +27,7 @@ def _routers():
 
 def _register_periodic_work() -> None:
     import app.modules.workspace.events.tasks  # noqa: F401
+    import app.modules.workspace.infrastructure.sandbox_gauge  # noqa: F401
 
 
 @asynccontextmanager

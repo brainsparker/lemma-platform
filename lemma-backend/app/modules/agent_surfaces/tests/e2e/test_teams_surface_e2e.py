@@ -183,6 +183,7 @@ async def test_a_teams_token_replayed_with_another_service_url_is_refused(
             pod_id=test_pod["id"],
             agent_name=agent["name"],
             external_thread_id=REAL_TEAMS_THREAD_ID,
+            timeout_seconds=0,  # refused at the webhook: nothing is coming
         )
         is None
     )

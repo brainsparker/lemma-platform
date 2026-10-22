@@ -208,7 +208,6 @@ class RequestObserverMiddleware:
                     trace.get_current_span(),
                     scope,
                     headers=headers,
-                    status_code=status_code,
                 )
                 attributes = {
                     "http.request.method": str(scope.get("method", "UNKNOWN")),

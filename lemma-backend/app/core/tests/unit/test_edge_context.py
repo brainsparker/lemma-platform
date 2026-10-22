@@ -108,7 +108,7 @@ def test_a_malformed_cloud_trace_header_is_ignored(value: str) -> None:
     assert parse_cloud_trace(value) is None
 
 
-def test_the_server_span_gets_the_lb_trace_location_and_caller() -> None:
+def test_the_server_span_gets_the_lb_trace_and_caller_and_nothing_the_lb_logs() -> None:
     span = TracerProvider().get_tracer("t").start_span("s", kind=SpanKind.SERVER)
     annotate_server_span(
         span,
@@ -116,19 +116,15 @@ def test_the_server_span_gets_the_lb_trace_location_and_caller() -> None:
         headers=[
             (b"x-cloud-trace-context", f"{_LB_TRACE}/7;o=1".encode()),
             (b"x-client-geo-region", b"IN"),
-            (b"x-client-geo-city", b"bengaluru"),
-            (b"x-client-geo-location", b"12.97,77.59"),
-            (b"user-agent", b"Mozilla/5.0 " + b"x" * 1000),
-            (b"cookie", b"sAccessToken=abc"),
+            (b"user-agent", b"python-httpx/0.28"),
         ],
-        status_code=200,
     )
-    assert span.attributes["gcp.lb.trace_id"] == _LB_TRACE
-    assert span.attributes["client.geo.region"] == "IN"
-    assert span.attributes["client.geo.city"] == "bengaluru"
-    assert span.attributes["client.geo.lat_long"] == "12.97,77.59"
-    assert len(span.attributes["user_agent.original"]) == 256
-    assert span.attributes["lemma.caller.kind"] == "browser"
+    # The user agent decides the kind without being recorded; location and
+    # the agent itself are in the load balancer's request log.
+    assert dict(span.attributes) == {
+        "gcp.lb.trace_id": _LB_TRACE,
+        "lemma.caller.kind": "sdk",
+    }
 
 
 _NOBODY: dict[str, str | bool] = {

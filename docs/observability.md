@@ -269,7 +269,7 @@ as a forged sampled `traceparent` always could -- and is still rejected by
 authentication. Find the user id with `SELECT id FROM users WHERE email = ...`
 or from any of that user's spans (`lemma.user_id`).
 
-### The edge: load-balancer trace, location, caller
+### The edge: load-balancer trace and caller
 
 `app/core/observability/edge.py`, applied by `RequestObserverMiddleware`.
 
@@ -277,22 +277,11 @@ or from any of that user's spans (`lemma.user_id`).
 baggage, then Google's `X-Cloud-Trace-Context: TRACE_ID/SPAN_ID;o=1`, which the
 external HTTPS load balancer sends. The Cloud Trace header is read only when
 no `traceparent` produced a context, so W3C wins. It is extract-only: outbound
-calls and outbox events still carry `traceparent` alone. Whatever the
-propagator does, the root server span also records the header's trace id as
-`gcp.lb.trace_id`, so a load-balancer log line can always be matched.
+calls and outbox events still carry `traceparent` alone. The root server span
+also records the header's trace id as `gcp.lb.trace_id`, whatever the
+propagator did, so a load-balancer log line can always be matched.
 
-**Server span attributes** (span only, never metric labels):
-
-| Attribute | From |
-|---|---|
-| `gcp.lb.trace_id` | `X-Cloud-Trace-Context`, as 32 hex characters |
-| `client.geo.region` | `X-Client-Geo-Region` (country code) |
-| `client.geo.city` | `X-Client-Geo-City` |
-| `client.geo.lat_long` | `X-Client-Geo-Location` |
-| `user_agent.original` | `User-Agent`, first 256 characters |
-| `lemma.caller.kind` | see below |
-
-`lemma.caller.kind`, first rule that applies:
+**`lemma.caller.kind`** on the server span. The first rule that applies wins:
 
 | Kind | When |
 |---|---|
@@ -303,15 +292,39 @@ propagator does, the root server span also records the header's trace id as
 | `sdk` | a bearer token, or a programmatic user agent (`python-httpx`, `python-requests`, `node`, `axios`, `curl`) |
 | `unknown` | none of the above |
 
-Metric `lemma.http.requests_by_country` (`lemma_http_requests_by_country_total`),
-labels `country` (an ISO 3166 two-letter code from `X-Client-Geo-Region`, else
-`unknown`) and `status_class` (`2xx`...`5xx`).
+The user agent is read to decide the kind and is not recorded.
 
-**Trust.** Any caller can send all of these headers. The geo headers are
-trustworthy only because the load balancer adds or overwrites them. Nothing
-authorizes on any of them. A forged trace header chooses which trace id a
-request joins, and -- because the sampler is parent-based -- can ask for its
-own request to be sampled, exactly as a forged `traceparent` always could.
+**What the app does not record.** Client IP, user agent, country, region and
+ASN, edge latency, and requests the load balancer refused before they reached
+the app all come from the load balancer's own request logs
+(`resource.type="http_load_balancer"`, 100% sampled) and an infra log-based
+metric. They join to app traces through the continued trace id.
+
+**Trust.** Any caller can send these headers, and nothing authorizes on them. A
+forged trace header chooses which trace id a request joins and -- because the
+sampler is parent-based -- can ask for its own request to be sampled, exactly
+as a forged `traceparent` always could.
+
+### Correlation: load balancer → trace → logs → metrics
+
+On GKE, every app log line written inside a span also carries Cloud Logging's
+native trace fields (`app/core/log/cloud_trace.py`):
+
+| Key | Value |
+|---|---|
+| `logging.googleapis.com/trace` | `projects/<PROJECT>/traces/<trace_id>` |
+| `logging.googleapis.com/spanId` | the span id |
+| `logging.googleapis.com/trace_sampled` | whether the trace is sampled |
+
+`<PROJECT>` is `OBSERVABILITY_TRACE_PROJECT_ID`, falling back to
+`GOOGLE_CLOUD_PROJECT`. With neither set, these keys are omitted (a laptop is
+unchanged). The payload's own `trace_id`/`span_id` stay for the tools that
+read them.
+
+So the path is: the load balancer's log line (native `trace`) leads to the
+app trace (same id, continued), which leads to the app's log lines (same
+native `trace`). From a latency metric, the histogram's exemplar leads back
+to a trace.
 
 ## Exemplars: click the spike, see the request
 

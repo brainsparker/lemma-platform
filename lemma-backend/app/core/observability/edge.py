@@ -1,5 +1,7 @@
 """What the edge tells a request's server span: the load balancer's trace,
-where the caller is, and what kind of caller it is.
+and what kind of caller it is. Everything else about the edge -- client IP,
+user agent, location, latency, requests refused at the edge -- is in the
+load balancer's own request log, joined to the app through the trace id.
 
 Google's external HTTPS load balancer starts a trace for every request and
 sends it as ``X-Cloud-Trace-Context: TRACE_ID/SPAN_ID;o=1``. Without an
@@ -8,9 +10,8 @@ in a load-balancer log line resolved to nothing. W3C ``traceparent`` still
 wins when both are present; the Cloud Trace header is read only when no
 ``traceparent`` produced a context.
 
-Every header here can be sent by any caller. They are trustworthy only
-because the load balancer overwrites or adds them on the way in, and nothing
-here makes an authorization decision from them. What a forged trace header
+Every header here can be sent by any caller, and nothing here makes an
+authorization decision from them. What a forged trace header
 can do is choose which trace id a request joins -- and, because the general
 sampler is parent-based, ask for its own request to be sampled, as a forged
 ``traceparent`` always could.
@@ -21,7 +22,7 @@ from __future__ import annotations
 from collections.abc import Mapping, MutableMapping, Sequence
 import re
 
-from opentelemetry import metrics, trace
+from opentelemetry import trace
 from opentelemetry.context import Context
 from opentelemetry.propagate import set_global_textmap
 from opentelemetry.propagators.composite import CompositePropagator
@@ -48,16 +49,6 @@ from app.core.origin import OriginKind, origin_for_path
 
 CLOUD_TRACE_HEADER = "x-cloud-trace-context"
 _CLOUD_TRACE_RE = re.compile(r"^([0-9a-fA-F]{32})/(\d{1,20})(?:;o=([01]))?$")
-_MAX_USER_AGENT = 256
-_MAX_GEO = 64
-_COUNTRY_RE = re.compile(r"^[A-Z]{2}$")
-
-meter = metrics.get_meter(__name__)
-requests_by_country = meter.create_counter(
-    "lemma.http.requests_by_country",
-    unit="{request}",
-    description="Inbound requests by the load balancer's client country.",
-)
 
 
 def parse_cloud_trace(value: str | None) -> tuple[int, int, bool] | None:
@@ -182,26 +173,17 @@ def _header(headers: Sequence[tuple[bytes, bytes]], name: bytes) -> str:
     return ""
 
 
-def _bounded(value: str, limit: int) -> str:
-    return " ".join(value.splitlines()).strip()[:limit]
-
-
 def annotate_server_span(
     span: Span,
     scope: Mapping[str, object],
     *,
     headers: Sequence[tuple[bytes, bytes]],
-    status_code: int,
 ) -> None:
-    """Put the edge's facts on the request's server span, and count the country."""
-    country = _header(headers, b"x-client-geo-region").strip().upper()
-    requests_by_country.add(
-        1,
-        {
-            "country": country if _COUNTRY_RE.fullmatch(country) else "unknown",
-            "status_class": f"{status_code // 100}xx",
-        },
-    )
+    """Put what only the app knows on the request's server span.
+
+    Client IP, user agent, location and latency are in the load balancer's
+    own request log, joined to this span through the continued trace id.
+    """
     if not span.is_recording() or getattr(span, "kind", None) is not SpanKind.SERVER:
         return
     raw_state = scope.get("state")
@@ -211,20 +193,9 @@ def annotate_server_span(
     parsed = parse_cloud_trace(_header(headers, CLOUD_TRACE_HEADER.encode()))
     if parsed is not None:
         attributes["gcp.lb.trace_id"] = format(parsed[0], "032x")
-    for header, key in (
-        (b"x-client-geo-region", "client.geo.region"),
-        (b"x-client-geo-city", "client.geo.city"),
-        (b"x-client-geo-location", "client.geo.lat_long"),
-    ):
-        value = _bounded(_header(headers, header), _MAX_GEO)
-        if value:
-            attributes[key] = value
-    user_agent = _bounded(_header(headers, b"user-agent"), _MAX_USER_AGENT)
-    if user_agent:
-        attributes["user_agent.original"] = user_agent
     authorization = _header(headers, b"authorization").lower()
     attributes["lemma.caller.kind"] = caller_kind(
-        user_agent=user_agent,
+        user_agent=_header(headers, b"user-agent"),
         lemma_client=_header(headers, b"x-lemma-client"),
         has_session_cookie="saccesstoken=" in _header(headers, b"cookie").lower(),
         has_bearer=authorization.startswith("bearer "),

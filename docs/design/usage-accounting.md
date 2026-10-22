@@ -14,6 +14,14 @@ window's shared counter, so it observes usage from other workers. A reached
 limit stops the next request. There are no budget allocations, reservations,
 prompt estimates, local grants or checkpoint batches.
 
+A run is checked twice before its first request: when the message that starts
+it is appended, and when a worker starts it. Both ask
+`UsageService.spent_windows` which of the windows its requests will be admitted
+under (`budget_windows`) has spent its limit, read from the same counters. The
+message check names the limit it hit; the run-start check commits what a
+recount learned even when it refuses, and the message check's recount commits
+with the message, so a refused message keeps none.
+
 A window's counter is its running total. Settlement adds a receipt's cost to
 it in the transaction that prices the ledger row, and admission compares it
 with the limit without a lock or a ledger sum, so the cost of a request does
@@ -30,6 +38,11 @@ a receipt settled while the sum ran keeps its charge, and recounts exclude one
 another with a transaction-scoped advisory lock rather than blocking
 settlement. Settlement never recounts: a counter recounted under other rules
 while its request was out is left for the next admission.
+
+The limits API (`get_usage_limits`) still sums the ledger, for every window: it
+reports spend in windows that have no limit, and those keep no counter. What it
+shows is the ledger's figure; what admits work is the counter's, and the two
+differ only for as long as a recount is due.
 
 Before provider I/O, admission commits a request journal entry marked `PENDING`.
 Afterward, settlement records the actual reported tokens and their per-request

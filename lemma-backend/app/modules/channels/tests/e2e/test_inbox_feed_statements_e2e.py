@@ -16,6 +16,7 @@ moved lines named once -- is printed beside it.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from typing import cast
@@ -31,7 +32,8 @@ from app.core.live.protocol import ResyncReason
 from app.modules.channels.services.live.inbox_feed import InboxFeed
 from app.modules.channels.services.live.readers import caller_for
 from app.modules.channels.services.live.subscriptions import InboxSub
-from app.modules.channels.tests.e2e.channel_pod import Pod
+from app.modules.channels.services.live.timeline import reads_moved
+from app.modules.channels.tests.e2e.channel_pod import Pod, group, say
 
 pytestmark = pytest.mark.e2e
 
@@ -339,3 +341,47 @@ async def test_an_idle_poll_costs_the_same_however_many_contacts_the_pod_has(
         "every channel of the pod instead of the ones that moved"
     )
     assert many[1] == 0, "an idle poll with nothing moved read channel rows"
+
+
+async def test_an_idle_poll_tells_a_reader_nothing_they_were_already_shown(
+    pod: Pod, db_manager
+):
+    """A poll reads back read positions moved shortly before it -- its
+    look-back -- so it finds the seat a reader was given just before they
+    subscribed. Their counts there are as ``/inbox`` showed them: they are
+    sent nothing until something moves."""
+    pod_id, reader = UUID(pod.id), UUID(pod.editor["id"])
+    theirs = await group(pod, title="Theirs", members=[pod.editor["id"]])
+    await say(pod, theirs["id"], "before they looked")
+    feed, socket = InboxFeed(pod_id), _Socket(reader)
+    async with db_manager.session_factory() as session:
+        uow = SqlAlchemyUnitOfWork(session)
+        caller = await caller_for(uow, pod_id=pod_id, user_id=reader)
+        assert caller is not None
+        await feed.join(
+            uow,
+            InboxSub(
+                id=uuid4().hex,
+                connection=cast(LiveConnection, socket),
+                caller=caller,
+            ),
+        )
+
+    async def poll() -> None:
+        async with db_manager.session_factory() as session:
+            uow = SqlAlchemyUnitOfWork(session)
+            since = await session.scalar(text("SELECT now() - interval '30 seconds'"))
+            await feed.drain(
+                uow,
+                dirty=(),
+                reads=await reads_moved(uow, [reader], since),
+                everything=False,
+                changed_since=since,
+            )
+
+    await poll()
+    assert socket.events == [], "a poll sent counts that had not moved"
+
+    await say(pod, theirs["id"], "news for them")
+    await poll()
+    assert [json.loads(event)["unread"]["lines"] for event in socket.events] == [2]

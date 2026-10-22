@@ -809,8 +809,11 @@ async def test_a_message_past_the_servers_cap_closes_the_socket_with_1009(
 
 
 async def test_a_change_that_moves_none_of_a_readers_counts_sends_them_nothing(
-    pod: Pod, backend_server
+    pod: Pod, backend_server, monkeypatch
 ) -> None:
+    # Polls inside the quiet windows: a poll reads back the seat the editor
+    # was given just before subscribing, and must not send it as news.
+    monkeypatch.setattr(live_settings, "live_idle_poll_seconds", 0.25)
     elsewhere = await group(pod, title="Not theirs")
     theirs = await group(pod, title="Theirs", members=[pod.editor["id"]])
     async with live_socket(backend_server, pod.id, pod.editor["token"]) as editor:

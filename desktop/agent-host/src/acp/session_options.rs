@@ -21,7 +21,9 @@
 //! offers the same thing and its prompt tells the agent to use Lemma's: the
 //! agent's own browser control (the person watches Lemma's browser, not one on
 //! their Mac), its own web search and fetch when the run has Lemma's, and
-//! Claude Code's own subagents when the run has Lemma's.
+//! Claude Code's own subagents when the run has Lemma's. Others are allowed
+//! either way: Claude Code may call Lemma's own tools, and run the run's own
+//! `lemma`, without asking anyone (`claude_code`).
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -29,7 +31,7 @@ use std::path::Path;
 use agent_client_protocol::schema::v1::McpServer;
 use serde_json::{Map, Value, json};
 
-use super::{claude_config_dir, claude_permission_rules, claude_sign_in};
+use super::{claude_config_dir, claude_permission_rules, claude_sign_in, published_mcp_tool_names};
 use crate::adapters::version_is_at_least;
 use crate::protocol::RunSpec;
 
@@ -171,8 +173,9 @@ impl LemmaTools {
 ///   in `env`), which lists every tool. Claude Code's own MCP call limit
 ///   needs nothing: it is longer than the bridge's (`CALL_TIMEOUT`) unless the
 ///   person set `MCP_TOOL_TIMEOUT`.
-/// - `allowedTools` lets the run's own `lemma` CLI run without a permission
-///   request (`lemma_cli_rules`), whichever way the switch is set.
+/// - `allowedTools` lets the tools Lemma serves the run (`lemma_tool_rules`)
+///   and the run's own `lemma` CLI (`lemma_cli_rules`) run without a
+///   permission request, whichever way the switch is set.
 fn claude_code(
     spec: &RunSpec,
     own_settings: bool,
@@ -207,8 +210,14 @@ fn claude_code(
         env.insert("ENABLE_TOOL_SEARCH".to_owned(), json!("false"));
     }
     claude_options.insert("disallowedTools".to_owned(), Value::Array(disallowed));
+    let mut allowed = mcp_server
+        .map(|server| lemma_tool_rules(spec, server))
+        .unwrap_or_default();
     if let Some(bin) = lemma_cli {
-        claude_options.insert("allowedTools".to_owned(), json!(lemma_cli_rules(bin)));
+        allowed.extend(lemma_cli_rules(bin));
+    }
+    if !allowed.is_empty() {
+        claude_options.insert("allowedTools".to_owned(), json!(allowed));
     }
     // Claude Code's own switch for its browser integration, which also reads
     // a preference `settingSources` does not govern.
@@ -271,6 +280,60 @@ fn persons_flag_settings(config: &Path) -> Option<Map<String, Value>> {
         settings.insert("permissions".to_owned(), Value::Object(rules));
     }
     (!settings.is_empty()).then_some(settings)
+}
+
+/// The permission rules that let the tools Lemma serves this run, through
+/// `server`, be called without a permission request: `mcp__<server>__<tool>`,
+/// the name Claude Code gives each, for every tool the run published.
+///
+/// Where Claude Code would ask about one of these, the host says yes itself
+/// (`PermissionHandler::triage` in `driver`): they are scoped to the run and
+/// authorised by the workspace already. So in a mode that asks, the rules
+/// only spare a round trip. "Don't Ask" is the mode they are for: it never
+/// asks, and denies whatever no rule allows, so a run in it could call none
+/// of Lemma's tools and did nothing. "Auto" mode's classifier, which judges
+/// only what Claude Code would otherwise ask about, no longer sees these
+/// calls either. Claude Code's own tools get no rule here: they ask, or are
+/// denied, as the mode says.
+///
+/// One rule per published name, the same set triage trusts, rather than
+/// `mcp__<server>`, which Claude Code also takes, for every tool of that
+/// server: a tool Lemma did not publish is not one the host vouches for.
+///
+/// A name with anything but letters, digits, `_` and `-` gets no rule.
+/// Claude Code would rename that tool, so the rule could not match it; and
+/// the rules reach Claude Code as one argument it splits on commas and spaces,
+/// so a name like `lemma_x,Bash` would add a rule of its own, for every
+/// command.
+fn lemma_tool_rules(spec: &RunSpec, server: &McpServer) -> Vec<String> {
+    let Some(server) = registered_name(server).filter(|name| is_plain_name(name)) else {
+        return Vec::new();
+    };
+    published_mcp_tool_names(&spec.mcp)
+        .filter(|tool| is_plain_name(tool))
+        .map(|tool| format!("mcp__{server}__{tool}"))
+        .collect()
+}
+
+/// The name `server` is registered under in the session, which an agent puts
+/// in front of each of its tools' names.
+fn registered_name(server: &McpServer) -> Option<&str> {
+    match server {
+        McpServer::Stdio(stdio) => Some(&stdio.name),
+        McpServer::Http(http) => Some(&http.name),
+        McpServer::Sse(sse) => Some(&sse.name),
+        _ => None,
+    }
+}
+
+/// Letters, digits, `_` and `-`, and at least one: a name Codex takes as a
+/// config key as it is, and one Claude Code leaves as it is in an MCP tool's
+/// name.
+fn is_plain_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
 /// The permission rules that let the run's own `lemma` CLI, in `bin`, run
@@ -374,12 +437,7 @@ fn codex_mcp_server(server: &McpServer) -> Option<(String, Value)> {
     let McpServer::Stdio(stdio) = server else {
         return None;
     };
-    let name_is_a_key = !stdio.name.is_empty()
-        && stdio
-            .name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
-    if !name_is_a_key {
+    if !is_plain_name(&stdio.name) {
         return None;
     }
     let env: Map<String, Value> = stdio
@@ -645,6 +703,111 @@ mod tests {
         // Lemma's own rule stays its own, apart from the person's.
         let exact = format!("Bash({}:*)", Path::new("/pack/bin").join("lemma").display());
         assert_eq!(options["allowedTools"], json!([exact, "Bash(lemma:*)"]));
+    }
+
+    fn publishing(names: &[&str]) -> RunSpec {
+        let mut spec = empty_spec();
+        spec.mcp = json!({ "server_name": "lemma_tools", "tool_names": names });
+        spec
+    }
+
+    /// "Don't Ask" never sends a permission request, so the host never got to
+    /// say yes to a Lemma tool, and every one of them was denied.
+    #[test]
+    fn claude_code_may_call_the_tools_lemma_published_without_asking() {
+        let spec = publishing(&["lemma_pod_read_file", "lemma_exec_command"]);
+        let server = bridge("lemma_tools");
+        let bin = Path::new("/pack/bin");
+        let cli = format!("Bash({}:*)", bin.join("lemma").display());
+        for own in [false, true] {
+            let options = claude_options(claude_code(
+                &spec,
+                own,
+                &no_web_tools(),
+                None,
+                Some(bin),
+                Some(&server),
+                CURRENT_CLAUDE_CODE,
+            ));
+            assert_eq!(
+                options["allowedTools"],
+                json!([
+                    "mcp__lemma_tools__lemma_pod_read_file",
+                    "mcp__lemma_tools__lemma_exec_command",
+                    cli,
+                    "Bash(lemma:*)",
+                ]),
+                "own_settings={own}"
+            );
+        }
+
+        // No server for the run, or nothing published on it: no tool is
+        // allowed by name, as triage would trust none.
+        let unserved = claude_options(claude_code(
+            &spec,
+            false,
+            &no_web_tools(),
+            None,
+            None,
+            None,
+            CURRENT_CLAUDE_CODE,
+        ));
+        assert!(unserved.get("allowedTools").is_none(), "{unserved}");
+        let unpublished = claude_options(claude_code(
+            &empty_spec(),
+            false,
+            &no_web_tools(),
+            None,
+            None,
+            Some(&server),
+            CURRENT_CLAUDE_CODE,
+        ));
+        assert!(unpublished.get("allowedTools").is_none(), "{unpublished}");
+    }
+
+    /// The rules reach Claude Code as one argument it splits on commas and
+    /// spaces, so a name that is not one plain word would write rules of its
+    /// own.
+    #[test]
+    fn a_published_name_that_is_not_one_plain_word_gets_no_rule() {
+        let spec = publishing(&[
+            "lemma_x,Bash",
+            "lemma_y Write",
+            "Edit(/**)",
+            "lemma.read",
+            " lemma_echo ",
+            "lemma_Read_Table",
+        ]);
+        let options = claude_options(claude_code(
+            &spec,
+            false,
+            &no_web_tools(),
+            None,
+            None,
+            Some(&bridge("lemma_tools")),
+            CURRENT_CLAUDE_CODE,
+        ));
+        // Trimmed as triage trims it, and otherwise spelled as published:
+        // Claude Code matches the name exactly.
+        assert_eq!(
+            options["allowedTools"],
+            json!([
+                "mcp__lemma_tools__lemma_echo",
+                "mcp__lemma_tools__lemma_Read_Table",
+            ])
+        );
+
+        // A server name that is not one word gives none of its tools a rule.
+        let options = claude_options(claude_code(
+            &spec,
+            false,
+            &no_web_tools(),
+            None,
+            None,
+            Some(&bridge("lemma tools")),
+            CURRENT_CLAUDE_CODE,
+        ));
+        assert!(options.get("allowedTools").is_none(), "{options}");
     }
 
     fn claude_options(options: SessionOptions) -> Value {

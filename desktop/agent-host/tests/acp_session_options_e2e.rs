@@ -347,6 +347,55 @@ async fn an_older_claude_code_has_its_tool_search_turned_off_instead() {
     );
 }
 
+/// The tools Lemma publishes to a run are allowed by name, on the session the
+/// run opens and on the one it resumes, whichever settings the person chose.
+/// Claude Code's "Don't Ask" mode never asks, and it denied every one of them.
+#[tokio::test]
+async fn claude_code_may_call_the_runs_lemma_tools_without_asking() {
+    let directory = TempDir::new().unwrap();
+    for own in [false, true] {
+        let log = directory.path().join(format!("claude-tools-{own}.jsonl"));
+        let mut first = request(
+            claude_code(&log, CLAUDE_CODE),
+            directory.path().join(format!("cwd-tools-{own}")),
+            own,
+            json!({
+                "server_name": "lemma_tools",
+                "tool_names": ["lemma_pod_list_files", "lemma_exec_command"],
+            }),
+        );
+        // As the runtime registers it: under the name the run published.
+        first.mcp_server = Some(McpServer::Stdio(McpServerStdio::new(
+            "lemma_tools",
+            PathBuf::from("lemma-agent-host"),
+        )));
+        AcpDriver::default()
+            .run(first.clone(), Arc::new(Quiet))
+            .await
+            .unwrap();
+        let mut resumed = first;
+        resumed.run_spec.resume_session_id = Some("fake-session".into());
+        AcpDriver::default()
+            .run(resumed, Arc::new(Quiet))
+            .await
+            .unwrap();
+
+        let traffic = read_traffic(&log);
+        let opened = sessions(&traffic);
+        assert_eq!(opened.len(), 2);
+        for session in opened {
+            assert_eq!(
+                session["params"]["_meta"]["claudeCode"]["options"]["allowedTools"],
+                json!([
+                    "mcp__lemma_tools__lemma_pod_list_files",
+                    "mcp__lemma_tools__lemma_exec_command",
+                ]),
+                "own_settings={own}: {session}"
+            );
+        }
+    }
+}
+
 #[tokio::test]
 async fn codex_keeps_the_persons_setup_and_the_pinned_config() {
     let directory = TempDir::new().unwrap();

@@ -481,7 +481,11 @@ jobs:
       - name: Start loading the images
         run: |
           load() {
-            ( docker load -i "$1" > "/tmp/$2-load.log" 2>&1; echo $? > "/tmp/$2-load.rc" ) &
+            # The status is written whatever happens: under the step's `-e`, a
+            # failing load would otherwise end the subshell before it, and the
+            # wait below would run to the job's timeout.
+            ( if docker load -i "$1" > "/tmp/$2-load.log" 2>&1; then rc=0; else rc=$?; fi
+              echo "$rc" > "/tmp/$2-load.rc" ) &
           }
           load /tmp/e2e-service-images.tar service
           if [ -f /tmp/e2e-sandbox-images.tar ]; then

@@ -63,6 +63,8 @@ def test_the_backoff_scale_shrinks_only_the_exponential_wait(monkeypatch) -> Non
     from app.modules.agent_surfaces.config import surface_settings
 
     policy = RetryPolicy()
+    # Set, not assumed: an e2e session in the same process shrinks it.
+    monkeypatch.setattr(surface_settings, "surface_send_backoff_scale", 1.0)
     assert policy.backoff(1) == 0.5
     monkeypatch.setattr(surface_settings, "surface_send_backoff_scale", 0.1)
     assert policy.backoff(1) == 0.05

@@ -124,6 +124,7 @@ EXPECTED = [
     ),
     ("enable_slack_socket_mode", "ENABLE_SLACK_SOCKET_MODE", False),
     ("enable_resend_polling_mode", "ENABLE_RESEND_POLLING_MODE", False),
+    ("surface_send_backoff_scale", "SURFACE_SEND_BACKOFF_SCALE", 1.0),
 ]
 
 
@@ -151,6 +152,8 @@ def test_surface_settings_reads_legacy_env_var(monkeypatch, field, env, default)
         raw, expected = ("false", False) if default else ("true", True)
     elif isinstance(default, int):
         raw, expected = "123", 123
+    elif isinstance(default, float):
+        raw, expected = "0.25", 0.25
     else:
         raw, expected = "sentinel", "sentinel"
     monkeypatch.setenv(env, raw)

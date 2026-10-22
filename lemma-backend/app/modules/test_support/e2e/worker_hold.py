@@ -174,7 +174,9 @@ async def _forget_queued_work(database_url: str) -> None:
 
     The next test's reset deletes it anyway. Left in place, a resumed worker
     ran it first -- the test's leftovers, against the next test's reset, whose
-    delete then waited on the worker's transactions and retried.
+    delete then waited on the worker's transactions and retried. Only queued
+    rows: a worker is stopped between transactions, not between jobs, and a
+    job it holds the lease of must find its ``running`` row to complete.
     """
     for database in _database_names(database_url):
         url = _libpq_url(database_url).rsplit("/", 1)[0] + "/" + database
@@ -182,4 +184,4 @@ async def _forget_queued_work(database_url: str) -> None:
             cursor = await conn.execute("SELECT to_regclass('work_items')")
             row = await cursor.fetchone()
             if row and row[0]:
-                await conn.execute("DELETE FROM work_items")
+                await conn.execute("DELETE FROM work_items WHERE state = 'queued'")

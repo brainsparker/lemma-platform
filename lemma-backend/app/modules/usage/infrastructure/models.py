@@ -15,10 +15,15 @@ from sqlalchemy import (
     Integer,
     Numeric,
     String,
+    event,
+    or_,
+    select,
     text,
+    update,
 )
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.engine import Connection
+from sqlalchemy.orm import Mapped, Mapper, mapped_column
 
 from app.core.infrastructure.db.base import UUIDAuditBase
 from app.modules.usage.domain.accounting import money
@@ -190,7 +195,13 @@ class UsageRecord(UUIDAuditBase):
 
 
 class UsageLimitCounter(UUIDAuditBase):
-    """Reserved/used system-profile cost for one active limit window."""
+    """System-profile spend in one limit window, kept as a running total.
+
+    Settling a request adds its cost here in the transaction that prices its
+    ledger row, so admission reads this rather than summing the ledger.
+    ``request_accounting`` describes when the total is recounted from the
+    ledger instead, and why each of those cases needs it.
+    """
 
     __tablename__ = "usage_limit_counters"
 
@@ -213,6 +224,14 @@ class UsageLimitCounter(UUIDAuditBase):
     reserved_usd: Mapped[Decimal] = mapped_column(
         Numeric(24, 9), nullable=False, default=Decimal(0)
     )
+    #: The ``BudgetWindow.basis`` ``used_usd`` was last counted under: which
+    #: ledger rows it is the total of. Null until it has been counted, and set
+    #: back to null by a ledger write that did not add to it.
+    basis: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    #: When ``used_usd`` was last recounted from the ledger.
+    reconciled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     __table_args__ = (
         Index(
@@ -224,6 +243,64 @@ class UsageLimitCounter(UUIDAuditBase):
             unique=True,
             postgresql_nulls_not_distinct=True,
         ),
+    )
+
+
+#: The order every writer locks counter rows in, so no two wait on each other
+#: in a cycle; ``spend_counters.lock_order`` is the same order in Python.
+COUNTER_LOCK_ORDER = (
+    UsageLimitCounter.window_kind.collate("C"),
+    UsageLimitCounter.window_start,
+    UsageLimitCounter.organization_id.asc().nulls_first(),
+    UsageLimitCounter.user_id.asc().nulls_first(),
+)
+
+
+@event.listens_for(UsageRecord, "after_insert")
+def _uncount_windows_of(
+    mapper: Mapper[UsageRecord], connection: Connection, row: UsageRecord
+) -> None:
+    """Have the windows a priced SYSTEM row falls into recounted before use.
+
+    Request settlement adds its own cost to the counters. Every other writer
+    -- the aggregate run recorder, a script, a test -- inserts a row no counter
+    knows about, so it marks those counters uncounted in the same transaction,
+    and the next admission sums the ledger before trusting them. Settlement
+    never reaches this: it prices a row that was inserted unpriced.
+    """
+    del mapper
+    if row.profile_scope != "SYSTEM" or (
+        row.cost_amount is None and row.cost_usd is None
+    ):
+        return
+    covering = (
+        select(UsageLimitCounter.id)
+        .where(
+            UsageLimitCounter.basis.is_not(None),
+            UsageLimitCounter.window_start <= row.occurred_at,
+            UsageLimitCounter.window_end > row.occurred_at,
+            # The member's own windows, scoped to this organization or to none.
+            or_(
+                UsageLimitCounter.user_id == row.user_id,
+                UsageLimitCounter.user_id.is_(None),
+            ),
+            or_(
+                UsageLimitCounter.organization_id == row.organization_id,
+                UsageLimitCounter.organization_id.is_(None),
+            ),
+            # Never a window of nobody in particular.
+            or_(
+                UsageLimitCounter.organization_id.is_not(None),
+                UsageLimitCounter.user_id.is_not(None),
+            ),
+        )
+        .order_by(*COUNTER_LOCK_ORDER)
+        .with_for_update()
+    )
+    connection.execute(
+        update(UsageLimitCounter)
+        .where(UsageLimitCounter.id.in_(covering))
+        .values(basis=None)
     )
 
 

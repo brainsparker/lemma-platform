@@ -8,10 +8,28 @@ once, including child runs. Parent totals are never added to child totals.
 ## Check, dispatch, record
 
 Run start and every LLM provider attempt check current organization and user budgets
-before dispatch. Request checks refresh shared totals from the ledger and current policy, so ongoing runs
-observe usage from other workers and newly configured limits. A reached limit
-stops the next request. There are no budget allocations, reservations, prompt
-estimates, local grants or checkpoint batches.
+before dispatch. Each request resolves the current limits, so an ongoing run
+observes newly configured ones at its next request, and reads each limited
+window's shared counter, so it observes usage from other workers. A reached
+limit stops the next request. There are no budget allocations, reservations,
+prompt estimates, local grants or checkpoint batches.
+
+A window's counter is its running total. Settlement adds a receipt's cost to
+it in the transaction that prices the ledger row, and admission compares it
+with the limit without a lock or a ledger sum, so the cost of a request does
+not grow with the ledger or queue a member's concurrent runs. The counter is
+recounted from the ledger instead of trusted when it is new; when the rows it
+counts change -- it keeps a digest, its basis, of the window's organization and
+source exclusions, and a window asking with another one recounts it -- or its
+limit changes; when a ledger row was inserted through the ORM by anything but
+settlement, which marks every counter that row falls into; and when it has not
+been recounted for `USAGE_COUNTER_REFRESH_SECONDS`, which bounds how long a
+ledger edit nothing announced (raw SQL) can go uncounted. A recount applies the
+difference between the ledger sum and the counter as read in one snapshot, so
+a receipt settled while the sum ran keeps its charge, and recounts exclude one
+another with a transaction-scoped advisory lock rather than blocking
+settlement. Settlement never recounts: a counter recounted under other rules
+while its request was out is left for the next admission.
 
 Before provider I/O, admission commits a request journal entry marked `PENDING`.
 Afterward, settlement records the actual reported tokens and their per-request
@@ -107,8 +125,12 @@ The compatibility `cost_usd` field is not the authority for new receipts.
 The usage migration follows the app/function history migrations. It adds exact
 costs, pricing provenance and a partial unique request-id index for idempotent
 settlement. It does not create allocation tables. Historical usage remains
-available with legacy provenance. Checks refresh totals from history so policy
-changes and compatibility writers cannot leave stale cached allowance. The request-id index is built concurrently so the migration does not
+available with legacy provenance. Counters carry the basis they were counted
+under, so policy changes and compatibility writers cannot leave a stale total
+trusted: a counter whose basis no longer matches, or that such a writer marked,
+is recounted from history before its next use. Counters from before the basis
+existed have none, and are recounted the first time a request uses them. The
+request-id index is built concurrently so the migration does not
 require a blocking index build on existing usage rows.
 
 Drain old workers before migration and deployment: aggregate run settlement

@@ -277,3 +277,50 @@ def test_tool_kinds_follow_the_toolset_and_the_dynamic_prefixes() -> None:
     assert tool_kind_of("function_x", FunctionToolset()) == "function"
     assert tool_kind_of("agent_x", FunctionToolset()) == "agent"
     assert tool_kind_of("ask_user", FunctionToolset()) == "builtin"
+
+
+class _RecordingFinalizer:
+    def __init__(self) -> None:
+        self.finished: list[dict[str, object]] = []
+
+    async def finish(self, **kwargs: object) -> None:
+        self.finished.append(kwargs)
+
+
+@pytest.mark.parametrize(
+    ("event_type", "expected"),
+    [
+        (AgentEventType.ERROR, "failed"),
+        (AgentEventType.REJECTED, "failed"),
+        (AgentEventType.WAITING, "waiting"),
+        (AgentEventType.STOPPED, "cancelled"),
+        (AgentEventType.COMPLETED, "completed"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_terminal_event_is_counted_as_the_outcome_it_finalized(
+    event_type: AgentEventType, expected: str
+) -> None:
+    """The pump finalizes these without a final status of their own; the
+    metric reads it, and an unset one used to count every one as completed."""
+    from app.modules.agent.services.run_event_pump import RunEventPump, RunOutcome
+    from app.modules.agent.services.run_identity import RunIdentity
+
+    finalizer = _RecordingFinalizer()
+    outcome = RunOutcome()
+    run = RunIdentity(
+        conversation_id=UUID("00000000-0000-0000-0000-000000000010"),
+        agent_run_id=UUID("00000000-0000-0000-0000-000000000020"),
+        organization_id=None,
+        pod_id=UUID("00000000-0000-0000-0000-000000000012"),
+        user_id=UUID("00000000-0000-0000-0000-000000000021"),
+        agent_id=None,
+        started_at=None,
+    )
+
+    terminal = await RunEventPump(SimpleNamespace(), finalizer).handle(
+        event=AgentEvent(type=event_type, data={}), run=run, outcome=outcome
+    )
+
+    assert terminal and len(finalizer.finished) == 1
+    assert ended_as(outcome.final_status) == expected

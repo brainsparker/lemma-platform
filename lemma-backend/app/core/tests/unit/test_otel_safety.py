@@ -802,6 +802,23 @@ def test_a_work_item_span_keeps_its_job_kind_name() -> None:
     )
 
 
+def test_the_work_execute_span_keeps_the_attributes_the_dispatcher_writes() -> None:
+    from app.core.infrastructure.work.dispatcher import work_span_attributes
+    from app.core.infrastructure.work.types import WorkClass
+
+    written = work_span_attributes(next(iter(WorkClass)), "agent.turn")
+    safe = _exported(
+        _app_span(
+            "work.execute",
+            scope_name="app.core.infrastructure.work.dispatcher",
+            kind=SpanKind.INTERNAL,
+            attributes=written,
+        )
+    )
+    assert safe.name == "work.execute"
+    assert safe.attributes == written
+
+
 def test_the_agent_run_root_span_keeps_who_ran_where() -> None:
     attributes = {
         "lemma.pod_id": "pod",

@@ -271,6 +271,13 @@ def _log_busiest(rows: Iterable[object]) -> None:
         )
 
 
+def _forget_samplers() -> None:
+    """Clear every registered sampler's reading. A failed main sample skips
+    them, so without this their last values would stand for the whole outage."""
+    for sampler in _samplers.values():
+        sampler.forget()
+
+
 async def gauge_loop(open_session: SessionOpener, interval_seconds: float) -> None:
     while True:
         try:
@@ -279,6 +286,7 @@ async def gauge_loop(open_session: SessionOpener, interval_seconds: float) -> No
             await _run_samplers(open_session, _snapshot.samples)
         except (SQLAlchemyError, OSError) as exc:
             _snapshot.forget()
+            _forget_samplers()
             _incident.record_failure(error_type=type(exc).__name__)
         await asyncio.sleep(interval_seconds)
 

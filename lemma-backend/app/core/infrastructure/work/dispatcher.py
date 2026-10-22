@@ -69,6 +69,12 @@ _REAP_BATCH = 100
 _REAP_INTERVAL_SECONDS = 1.0
 
 
+def work_span_attributes(cls: WorkClass, kind: str) -> dict[str, str]:
+    """The ``work.execute`` span's attributes, under the ``lemma.`` names the
+    span exporter keeps; the bare metric label names are dropped there."""
+    return {"lemma.work_class": cls.value, "lemma.work_kind": kind}
+
+
 class Dispatcher:
     def __init__(
         self,
@@ -175,7 +181,7 @@ class Dispatcher:
         with tracer.start_as_current_span(
             "work.execute",
             context=trace.set_span_in_context(trace.INVALID_SPAN),
-            attributes={"work_class": self.cls.value, "work_kind": item.kind},
+            attributes=work_span_attributes(self.cls, item.kind),
         ):
             started = time.monotonic()
             outcome = "error"

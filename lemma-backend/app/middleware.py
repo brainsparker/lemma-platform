@@ -13,7 +13,7 @@ import uuid
 from opentelemetry import metrics, trace
 from opentelemetry.trace import SpanKind
 from fastapi.responses import JSONResponse
-from starlette.routing import Match
+from starlette.routing import BaseRoute, Match, Route
 
 from app.core.api.exception_handlers import ERROR_REQUEST_ID
 from app.core.domain.errors import PayloadTooLargeError
@@ -337,19 +337,53 @@ def _template_for_unrouted(scope: Scope) -> str:
     as bounded as any other route label. Only plain routes are tried: a
     mount's template is its prefix, which would name the wrong thing. A path
     nothing matches stays ``unmatched``.
+
+    Only the routes sharing the path's first segment are tried, from an index
+    built once per route table: these are the cheapest requests to send, and
+    a scan of every route on each would add work exactly where it is least
+    affordable.
     """
     router = getattr(scope.get("app"), "router", None)
+    routes = getattr(router, "routes", None)
+    if not routes:
+        return _UNMATCHED_ROUTE
+    by_segment = _routes_by_first_segment(routes)
+    first = _first_segment(str(scope.get("path") or ""))
     partial: str | None = None
-    for candidate in getattr(router, "routes", ()):
-        template = getattr(candidate, "path_format", None)
-        if not isinstance(template, str):
-            continue
+    for candidate in (*by_segment.get(first, ()), *by_segment.get(None, ())):
         match, _ = candidate.matches(scope)
         if match is Match.FULL:
-            return template
+            return candidate.path_format
         if match is Match.PARTIAL and partial is None:
-            partial = template
+            partial = candidate.path_format
     return partial or _UNMATCHED_ROUTE
+
+
+#: Route index per route table, keyed by the list's identity and length so a
+#: route added after start-up rebuilds it.
+_ROUTE_INDEX: dict[
+    tuple[int, int], dict[str | None, list[Route]]
+] = {}  # memory: bounded cleared to one route table on every rebuild
+
+
+def _first_segment(path: str) -> str:
+    return path.lstrip("/").split("/", 1)[0]
+
+
+def _routes_by_first_segment(routes: list[BaseRoute]) -> dict[str | None, list[Route]]:
+    """Plain routes by their literal first segment; ``None`` for a parameter."""
+    key = (id(routes), len(routes))
+    index = _ROUTE_INDEX.get(key)
+    if index is None:
+        index = {}
+        for route in routes:
+            if not isinstance(route, Route):
+                continue
+            first = _first_segment(route.path_format)
+            index.setdefault(None if first.startswith("{") else first, []).append(route)
+        _ROUTE_INDEX.clear()
+        _ROUTE_INDEX[key] = index
+    return index
 
 
 def _name_server_span_route(route: str) -> None:

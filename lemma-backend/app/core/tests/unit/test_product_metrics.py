@@ -196,3 +196,33 @@ async def test_a_failing_sampler_forgets_its_reading_and_spares_the_others() -> 
     assert forgotten == ["fails"]
     # The every-second-tick sampler skipped tick 1.
     assert seen == ["works"]
+
+
+class _DownDatabase:
+    async def __aenter__(self) -> None:
+        raise OSError("database down")
+
+    async def __aexit__(self, *exc: object) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_a_failed_main_sample_forgets_every_registered_sampler() -> None:
+    """Otherwise their last readings stand, looking healthy, through the outage."""
+    import asyncio
+
+    forgotten = asyncio.Event()
+
+    async def never(session) -> None:
+        raise AssertionError("samplers do not run when the main sample fails")
+
+    registered = dict(gauges._samplers)
+    gauges._samplers.clear()
+    gauges.register_gauge_sampler("test-active", never, forget=forgotten.set)
+    loop = asyncio.create_task(gauges.gauge_loop(_DownDatabase, 0))
+    try:
+        await asyncio.wait_for(forgotten.wait(), timeout=2)
+    finally:
+        loop.cancel()
+        gauges._samplers.clear()
+        gauges._samplers.update(registered)

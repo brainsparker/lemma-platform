@@ -199,10 +199,15 @@ harness) runs only; an Agent Host harness runs its own tools.
 
 ### Span names
 
+Server spans used to be exported as `http.server`. A saved query or alert that
+groups or filters by that span name goes empty after this change; point it at
+`span.kind = SERVER` (or the `{METHOD} {route}` names) instead.
+
+
 | Span | Name | Notes |
 |---|---|---|
 | Inbound request | `{METHOD} {route}`, e.g. `GET /pods/{pod_id}/agents` | OTel HTTP semconv. A request refused before routing (a 401 from auth, a 413) is given the route template its path matches; one matching no route is `GET unmatched`, and `http.route` is `unmatched` too. An unknown method is `HTTP` |
-| Work item | `job {kind}`, e.g. `job agent.turn` | CONSUMER span around the handler, with `lemma.job_id`, `lemma.work_kind`, `lemma.attempt` and `lemma.outcome` |
+| Work item | `work.execute` | A root span per claimed item, carrying `lemma.work_class` and `lemma.work_kind` (which handler ran). A span named `job {kind}` would also survive export, but nothing emits one today |
 | Agent run | `agent.run` | Not `agent.run {name}`: names are per pod and unbounded across tenants, so the name is the `lemma.agent_name` attribute. The root carries `lemma.pod_id`, `lemma.agent_id`, `lemma.conversation_id`, `lemma.agent_run_id`, `lemma.agent_name` and `lemma.run_kind` (the `kind` above) |
 
 ### HTTP semantic conventions

@@ -70,3 +70,38 @@ async def test_a_wrong_method_still_names_the_path_template():
 async def test_a_path_no_route_matches_is_unmatched():
     span = await _refused_before_routing("/nowhere/at/all")
     assert span.attributes["http.route"] == "unmatched"
+
+
+def _scope(app: object, path: str) -> dict[str, object]:
+    return {"type": "http", "method": "GET", "path": path, "headers": [], "app": app}
+
+
+def test_a_mount_never_names_a_request() -> None:
+    from starlette.applications import Starlette
+    from starlette.routing import Mount
+
+    from app.middleware import _template_for_unrouted
+
+    app = _app()
+    app.router.routes.append(Mount("/st", app=Starlette()))
+    assert _template_for_unrouted(_scope(app, "/st/anything")) == "unmatched"
+
+
+def test_only_routes_sharing_the_first_segment_are_tried() -> None:
+    from app.middleware import _template_for_unrouted
+
+    app = _app()
+    tried: list[str] = []
+    for route in app.router.routes:
+        original = route.matches
+
+        def recording(scope, *, _route=route, _original=original):
+            tried.append(_route.path_format)
+            return _original(scope)
+
+        route.matches = recording  # type: ignore[method-assign]
+
+    assert _template_for_unrouted(_scope(app, "/pods/p/agents")) == (
+        "/pods/{pod_id}/agents"
+    )
+    assert tried == ["/pods/{pod_id}/agents"]

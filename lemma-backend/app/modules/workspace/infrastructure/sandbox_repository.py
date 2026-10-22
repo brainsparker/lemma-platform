@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from uuid import UUID, uuid7
 
 from sqlalchemy import case, select, update
+from sqlalchemy.orm import aliased
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -285,6 +286,15 @@ class SandboxRepository:
             .where(SandboxModel.id == sandbox_id)
             .scalar_subquery()
         )
+        # The state the claim replaced. A subquery in RETURNING reads the
+        # statement's snapshot, so this is the row as it was before the update
+        # -- which is what says whether the claim ended a running session.
+        before = aliased(SandboxInstanceModel)
+        prior_state = (
+            select(before.state)
+            .where(before.id == SandboxInstanceModel.id)
+            .scalar_subquery()
+        )
         result = await self.session.execute(
             update(SandboxInstanceModel)
             .where(
@@ -294,10 +304,22 @@ class SandboxRepository:
                 SandboxInstanceModel.state != SandboxInstanceState.DESTROYED.value,
             )
             .values(state=SandboxInstanceState.DESTROYED.value)
-            .returning(SandboxInstanceModel)
+            .returning(SandboxInstanceModel, prior_state)
         )
-        row = result.scalar_one_or_none()
-        return row.to_entity() if row is not None else None
+        claimed = result.one_or_none()
+        if claimed is None:
+            return None
+        row, was = claimed
+        # The claim is what ends a READY E2B session on this path, so it is
+        # where the session is timed; the later mark finds it DESTROYED and
+        # times nothing, so the session is counted once.
+        if (
+            was == SandboxInstanceState.READY.value
+            and row.provider == E2B_PROVIDER
+            and row.ready_at is not None
+        ):
+            record_sandbox_session((utcnow() - row.ready_at).total_seconds())
+        return row.to_entity()
 
     async def current_instance(self, sandbox_id: UUID) -> SandboxInstance | None:
         """The instance at the sandbox's current epoch, whatever its state."""

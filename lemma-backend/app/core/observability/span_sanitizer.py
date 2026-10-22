@@ -136,6 +136,7 @@ GENERAL_SPAN_ATTRIBUTE_KEYS = frozenset(
         "lemma.agent_name",
         "lemma.run_kind",
         "lemma.work_kind",
+        "lemma.work_class",
         "lemma.task_name",
         "lemma.consumer",
         "lemma.event_type",

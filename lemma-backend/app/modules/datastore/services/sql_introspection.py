@@ -57,7 +57,44 @@ def _forbidden_nodes() -> tuple[type[exp.Expression], ...]:
 # reads every user's rows. Revoking the parameters at the database level does
 # not help -- PostgreSQL keeps no ACL for customized options, so
 # ``REVOKE SET ON PARAMETER app.foo`` silently leaves the placeholder settable.
-_FORBIDDEN_FUNCTIONS = frozenset({"set_config"})
+#
+# The rest run SQL handed to them as a string, or read a relation named by a
+# string, so the tables they reach never appear in the parse tree and escape the
+# per-table read check below. The query role can use every pod's schema, so
+# ``table_to_xml('pod_<other>.t', ...)`` read another pod's rows -- another
+# organization's -- and ``query_to_xml('select nspname from pg_namespace', ...)``
+# listed the schemas to aim at. ``ts_stat`` and ``ts_rewrite`` take a query as
+# text too. The others reach the server's files, large objects, other sessions
+# or the app's notification channels, none of which a pod query has any use for.
+_FORBIDDEN_FUNCTIONS = frozenset(
+    {
+        "set_config",
+        "query_to_xml",
+        "query_to_xmlschema",
+        "query_to_xml_and_xmlschema",
+        "cursor_to_xml",
+        "cursor_to_xmlschema",
+        "table_to_xml",
+        "table_to_xmlschema",
+        "table_to_xml_and_xmlschema",
+        "schema_to_xml",
+        "schema_to_xmlschema",
+        "schema_to_xml_and_xmlschema",
+        "database_to_xml",
+        "database_to_xmlschema",
+        "database_to_xml_and_xmlschema",
+        "ts_stat",
+        "ts_rewrite",
+        "pg_read_file",
+        "pg_read_binary_file",
+        "pg_ls_dir",
+        "pg_stat_file",
+        "pg_notify",
+        "pg_cancel_backend",
+        "pg_terminate_backend",
+    }
+)
+_FORBIDDEN_FUNCTION_PREFIXES = ("dblink", "lo_", "pg_advisory")
 
 
 # Read-only statement roots permitted as the top-level expression.
@@ -144,7 +181,10 @@ def analyze_query(sql: str) -> QueryAnalysis:
             if isinstance(function, exp.Anonymous)
             else function.sql_name()
         )
-        if name.lower() in _FORBIDDEN_FUNCTIONS:
+        lowered = name.lower()
+        if lowered in _FORBIDDEN_FUNCTIONS or lowered.startswith(
+            _FORBIDDEN_FUNCTION_PREFIXES
+        ):
             raise DatastoreQueryError(f"{name}() is not allowed in datastore queries")
 
     cte_aliases = {

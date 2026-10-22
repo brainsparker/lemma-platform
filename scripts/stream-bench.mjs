@@ -27,6 +27,10 @@
  *   --scenarios a,b       idle, scroll, animation, typing, resize (default: all)
  *   --quick               5 s scenarios, 10 keys, 2 resizes: a smoke run
  *   --shaper proxy|cdp    how profiles are applied (default proxy; see PROFILES)
+ *   --transports a,b      vnc, webrtc (default vnc). WebRTC needs a target with
+ *                         a `turn_container` for its profiles: its media is
+ *                         shaped by `tc netem` on the TURN server, since it
+ *                         never crosses the TCP proxy
  *   --headed              show the browser
  *
  * `STREAM_BENCH_DEBUG=1` logs a stack trace whenever the page closes the view
@@ -129,10 +133,13 @@ async function shapingProxy(upstream, profile) {
 const SCENARIOS = ["idle", "scroll", "animation", "typing", "resize"];
 const VIEWPORT = { width: 1440, height: 900 };
 const RESIZED = { width: 1120, height: 760 };
-const GROUPS = ["x11vnc", "websockify", "relay", "xvfb", "chrome", "probe"];
+const GROUPS = ["x11vnc", "tigervnc", "websockify", "relay", "streamer", "xvfb", "chrome", "probe"];
+/** The processes that exist to carry the picture, on either transport. */
+const STREAMING = ["x11vnc", "tigervnc", "websockify", "relay", "streamer"];
+const TRANSPORTS = ["vnc", "webrtc"];
 
 function parseArgs(argv) {
-    const args = { out: path.join(REPO, "out", "stream-bench"), dpr: [1, 2], profiles: Object.keys(PROFILES), scenarios: SCENARIOS };
+    const args = { out: path.join(REPO, "out", "stream-bench"), dpr: [1, 2], profiles: Object.keys(PROFILES), scenarios: SCENARIOS, transports: ["vnc"] };
     for (let i = 0; i < argv.length; i++) {
         const flag = argv[i];
         const value = () => argv[++i];
@@ -142,6 +149,7 @@ function parseArgs(argv) {
         else if (flag === "--dpr") args.dpr = value().split(",").map(Number);
         else if (flag === "--profiles") args.profiles = value().split(",");
         else if (flag === "--scenarios") args.scenarios = value().split(",");
+        else if (flag === "--transports") args.transports = value().split(",");
         else if (flag === "--quick") args.quick = true;
         else if (flag === "--headed") args.headed = true;
         else if (flag === "--shaper") args.shaper = value();
@@ -152,6 +160,7 @@ function parseArgs(argv) {
     if (!["proxy", "cdp"].includes(args.shaper)) throw new Error("--shaper is proxy or cdp");
     for (const p of args.profiles) if (!PROFILES[p]) throw new Error(`unknown profile ${p}`);
     for (const s of args.scenarios) if (!SCENARIOS.includes(s)) throw new Error(`unknown scenario ${s}`);
+    for (const t of args.transports) if (!TRANSPORTS.includes(t)) throw new Error(`unknown transport ${t}`);
     return args;
 }
 
@@ -220,7 +229,7 @@ function cpuBetween(before, after) {
     const idle = after.machine.idle - before.machine.idle;
     return {
         cores,
-        streaming_cores: round(["x11vnc", "websockify", "relay"].reduce((sum, g) => sum + (cores[g] ?? 0), 0), 3),
+        streaming_cores: round(STREAMING.reduce((sum, g) => sum + (cores[g] ?? 0), 0), 3),
         machine_busy_fraction: total > 0 ? round(1 - idle / total, 3) : null,
         cpu_count: after.cpu_count,
         cpu_quota: after.cpu_quota,
@@ -265,7 +274,28 @@ async function startFrontend(target) {
 
 /* ------------------------------------------------------------ one viewer */
 
-async function openViewer(browser, { frontend, target, dpr, profile, shaper }) {
+/** Shape WebRTC's media, which never touches the TCP proxy: `tc netem` on
+ *  the TURN server's interface, through a sidecar in its network namespace.
+ *  Both ends are relay-only, so every media packet leaves that interface
+ *  once each way -- half the round trip is added per direction, and the
+ *  rate and loss apply to everything it sends. */
+async function shapeTurn(target, profile) {
+    if (!target.turn_container) return "none";
+    const p = PROFILES[profile];
+    const rule = shaped(p)
+        ? ["qdisc", "replace", "dev", "eth0", "root", "netem", "delay", `${p.latency / 2}ms`,
+            ...(p.downloadThroughput > 0 ? ["rate", `${Math.round((p.downloadThroughput * 8) / 1e6)}mbit`] : []),
+            ...(p.packetLoss > 0 ? ["loss", `${p.packetLoss}%`] : [])]
+        : ["qdisc", "del", "dev", "eth0", "root"];
+    await new Promise((resolve) => {
+        const child = spawn("docker", ["run", "--rm", "--cap-add", "NET_ADMIN", "--network", `container:${target.turn_container}`,
+            target.netem_image ?? "lemma-bench-netem", "tc", ...rule], { stdio: "ignore" });
+        child.on("close", resolve);
+    });
+    return shaped(p) ? "netem on TURN" : "none";
+}
+
+async function openViewer(browser, { frontend, target, dpr, profile, shaper, transport }) {
     /* The proxy needs a plain-HTTP API to sit in front of; an https target is
        shaped by CDP alone, and the results say so. */
     const useProxy = shaper === "proxy" && shaped(PROFILES[profile]) && target.api_url.startsWith("http:");
@@ -303,7 +333,8 @@ async function openViewer(browser, { frontend, target, dpr, profile, shaper }) {
         if (request.url().includes("/workspace/browser/display-size")) resizes.push(now());
     });
     const opened = now();
-    await page.goto(`${frontend}/t/${target.pod_id}/computer?streamProbe=1`, { waitUntil: "domcontentloaded" });
+    const media = transport === "webrtc" ? await shapeTurn(target, profile) : null;
+    await page.goto(`${frontend}/t/${target.pod_id}/computer?streamProbe=1&stream=${transport}`, { waitUntil: "domcontentloaded" });
     /* A fresh bench user is asked for a name first, and the dialog would take
        the clicks the typing scenario aims at the picture. */
     const skip = page.getByRole("button", { name: "Skip for now" });
@@ -317,11 +348,12 @@ async function openViewer(browser, { frontend, target, dpr, profile, shaper }) {
         extensions: snap.connect.extensions,
         protocol: snap.connect.protocol,
     };
-    return { context, page, resizes, first, shaping: proxy ? "proxy" : shaped(PROFILES[profile]) ? "cdp" : "none" };
+    const signalling = proxy ? "proxy" : shaped(PROFILES[profile]) ? "cdp" : "none";
+    return { context, page, resizes, first, shaping: media ? `${signalling}; media ${media}` : signalling };
 }
 
 async function canvasCentre(page) {
-    const box = await page.locator(".screen-surfaces canvas").last().boundingBox();
+    const box = await page.locator(".screen-surfaces canvas, .screen-video").last().boundingBox();
     if (!box) throw new Error("no canvas on the page");
     return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
 }
@@ -485,26 +517,26 @@ function markdown(results) {
     lines.push(`# Stream bench — ${results.target.name}`, "");
     lines.push(`${results.started} · git ${results.git} · sandbox ${results.target.sandbox} · ${results.quick ? "quick run" : "full run"}`, "");
     lines.push(`Clock offset (sandbox − viewer): ${results.clock.offset_ms} ms ± ${results.clock.error_ms} ms (best of ${results.clock.pings} pings, min RTT ${results.clock.rtt_ms.min} ms)`, "");
-    lines.push("| DPR | network | shaped by | first frame (nav → picture) | socket → first frame | permessage-deflate (browser ↔ API) |");
-    lines.push("|---|---|---|---|---|---|");
+    lines.push("| transport | DPR | network | shaped by | first frame (nav → picture) | socket → first frame | permessage-deflate (browser ↔ API) |");
+    lines.push("|---|---|---|---|---|---|---|");
     for (const run of results.runs) {
-        lines.push(`| ${run.dpr} | ${PROFILES[run.profile].label} | ${fmt(run.shaping)} | ${fmt(run.first?.navigation_to_first_frame_ms)} ms | ${fmt(run.first?.socket_to_first_frame_ms)} ms | ${run.first ? (run.first.extensions || "not negotiated") : "–"} |`);
+        lines.push(`| ${run.transport} | ${run.dpr} | ${PROFILES[run.profile].label} | ${fmt(run.shaping)} | ${fmt(run.first?.navigation_to_first_frame_ms)} ms | ${fmt(run.first?.socket_to_first_frame_ms)} ms | ${run.first ? (run.first.extensions || "not negotiated") : "–"} |`);
     }
     lines.push("");
-    lines.push("| scenario | DPR | network | fps delivered | sandbox fps | dropped | longest still ms | socket closes | g2g p50 / p95 ms | key→echo p50 / p95 ms | rx kbps | tx kbps | CPU x11vnc / websockify / relay / Xvfb / chrome (cores) | display resizes |");
-    lines.push("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|");
+    lines.push("| transport | scenario | DPR | network | fps delivered | sandbox fps | dropped | longest still ms | socket closes | g2g p50 / p95 ms | key→echo p50 / p95 ms | rx kbps | tx kbps | streaming cores | CPU vnc server / websockify / relay / streamer / Xvfb / chrome | display resizes |");
+    lines.push("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|");
     for (const run of results.runs) {
         for (const s of run.scenarios) {
-            if (s.error) { lines.push(`| ${s.scenario} | ${run.dpr} | ${PROFILES[run.profile].label} | error: ${s.error.split("\n")[0]} |||||||||||`); continue; }
+            if (s.error) { lines.push(`| ${run.transport} | ${s.scenario} | ${run.dpr} | ${PROFILES[run.profile].label} | error: ${s.error.split("\n")[0]} ||||||||||||`); continue; }
             const c = s.cpu.cores;
             lines.push([
-                "", s.scenario, run.dpr, PROFILES[run.profile].label, s.fps_delivered, fmt(s.cpu.page_paint_fps),
+                "", run.transport, s.scenario, run.dpr, PROFILES[run.profile].label, s.fps_delivered, fmt(s.cpu.page_paint_fps),
                 s.drop_fraction === null ? "–" : `${s.frames_dropped} (${Math.round(s.drop_fraction * 100)}%)`,
                 s.longest_still_ms, s.socket_closes ? `${s.socket_closes} (${s.close_codes.join(", ")})` : 0,
                 `${fmt(s.glass_to_glass_ms.p50)} / ${fmt(s.glass_to_glass_ms.p95)}`,
                 s.keys ? `${fmt(s.keys.key_to_echo_ms.p50)} / ${fmt(s.keys.key_to_echo_ms.p95)}` : "",
-                s.bytes.rx_kbps, s.bytes.tx_kbps,
-                [c.x11vnc, c.websockify, c.relay, c.xvfb, c.chrome].map(fmt).join(" / "),
+                s.bytes.rx_kbps, s.bytes.tx_kbps, fmt(s.cpu.streaming_cores),
+                [c.tigervnc ?? c.x11vnc, c.websockify, c.relay, c.streamer, c.xvfb, c.chrome].map(fmt).join(" / "),
                 s.display_resize_requests, "",
             ].join(" | ").trim());
         }
@@ -513,7 +545,7 @@ function markdown(results) {
     if (resizes.length) {
         lines.push("", "Resize: time from the viewport changing to the canvas taking the new size, and to the first decoded frame after it (ms).", "");
         for (const { run, s } of resizes) {
-            lines.push(`- DPR ${run.dpr}, ${PROFILES[run.profile].label}: ` + s.resizes.map((r) => `${fmt(r.canvas_changed_ms)}/${fmt(r.picture_back_ms)}`).join(", "));
+            lines.push(`- ${run.transport}, DPR ${run.dpr}, ${PROFILES[run.profile].label}: ` + s.resizes.map((r) => `${fmt(r.canvas_changed_ms)}/${fmt(r.picture_back_ms)}`).join(", "));
         }
     }
     return lines.join("\n") + "\n";
@@ -547,16 +579,16 @@ async function main() {
     };
 
     try {
-        for (const dpr of args.dpr) {
+        for (const transport of args.transports) for (const dpr of args.dpr) {
             for (const profile of args.profiles) {
-                log(`DPR ${dpr}, ${PROFILES[profile].label}`);
-                const run = { dpr, profile, scenarios: [] };
+                log(`${transport}, DPR ${dpr}, ${PROFILES[profile].label}`);
+                const run = { transport, dpr, profile, scenarios: [] };
                 results.runs.push(run);
                 let viewer;
                 try {
                     await sandbox.setMode("idle");
                     await sandbox.open();
-                    viewer = await openViewer(browser, { frontend: frontend.origin, target, dpr, profile, shaper: args.shaper });
+                    viewer = await openViewer(browser, { frontend: frontend.origin, target, dpr, profile, shaper: args.shaper, transport });
                     run.first = viewer.first;
                     run.shaping = viewer.shaping;
                     log(`  first frame ${viewer.first.navigation_to_first_frame_ms} ms after navigation; extensions "${viewer.first.extensions}"`);
@@ -578,6 +610,7 @@ async function main() {
                     if (viewer?.page) await viewer.page.screenshot({ path: path.join(dir, `failed-dpr${dpr}-${profile}.png`) }).catch(() => {});
                 } finally {
                     await viewer?.context.close();
+                    if (transport === "webrtc") await shapeTurn(target, "unthrottled");
                     save();
                 }
             }

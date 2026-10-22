@@ -117,16 +117,22 @@ def transport_for(user_id: UUID) -> Transport:
     return "vnc"
 
 
-def density_for(vcpus: float | None) -> int:
-    """How many device pixels per CSS pixel the screen is streamed at.
+#: Where the sandbox reads whether it may stream at native density. A file
+#: delivered beside the relay token, so turning the setting off reaches a
+#: running machine at its next browser start without a new image.
+DISPLAY_DECISION_PATH = "/tmp/lemma-relay/display.json"
 
-    2 only where there is a second vCPU for it: Chrome at DPR 2 takes a whole
-    vCPU before any encoder runs, so a one-vCPU machine streams at 1x. An
-    unknown size is treated as small.
+
+def display_decision() -> bytes:
+    """`{"native_density": bool}`: the server's half of the density decision.
+
+    The machine's half is its CPU count, which only it knows for certain (a
+    container's quota is not its host's core count), so the sandbox decides
+    density 2 itself from this and from that (`lemma-ensure-display`).
     """
-    if not workspace_settings.browser_native_density:
-        return 1
-    return 2 if vcpus is not None and vcpus >= 2 else 1
+    return json.dumps(
+        {"native_density": workspace_settings.browser_native_density}
+    ).encode()
 
 
 __all__ = [
@@ -135,7 +141,8 @@ __all__ = [
     "Mode",
     "StreamKeyUnavailable",
     "Transport",
-    "density_for",
+    "DISPLAY_DECISION_PATH",
+    "display_decision",
     "mint_ticket",
     "stream_key",
     "stream_key_file",

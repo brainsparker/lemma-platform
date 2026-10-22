@@ -19,7 +19,7 @@ from app.modules.workspace.config import workspace_settings
 from app.modules.workspace.services import browser_stream, browser_stream_turn
 from app.modules.workspace.services.browser_stream import (
     TICKET_TTL_SECONDS,
-    density_for,
+    display_decision,
     mint_ticket,
     stream_key,
     stream_key_file,
@@ -129,13 +129,12 @@ def test_a_percentage_is_a_stable_share(monkeypatch) -> None:
     assert 0.05 < share < 0.15
 
 
-def test_density_needs_a_second_cpu(monkeypatch) -> None:
+def test_the_server_only_allows_density_the_machine_decides(monkeypatch) -> None:
+    """The flag reaches the machine as a file; its CPUs are its own business."""
     monkeypatch.setattr(workspace_settings, "browser_native_density", True)
-    assert density_for(1.0) == 1
-    assert density_for(None) == 1
-    assert density_for(2.0) == 2
+    assert json.loads(display_decision()) == {"native_density": True}
     monkeypatch.setattr(workspace_settings, "browser_native_density", False)
-    assert density_for(4.0) == 1
+    assert json.loads(display_decision()) == {"native_density": False}
 
 
 # --- TURN ------------------------------------------------------------------

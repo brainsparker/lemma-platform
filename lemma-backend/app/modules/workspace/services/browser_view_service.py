@@ -176,7 +176,7 @@ class BrowserViewService:
             await asyncio.gather(
                 relay.deliver_token(),
                 relay.deliver_browser_proxy(sandbox.id, sandbox.kind),
-                relay.deliver_stream_key(),
+                relay.deliver_stream_files(),
             )
         return relay
 

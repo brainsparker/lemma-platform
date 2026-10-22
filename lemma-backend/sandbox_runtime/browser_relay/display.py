@@ -75,7 +75,9 @@ class DisplayResizeResponse(BaseModel):
 
 
 class DisplayState(BaseModel):
+    #: In device pixels; a preset is this divided by `density`.
     size: str | None
+    density: int
     presets: dict[str, str]
     #: The viewer holding the size, if one is.
     lease: str | None
@@ -89,6 +91,20 @@ def lease_holder() -> str | None:
     return None
 
 
+#: What the running browser was launched at: written by `lemma-ensure-display`
+#: beside its proxy stamp. A preset is in CSS pixels and the display is in
+#: device pixels, so this is the factor between them.
+DENSITY_STAMP = Path("/tmp/lemma-browser/density.active")
+
+
+def active_density() -> int:
+    """1 or 2: the device scale factor Chrome is running at right now."""
+    try:
+        return 2 if DENSITY_STAMP.read_text().strip() == "2" else 1
+    except OSError:
+        return 1
+
+
 def _size_for(width: int, height: int) -> tuple[int, int]:
     """A preset as asked; anything else clamped to the resting size.
 
@@ -98,10 +114,11 @@ def _size_for(width: int, height: int) -> tuple[int, int]:
     `agent-browser record` to grab, which was measured to lose a recording
     part-way through on a loaded runner.
     """
+    density = active_density()
     if (width, height) in _PRESET_SIZES:
-        return width, height
+        return width * density, height * density
     cap_width, cap_height = default_display_size()
-    return min(width, cap_width), min(height, cap_height)
+    return min(width, cap_width) * density, min(height, cap_height) * density
 
 
 def _claim(viewer: str | None) -> None:
@@ -139,6 +156,7 @@ def register(app: FastAPI, require_token: Callable[..., Awaitable[None]]) -> Non
     async def display_state() -> DisplayState:
         return DisplayState(
             size=await current_size(),
+            density=active_density(),
             presets={name: f"{w}x{h}" for name, (w, h) in PRESETS.items()},
             lease=lease_holder(),
         )
@@ -184,7 +202,8 @@ def register(app: FastAPI, require_token: Callable[..., Awaitable[None]]) -> Non
         against.
         """
         _lease["holder"] = None
-        width, height = default_display_size()
+        density = active_density()
+        width, height = (side * density for side in default_display_size())
         try:
             size = await set_display_size(width, height)
         except RecordingInProgress as exc:
@@ -253,6 +272,7 @@ def parse_screen_size(xrandr: str) -> str | None:
 
 __all__ = [
     "PRESETS",
+    "active_density",
     "DisplayResizeRequest",
     "register",
     "current_size",

@@ -113,6 +113,17 @@ export function LiveScreenRtc({
                 },
             });
             session.current = current;
+            /* The stream bench's probe (`stream-probe.ts`), as on the VNC
+               pane: dev builds only, behind `?streamProbe=1`. */
+            if (process.env.NODE_ENV !== "production" && holder.current) {
+                const surface = holder.current;
+                const socketAt = performance.timeOrigin + performance.now();
+                void import("./stream-probe").then((probe) => {
+                    if (probe.streamProbeAsked()) {
+                        probe.attachStreamProbe({ socket: current.signalling, surface, socketAt, mediaBytes: () => current.bytesReceived() });
+                    }
+                });
+            }
         };
 
         connect();

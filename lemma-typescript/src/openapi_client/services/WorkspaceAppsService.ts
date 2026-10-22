@@ -2,10 +2,13 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { BrowserCommandRequest } from '../models/BrowserCommandRequest.js';
+import type { BrowserCommandResponse } from '../models/BrowserCommandResponse.js';
 import type { BrowserStatusResponse } from '../models/BrowserStatusResponse.js';
 import type { CurrentPageUrlResponse } from '../models/CurrentPageUrlResponse.js';
 import type { DisplaySizeRequest } from '../models/DisplaySizeRequest.js';
 import type { DisplaySizeResponse } from '../models/DisplaySizeResponse.js';
+import type { StreamBeacon } from '../models/StreamBeacon.js';
 import type { WorkspaceAppAccessRequest } from '../models/WorkspaceAppAccessRequest.js';
 import type { WorkspaceAppAccessResponse } from '../models/WorkspaceAppAccessResponse.js';
 import type { CancelablePromise } from '../core/CancelablePromise.js';
@@ -24,6 +27,49 @@ export class WorkspaceAppsService {
         return __request(OpenAPI, {
             method: 'POST',
             url: '/workspace/apps/browser/access',
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Report how a live screen session went
+     * @param requestBody
+     * @returns void
+     * @throws ApiError
+     */
+    public static workspaceBrowserBeacon(
+        requestBody: StreamBeacon,
+    ): CancelablePromise<void> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/workspace/browser/beacon',
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Steer the workspace browser from the screen's toolbar
+     * One toolbar command; the open tabs as they are afterwards.
+     *
+     * 409 with a sentence when the browser cannot do it right now -- it is not
+     * running, the tab has closed -- because the toolbar shows it, and 422 for
+     * an address that is not a web address.
+     * @param requestBody
+     * @returns BrowserCommandResponse Successful Response
+     * @throws ApiError
+     */
+    public static workspaceBrowserCommand(
+        requestBody: BrowserCommandRequest,
+    ): CancelablePromise<BrowserCommandResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/workspace/browser/commands',
             body: requestBody,
             mediaType: 'application/json',
             errors: {

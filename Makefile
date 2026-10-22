@@ -16,7 +16,7 @@ SHELL := /bin/bash
 #   make coverage      full coverage report (unit + e2e per component)
 # ──────────────────────────────────────────────────────────────────────────────
 
-.PHONY: help init dev dev-public stop stop-all logs otel-up otel-down otel-tail otel-smoke \
+.PHONY: help init streamer-test dev dev-public stop stop-all logs otel-up otel-down otel-tail otel-smoke \
         observability-up observability-down observability-open \
         _prepare-dev _start-public-api-tunnel _ensure-databases _ensure-sandbox-images _wait-backend \
         _ensure-native-connectors _desktop-verify-dist-app _desktop-ensure-sidecars \
@@ -2126,6 +2126,12 @@ QUALITY_GATES := \
 .PHONY: quality $(QUALITY_GATES)
 
 QUALITY_JOBS ?=
+
+# The browser streamer's Go tests, in the builder image the workspace image uses:
+# go vet, go test (encoders included, with cgo), then the binaries into out/.
+streamer-test:
+	@docker build -f lemma-backend/sandbox-images/streamer/Dockerfile --target out \
+		-o type=local,dest=out/streamer lemma-backend/sandbox-images/streamer
 
 quality:
 	@python3 scripts/run_quality_gates.py $(if $(QUALITY_JOBS),--jobs $(QUALITY_JOBS)) $(QUALITY_GATES)

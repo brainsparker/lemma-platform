@@ -29,6 +29,7 @@ from uuid import UUID
 
 from sqlalchemy import (
     ColumnElement,
+    CompoundSelect,
     Subquery,
     Uuid,
     and_,
@@ -54,6 +55,7 @@ from app.modules.channels.infrastructure.models import (
     ChannelReadStateModel,
 )
 from app.modules.channels.infrastructure.questions import still_waiting
+from app.modules.channels.infrastructure.rows import channel_entity
 
 #: Where unread counting stops; the app shows "99+" past it.
 UNREAD_CAP = 100
@@ -131,6 +133,18 @@ class InboxReads:
                 joined=channel.id in joined,
             )
         return found
+
+    async def places(self, viewer: Viewer, *, limit: int) -> list[Channel]:
+        """The channels the member may see and has a place in, or a question
+        waiting on them in -- where their counts can be anything but nothing
+        -- the most recently active ``limit`` of them."""
+        rows = await self.session.scalars(
+            select(ChannelModel)
+            .where(ChannelModel.id.in_(_counted_in(viewer)), visible_to(viewer))
+            .order_by(ChannelModel.last_line_at.desc())
+            .limit(limit)
+        )
+        return [channel_entity(row) for row in rows]
 
     async def _mentions_by_channel(
         self, viewer: Viewer, ids: list[UUID]
@@ -297,6 +311,21 @@ def _named_unread(
             mention.read_at.is_(None),
         )
         .exists()
+    )
+
+
+def _counted_in(viewer: Viewer) -> CompoundSelect:
+    """The ids of the channels where the member's counts can be anything but
+    nothing: their places, and those with a question waiting on them."""
+    q = ChannelQuestionModel
+    places = _places_of(viewer)
+    return union(
+        select(places.c.id),
+        select(q.channel_id.label("id")).where(
+            q.awaits_user_id == viewer.user_id,
+            q.pod_id == viewer.pod_id,
+            still_waiting(),
+        ),
     )
 
 

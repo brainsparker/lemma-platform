@@ -77,10 +77,11 @@ class InboxFeed:
         #: ``SEEN_AT_JOIN`` at first, plus those sent to them since; dropped
         #: with the reader's last subscription.
         self._seen: dict[UUID, set[UUID]] = {}
-        #: memory: per reader, what they were last told: each channel's
-        #: counts, and their totals. A channel whose counts did not move is
-        #: not sent again; one never sent was nothing to them (``Unread()``).
-        #: Dropped with the reader's last subscription.
+        #: memory: per reader, what they were last shown: each channel's
+        #: counts, and their totals -- from what ``/inbox`` showed them at
+        #: first (``_shown_now``), then what was sent. A channel whose counts
+        #: did not move is not sent again; one not in it was nothing to them
+        #: (``Unread()``). Dropped with the reader's last subscription.
         self._told: dict[UUID, _Told] = {}
 
     def __bool__(self) -> bool:
@@ -98,11 +99,7 @@ class InboxFeed:
         if sub.user_id not in self._seen:
             self._seen[sub.user_id] = await _seen_by(uow, sub.caller)
         if sub.user_id not in self._told:
-            # The totals they fetched with ``/inbox``, near enough: a first
-            # change that leaves them as they are is not sent.
-            self._told[sub.user_id] = _Told(
-                totals=await InboxReads(uow.session).totals(sub.caller.viewer)
-            )
+            self._told[sub.user_id] = await _shown_now(uow, sub.caller)
         self.subs.setdefault(sub.user_id, set()).add(sub)
 
     def release(self, sub: InboxSub) -> None:
@@ -310,6 +307,8 @@ class InboxFeed:
             if not changed:
                 continue
             self._seen[user_id] = await _seen_by(uow, caller)
+            # They refetch ``/inbox``: what it shows them is what they know.
+            self._told[user_id] = await _shown_now(uow, caller)
             for sub in subs:
                 sub.caller = caller
             for sub in changed:
@@ -435,6 +434,20 @@ async def _memberships(
     for user_id, channel_id in rows:
         joined.setdefault(user_id, set()).add(channel_id)
     return joined
+
+
+async def _shown_now(uow: SqlAlchemyUnitOfWork, caller: Caller) -> _Told:
+    """What the reader's ``/inbox`` shows them now, near enough: their
+    totals, and the counts of every channel where those can be anything but
+    nothing. A poll reads back positions moved shortly before they subscribed
+    (its look-back); measured against this, the counts it finds have not
+    moved, and nothing is sent."""
+    inbox = InboxReads(uow.session)
+    places = await inbox.places(caller.viewer, limit=SEEN_AT_JOIN)
+    return _Told(
+        unread=await inbox.unread(caller.viewer, places),
+        totals=await inbox.totals(caller.viewer),
+    )
 
 
 async def _seen_by(uow: SqlAlchemyUnitOfWork, caller: Caller) -> set[UUID]:

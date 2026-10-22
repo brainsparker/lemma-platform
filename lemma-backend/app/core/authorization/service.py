@@ -593,11 +593,7 @@ class AuthorizationDataService:
     ) -> Context:
         authorizer = Authorizer(self.session)
         normalized_principal_type = principal_type.upper()
-        kind = (
-            WorkloadKind.AGENT
-            if normalized_principal_type == "AGENT"
-            else WorkloadKind.FUNCTION
-        )
+        kind = WorkloadKind.of(principal_type)
 
         # Ask the cache FIRST, exactly as the user path does. The pod-scoped key
         # omits the organization (see ``_snapshot_suffix``), so a hit needs no
@@ -622,9 +618,7 @@ class AuthorizationDataService:
         if cached is not None:
             return Context(
                 actor=Workload(
-                    kind=kind,
-                    workload_id=principal_id,
-                    principal_refs=cached.principal_refs,
+                    kind, principal_id, principal_refs=cached.principal_refs
                 ),
                 actor_id=str(principal_id),
                 organization_id=cached.organization_id,
@@ -669,11 +663,7 @@ class AuthorizationDataService:
         )
         await self._cache_snapshot_without_holding(principal_id, snapshot)
         return Context(
-            actor=Workload(
-                kind=kind,
-                workload_id=principal_id,
-                principal_refs=snapshot.principal_refs,
-            ),
+            actor=Workload(kind, principal_id, principal_refs=snapshot.principal_refs),
             actor_id=str(principal_id),
             organization_id=organization_id,
             pod_id=pod_id,
@@ -729,11 +719,7 @@ class AuthorizationDataService:
         )
         return Context(
             actor=Workload(
-                kind=(
-                    WorkloadKind.AGENT
-                    if principal_type.upper() == "AGENT"
-                    else WorkloadKind.FUNCTION
-                ),
+                kind=WorkloadKind.of(principal_type),
                 workload_id=principal_id,
                 for_user_id=user_id,
                 principal_refs=workload_ctx.principal_refs,

@@ -495,7 +495,9 @@ def workspace_template():
             {
                 "DISPLAY": ":99",
                 "XDG_RUNTIME_DIR": "/tmp/lemma-browser/runtime",
-                "WORKSPACE_XVFB_SCREEN": "1440x960x24",
+                "WORKSPACE_XVFB_SCREEN": "1280x800x24",
+                # See Dockerfile.workspace: downloads land in the Files view.
+                "AGENT_BROWSER_DOWNLOAD_PATH": "/home/user/lemma/downloads",
                 "AGENT_BROWSER_CONFIG": "/tmp/lemma-browser/config.json",
                 "AGENT_BROWSER_EXECUTABLE_PATH": "/usr/local/bin/workspace-chrome",
                 "AGENT_BROWSER_PROFILE": "/home/user/.lemma/browser/profile",

@@ -18,7 +18,7 @@ from app.modules.workspace.services.browser_relay_client import (
     BrowserRelayClient,
     BrowserRelayUnavailable,
 )
-from app.modules.workspace.services.browser_stream import density_for, transport_for
+from app.modules.workspace.services.browser_stream import transport_for
 
 #: How recently an agent command counts as "driving". The agent issues a
 #: command every few seconds while it works; a person reading the page between
@@ -47,11 +47,13 @@ async def stream_details(relay: BrowserRelayClient, user_id: UUID) -> StreamDeta
     health, display = await asyncio.gather(
         _json(relay, "/health"), _json(relay, "/display")
     )
-    cpus = health.get("cpus")
     active = health.get("agent_active_seconds")
+    density = display.get("density")
     details: StreamDetails = {
         "transport": transport_for(user_id),
-        "density": density_for(float(cpus) if isinstance(cpus, (int, float)) else None),
+        # The relay's word, which is what Chrome is running at: the server
+        # only allows density 2 (`display.json`), the machine decides.
+        "density": density if density in (1, 2) else 1,
         "agent_driving": isinstance(active, (int, float))
         and active < AGENT_DRIVING_SECONDS,
         "watching": _watchers(health.get("watching")),

@@ -447,3 +447,28 @@ def test_a_containers_cpus_are_its_quota_not_the_hosts(tmp_path) -> None:
     assert display.machine_cpus(quota) == 0.5
     quota.write_text("max 100000\n")
     assert display.machine_cpus(quota) == float(__import__("os").cpu_count())
+
+
+def test_a_preset_is_doubled_on_a_dense_screen(monkeypatch, tmp_path) -> None:
+    """Presets are CSS pixels; at density 2 the display is twice them."""
+    stamp = tmp_path / "density.active"
+    stamp.write_text("2\n")
+    monkeypatch.setattr(display, "DENSITY_STAMP", stamp)
+    monkeypatch.setenv("WORKSPACE_XVFB_SCREEN", "1280x800x24")
+    asked = _resizes(monkeypatch)
+    VIEWERS.join("me/1", mode="control", transport="rtc")
+    client = _client(monkeypatch, tmp_path)
+
+    client.post(
+        "/display:resize",
+        json={"width": 1440, "height": 900, "viewer": "me/1"},
+        headers=HEADERS,
+    )
+    client.post("/display:reset", headers=HEADERS)
+
+    assert asked == [(2880, 1800), (2560, 1600)]
+
+
+def test_density_is_one_until_the_browser_says_otherwise(tmp_path, monkeypatch):
+    monkeypatch.setattr(display, "DENSITY_STAMP", tmp_path / "absent")
+    assert display.active_density() == 1

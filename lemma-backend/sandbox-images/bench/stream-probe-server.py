@@ -36,6 +36,10 @@ def _process_group(comm: str, cmdline: str) -> str | None:
     """Which part of the streaming chain a process belongs to, if any."""
     if comm == "x11vnc":
         return "x11vnc"
+    if comm.startswith(("X0tigervnc", "Xtigervnc")):
+        return "tigervnc"
+    if comm == "lemma-streamer":
+        return "streamer"
     if "websockify" in cmdline:
         return "websockify"
     if "sandbox_runtime.browser_relay.server" in cmdline:

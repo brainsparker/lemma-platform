@@ -164,7 +164,10 @@ ENV PYTHONUNBUFFERED=1 \
     HOME=/home/user \
     DISPLAY=:99 \
     XDG_RUNTIME_DIR=/tmp/lemma-browser/runtime \
-    WORKSPACE_XVFB_SCREEN=1440x960x24 \
+    # The resting size is the Desktop preset (`browser_relay/display.py`):
+    # what an agent sees with nobody watching, and what a watcher's pane
+    # starts on.
+    WORKSPACE_XVFB_SCREEN=1280x800x24 \
     AGENT_BROWSER_CONFIG=/tmp/lemma-browser/config.json \
     AGENT_BROWSER_EXECUTABLE_PATH=/usr/local/bin/workspace-chrome \
     # In the home, which is the durable root, so a person signs in to a site
@@ -173,6 +176,10 @@ ENV PYTHONUNBUFFERED=1 \
     AGENT_BROWSER_PROFILE=/home/user/.lemma/browser/profile \
     AGENT_BROWSER_SESSION=workspace \
     AGENT_BROWSER_HEADED=true \
+    # Where a download lands, whoever clicked it: under the project root, so
+    # it is in the Files view beside everything else rather than in a
+    # `~/Downloads` nobody is shown.
+    AGENT_BROWSER_DOWNLOAD_PATH=/home/user/lemma/downloads \
     # A browser nobody is using stops being one. The agent-browser daemon
     # closes Chrome and exits after this long without a command, which is the
     # only thing that reclaims the browser's whole footprint -- Chrome keeps a

@@ -113,7 +113,12 @@ _NAME_TO_MODULE = {
     'AvailableSurfaceChannelResponse': 'available_surface_channel_response',
     'AvailableSurfaceChannelsResponse': 'available_surface_channels_response',
     'AvailableSurfacesResponse': 'available_surfaces_response',
+    'BrowserCommandRequest': 'browser_command_request',
+    'BrowserCommandResponse': 'browser_command_response',
     'BrowserStatusResponse': 'browser_status_response',
+    'BrowserStatusResponsePresetsType0': 'browser_status_response_presets_type_0',
+    'BrowserStatusResponseWatchingItem': 'browser_status_response_watching_item',
+    'BrowserTab': 'browser_tab',
     'BulkCreateRecordsRequest': 'bulk_create_records_request',
     'BulkCreateRecordsRequestRecordsItem': 'bulk_create_records_request_records_item',
     'BulkDeleteRecordsRequest': 'bulk_delete_records_request',
@@ -338,6 +343,8 @@ _NAME_TO_MODULE = {
     'GranteeRefGranteeType': 'grantee_ref_grantee_type',
     'GroupPublicResponse': 'group_public_response',
     'HarnessKind': 'harness_kind',
+    'HistoryCommand': 'history_command',
+    'HistoryCommandCommand': 'history_command_command',
     'HistoryMessage': 'history_message',
     'HistoryResponse': 'history_response',
     'HomeAgentResponse': 'home_agent_response',
@@ -401,6 +408,7 @@ _NAME_TO_MODULE = {
     'MyMembershipUpdateNotifyViaType0Item': 'my_membership_update_notify_via_type_0_item',
     'MyUsageLimitsResponse': 'my_usage_limits_response',
     'MyUsageLimitsResponsePlanTypeType0': 'my_usage_limits_response_plan_type_type_0',
+    'NavigateCommand': 'navigate_command',
     'NavigationOrganizationResponse': 'navigation_organization_response',
     'NavigationPodResponse': 'navigation_pod_response',
     'NavigationResponse': 'navigation_response',
@@ -604,6 +612,11 @@ _NAME_TO_MODULE = {
     'SourceUpdateRequest': 'source_update_request',
     'StepRecordResponse': 'step_record_response',
     'StepStatus': 'step_status',
+    'StreamBeacon': 'stream_beacon',
+    'StreamBeaconCodecType0': 'stream_beacon_codec_type_0',
+    'StreamBeaconFallbackType0': 'stream_beacon_fallback_type_0',
+    'StreamBeaconRelayType0': 'stream_beacon_relay_type_0',
+    'StreamBeaconTransport': 'stream_beacon_transport',
     'SurfaceAdminConsentInfo': 'surface_admin_consent_info',
     'SurfaceBehaviorConfigInput': 'surface_behavior_config_input',
     'SurfaceChannelRouteInput': 'surface_channel_route_input',
@@ -643,6 +656,8 @@ _NAME_TO_MODULE = {
     'SurfaceUnavailableReason': 'surface_unavailable_reason',
     'SurfaceUpdateRequest': 'surface_update_request',
     'SurfaceWhatsAppConfigInput': 'surface_whats_app_config_input',
+    'TabCommand': 'tab_command',
+    'TabCommandCommand': 'tab_command_command',
     'TableColumn': 'table_column',
     'TableDetailResponse': 'table_detail_response',
     'TableDetailResponseConfigType0': 'table_detail_response_config_type_0',
@@ -650,6 +665,7 @@ _NAME_TO_MODULE = {
     'TableOpeningResponse': 'table_opening_response',
     'TableResponse': 'table_response',
     'TableSummaryResponse': 'table_summary_response',
+    'TabsCommand': 'tabs_command',
     'TelegramLinkRequest': 'telegram_link_request',
     'TelegramLinkResponse': 'telegram_link_response',
     'TelegramManagedBotSetupRequest': 'telegram_managed_bot_setup_request',
@@ -863,7 +879,12 @@ if TYPE_CHECKING:
     from .available_surface_channel_response import AvailableSurfaceChannelResponse
     from .available_surface_channels_response import AvailableSurfaceChannelsResponse
     from .available_surfaces_response import AvailableSurfacesResponse
+    from .browser_command_request import BrowserCommandRequest
+    from .browser_command_response import BrowserCommandResponse
     from .browser_status_response import BrowserStatusResponse
+    from .browser_status_response_presets_type_0 import BrowserStatusResponsePresetsType0
+    from .browser_status_response_watching_item import BrowserStatusResponseWatchingItem
+    from .browser_tab import BrowserTab
     from .bulk_create_records_request import BulkCreateRecordsRequest
     from .bulk_create_records_request_records_item import BulkCreateRecordsRequestRecordsItem
     from .bulk_delete_records_request import BulkDeleteRecordsRequest
@@ -1088,6 +1109,8 @@ if TYPE_CHECKING:
     from .grantee_ref_grantee_type import GranteeRefGranteeType
     from .group_public_response import GroupPublicResponse
     from .harness_kind import HarnessKind
+    from .history_command import HistoryCommand
+    from .history_command_command import HistoryCommandCommand
     from .history_message import HistoryMessage
     from .history_response import HistoryResponse
     from .home_agent_response import HomeAgentResponse
@@ -1151,6 +1174,7 @@ if TYPE_CHECKING:
     from .my_membership_update_notify_via_type_0_item import MyMembershipUpdateNotifyViaType0Item
     from .my_usage_limits_response import MyUsageLimitsResponse
     from .my_usage_limits_response_plan_type_type_0 import MyUsageLimitsResponsePlanTypeType0
+    from .navigate_command import NavigateCommand
     from .navigation_organization_response import NavigationOrganizationResponse
     from .navigation_pod_response import NavigationPodResponse
     from .navigation_response import NavigationResponse
@@ -1354,6 +1378,11 @@ if TYPE_CHECKING:
     from .source_update_request import SourceUpdateRequest
     from .step_record_response import StepRecordResponse
     from .step_status import StepStatus
+    from .stream_beacon import StreamBeacon
+    from .stream_beacon_codec_type_0 import StreamBeaconCodecType0
+    from .stream_beacon_fallback_type_0 import StreamBeaconFallbackType0
+    from .stream_beacon_relay_type_0 import StreamBeaconRelayType0
+    from .stream_beacon_transport import StreamBeaconTransport
     from .surface_admin_consent_info import SurfaceAdminConsentInfo
     from .surface_behavior_config_input import SurfaceBehaviorConfigInput
     from .surface_channel_route_input import SurfaceChannelRouteInput
@@ -1393,6 +1422,8 @@ if TYPE_CHECKING:
     from .surface_unavailable_reason import SurfaceUnavailableReason
     from .surface_update_request import SurfaceUpdateRequest
     from .surface_whats_app_config_input import SurfaceWhatsAppConfigInput
+    from .tab_command import TabCommand
+    from .tab_command_command import TabCommandCommand
     from .table_column import TableColumn
     from .table_detail_response import TableDetailResponse
     from .table_detail_response_config_type_0 import TableDetailResponseConfigType0
@@ -1400,6 +1431,7 @@ if TYPE_CHECKING:
     from .table_opening_response import TableOpeningResponse
     from .table_response import TableResponse
     from .table_summary_response import TableSummaryResponse
+    from .tabs_command import TabsCommand
     from .telegram_link_request import TelegramLinkRequest
     from .telegram_link_response import TelegramLinkResponse
     from .telegram_managed_bot_setup_request import TelegramManagedBotSetupRequest
@@ -1626,7 +1658,12 @@ __all__ = [
     'AvailableSurfaceChannelResponse',
     'AvailableSurfaceChannelsResponse',
     'AvailableSurfacesResponse',
+    'BrowserCommandRequest',
+    'BrowserCommandResponse',
     'BrowserStatusResponse',
+    'BrowserStatusResponsePresetsType0',
+    'BrowserStatusResponseWatchingItem',
+    'BrowserTab',
     'BulkCreateRecordsRequest',
     'BulkCreateRecordsRequestRecordsItem',
     'BulkDeleteRecordsRequest',
@@ -1851,6 +1888,8 @@ __all__ = [
     'GranteeRefGranteeType',
     'GroupPublicResponse',
     'HarnessKind',
+    'HistoryCommand',
+    'HistoryCommandCommand',
     'HistoryMessage',
     'HistoryResponse',
     'HomeAgentResponse',
@@ -1914,6 +1953,7 @@ __all__ = [
     'MyMembershipUpdateNotifyViaType0Item',
     'MyUsageLimitsResponse',
     'MyUsageLimitsResponsePlanTypeType0',
+    'NavigateCommand',
     'NavigationOrganizationResponse',
     'NavigationPodResponse',
     'NavigationResponse',
@@ -2117,6 +2157,11 @@ __all__ = [
     'SourceUpdateRequest',
     'StepRecordResponse',
     'StepStatus',
+    'StreamBeacon',
+    'StreamBeaconCodecType0',
+    'StreamBeaconFallbackType0',
+    'StreamBeaconRelayType0',
+    'StreamBeaconTransport',
     'SurfaceAdminConsentInfo',
     'SurfaceBehaviorConfigInput',
     'SurfaceChannelRouteInput',
@@ -2156,6 +2201,8 @@ __all__ = [
     'SurfaceUnavailableReason',
     'SurfaceUpdateRequest',
     'SurfaceWhatsAppConfigInput',
+    'TabCommand',
+    'TabCommandCommand',
     'TableColumn',
     'TableDetailResponse',
     'TableDetailResponseConfigType0',
@@ -2163,6 +2210,7 @@ __all__ = [
     'TableOpeningResponse',
     'TableResponse',
     'TableSummaryResponse',
+    'TabsCommand',
     'TelegramLinkRequest',
     'TelegramLinkResponse',
     'TelegramManagedBotSetupRequest',

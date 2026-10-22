@@ -154,7 +154,16 @@ async def stream_beacon(user: CurrentUser, beacon: StreamBeacon) -> None:
     logger.info(
         "workspace.browser_view.stream_session.observed",
         user_id=str(user.id),
-        **beacon.model_dump(exclude_none=True),
+        transport=beacon.transport,
+        fallback=beacon.fallback,
+        seconds=beacon.seconds,
+        first_frame_ms=beacon.first_frame_ms,
+        fps=beacon.fps,
+        latency_ms=beacon.latency_ms,
+        kbps=beacon.kbps,
+        codec=beacon.codec,
+        relay=beacon.relay,
+        density=beacon.density,
     )
 
 

@@ -24,6 +24,33 @@ DISPLAY_VALUE="${DISPLAY:-:99}"
 # branch that restarts Xvfb kills both first.
 SCREEN="${WORKSPACE_XVFB_MAX_SCREEN:-${WORKSPACE_XVFB_SCREEN:-1920x1200x24}}"
 START_SCREEN="${WORKSPACE_XVFB_SCREEN:-1440x960x24}"
+
+# Native density: Chrome at a device scale factor of 2, so a person watching
+# on a high-density screen reads text at its own pixels instead of a 1x
+# picture scaled up. Twice the pixels to render and encode, so only on a
+# machine with a second vCPU -- Chrome at DPR 2 takes a whole one on its own
+# -- and only when the server allows it, in the file it delivers beside the
+# relay token (`browser_view_service._relay`).
+#
+# The framebuffer ceiling follows the CPUs, not the flag: Xvfb's ceiling is
+# fixed when it starts, and the flag can turn on later. A two-vCPU machine
+# allocates room for a doubled preset from the start.
+cpus_x100() {
+  local quota period
+  if read -r quota period < /sys/fs/cgroup/cpu.max 2>/dev/null && [ "$quota" != "max" ]; then
+    echo $((quota * 100 / period))
+  else
+    echo $(($(nproc 2>/dev/null || echo 1) * 100))
+  fi
+}
+DENSITY=1
+if [ "$(cpus_x100)" -ge 200 ]; then
+  SCREEN="${WORKSPACE_XVFB_DENSE_MAX_SCREEN:-2880x2400x24}"
+  if grep -Eq '"native_density": *true' /tmp/lemma-relay/display.json 2>/dev/null; then
+    DENSITY=2
+  fi
+fi
+DENSITY_STAMP="/tmp/lemma-browser/density.active"
 PROFILE_DIR="${AGENT_BROWSER_PROFILE:-/home/user/.lemma/browser/profile}"
 RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/lemma-browser/runtime}"
 CONFIG_PATH="${AGENT_BROWSER_CONFIG:-/tmp/lemma-browser/config.json}"
@@ -44,6 +71,9 @@ export AGENT_BROWSER_SESSION="${AGENT_BROWSER_SESSION:-workspace}"
 unset AGENT_BROWSER_SESSION_NAME
 
 mkdir -p "$PROFILE_DIR" /tmp/.X11-unix
+# Chrome will not create the download directory itself, and a download into a
+# missing one fails with nothing on screen to say why.
+[ -n "${AGENT_BROWSER_DOWNLOAD_PATH:-}" ] && mkdir -p "$AGENT_BROWSER_DOWNLOAD_PATH" 2>/dev/null || true
 # No lock-file cleanup here, and none in quiesce either.
 #
 # This removed `SingletonCookie`, `SingletonLock`, `SingletonSocket` and
@@ -82,6 +112,9 @@ mkdir -p "$PROFILE_DIR" /tmp/.X11-unix
 # different thing -- the binary is whatever `workspace-chrome` points at,
 # Debian Chromium on the Docker image and `google-chrome-stable` on E2B.
 CHROME_ARGS="--no-sandbox,--test-type,--disable-dev-shm-usage,--no-first-run,--no-default-browser-check,--disable-blink-features=AutomationControlled"
+if [ "$DENSITY" = "2" ]; then
+  CHROME_ARGS="${CHROME_ARGS},--force-device-scale-factor=2"
+fi
 # Chrome's own size is *not* set here, and cannot be: this list is
 # comma-separated (agent-browser splits it), and every flag that would say a
 # size takes a comma inside its value. `--window-size=1920,1200` arrives at
@@ -244,7 +277,12 @@ EOF
 # `close --all` rather than a signal: it is the only stop that writes the
 # profile back, so changing the proxy does not cost the person their logins.
 PROXY_STAMP="/tmp/lemma-browser/proxy.active"
-PROXY_WANTED="$(printf '%s' "$BROWSER_PROXY" | sha256sum | cut -d" " -f1)"
+# The density rides in the same digest, so changing it restarts the browser
+# the same way a proxy change does -- `close --all`, which keeps the profile.
+# Only when it is not 1, so a machine at 1x keeps the digest it already had.
+DENSITY_SUFFIX=""
+[ "$DENSITY" != "1" ] && DENSITY_SUFFIX="|density=$DENSITY"
+PROXY_WANTED="$(printf '%s' "$BROWSER_PROXY$DENSITY_SUFFIX" | sha256sum | cut -d" " -f1)"
 PROXY_ACTIVE=""
 if [ -r "$PROXY_STAMP" ]; then
   IFS= read -r PROXY_ACTIVE < "$PROXY_STAMP" || PROXY_ACTIVE=""
@@ -427,6 +465,8 @@ if [ "$START_SCREEN" != "$SCREEN" ] && command -v set-display-size >/dev/null 2>
   start_w="${START_SCREEN%%x*}"
   start_rest="${START_SCREEN#*x}"
   start_h="${start_rest%%x*}"
+  start_w=$((start_w * DENSITY))
+  start_h=$((start_h * DENSITY))
   if ! DISPLAY="$DISPLAY_VALUE" set-display-size "$start_w" "$start_h" \
     >/tmp/lemma-initial-size.log 2>&1; then
     echo "[lemma-ensure-display] could not size the display to ${start_w}x${start_h}" >&2
@@ -569,6 +609,10 @@ fi
 if [ "$open_status" = "0" ]; then
   mkdir -p "$(dirname "$PROXY_STAMP")"
   printf '%s\n' "$PROXY_WANTED" > "$PROXY_STAMP"
+  # What the running browser was launched at, which the relay multiplies a
+  # preset by (`browser_relay/display.py`). Beside the proxy stamp, and like
+  # it ephemeral: it describes a running process.
+  printf '%s\n' "$DENSITY" > "$DENSITY_STAMP"
 fi
 if [ "$opened_cold" = "1" ] && [ "$open_status" = "0" ]; then
   close_new_tab_page

@@ -43,7 +43,9 @@ from app.modules.workspace.services.browser_proxy import (
     decision_bytes,
 )
 from app.modules.workspace.services.browser_stream import (
+    DISPLAY_DECISION_PATH,
     STREAM_KEY_PATH,
+    display_decision,
     stream_key_file,
 )
 from app.modules.workspace.services.browser_relay_commands import (
@@ -205,9 +207,12 @@ class BrowserRelayClient:
         """
         await self._deliver(RELAY_TOKEN_PATH, self._token.encode())
 
-    async def deliver_stream_key(self) -> None:
-        """Put the WebRTC streamer's ticket key beside the token, likewise."""
-        await self._deliver(STREAM_KEY_PATH, stream_key_file(self.provider_id))
+    async def deliver_stream_files(self) -> None:
+        """The streamer's ticket key and the density decision, likewise."""
+        await asyncio.gather(
+            self._deliver(STREAM_KEY_PATH, stream_key_file(self.provider_id)),
+            self._deliver(DISPLAY_DECISION_PATH, display_decision()),
+        )
 
     @property
     def provider_id(self) -> str:
@@ -540,12 +545,7 @@ class BrowserRelayClient:
     async def resize_display(
         self, *, width: int, height: int, viewer: str | None = None
     ) -> str:
-        """Make the sandbox display the shape of the pane watching it.
-
-        Returns the size it settled on, which is not always the size asked
-        for: the framebuffer Xvfb allocated at startup is a ceiling RandR
-        cannot raise, so a large request is clamped rather than refused.
-        """
+        """Put the display at a preset; the size it settled on (maybe clamped)."""
         response = await self.request(
             "POST",
             "/display:resize",

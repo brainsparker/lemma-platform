@@ -151,6 +151,22 @@ declare global {
 
 const MAX_SAMPLES = 50_000;
 
+/** A canvas holding what the viewer shows now: noVNC's own, or for WebRTC a
+ *  copy of the video's current frame. The copy is made at the video's own
+ *  size, so the strips are read at the stream's pixels either way. */
+const videoCopy = typeof document === "undefined" ? null : document.createElement("canvas");
+function pictureOf(surface: HTMLElement): HTMLCanvasElement | null {
+    const video = surface.querySelector("video");
+    if (!video) return surface.querySelector("canvas");
+    if (!videoCopy || !video.videoWidth || !video.videoHeight) return null;
+    if (videoCopy.width !== video.videoWidth || videoCopy.height !== video.videoHeight) {
+        videoCopy.width = video.videoWidth;
+        videoCopy.height = video.videoHeight;
+    }
+    videoCopy.getContext("2d", { willReadFrequently: true })?.drawImage(video, 0, 0);
+    return videoCopy;
+}
+
 /** Whether this page asked for the probe. The flag is kept for the tab's
  *  session because the shell rewrites its address as it routes, and the
  *  query string does not survive that. */
@@ -185,11 +201,15 @@ const measured = {
 const connections: Connection[] = [];
 
 /** Start measuring one connection, adding to what earlier ones measured. */
-export function attachStreamProbe({ socket, surface, socketAt }: {
+export function attachStreamProbe({ socket, surface, socketAt, mediaBytes }: {
     socket: WebSocket;
     surface: HTMLElement;
     /** When the socket was made, taken before this module was loaded. */
     socketAt: number;
+    /** Over WebRTC the picture is not on the socket: the bytes the peer
+     *  connection has received, read from its stats. Counted instead of the
+     *  socket's, which carries only signalling. */
+    mediaBytes?: () => Promise<number>;
 }): void {
     /* Already open when a slow chunk load lands after the handshake: the
        moment is lost, so it reads as unknown rather than as now. */
@@ -201,10 +221,23 @@ export function attachStreamProbe({ socket, surface, socketAt }: {
     socket.addEventListener("open", () => { connection[1] = clock(); });
     socket.addEventListener("close", (event: CloseEvent) => { connection[3] = clock(); connection[4] = event.code; });
     socket.addEventListener("message", (event: MessageEvent) => {
+        if (mediaBytes) return;
         const data = event.data as ArrayBuffer | Blob | string;
         bytes.rx += typeof data === "string" ? data.length : data instanceof ArrayBuffer ? data.byteLength : data.size;
         bytes.rxMessages++;
     });
+    if (mediaBytes) {
+        /* Cumulative from the peer connection, turned into a count since
+           the last reset like the socket's. */
+        let seen = 0;
+        const poll = setInterval(() => {
+            if (socket.readyState > WebSocket.OPEN) { clearInterval(poll); return; }
+            void mediaBytes().then((total) => {
+                if (total > seen) { bytes.rx += total - seen; bytes.rxMessages++; }
+                seen = total;
+            }).catch(() => undefined);
+        }, 500);
+    }
     /* Counted by wrapping this one socket's `send`, not the prototype's: the
        call goes through unchanged, and no other socket on the page is seen. */
     const send = socket.send.bind(socket);
@@ -234,9 +267,9 @@ export function attachStreamProbe({ socket, surface, socketAt }: {
         if (socket.readyState > WebSocket.OPEN) { document.removeEventListener("keydown", onKey, true); return; }
         requestAnimationFrame(tick);
         decode.ticks++;
-        const found = surface.querySelector("canvas");
+        const found = pictureOf(surface);
         if (!found || found.width === 0 || found.height === 0) return;
-        if (found !== canvas) { canvas = found; context = found.getContext("2d"); }
+        if (found !== canvas) { canvas = found; context = found.getContext("2d", { willReadFrequently: true }); }
         if (!context) return;
         const at = clock();
         const now = found.width + "x" + found.height;

@@ -113,6 +113,20 @@ export class RtcSession {
         return this.driving;
     }
 
+    /** The signalling socket, for the stream bench's probe only. */
+    get signalling(): WebSocket {
+        return this.socket;
+    }
+
+    /** Media bytes received so far, for the stream bench's probe only. */
+    async bytesReceived(): Promise<number> {
+        let total = 0;
+        (await this.peer?.getStats())?.forEach((entry: { type: string; kind?: string; bytesReceived?: number }) => {
+            if (entry.type === "inbound-rtp" && entry.kind === "video") total += entry.bytesReceived ?? 0;
+        });
+        return total;
+    }
+
     close(): void {
         if (this.finished) return;
         this.finished = true;

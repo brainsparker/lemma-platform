@@ -253,10 +253,10 @@ OTEL_ALWAYS_SAMPLE_USER_IDS=0199a1b2-...,0199c3d4-...   # comma-separated
 A request whose access token (the `sAccessToken` cookie or a bearer token)
 carries one of those ids as `sub` is sampled, with every span created while
 the request is served -- its database and HTTP calls, and any model call made
-on the API's LLM tracer, which is forced the same way. Work the request hands
-to the worker is **not** guaranteed: a work item runs under its own root
-`work.execute` span and is sampled by the worker's sampler independently, so
-an agent turn the request started is kept only at the configured ratio.
+on the API's LLM tracer, which is forced the same way -- and the work it
+queues: the work item carries the request's trace context, so an agent turn,
+delivery or function run the request started is traced in the worker too
+(see the correlation section).
 Removing the id (and restarting) stops it. With the setting empty nothing is
 installed.
 
@@ -320,6 +320,17 @@ native trace fields (`app/core/log/cloud_trace.py`):
 `GOOGLE_CLOUD_PROJECT`. With neither set, these keys are omitted (a laptop is
 unchanged). The payload's own `trace_id`/`span_id` stay for the tools that
 read them.
+
+**Async work joins the request's trace.** `WorkWriter.add` stores the current
+W3C `traceparent` in the item (under `_traceparent`, removed again at claim, so
+handlers never see it), and the dispatcher starts `work.execute` as its child.
+The worker's parent-based sampler therefore follows the request's decision --
+ratio, upstream or forced -- and one trace shows the request and the agent
+turn, delivery or function run it queued. Retries are children of the same
+parent. An item queued with no span current (start-up, maintenance) runs as a
+root. A periodic's next run is queued by the run before it, so it carries a
+*link* to that run (`_trace_link`) instead of a parent, rather than chaining
+every run since boot into one trace (`app/core/infrastructure/work/trace_carry.py`).
 
 So the path is: the load balancer's log line (native `trace`) leads to the
 app trace (same id, continued), which leads to the app's log lines (same

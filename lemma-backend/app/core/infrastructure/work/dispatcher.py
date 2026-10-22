@@ -32,6 +32,7 @@ from app.core.infrastructure.work.retry import (
     Dead,
     after_lease_lost,
 )
+from app.core.infrastructure.work.trace_carry import work_span_parent
 from app.core.infrastructure.work.types import ClaimedItem, WorkClass, WorkMode
 from app.core.infrastructure.work.writer import waking_locally
 from app.core.log.log import get_logger
@@ -174,13 +175,17 @@ class Dispatcher:
     async def execute(self, item: ClaimedItem) -> str:
         """Run one claimed item to an outcome; never raises for a handler's failure."""
         spec = self.env.registry.get(item.kind)
-        # A root span per item, so the duration below is recorded inside a
-        # sampled trace and its histogram bucket can carry an exemplar
-        # (trace_id/span_id) pointing at a real run. Record before the span
-        # ends: outside it the trace-based exemplar filter offers nothing.
+        # A span per item, so the duration below is recorded inside a sampled
+        # trace and its histogram bucket can carry an exemplar pointing at a
+        # real run. Record before the span ends: outside it the trace-based
+        # exemplar filter offers nothing. A child of the request that queued
+        # the item when it carried one (``trace_carry``), so the work joins
+        # that trace and follows its sampling; otherwise a root.
+        parent, links = work_span_parent(item.traceparent, item.trace_link)
         with tracer.start_as_current_span(
             "work.execute",
-            context=trace.set_span_in_context(trace.INVALID_SPAN),
+            context=parent,
+            links=links,
             attributes=work_span_attributes(self.cls, item.kind),
         ):
             started = time.monotonic()

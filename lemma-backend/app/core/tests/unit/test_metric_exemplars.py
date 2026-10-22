@@ -130,7 +130,9 @@ async def test_work_handler_duration_is_recorded_inside_the_item_span(
         quantum=1,
         poll_interval=1.0,  # type: ignore[arg-type]
     )
-    item = SimpleNamespace(id=uuid4(), kind="test.kind", ns="ns")
+    item = SimpleNamespace(
+        id=uuid4(), kind="test.kind", ns="ns", traceparent=None, trace_link=None
+    )
 
     assert await dispatcher.execute(item) == "done"  # type: ignore[arg-type]
 

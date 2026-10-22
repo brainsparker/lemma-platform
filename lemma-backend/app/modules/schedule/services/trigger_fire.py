@@ -45,6 +45,8 @@ from app.modules.schedule.work.kinds import (
     schedule_namespace,
 )
 
+from app.core.observability.product_metrics import record_schedule_run
+
 logger = get_logger(__name__)
 
 
@@ -87,6 +89,23 @@ def target_kind_of(schedule: ScheduleEntity) -> str:
     return "WORKFLOW" if schedule.workflow_id is not None else "AGENT"
 
 
+_RUN_OUTCOME_OF_FIRE = {
+    FireOutcome.STARTED: "triggered",
+    FireOutcome.FIRE_CAP: "skipped",
+    FireOutcome.AT_CAPACITY: "skipped",
+}
+
+
+def _counted(schedule: ScheduleEntity, outcome: FireOutcome) -> FireOutcome:
+    """Count a fire decision on ``lemma.schedule.runs``. A filtering hand-off
+    is counted when the filter answers; a duplicate or an inactive schedule
+    decided nothing."""
+    counted = _RUN_OUTCOME_OF_FIRE.get(outcome)
+    if counted is not None:
+        record_schedule_run(schedule.schedule_type, counted)
+    return outcome
+
+
 async def fire_trigger(
     uow: SqlAlchemyUnitOfWork,
     schedule: ScheduleEntity,
@@ -94,6 +113,20 @@ async def fire_trigger(
     *,
     work: WorkWriter | None = None,
     cap_checked: bool = False,
+) -> FireOutcome:
+    return _counted(
+        schedule,
+        await _fire_trigger(uow, schedule, event, work=work, cap_checked=cap_checked),
+    )
+
+
+async def _fire_trigger(
+    uow: SqlAlchemyUnitOfWork,
+    schedule: ScheduleEntity,
+    event: TriggerEvent,
+    *,
+    work: WorkWriter | None,
+    cap_checked: bool,
 ) -> FireOutcome:
     """Fire ``schedule`` for ``event`` (or hand it to its filter).
 
@@ -161,6 +194,30 @@ async def start_after_filter(
     work: WorkWriter,
 ) -> FireOutcome:
     """The filter said yes for the FILTERING run ``run_id``: fire it, or skip it."""
+    return _counted(
+        schedule,
+        await _start_after_filter(
+            uow,
+            schedule,
+            run_id=run_id,
+            source_event_id=source_event_id,
+            llm_output=llm_output,
+            metadata=metadata,
+            work=work,
+        ),
+    )
+
+
+async def _start_after_filter(
+    uow: SqlAlchemyUnitOfWork,
+    schedule: ScheduleEntity,
+    *,
+    run_id: UUID,
+    source_event_id: str,
+    llm_output: Mapping[str, JsonValue],
+    metadata: Mapping[str, JsonValue],
+    work: WorkWriter,
+) -> FireOutcome:
     ledger = FireLedger(uow.session)
     if not schedule.is_active:
         await ledger.settle_skipped(

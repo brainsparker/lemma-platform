@@ -226,3 +226,76 @@ async def test_a_failed_main_sample_forgets_every_registered_sampler() -> None:
         loop.cancel()
         gauges._samplers.clear()
         gauges._samplers.update(registered)
+
+
+@pytest.mark.parametrize(
+    ("given", "label"),
+    [
+        ("TIME", "time"),
+        ("WEBHOOK", "webhook"),
+        ("DATASTORE", "datastore"),
+        ("X", "other"),
+    ],
+)
+def test_schedule_types_fold_onto_a_fixed_set(given, label) -> None:
+    assert pm.schedule_type_label(given) == label
+
+
+def test_a_late_timer_fire_records_its_lag() -> None:
+    assert (
+        _delta(
+            "lemma.schedule.fire_lag",
+            lambda: pm.record_schedule_fire_lag("TIME", 2.5),
+            schedule_type="time",
+        )
+        == 1
+    )
+
+
+def test_an_unknown_run_outcome_is_other_not_a_new_series() -> None:
+    assert (
+        _delta(
+            "lemma.schedule.runs",
+            lambda: pm.record_schedule_run("TIME", "exploded"),
+            schedule_type="time",
+            outcome="other",
+        )
+        == 1
+    )
+
+
+class _Rows:
+    def __init__(self, rows) -> None:
+        self._rows = rows
+
+    def all(self):
+        return self._rows
+
+
+class _ScheduleSession:
+    async def execute(self, statement):
+        from types import SimpleNamespace as Row
+
+        return _Rows(
+            [
+                Row(schedule_type="TIME", has_workflow=False, has_agent=True, n=3),
+                Row(schedule_type="WEBHOOK", has_workflow=True, has_agent=False, n=2),
+                Row(schedule_type="NEW", has_workflow=False, has_agent=False, n=1),
+            ]
+        )
+
+
+@pytest.mark.asyncio
+async def test_active_schedules_are_grouped_by_type_and_target() -> None:
+    from app.modules.schedule.infrastructure.schedules_gauge import (
+        sample_active_schedules,
+    )
+
+    await sample_active_schedules(_ScheduleSession())  # type: ignore[arg-type]
+    try:
+        assert {
+            (p.attributes["schedule_type"], p.attributes["target"]): p.value
+            for p in points("lemma.schedules.active")
+        } == {("time", "agent"): 3, ("webhook", "workflow"): 2, ("other", "other"): 1}
+    finally:
+        pm.snapshot.schedules_active = {}

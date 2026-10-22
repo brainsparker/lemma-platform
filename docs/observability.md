@@ -137,6 +137,10 @@ usual translation (`.` → `_`, counters gain `_total`).
 | `lemma.function.runs`, `lemma.function.run_duration_seconds` | `kind` = api/job, `outcome` (counter only) | `FunctionExecutionRepository._announce_finished`, every terminal transition |
 | `lemma.connector.operations`, `lemma.connector.operation_duration_seconds` | `connector` (catalog slug; the connectors table is global, so bounded by the catalog), `outcome` = success/failure (counter only) | `KindDispatcher.execute`, credential presentation included |
 | `lemma.sandbox.sessions_active` (gauge) | — | E2B `sandbox_instances` in state `ready`, sampled on the worker |
+| `lemma.schedules.active` (gauge) | `schedule_type` = time/webhook/datastore/other, `target` = agent/workflow/other | Active, non-internal schedules: one grouped count on the worker's gauge loop. Every replica reports the same value, so take the max, not the sum |
+| `lemma.schedule.runs` | `schedule_type`, `outcome` = triggered/filtered/failed/skipped/breaker_tripped | Every fire decision. `triggered`: started its target. `filtered`: its filter said no. `failed`: dead-lettered before or at dispatch. `skipped`: the run cap or daily fire cap held it. `breaker_tripped`: this failure deactivated the schedule. A duplicate event or an inactive schedule is not counted |
+| `lemma.schedule.run.duration` (s) | `schedule_type`, `outcome` = completed/failed/cancelled | From the run starting to its target's terminal outcome (`ScheduleRunOutcomeService.record_target_outcome`) |
+| `lemma.schedule.fire_lag` (s) | `schedule_type` | Timer schedules only: when the fire ran minus when it was due (`next_fire_at`) |
 | `lemma.sandbox.session_seconds` | — | An E2B instance leaving `ready` (release or destroy), timed from ready or its latest resume. A destroy through the epoch-fenced `claim_for_destroy` path is not timed |
 | `lemma.active_users` (gauge) | `window` = 5m/1h/24h | Distinct `user_id` in `usage_records` over the window — people the product did model work for. One query over a UUIDv7 primary-key range, every 20 gauge ticks (five minutes by default) |
 

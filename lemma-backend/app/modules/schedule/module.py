@@ -73,6 +73,7 @@ def _register_work() -> None:
 
 def _register_periodic_work() -> None:
     import app.modules.schedule.events.tasks  # noqa: F401
+    import app.modules.schedule.infrastructure.schedules_gauge  # noqa: F401
 
 
 def _resource_names():

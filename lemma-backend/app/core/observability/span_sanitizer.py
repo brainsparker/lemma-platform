@@ -222,6 +222,10 @@ METRIC_ATTRIBUTE_KEYS = frozenset(
         "kind",
         "model",
         "tool_kind",
+        # Schedule metrics: ``ScheduleType`` lowered (or ``other``), and
+        # agent / workflow / other.
+        "schedule_type",
+        "target",
         # The work runtime's class (bounded by the WorkClass enum), kind
         # (bounded by the handlers registered in the code) and why an item went
         # dead (bounded by the runtime's own reasons). Never the namespace: a

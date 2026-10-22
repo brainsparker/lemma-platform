@@ -100,6 +100,20 @@ connector_operation_duration = meter.create_histogram(
     unit="s",
     description="One connector operation, credential presentation included.",
 )
+schedule_runs = meter.create_counter(
+    "lemma.schedule.runs",
+    description="Schedule fire decisions, by schedule type and outcome.",
+)
+schedule_run_duration = meter.create_histogram(
+    "lemma.schedule.run.duration",
+    unit="s",
+    description="A schedule run, fired to its target's terminal outcome.",
+)
+schedule_fire_lag = meter.create_histogram(
+    "lemma.schedule.fire_lag",
+    unit="s",
+    description="How late a timer schedule fired: fire time minus due time.",
+)
 sandbox_session_seconds = meter.create_histogram(
     "lemma.sandbox.session_seconds",
     unit="s",
@@ -178,12 +192,70 @@ def record_sandbox_session(seconds: float) -> None:
     sandbox_session_seconds.record(max(seconds, 0.0))
 
 
+#: ``ScheduleType`` values, lowered. Anything else is ``other``.
+SCHEDULE_TYPES: Final = frozenset({"time", "webhook", "datastore"})
+#: How a fire was decided (``lemma.schedule.runs``): it started its target,
+#: its filter said no, it failed before reaching a target, the run cap or the
+#: daily fire cap held it back, or it tripped the failure breaker.
+SCHEDULE_RUN_OUTCOMES: Final = frozenset(
+    {"triggered", "filtered", "failed", "skipped", "breaker_tripped"}
+)
+#: How a started run ended (``lemma.schedule.run.duration``).
+_SCHEDULE_TERMINAL: Final = {
+    "completed": "completed",
+    "target_failed": "failed",
+    "cancelled": "cancelled",
+}
+
+
+def schedule_type_label(value: object) -> str:
+    raw = getattr(value, "value", value)
+    lowered = str(raw or "").lower()
+    return lowered if lowered in SCHEDULE_TYPES else "other"
+
+
+def schedule_target_label(*, agent_id: object, workflow_id: object) -> str:
+    if workflow_id is not None:
+        return "workflow"
+    return "agent" if agent_id is not None else "other"
+
+
+def record_schedule_run(schedule_type: object, outcome: str) -> None:
+    schedule_runs.add(
+        1,
+        {
+            "schedule_type": schedule_type_label(schedule_type),
+            "outcome": outcome if outcome in SCHEDULE_RUN_OUTCOMES else "other",
+        },
+    )
+
+
+def record_schedule_run_duration(
+    schedule_type: object, status: str, seconds: float
+) -> None:
+    schedule_run_duration.record(
+        max(seconds, 0.0),
+        {
+            "schedule_type": schedule_type_label(schedule_type),
+            "outcome": _SCHEDULE_TERMINAL.get(status.lower(), "other"),
+        },
+    )
+
+
+def record_schedule_fire_lag(schedule_type: object, seconds: float) -> None:
+    schedule_fire_lag.record(
+        max(seconds, 0.0), {"schedule_type": schedule_type_label(schedule_type)}
+    )
+
+
 @dataclass
 class GaugeSnapshot:
     """Last successful reading. Empty means "not measured", never zero."""
 
     sandboxes_active: int | None = None
     active_users: dict[str, int] = field(default_factory=dict)
+    #: Active schedules by ``(schedule_type, target)``.
+    schedules_active: dict[tuple[str, str], int] = field(default_factory=dict)
 
 
 snapshot = GaugeSnapshot()
@@ -204,6 +276,19 @@ def _observe_active_users(options: CallbackOptions) -> Iterable[Observation]:
     ]
 
 
+def _observe_schedules(options: CallbackOptions) -> Iterable[Observation]:
+    del options
+    return [
+        Observation(count, {"schedule_type": schedule_type, "target": target})
+        for (schedule_type, target), count in snapshot.schedules_active.items()
+    ]
+
+
+meter.create_observable_gauge(
+    "lemma.schedules.active",
+    callbacks=[_observe_schedules],
+    description="Active, non-internal schedules, by type and target.",
+)
 meter.create_observable_gauge(
     "lemma.sandbox.sessions_active",
     callbacks=[_observe_sandboxes],

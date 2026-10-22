@@ -78,7 +78,7 @@ way a scenario says, do not edit the scenario.
 | Scenarios (all local lanes) | `make scenarios-all` | Locally; runs non-live journeys, sandbox cases and client conformance, then writes one report |
 | Scenarios (sandbox) | `make scenarios-sandbox` | Same, after building the workspace images |
 | Scenarios (live) | `make scenarios-live` | Locally, before a release. See [LIVE.md](../tests/scenarios/LIVE.md) |
-| Protected e2e | `make test-e2e-runtime` | Weekly and on every `v*` tag, via `backend-protected-e2e.yml`. Where `@pytest.mark.slow` tests go, and what every Desktop release gate reads. It builds nothing, so a test needing a compiled artifact belongs in the lane that builds it. |
+| Protected e2e | `make test-e2e-runtime` | Nightly and on every `v*` tag, via `backend-protected-e2e.yml`. Where `@pytest.mark.slow` tests go, and what every Desktop release gate reads. It builds nothing, so a test needing a compiled artifact belongs in the lane that builds it. |
 | Sandbox function benchmark | `make benchmark-functions-docker` | Nightly on Docker, weekly on E2B, via `sandbox-function-benchmark.yml`. Owns `@pytest.mark.benchmark`: wall-clock budgets are trended here and gate nothing. |
 | Real-LLM e2e | `make test-e2e-real-llm` | Locally whenever a change touches the model or pause path. Not in CI. |
 

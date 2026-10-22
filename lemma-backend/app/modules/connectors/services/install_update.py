@@ -30,6 +30,8 @@ credential is actually bound to:
 
 from __future__ import annotations
 
+from app.core.authorization.permissions import Permissions
+
 from typing import Any
 from urllib.parse import urlsplit
 from uuid import UUID
@@ -324,7 +326,7 @@ async def update_install(
     await service._require_org_member(
         user_id=user_id,
         organization_id=organization_id,
-        allowed_roles=["ORG_OWNER", "ORG_EDITOR"],
+        permission=Permissions.ORG_INSTALLATION_MANAGE,
     )
     auth_config = await service._resolve_auth_config(
         organization_id=organization_id, auth_config_name=auth_config_name

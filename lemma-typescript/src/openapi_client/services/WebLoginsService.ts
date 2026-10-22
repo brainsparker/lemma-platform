@@ -14,17 +14,23 @@ export class WebLoginsService {
     /**
      * Sign your browser out of a site
      * @param origin The site to forget, as an origin or a host.
+     * @param podId The pod whose browser to manage. Omitted, your personal one.
+     * @param agent A named agent of `pod_id`, to manage that agent's browser. Omitted, the pod assistant's.
      * @returns ForgetResponse Successful Response
      * @throws ApiError
      */
     public static webLoginDelete(
         origin: string,
+        podId?: (string | null),
+        agent?: (string | null),
     ): CancelablePromise<ForgetResponse> {
         return __request(OpenAPI, {
             method: 'DELETE',
             url: '/web-logins',
             query: {
                 'origin': origin,
+                'pod_id': podId,
+                'agent': agent,
             },
             errors: {
                 422: `Validation Error`,
@@ -33,17 +39,23 @@ export class WebLoginsService {
     }
     /**
      * List the sites your browser is signed in to
+     * @param podId The pod whose browser to manage. Omitted, your personal one.
+     * @param agent A named agent of `pod_id`, to manage that agent's browser. Omitted, the pod assistant's.
      * @param wake Start the computer if it is paused. Off by default so that rendering this list is never what wakes one.
      * @returns WebLoginListResponse Successful Response
      * @throws ApiError
      */
     public static webLoginList(
+        podId?: (string | null),
+        agent?: (string | null),
         wake: boolean = false,
     ): CancelablePromise<WebLoginListResponse> {
         return __request(OpenAPI, {
             method: 'GET',
             url: '/web-logins',
             query: {
+                'pod_id': podId,
+                'agent': agent,
                 'wake': wake,
             },
             errors: {

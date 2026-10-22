@@ -23,6 +23,7 @@ from app.core.authorization.context import (
     Workload,
     WorkloadKind,
 )
+from app.core.authorization import pod_liveness
 from app.core.authorization.dependencies import require_pod_membership
 from app.core.authorization.permissions import ORG_OWNER_PERMISSIONS
 from app.core.domain.errors import DomainError
@@ -86,6 +87,22 @@ class _UowFactory:
             yield SimpleNamespace(session=_Session(self.pod))
         finally:
             self.exited = True
+
+
+@pytest.fixture(autouse=True)
+def _pod_liveness(monkeypatch):
+    """The reader `mod:pod` registers at assembly, against the double above.
+
+    Without it these tests passed only when an earlier test in the same
+    process had assembled the app, and failed when run on their own.
+    """
+
+    async def pod_is_live(uow_factory, pod_id) -> bool:
+        async with uow_factory() as uow:
+            pod = await uow.session.get(None, pod_id)
+            return pod is not None and not pod.is_deleted
+
+    monkeypatch.setattr(pod_liveness, "_pod_liveness_reader", pod_is_live)
 
 
 async def _run(ctx: Context) -> None:

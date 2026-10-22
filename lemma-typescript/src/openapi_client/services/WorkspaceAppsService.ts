@@ -15,15 +15,23 @@ export class WorkspaceAppsService {
     /**
      * Create workspace browser access URL
      * @param requestBody
+     * @param podId The pod whose workspace to use. Each pod has its own, with its own files and browser. Omitted, your personal workspace.
+     * @param agent A named agent of `pod_id`, to use that agent's workspace. Each agent has its own. Omitted, the pod assistant's.
      * @returns WorkspaceAppAccessResponse Successful Response
      * @throws ApiError
      */
     public static workspaceBrowserAccess(
         requestBody: WorkspaceAppAccessRequest,
+        podId?: (string | null),
+        agent?: (string | null),
     ): CancelablePromise<WorkspaceAppAccessResponse> {
         return __request(OpenAPI, {
             method: 'POST',
             url: '/workspace/apps/browser/access',
+            query: {
+                'pod_id': podId,
+                'agent': agent,
+            },
             body: requestBody,
             mediaType: 'application/json',
             errors: {
@@ -41,17 +49,23 @@ export class WorkspaceAppsService {
      * `sign-in-to-site/[conversationId]/[toolCallId]/page.tsx` reads instead,
      * so a person mid-SSO-redirect still sees which site they are actually on.
      * @param origin
+     * @param podId The pod whose workspace to use. Each pod has its own, with its own files and browser. Omitted, your personal workspace.
+     * @param agent A named agent of `pod_id`, to use that agent's workspace. Each agent has its own. Omitted, the pod assistant's.
      * @returns CurrentPageUrlResponse Successful Response
      * @throws ApiError
      */
     public static workspaceBrowserCurrentPageUrl(
         origin: string,
+        podId?: (string | null),
+        agent?: (string | null),
     ): CancelablePromise<CurrentPageUrlResponse> {
         return __request(OpenAPI, {
             method: 'GET',
             url: '/workspace/browser/current-page-url',
             query: {
                 'origin': origin,
+                'pod_id': podId,
+                'agent': agent,
             },
             errors: {
                 422: `Validation Error`,
@@ -72,15 +86,23 @@ export class WorkspaceAppsService {
      * had. So an unreachable or sleeping sandbox answers with no size rather
      * than a status code the pane would have to special-case.
      * @param requestBody
+     * @param podId The pod whose workspace to use. Each pod has its own, with its own files and browser. Omitted, your personal workspace.
+     * @param agent A named agent of `pod_id`, to use that agent's workspace. Each agent has its own. Omitted, the pod assistant's.
      * @returns DisplaySizeResponse Successful Response
      * @throws ApiError
      */
     public static workspaceBrowserResizeDisplay(
         requestBody: DisplaySizeRequest,
+        podId?: (string | null),
+        agent?: (string | null),
     ): CancelablePromise<DisplaySizeResponse> {
         return __request(OpenAPI, {
             method: 'POST',
             url: '/workspace/browser/display-size',
+            query: {
+                'pod_id': podId,
+                'agent': agent,
+            },
             body: requestBody,
             mediaType: 'application/json',
             errors: {
@@ -90,13 +112,25 @@ export class WorkspaceAppsService {
     }
     /**
      * Whether the workspace browser can be watched
+     * @param podId The pod whose workspace to use. Each pod has its own, with its own files and browser. Omitted, your personal workspace.
+     * @param agent A named agent of `pod_id`, to use that agent's workspace. Each agent has its own. Omitted, the pod assistant's.
      * @returns BrowserStatusResponse Successful Response
      * @throws ApiError
      */
-    public static workspaceBrowserStatus(): CancelablePromise<BrowserStatusResponse> {
+    public static workspaceBrowserStatus(
+        podId?: (string | null),
+        agent?: (string | null),
+    ): CancelablePromise<BrowserStatusResponse> {
         return __request(OpenAPI, {
             method: 'GET',
             url: '/workspace/browser/status',
+            query: {
+                'pod_id': podId,
+                'agent': agent,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
         });
     }
 }

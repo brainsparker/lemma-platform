@@ -24,6 +24,7 @@ from app.modules.agent.tools.workspace_cli.models import ExecCommandRequest
 from app.modules.agent.tools.workspace_cli.workspace_cli import exec_command_internal
 from app.modules.test_support.e2e.waiters import eventually
 from app.modules.workspace.config import workspace_settings
+from app.modules.workspace.domain.workspace_identity import workspace_sandbox_id
 from app.modules.workspace.infrastructure.runtime_bundle import runtime_bundle
 from app.modules.workspace.services.workspace_runtime_restart import was_restarted
 from app.modules.workspace.services.workspace_sandbox_service import (
@@ -91,9 +92,9 @@ async def _run(ctx, command: str) -> str:
     return (result.stdout or "").strip()
 
 
-async def _running_version(user_id: UUID) -> str | None:
+async def _running_version(sandbox_id: UUID) -> str | None:
     client = WorkspaceSandboxService()._get_manager_client()
-    state = await client.runtime_state(WorkloadKind.WORKSPACE, user_id)
+    state = await client.runtime_state(WorkloadKind.WORKSPACE, sandbox_id)
     assert state is not None, "the Docker fabric reports no runtime state"
     return state.version
 
@@ -109,7 +110,10 @@ async def test_the_server_runs_the_overlay_after_one_restart_and_no_more(
 ) -> None:
     del local_sandbox_server, backend_server, configure_workspace_api_url
     ctx = await _context(authenticated_client, fixed_test_org, fixed_test_user)
-    user_id = UUID(fixed_test_user["id"])
+    # The sandbox this context's commands run in: its person's, in its pod,
+    # as the pod's assistant. Not the person's id, which names their personal
+    # workspace -- one this test never starts.
+    sandbox_id = workspace_sandbox_id(ctx.user_id, ctx.pod_id)
 
     # The first session: install, restart, then the command.
     await eventually(
@@ -121,13 +125,13 @@ async def test_the_server_runs_the_overlay_after_one_restart_and_no_more(
         timeout_seconds=600,
         interval_seconds=2.0,
     )
-    assert await _running_version(user_id) == bundle, (
+    assert await _running_version(sandbox_id) == bundle, (
         "the workspace server is not running the overlay it was sent"
     )
     # It got there by the restart, not by starting on it: the overlay's volume
     # was empty when this sandbox's container started, so its server began on
     # the floor.
-    assert was_restarted(user_id, bundle), (
+    assert was_restarted(sandbox_id, bundle), (
         "the server runs the overlay but no restart was recorded"
     )
     started = await _run(ctx, "ps -o lstart= -p 1")
@@ -138,4 +142,4 @@ async def test_the_server_runs_the_overlay_after_one_restart_and_no_more(
     assert await _run(ctx, "ps -o lstart= -p 1") == started, (
         "a session restarted a sandbox whose server was already current"
     )
-    assert await _running_version(user_id) == bundle
+    assert await _running_version(sandbox_id) == bundle

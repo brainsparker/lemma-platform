@@ -13,35 +13,51 @@ from app.modules.workspace.contracts import (
     PythonExecutionResult,
     ShellCommandResult,
 )
+from app.modules.workspace.domain.workspace_identity import workspace_sandbox_id
 
 
 class ISandbox(ABC):
-    """Interface for managing a user-scoped code sandbox."""
+    """Interface for managing a person's workspace sandboxes.
+
+    Every method but ``resolve_workspace`` takes the workspace's id: one per
+    person, per pod, per actor, see ``domain/workspace_identity``. A person's
+    workspace with no pod keeps their user id.
+    """
+
+    async def resolve_workspace(
+        self, user_id: UUID, pod_id: UUID | None, *, actor_id: UUID | None = None
+    ) -> UUID:
+        """The id of ``user_id``'s workspace in ``pod_id`` as ``actor_id``.
+
+        An implementation that keeps rows makes the row here, because the id
+        alone does not say whose workspace it is. No actor is the assistant.
+        """
+        return workspace_sandbox_id(user_id, pod_id, actor_id)
 
     @abstractmethod
-    async def ensure_sandbox(self, user_id: UUID) -> SandboxInfo:
-        """Create or resume a sandbox for a user."""
+    async def ensure_sandbox(self, workspace_id: UUID) -> SandboxInfo:
+        """Create or resume a workspace sandbox."""
 
     @abstractmethod
-    async def get_sandbox(self, user_id: UUID) -> Optional[SandboxInfo]:
-        """Get sandbox information by user ID."""
+    async def get_sandbox(self, workspace_id: UUID) -> Optional[SandboxInfo]:
+        """Get a workspace sandbox's information without starting it."""
 
     @abstractmethod
-    async def delete_sandbox(self, user_id: UUID) -> None:
-        """Delete a user's sandbox."""
+    async def delete_sandbox(self, workspace_id: UUID) -> None:
+        """Delete a workspace sandbox."""
 
-    async def suspend_sandbox(self, user_id: UUID) -> None:
-        """Release compute while retaining the user's logical sandbox identity.
+    async def suspend_sandbox(self, workspace_id: UUID) -> None:
+        """Release compute while retaining the logical sandbox identity.
 
         Providers without a suspend primitive retain historical behavior by
-        deleting compute; the next ensure still uses the same logical user ID.
+        deleting compute; the next ensure still uses the same logical id.
         """
 
-        await self.delete_sandbox(user_id)
+        await self.delete_sandbox(workspace_id)
 
     @abstractmethod
-    async def is_sandbox_running(self, user_id: UUID) -> bool:
-        """Check if the user's sandbox is running."""
+    async def is_sandbox_running(self, workspace_id: UUID) -> bool:
+        """Check if a workspace sandbox is running."""
 
 
 class IWorkspaceSession(ABC):

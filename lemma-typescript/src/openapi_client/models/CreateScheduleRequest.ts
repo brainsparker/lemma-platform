@@ -8,10 +8,6 @@ import type { ScheduleType } from './ScheduleType.js';
  */
 export type CreateScheduleRequest = {
     /**
-     * Connected connector account used to provision provider-backed webhook schedules.
-     */
-    account_id?: (string | null);
-    /**
      * Pod agent to wake, by name. Pass 'POD_DEFAULT' (or 'pod_default') to wake the pod's default assistant, which has no name of its own.
      */
     agent_name?: (string | null);
@@ -43,6 +39,10 @@ export type CreateScheduleRequest = {
      * Stable pod-scoped schedule name used for import/export upserts.
      */
     name?: (string | null);
+    /**
+     * The pod connector, by slug, a WEBHOOK schedule listens through -- for a connector trigger or an MCP server's event. The account it means is the connector's decision: your own for a per-member connector, the shared one for a shared connector. It is resolved again on every fire and renewal, as the schedule's owner.
+     */
+    pod_connector?: (string | null);
     schedule_type: ScheduleType;
     visibility?: (string | null);
     workflow_name?: (string | null);

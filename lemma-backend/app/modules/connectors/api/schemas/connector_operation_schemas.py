@@ -1,5 +1,4 @@
 from typing import Any, Dict, Optional
-from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -132,15 +131,9 @@ class OperationExecutionRequest(BaseModel):
             "`output_path` chooses where a file result lands in the pod."
         )
     )
-    account_id: str | None = None
-    pod_id: UUID | None = Field(
-        default=None,
-        description=(
-            "The pod that `pod_path` and `file_id` references resolve in, and "
-            "that file results land in. Implied for a call made from inside a "
-            "pod; name it when calling as a person from outside one."
-        ),
-    )
+    # No account: the pod connector's mode and the caller decide it. An
+    # account id here was a free argument a model could type to run as a
+    # colleague.
 
 
 class OperationExecutionResponse(BaseModel):

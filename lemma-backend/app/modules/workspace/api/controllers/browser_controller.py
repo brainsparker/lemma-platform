@@ -5,6 +5,11 @@ from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
 from app.core.api.dependencies import CurrentUser
+from app.modules.workspace.api.controllers.workspace_pod import (
+    AgentQuery,
+    PodQuery,
+    require_workspace_pod,
+)
 from app.modules.workspace.config import workspace_settings
 from app.modules.workspace.services.workspace_sandbox_service import (
     WorkspaceSandboxService,
@@ -33,6 +38,8 @@ class WorkspaceAppAccessResponse(BaseModel):
 async def create_workspace_browser_access(
     request: WorkspaceAppAccessRequest,
     user: CurrentUser,
+    pod_id: PodQuery = None,
+    agent: AgentQuery = None,
 ) -> WorkspaceAppAccessResponse:
     # The URL handed back is a signed grant, so without the signing key there
     # is nothing to hand back.
@@ -42,8 +49,9 @@ async def create_workspace_browser_access(
             detail="Workspace port access signing key is not configured",
         )
 
+    await require_workspace_pod(user.id, pod_id, agent)
     access = await WorkspaceSandboxService().create_browser_access(
-        user.id, ttl_seconds=request.ttl_seconds
+        user.id, pod_id=pod_id, actor_id=agent, ttl_seconds=request.ttl_seconds
     )
 
     return WorkspaceAppAccessResponse(

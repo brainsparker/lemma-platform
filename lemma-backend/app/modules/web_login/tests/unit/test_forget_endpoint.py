@@ -19,10 +19,14 @@ class _Browser:
         self._answer = {"running": running, "cookies": cookies or [], "signed_in": []}
         self.forgot: list[tuple[list[str], list[str]]] = []
 
-    async def signed_in_sites(self, _user_id, *, wake: bool = False):
+    async def signed_in_sites(
+        self, _user_id, *, wake: bool = False, pod_id=None, actor_id=None
+    ):
         return self._answer
 
-    async def forget_sites(self, _user_id, *, domains, sites):
+    async def forget_sites(
+        self, _user_id, *, domains, sites, pod_id=None, actor_id=None
+    ):
         self.forgot.append((domains, sites))
         return len(domains)
 

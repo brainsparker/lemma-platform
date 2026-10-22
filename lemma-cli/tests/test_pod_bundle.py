@@ -2059,15 +2059,6 @@ def test_import_pod_bundle_retries_app_create_with_unique_public_slug_on_conflic
 def test_export_pod_bundle_writes_normalized_surfaces(tmp_path: Path):
     client = FakeClient(
         pods=SimpleNamespace(get=lambda pod_id: {"id": pod_id, "name": "demo-pod"}),
-        connectors=SimpleNamespace(
-            accounts=SimpleNamespace(
-                get=lambda account_id: {
-                    "id": account_id,
-                    "connector_id": "slack",
-                    "kind": "composio",
-                }
-            )
-        ),
         surfaces=SimpleNamespace(
             list=lambda pod_id, limit=100: {
                 "items": [
@@ -2079,7 +2070,7 @@ def test_export_pod_bundle_writes_normalized_surfaces(tmp_path: Path):
                         "agent_id": "agent_1",
                         "agent_name": "triage-agent",
                         "credential_mode": "CUSTOM",
-                        "account_id": "00000000-0000-0000-0000-00000000aaaa",
+                        "pod_connector": "slack-shared",
                         "status": "ACTIVE",
                         "webhook_url": "https://example.com/hook",
                         "surface_identity_id": "B123",
@@ -2119,8 +2110,8 @@ def test_export_pod_bundle_writes_normalized_surfaces(tmp_path: Path):
 
     assert result["ok"] is True
     assert result["counts"]["surfaces"] == 1
-    # The non-portable account id is extracted into a pod.json variable.
-    assert result["variables"] == ["slack_account"]
+    # The pod connector slug is portable as it is: no account variable.
+    assert result["variables"] == []
     surface_json = tmp_path / "demo-pod" / "surfaces" / "slack" / "slack.json"
     assert surface_json.exists()
     payload = json.loads(surface_json.read_text(encoding="utf-8"))
@@ -2129,12 +2120,7 @@ def test_export_pod_bundle_writes_normalized_surfaces(tmp_path: Path):
         "platform": "SLACK",
         "default_agent_name": "triage-agent",
         "credential_mode": "CUSTOM",
-        "account_id": "${slack_account}",
-        # Ground-truth connector identity, resolved via the connectors API and
-        # carried onto the variable so the importer knows exactly which
-        # connector + kind to reconnect.
-        "connector_id": "slack",
-        "connector_kind": "composio",
+        "pod_connector": "slack-shared",
         "is_enabled": True,
         "config": {
             # The place travels, not a per-channel agent: a surface answers as
@@ -2148,12 +2134,6 @@ def test_export_pod_bundle_writes_normalized_surfaces(tmp_path: Path):
             "identity": {"allowed_domains": ["example.com"]},
         },
     }
-
-    pod_data = json.loads(
-        (tmp_path / "demo-pod" / "pod.json").read_text(encoding="utf-8")
-    )
-    assert pod_data["variables"]["slack_account"]["connector"] == "slack"
-    assert pod_data["variables"]["slack_account"]["connector_kind"] == "composio"
 
 
 def test_import_pod_bundle_upserts_surfaces_by_name(tmp_path: Path):
@@ -2846,16 +2826,8 @@ def test_variable_applier_resolves_and_strips_unresolved(tmp_path: Path):
                 "name": "demo",
                 "variables": {
                     "approver": {"type": "pod_member"},
-                    "slack_account": {
-                        "type": "account",
-                        "connector": "slack",
-                        "connector_kind": "composio",
-                    },
-                    "ghost_account": {
-                        "type": "account",
-                        "connector": "jira",
-                        "connector_kind": "package",
-                    },
+                    "region": {"type": "string"},
+                    "ghost": {"type": "string"},
                 },
             }
         ),
@@ -2865,21 +2837,48 @@ def test_variable_applier_resolves_and_strips_unresolved(tmp_path: Path):
         client=None,
         pod_sdk=None,
         source_dir=tmp_path,
-        var_overrides={"slack_account": "acc-new"},
+        var_overrides={"region": "eu"},
         member_override="member-xyz",
     )
     out = apply(
         {
             "assignee_pod_member_id": "${approver}",
-            "account_id": "${slack_account}",
-            "other_account": "${ghost_account}",
+            "region": "${region}",
+            "other": "${ghost}",
             "keep": "value",
         }
     )
     assert out["assignee_pod_member_id"] == "member-xyz"  # pod_member default
-    assert out["account_id"] == "acc-new"  # --var override
-    assert "other_account" not in out  # unresolved account -> field dropped
+    assert out["region"] == "eu"  # --var override
+    assert "other" not in out  # unresolved -> field dropped
     assert out["keep"] == "value"
+
+
+def test_a_bundle_asking_for_an_account_is_refused(tmp_path: Path):
+    """Bundles name the pod connector a resource runs through; one that asks
+    the importer for an account predates that and would import resources
+    wired to an id nothing reads any more."""
+    from lemma_cli.cli_app.pod_bundle import _build_variable_applier
+
+    (tmp_path / "pod.json").write_text(
+        json.dumps(
+            {
+                "name": "demo",
+                "variables": {
+                    "slack_account": {"type": "account", "connector": "slack"}
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="slack_account.*pod connector"):
+        _build_variable_applier(
+            client=None,
+            pod_sdk=None,
+            source_dir=tmp_path,
+            var_overrides=None,
+            member_override=None,
+        )
 
 
 def test_variable_applier_rejects_unknown_var(tmp_path: Path):
@@ -3216,10 +3215,10 @@ def test_zero_grant_advisory_is_quiet_when_grants_are_declared(tmp_path: Path):
     )
 
 
-def test_export_tokenizes_pinned_account_grants(tmp_path: Path):
-    """A `connector_account` grant names the account by its raw id, which is
-    meaningless in any other org. Export must turn it into a ${var} like every
-    other account reference — it used to ship the source-org id verbatim."""
+def test_export_leaves_grants_on_accounts_out(tmp_path: Path):
+    """A grant on a pod account decides nothing for a workload -- a shared
+    account is used through a pod connector -- and an account never leaves its
+    organization, so the bundle carries the connector grant and not the other."""
     account_id = "11111111-2222-4333-8444-555555555555"
     agent = {
         "name": "mailer",
@@ -3253,15 +3252,6 @@ def test_export_tokenizes_pinned_account_grants(tmp_path: Path):
         schedules=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
         surfaces=SimpleNamespace(list=lambda pod_id, limit=100: {"items": []}),
         apps=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
-        connectors=SimpleNamespace(
-            accounts=SimpleNamespace(
-                get=lambda aid: {
-                    "id": aid,
-                    "connector_id": "gmail",
-                    "kind": "LEMMA",
-                }
-            )
-        ),
         files=SimpleNamespace(
             tree=lambda pod_id, root_path="/", files_per_directory=20: {
                 "tree": {"path": "/", "name": "/", "kind": "FOLDER", "children": []}
@@ -3273,114 +3263,15 @@ def test_export_tokenizes_pinned_account_grants(tmp_path: Path):
 
     bundle = Path(result["path"])
     payload = json.loads((bundle / "agents" / "mailer" / "mailer.json").read_text())
-    grants = payload["permissions"]["grants"]
-    account_grant = next(g for g in grants if g["resource_type"] == "connector_account")
-    # The raw id is gone, replaced by a variable...
-    assert account_grant["resource_name"].startswith("${")
-    assert account_id not in json.dumps(payload)
-    # ...and the variable records which connector to reconnect.
-    variables = json.loads((bundle / "pod.json").read_text())["variables"]
-    var_name = account_grant["resource_name"][2:-1]
-    assert variables[var_name]["type"] == "account"
-    assert variables[var_name]["connector"] == "gmail"
-    assert variables[var_name]["connector_kind"] == "LEMMA"
-    # The plain connector grant is untouched — it is portable by name.
-    assert {
-        "resource_type": "connector",
-        "resource_name": "gmail",
-        "permission_ids": ["connector.use"],
-    } in grants
-
-
-def test_import_drops_an_unresolved_pinned_account_grant(tmp_path: Path, capsys):
-    """An account variable nobody supplied must not reach the API: the whole
-    permissions pass would 400, at the very end of an import that has already
-    written everything else."""
-    (tmp_path / "pod.json").write_text(
-        json.dumps(
-            {
-                "name": "mailpod",
-                "variables": {
-                    "mailer_account": {
-                        "type": "account",
-                        "source_value": "11111111-2222-4333-8444-555555555555",
-                        "connector": "gmail",
-                        "connector_kind": "LEMMA",
-                    }
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    _write_agent(
-        tmp_path,
-        "mailer",
+    assert payload["permissions"]["grants"] == [
         {
-            "name": "mailer",
-            "instruction": "Send mail.",
-            "permissions": {
-                "grants": [
-                    {
-                        "resource_type": "connector",
-                        "resource_name": "gmail",
-                        "permission_ids": ["connector.use"],
-                    },
-                    {
-                        "resource_type": "connector_account",
-                        "resource_name": "${mailer_account}",
-                        "permission_ids": ["connector_account.use"],
-                        "connector_id": "gmail",
-                        "connector_kind": "LEMMA",
-                    },
-                ]
-            },
-        },
-    )
-
-    permission_payloads: list = []
-    client = FakeClient(
-        tables=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
-        functions=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
-        agents=SimpleNamespace(
-            list=lambda pod_id, limit=1000: {"items": []},
-            create=lambda pod_id, payload: {"name": _plain(payload)["name"]},
-            replace_permissions=lambda pod_id, name, payload: (
-                permission_payloads.append(_plain(payload)) or {"agent_name": name}
-            ),
-        ),
-        workflows=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
-        apps=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
-        connectors=SimpleNamespace(
-            accounts=SimpleNamespace(
-                get=lambda aid: (_ for _ in ()).throw(
-                    LemmaAPIError(status_code=404, message="gone")
-                )
-            )
-        ),
-        files=SimpleNamespace(
-            tree=lambda pod_id, root_path="/", files_per_directory=20: {
-                "tree": {"path": "/", "name": "/", "kind": "FOLDER", "children": []}
-            }
-        ),
-    )
-
-    result = import_pod_bundle(client, pod_id="pod_1", source_dir=tmp_path)
-
-    assert result["ok"] is True
-    # Only the portable connector grant is sent; the pinned account is dropped,
-    # and the export-only metadata never reaches the API.
-    assert permission_payloads == [
-        {
-            "grants": [
-                {
-                    "resource_type": "connector",
-                    "resource_name": "gmail",
-                    "permission_ids": ["connector.use"],
-                }
-            ]
+            "resource_type": "connector",
+            "resource_name": "gmail",
+            "permission_ids": ["connector.use"],
         }
     ]
-    assert "dropped 1 grant" in capsys.readouterr().err
+    assert account_id not in json.dumps(payload)
+    assert result["variables"] == []
 
 
 def _bare_pod_client():
@@ -3467,34 +3358,52 @@ def test_import_rejects_an_unrecognized_field_in_a_bundle(tmp_path: Path):
         import_pod_bundle(client, pod_id="pod_1", source_dir=tmp_path)
 
 
-def test_plan_flags_an_unreachable_pinned_account_grant(tmp_path: Path):
-    """A pinned account the target org can't reach must fail the PLAN. Left to the
-    apply step it 400s on the final permissions pass, after every other resource
-    has already been written."""
+def _mailer_granted(tmp_path: Path, grant: dict) -> None:
     _write_agent(
         tmp_path,
         "mailer",
         {
             "name": "mailer",
             "instruction": "Send mail.",
-            "permissions": {
-                "grants": [
-                    {
-                        "resource_type": "connector_account",
-                        "resource_name": "11111111-2222-4333-8444-555555555555",
-                        "permission_ids": ["connector_account.use"],
-                    }
-                ]
-            },
+            "permissions": {"grants": [grant]},
+        },
+    )
+
+
+def test_plan_refuses_a_grant_on_an_account(tmp_path: Path):
+    """Left to the apply step it would fail the final permissions pass, after
+    every other resource has already been written."""
+    _mailer_granted(
+        tmp_path,
+        {
+            "resource_type": "connector_account",
+            "resource_name": "11111111-2222-4333-8444-555555555555",
+            "permission_ids": ["connector_account.use"],
+        },
+    )
+
+    result = import_pod_bundle(
+        _bare_pod_client(), pod_id="pod_1", source_dir=tmp_path, dry_run=True
+    )
+
+    assert result["ok"] is False
+    assert any("connector:<slug>:use" in error["message"] for error in result["errors"])
+
+
+def test_plan_flags_a_pod_connector_the_pod_does_not_declare(tmp_path: Path):
+    """A connector grant names a pod connector by slug. Bundles do not declare
+    connectors yet, so the target pod has to have it before the import."""
+    _mailer_granted(
+        tmp_path,
+        {
+            "resource_type": "connector",
+            "resource_name": "support-inbox",
+            "permission_ids": ["connector.use"],
         },
     )
     client = _bare_pod_client()
     client.connectors = SimpleNamespace(
-        accounts=SimpleNamespace(
-            get=lambda aid: (_ for _ in ()).throw(
-                LemmaAPIError(status_code=404, message="gone")
-            )
-        )
+        pod_connectors=lambda pod_id: {"items": [{"slug": "gmail"}]}
     )
 
     result = import_pod_bundle(
@@ -3502,27 +3411,17 @@ def test_plan_flags_an_unreachable_pinned_account_grant(tmp_path: Path):
     )
 
     assert result["ok"] is False
-    assert any("connector_account" in error["message"] for error in result["errors"])
+    assert any("support-inbox" in error["message"] for error in result["errors"])
 
 
-def test_plan_does_not_block_when_the_account_check_cannot_run(tmp_path: Path):
-    """A validator that can't validate must not invent a finding — an older
-    client with no accounts API still plans."""
-    _write_agent(
+def test_plan_does_not_block_when_the_connector_check_cannot_run(tmp_path: Path):
+    """A validator that can't validate must not invent a finding."""
+    _mailer_granted(
         tmp_path,
-        "mailer",
         {
-            "name": "mailer",
-            "instruction": "Send mail.",
-            "permissions": {
-                "grants": [
-                    {
-                        "resource_type": "connector_account",
-                        "resource_name": "11111111-2222-4333-8444-555555555555",
-                        "permission_ids": ["connector_account.use"],
-                    }
-                ]
-            },
+            "resource_type": "connector",
+            "resource_name": "support-inbox",
+            "permission_ids": ["connector.use"],
         },
     )
 

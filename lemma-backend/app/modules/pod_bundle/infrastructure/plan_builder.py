@@ -24,7 +24,6 @@ from uuid import UUID
 from lemma_pod_bundle import (
     diff_table_columns,
     load_resource_payload,
-    require_account_variable_metadata,
 )
 from lemma_pod_bundle.diff import _order_table_dirs_by_dependency
 from lemma_pod_bundle.jsonc import loads_jsonc
@@ -539,47 +538,35 @@ class ServiceExistingResources:
 def _variables_from_manifest(pod_manifest: dict[str, Any]) -> list[VariableSpec]:
     """Turn ``pod.json -> variables`` into typed specs.
 
-    A connector ``account`` variable is **required**: its source id belongs to the
-    exporting org and cannot be reused, so the importer must supply one of their own
-    accounts (validated at apply). A ``pod_member`` variable auto-resolves to the
-    importing user, and a ``free`` variable (e.g. an app slug) is required only when
-    it has no default.
+    A ``pod_member`` variable auto-resolves to the importing user, and a
+    ``free`` variable (e.g. an app slug) is required only when it has no
+    default.
 
-    Every ``account`` variable must carry ``connector``/``provider`` metadata —
-    a bundle missing it predates that guarantee (or was hand-edited) and must
-    be re-exported rather than imported half-resolvable."""
+    There is no account variable: a surface or schedule names the pod connector
+    it runs through by slug, and the importing pod's connector decides the
+    account. A bundle that still declares one predates that and is refused,
+    rather than creating resources wired to an id nothing reads."""
     raw = pod_manifest.get("variables")
     if not isinstance(raw, dict):
         return []
-    try:
-        require_account_variable_metadata(raw)
-    except ValueError as exc:
-        raise BundleInvalidError(str(exc)) from exc
     specs: list[VariableSpec] = []
     for name, meta in raw.items():
         vtype = str((meta or {}).get("type") or "").lower()
         if vtype == "account":
-            kind = "account"
-        elif vtype in ("member", "pod_member"):
-            kind = "pod_member"
-        else:
-            kind = "free"
+            raise BundleInvalidError(
+                f"Variable '{name}' asks for a connected account. Bundles name "
+                "the pod connector a resource runs through instead; re-export "
+                "this pod to get a bundle that imports."
+            )
+        kind = "pod_member" if vtype in ("member", "pod_member") else "free"
         default = (meta or {}).get("default")
-        connector = (meta or {}).get("connector")
-        # `provider` is the pre-rename spelling, still read so bundles exported
-        # before it keep planning.
-        connector_kind = (meta or {}).get("connector_kind") or (meta or {}).get(
-            "provider"
-        )
         specs.append(
             VariableSpec(
                 name=str(name),
                 kind=kind,  # type: ignore[arg-type]
                 description=(meta or {}).get("description"),
-                required=(kind == "account") or (kind == "free" and default is None),
+                required=kind == "free" and default is None,
                 default=str(default) if default is not None else None,
-                connector=str(connector) if connector else None,
-                connector_kind=str(connector_kind) if connector_kind else None,
             )
         )
     return specs

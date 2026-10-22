@@ -14,7 +14,8 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from app.core.authorization.context import ActorType, Context
+from app.core.authorization.context import Context
+from app.modules.datastore.domain.errors import DatastoreAccessDeniedError
 from app.modules.datastore.domain.errors import (
     DatastoreRevocationIncompleteError,
     DatastoreValidationError,
@@ -30,34 +31,6 @@ from app.modules.datastore.services.files.signed_url import (
     SignedUrlRevocationIncomplete,
     get_signed_url_store,
 )
-
-
-#: Marks a link a workload minted with no person behind it. Without it, a link
-#: an agent minted for somebody whose account was later deleted (the row's
-#: `created_by_user_id` is nulled) would read exactly like one an agent minted
-#: on its own, and be re-checked on the agent's authority alone — wider than
-#: the intersection it was minted under. So the permissive case is the one that
-#: has to say so, and a link that says nothing needs its person.
-ACTING_ALONE = "alone:"
-
-
-def minting_workload(ctx: Context) -> str | None:
-    """Which workload minted this, and whether a person stood behind it.
-
-    A live link is re-checked on every fetch, and the check has to be the one
-    the minter was held to: the person's access, intersected with the agent's
-    when an agent acts for them (``agent:<id>``), or the workload's own when it
-    acts for nobody (``alone:agent:<id>``). The pod's default agent acts *as*
-    the person, so it is recorded as the person alone.
-    """
-    if ctx.is_assistant:
-        return None
-    if ctx.actor_type is ActorType.DELEGATED_USER_WORKLOAD:
-        return ctx.actor_id
-    if ctx.actor_type in (ActorType.AGENT, ActorType.FUNCTION):
-        workload = f"{ctx.actor_type.value.lower()}:{ctx.actor_id}"
-        return workload if ctx.user_id else ACTING_ALONE + workload
-    return None
 
 
 class SignedLinks:
@@ -90,6 +63,16 @@ class SignedLinks:
         to create one mirrors a normal file read — the read is what proves the
         caller could have handed the bytes over anyway.
         """
+        if ctx.workload is not None:
+            # A public link gives the file to anyone who holds it, outside every
+            # grant. That is sharing, a person's act: the assistant mints as its
+            # person, a named agent or function does not mint at all -- with a
+            # person behind it or without one. A link is re-checked on every
+            # fetch as the person who shared it, so one minted by nobody would
+            # serve nothing anyway.
+            raise DatastoreAccessDeniedError(
+                "An agent or function may not make a public link to a file."
+            )
         entity = await self._reader.get_file_by_path(pod_id, path, ctx.user_id, ctx=ctx)
         if entity.is_folder:
             raise DatastoreValidationError("Folders do not have a downloadable URL")
@@ -102,7 +85,6 @@ class SignedLinks:
             file=entity,
             links=self._links(),
             created_by_user_id=ctx.user_id,
-            minted_by_workload=minting_workload(ctx),
             expires_seconds=expires_seconds,
             max_hits=max_hits,
         )

@@ -45,12 +45,20 @@ from app.modules.schedule.services.schedule_target_policy import (
     derive_webhook_target_from_workflow_start,
     named_agent_target_fields,
     validate_global_workflow_is_unclaimed,
+    validate_global_workflow_unclaimed_after_update,
     validate_instruction_survives_update,
     validate_target_instruction,
     validate_single_target,
     workflow_target_fields,
 )
 from app.modules.schedule.services.schedule_naming import schedule_name_for
+from app.modules.schedule.services.schedule_ownership import (
+    take_ownership_if_behaviour_changes,
+)
+from app.modules.schedule.services.schedule_connector_policy import (
+    ConnectorResolve,
+    require_connector_use,
+)
 from app.modules.schedule.services import trigger_resubscription as resub
 from app.modules.schedule.services.schedule_update_policy import (
     is_explicit_reactivation,
@@ -74,8 +82,12 @@ class ScheduleService:
         datastore_policy: DatastoreSchedulePolicy | None = None,
         authorization_service: object | None = None,
         webhook_sources: WebhookSourceRegistry | None = None,
+        connector_access: ConnectorResolve | None = None,
     ):
         self.uow = uow
+        # The pod connector check, injectable so a unit test can watch who is
+        # asked about which connector without a database behind it.
+        self._connector_access = connector_access
         self.schedule_repository = schedule_repository or ScheduleRepositoryImpl(
             uow=uow
         )
@@ -146,6 +158,7 @@ class ScheduleService:
         await self._validate_target(schedule_create)
         await self._require_target_execute(schedule_create, ctx=ctx)
         await self._require_datastore_table_update(schedule_create, ctx=ctx)
+        await self._require_connector_use(schedule_create, ctx)
         if schedule_create.schedule_type == ScheduleType.TIME:
             refuse_time_schedule_filter(
                 schedule_create.filter_instruction,
@@ -157,7 +170,7 @@ class ScheduleService:
         elif schedule_create.schedule_type == ScheduleType.WEBHOOK:
             validate_webhook_source(schedule_create, self.webhook_sources)
         schedule = ScheduleEntity(**schedule_create.model_dump())
-        if not schedule.listens_through_account:
+        if not schedule.listens_through_connector:
             return await self.schedule_repository.create(schedule)
         return await resub.create_listening(schedule, self)
 
@@ -395,24 +408,16 @@ class ScheduleService:
                 existing.model_copy(update={"name": update_data["name"]}),
                 existing_schedule_id=schedule_id,
             )
-        if "workflow_id" in update_data or "agent_id" in update_data:
-            candidate = existing.model_copy(update=update_data)
-            await self._require_target_execute(candidate, ctx=ctx)
-        if "workflow_id" in update_data and update_data["workflow_id"] is not None:
-            workflow = await self.target_resolver.get_workflow(
-                update_data["workflow_id"]
-            )
-            if workflow and workflow.is_global_workflow:
-                existing_for_workflow = (
-                    await self.schedule_repository.find_active_by_workflow(
-                        pod_id=existing.pod_id,
-                        workflow_id=update_data["workflow_id"],
-                        user_id=existing.user_id,
-                    )
-                )
-                validate_global_workflow_is_unclaimed(
-                    [item for item in existing_for_workflow if item.id != schedule_id]
-                )
+        await take_ownership_if_behaviour_changes(
+            existing,
+            update_data,
+            ctx=ctx,
+            require_target_execute=self._require_target_execute,
+            require_connector_use=self._require_connector_use,
+        )
+        await validate_global_workflow_unclaimed_after_update(
+            existing, update_data, self.target_resolver, self.schedule_repository
+        )
         updated = await resub.update_schedule_resubscribing(
             existing,
             update_data,
@@ -446,7 +451,7 @@ class ScheduleService:
                 self.uow.after_commit(lambda: resub.drop_subscription(existing, writer))
             return deleted
 
-        if existing.listens_through_account and existing.config.get(
+        if existing.listens_through_connector and existing.config.get(
             "provider_trigger_id"
         ):
             try:
@@ -586,6 +591,18 @@ class ScheduleService:
                     pod_id=schedule.pod_id,
                 ),
             )
+
+    async def _require_connector_use(
+        self,
+        schedule: ScheduleCreateEntity | ScheduleEntity,
+        ctx: Context | None,
+    ) -> None:
+        if self._connector_access is None:
+            await require_connector_use(schedule, ctx, self.uow)
+            return
+        await require_connector_use(
+            schedule, ctx, self.uow, resolve=self._connector_access
+        )
 
     async def _require_datastore_table_update(
         self,

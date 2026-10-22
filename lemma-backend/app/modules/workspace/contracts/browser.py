@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from typing import TypedDict
 from urllib.parse import urlparse
+from uuid import UUID
 
 
 class BrowserCookie(TypedDict, total=False):
@@ -71,6 +72,22 @@ from app.modules.workspace.services.browser_relay_client import (  # noqa: E402
     ProfileCookie,
     ProfileCookies,
 )
+
+
+async def require_browser_workspace(
+    user_id: UUID, pod_id: UUID | None, agent: UUID | None = None
+) -> None:
+    """Refuse a person naming a pod they cannot see, or an agent not its own.
+
+    Every browser is one person's in one pod as one actor, and a caller that
+    lets a person pick which must ask this first; see
+    ``services/workspace_access``.
+    """
+    from app.modules.workspace.services.workspace_access import (
+        require_workspace_pod,
+    )
+
+    await require_workspace_pod(user_id, pod_id, agent)
 
 
 def browser_unavailable() -> type[Exception]:

@@ -29,6 +29,14 @@ and that is now structural in a stronger sense than a response shape with no
 field for one: cookie values never cross the sandbox boundary at all. What
 comes back is a host, a count and an expiry.
 
+Which browser: every workspace -- one per person, pod and actor -- has its own,
+with its own sign-ins. `pod_id` names the pod and `agent` one of its named
+agents; without `agent` it is the pod assistant's, and without `pod_id` the
+caller's personal workspace. Both are checked the way the `workspace` routes
+check them, and `web_login.delete` takes the same pair. A sign-in answered
+through `web_login.sign_in.answer` goes into the browser of the conversation's
+agent.
+
 Does not start a paused computer unless `wake=true`, and answers `sleeping`
 instead. Rendering a settings page should not be what spins one up, and unlike
 the table read this replaces, answering costs a round trip into the sandbox.

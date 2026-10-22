@@ -18,6 +18,7 @@ from starlette import status
 
 from app.core.authorization.factory import create_authorization_data_service
 from app.core.authorization.scope import context_scope
+from app.core.authorization.session_approvals import record_denial
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import (
@@ -219,3 +220,28 @@ async def conversation(conversation_id: UUID) -> Conversation:
         )
     assert loaded is not None
     return loaded
+
+
+#: What a pod-tool delete of a record is refused for, one at a time, when the
+#: agent holds no grant on the table.
+RECORD_DELETE_REFUSALS = ("datastore.table.read", "datastore.record.delete")
+
+
+async def refused_before_asking(
+    seeded: Seeded, *, tool_name: str, args: JsonObject, permission_ids: tuple[str, ...]
+) -> None:
+    """The refusals an agent hits before it asks: the server's record of them.
+
+    A seeded ``request_approval`` skips the call the agent made first, and an
+    approval lends exactly what the server refused that call for -- never the
+    person's whole authority, and never the model's own ``permission_ids``. So a
+    test that approves a call the agent "was refused" writes the refusal down,
+    as the pod tool would have.
+    """
+    await record_denial(
+        session_id=str(seeded.conversation_id),
+        workload_actor_id=f"agent:{seeded.agent_id}",
+        tool_name=tool_name,
+        args=dict(args),
+        permission_ids=permission_ids,
+    )

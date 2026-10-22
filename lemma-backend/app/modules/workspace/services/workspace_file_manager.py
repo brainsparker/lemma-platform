@@ -16,8 +16,20 @@ logger = get_logger(__name__)
 class WorkspaceFileManager:
     """File manager for workspace operations."""
 
-    def __init__(self, user_id: UUID, cwd: Optional[str] = None):
+    def __init__(
+        self,
+        user_id: UUID,
+        cwd: Optional[str] = None,
+        *,
+        pod_id: UUID | None = None,
+        actor_id: UUID | None = None,
+    ):
         self.user_id = user_id
+        # Which of the person's workspaces: one per pod and actor (the
+        # assistant when absent). An agent's file reads must name both, or
+        # they read a different disk from the one its shell writes to.
+        self.pod_id = pod_id
+        self.actor_id = actor_id
         self.cwd = self._normalize_cwd(cwd)
 
     @staticmethod
@@ -84,6 +96,9 @@ class WorkspaceFileManager:
         return posixpath.relpath(path, root)
 
     async def _get_workspace_session(self):
+        from app.modules.workspace.domain.workspace_identity import (
+            workspace_sandbox_id,
+        )
         from app.modules.workspace.services.workspace_sandbox_service import (
             WorkspaceSandboxService,
         )
@@ -91,8 +106,14 @@ class WorkspaceFileManager:
         service = WorkspaceSandboxService()
         return await service.get_session(
             user_id=self.user_id,
-            pod_id=None,
-            session_id=f"files-{self.user_id.hex}",
+            pod_id=self.pod_id,
+            actor_id=self.actor_id,
+            session_id=(
+                f"files-{self.user_id.hex}"
+                if self.pod_id is None
+                else "files-"
+                + workspace_sandbox_id(self.user_id, self.pod_id, self.actor_id).hex
+            ),
             initial_cwd=WORKSPACE_ROOT,
             close_on_exit=False,
         )

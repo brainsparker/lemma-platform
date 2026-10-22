@@ -30,6 +30,7 @@ from uuid import UUID
 
 from app.core.authorization.current import reset_current_context, set_current_context
 from app.core.authorization.context import Context
+from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
@@ -38,9 +39,9 @@ from app.core.config import settings
 from app.core.log.log import get_logger
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.authority import tool_authorization_context
-from app.modules.connectors.domain.errors import (
-    AccountResolutionError,
-    ConnectorAccessDeniedError,
+from app.modules.connectors.contracts.pod_connectors import (
+    acting_person,
+    resolve_pod_connector,
 )
 
 if TYPE_CHECKING:
@@ -49,33 +50,51 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
-class _ResolvedAccount(Protocol):
-    """What account resolution hands back, as far as this bridge is concerned."""
+class _ResolvedConnector(Protocol):
+    """What resolving the pod's `github` connector hands back, as far as this
+    bridge is concerned: whose account it is, and the account."""
 
-    credentials: object
-    display_name: str | None
-    email: str | None
+    owner_user_id: UUID
+    account: object
 
 
-class _AccountResolution(Protocol):
-    """The single connector-side call this makes.
+class _ResolveConnector(Protocol):
+    async def __call__(
+        self,
+        uow: SqlAlchemyUnitOfWork,
+        ctx: Context,
+        *,
+        pod_id: UUID,
+        slug: str,
+    ) -> _ResolvedConnector: ...
 
-    Named here rather than imported: `AccountResolutionService` lives inside
-    the connectors module, and the concrete factory for it is imported lazily
-    below to avoid an import cycle.
+
+@dataclass(frozen=True, slots=True)
+class GithubRefusal:
+    """Why no credential was written, for the agent to read.
+
+    The pod connector's own typed answer -- connect your account, reconnect
+    it, this pod declares no `github` -- carried as data so the agent can act
+    on it, with the link when there is one. It used to be a cached
+    "unavailable" and nothing else, so git simply failed with its own auth
+    error and nobody was told what to do about it.
     """
 
-    async def resolve_account(
-        self,
-        *,
-        user_id: UUID,
-        connector_id: str,
-        auth_actor: Context,
-        account_id: UUID | None,
-    ) -> _ResolvedAccount: ...
+    code: str
+    message: str
+    connect_url: str | None = None
+
+    def notice(self) -> str:
+        text = (
+            f"[workspace notice] No GitHub credential in this workspace: {self.message}"
+        )
+        if self.connect_url:
+            text += f" Connect it at {self.connect_url}"
+        return text
 
 
-_CONNECTOR_ID = "github"
+#: The pod connector slug the sandbox's git and gh run through.
+_POD_CONNECTOR_SLUG = "github"
 _CREDENTIALS_PATH = "/tmp/.git-credentials"
 # `gh` reads its own config; it does not understand git's credential file. The
 # alternative -- exporting GH_TOKEN from a shell profile -- would put the raw
@@ -169,19 +188,24 @@ async def ensure_github_credentials(
     *,
     redis: "Redis | None" = None,
     resolve_credential: Callable[
-        [BaseAgentContext], Awaitable["_GithubCredential | None"]
+        [BaseAgentContext],
+        Awaitable["_GithubCredential | GithubRefusal | None"],
     ]
     | None = None,
-) -> None:
+) -> str | None:
     """Provision a session-scoped GitHub credential file, once per session/TTL.
+
+    Returns a notice for the agent when the pod connector refused -- once, on
+    the call that found out; the refusal is cached like any other
+    unavailability, so the commands after it say nothing more.
 
     Also configures a git commit identity (`user.name`/`user.email`) from the
     connected account so an agent never has to discover and set this itself
     before its first commit -- the exact manual step this function exists to
     make unnecessary.
 
-    Only the "no connected account" / "not authorized" outcome is treated as
-    a stable result worth caching as unavailable. Any other failure (Redis or
+    Only a refusal (the pod connector's typed answer, or no token on the
+    account) is treated as a stable result worth caching as unavailable. Any other failure (Redis or
     DB unreachable, a write to the sandbox failing) is left uncached so the
     next git-looking command retries rather than being permanently treated as
     unavailable for the rest of the session -- and, deliberately, is not
@@ -193,7 +217,7 @@ async def ensure_github_credentials(
     """
     session_id = workspace_session.session_id
     if not session_id:
-        return
+        return None
 
     # Both collaborators are arguments so a test can watch this function's own
     # decisions -- the marker key, which outcome is cacheable, what lands in
@@ -203,18 +227,16 @@ async def ensure_github_credentials(
         redis = get_redis(url=settings.redis_url)
     if resolve_credential is None:
         resolve_credential = _resolve_github_credential
-    # The account is part of the marker: a conversation bound to a project names
-    # the account it works as, and two conversations in one session must not
-    # inherit each other's credential file.
-    account_id = ctx.workspace_repo.account_id if ctx.workspace_repo else None
-    marker_key = f"{_MARKER_KEY_PREFIX}:{session_id}:{account_id or 'default'}"
+    # Per session only: which account is written is the pod connector's
+    # decision for the person acting, never something a conversation names.
+    marker_key = f"{_MARKER_KEY_PREFIX}:{session_id}"
     if await redis.exists(marker_key):
-        return
+        return None
 
     credential = await resolve_credential(ctx)
-    if credential is None:
+    if not isinstance(credential, _GithubCredential):
         await redis.set(marker_key, "unavailable", ex=_UNAVAILABLE_TTL_SECONDS)
-        return
+        return credential.notice() if credential is not None else None
 
     await workspace_session.write_file(
         _CREDENTIALS_PATH,
@@ -256,6 +278,7 @@ async def ensure_github_credentials(
     await workspace_session.exec_command(cmd=" && ".join(setup_commands), timeout=15)
 
     await redis.set(marker_key, "provisioned", ex=_provisioned_ttl(credential))
+    return None
 
 
 async def _refreshed_credentials(
@@ -342,57 +365,63 @@ async def _resolve_github_credential(
         [SqlAlchemyUnitOfWork, BaseAgentContext], Awaitable[Context]
     ]
     | None = None,
-    account_resolution: Callable[[SqlAlchemyUnitOfWork], _AccountResolution]
-    | None = None,
+    resolve_connector: _ResolveConnector | None = None,
     refresh_credentials: Callable[
         [SqlAlchemyUnitOfWork, object, UUID], Awaitable[dict[str, object] | None]
     ]
     | None = None,
-) -> _GithubCredential | None:
-    """Resolve the connected GitHub account's token for this conversation.
+) -> _GithubCredential | GithubRefusal | None:
+    """The token of the account the pod's `github` connector resolves to.
 
-    The unit of work and the two connector collaborators are arguments so this
-    can be exercised without a database: it used to build
-    ``SessionUnitOfWorkFactory(async_session_maker)()`` itself, and its tests
-    entered a real async session on the argument that nothing inside would
-    execute a query -- which is a property of the code under test, not
-    something the test could hold.
+    Resolved as the run's actor -- a named agent as its person intersected
+    with its own grants, the assistant as the person -- through the same
+    resolver as every connector operation, so the pod connector's mode decides
+    the account and its typed refusals come back as a `GithubRefusal`.
+
+    Only the acting person's own account is written into a sandbox. A token
+    there is readable by every later command, and a SHARED connector's account
+    belongs to somebody who shared it for operations run through Lemma, not
+    for a shell to hold (design §3.8); there is no owner opt-in for that yet,
+    so it is refused.
+
+    The unit of work and the connector collaborators are arguments so this can
+    be exercised without a database.
     """
-    if account_resolution is None:
-        # Imported here rather than at module scope to avoid an import cycle.
-        from app.modules.connectors.api.dependencies import (
-            get_account_resolution_service,
-        )
-
-        account_resolution = get_account_resolution_service
+    if resolve_connector is None:
+        resolve_connector = resolve_pod_connector
     if uow_factory is None:
         uow_factory = SessionUnitOfWorkFactory(async_session_maker)
     if refresh_credentials is None:
         refresh_credentials = _refreshed_credentials
 
-    # A project names the account it is worked as. Without one, resolution picks
-    # for a user who may have connected GitHub twice -- fine as a fallback, but
-    # never the right answer when the caller actually knows.
-    account_id = ctx.workspace_repo.account_id if ctx.workspace_repo else None
     async with uow_factory() as uow:
         auth_ctx = await (delegated_context or tool_authorization_context)(uow, ctx)
         token = set_current_context(auth_ctx)
         try:
-            resolution = account_resolution(uow)
             try:
-                account = await resolution.resolve_account(
-                    user_id=ctx.user_id,
-                    connector_id=_CONNECTOR_ID,
-                    auth_actor=auth_ctx,
-                    account_id=account_id,
+                resolved = await resolve_connector(
+                    uow, auth_ctx, pod_id=ctx.pod_id, slug=_POD_CONNECTOR_SLUG
                 )
-            except AccountResolutionError, ConnectorAccessDeniedError:
-                return None
-            # Refreshed if it is due, exactly like every connector operation.
-            # This path used to read `account.credentials` verbatim, which is
-            # how an expired token kept being written into the workspace: the
-            # refresh machinery existed, and only the sandbox did not use it.
-            credentials = await refresh_credentials(uow, account, ctx.user_id)
+            except DomainError as refused:
+                return _refusal(refused)
+            if resolved.owner_user_id != acting_person(auth_ctx):
+                return GithubRefusal(
+                    code="SHARED_ACCOUNT_NOT_FOR_SANDBOX",
+                    message=(
+                        "this pod's 'github' connector runs as an account somebody "
+                        "shared with the pod, and a shared account is not put "
+                        "inside a workspace. Use the GitHub connector operations "
+                        "instead, or ask a pod editor for a per-member 'github' "
+                        "connector."
+                    ),
+                )
+            account = resolved.account
+            # Refreshed if it is due, exactly like every connector operation:
+            # an expired token written into the workspace is a dead one.
+            try:
+                credentials = await refresh_credentials(uow, account, ctx.user_id)
+            except DomainError as refused:
+                return _refusal(refused)
             access_token = (credentials or {}).get("access_token")
             reveal = getattr(access_token, "get_secret_value", None)
             if callable(reveal):
@@ -401,10 +430,20 @@ async def _resolve_github_credential(
                 return None
             return _GithubCredential(
                 access_token=access_token,
-                login=account.display_name,
-                email=account.email,
+                login=getattr(account, "display_name", None),
+                email=getattr(account, "email", None),
                 user_id=_github_user_id(credentials),
                 expires_at=_expires_at(credentials),
             )
         finally:
             reset_current_context(token)
+
+
+def _refusal(refused: DomainError) -> GithubRefusal:
+    details = refused.details if isinstance(refused.details, dict) else {}
+    connect_url = details.get("connect_url")
+    return GithubRefusal(
+        code=str(refused.code),
+        message=str(refused.message),
+        connect_url=connect_url if isinstance(connect_url, str) else None,
+    )

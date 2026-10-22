@@ -162,10 +162,16 @@ async def _serve_the_site(ctx) -> None:
     )
 
 
-def _service(db_manager, *, waiting_on: str | None = None, owner: UUID | None = None):
+def _service(
+    db_manager,
+    *,
+    pod_id: UUID,
+    waiting_on: str | None = None,
+    owner: UUID | None = None,
+):
     """The real service, against the real database and the real sandbox.
 
-    Two stand-ins, and both for the same reason: there is no conversation row.
+    Three stand-ins, and all for the same reason: there is no conversation row.
     This test's subject is *which browser* a sign-in lands in -- the thing that
     was silently wrong -- so it drives the service directly rather than through
     an agent run, and its `conversation_id` names nothing in the database.
@@ -176,6 +182,11 @@ def _service(db_manager, *, waiting_on: str | None = None, owner: UUID | None = 
     for the second is what says a sign-in is answerable only by the person whose
     it is -- the real check, and what a pause looks like, are covered where they
     belong: `web_login/tests/unit/test_sign_in_service.py`.
+
+    The third says which browser the conversation's sign-in goes into: the
+    pod assistant's in ``pod_id``, the one this test's commands run beside.
+    Every browser is one person's, in one pod, as one actor, so the answer
+    has to land where the next run of the same actor will look.
     """
     from app.modules.web_login.contracts import SignInService
 
@@ -192,16 +203,22 @@ def _service(db_manager, *, waiting_on: str | None = None, owner: UUID | None = 
     async def _owned_by(_uow, _conversation_id):
         return owner
 
+    async def _the_pods_assistant(_uow, _conversation_id):
+        return pod_id, None
+
     return SignInService(
         SessionUnitOfWorkFactory(db_manager.session_factory),
         read_pause=_waiting,
         owner_of=_owned_by,
+        workspace_of=_the_pods_assistant,
     )
 
 
-def _person_ctx(user_id: UUID) -> Context:
-    """An authorization context for the person whose sandbox this is."""
-    return allow_all_context(user_id=user_id)
+def _person_ctx(user_id: UUID, pod_id: UUID) -> Context:
+    """An authorization context for a run of the pod's assistant, for the
+    person whose sandbox this is -- which is what picks the browser: theirs,
+    in this pod, as the assistant."""
+    return allow_all_context(user_id=user_id, pod_id=pod_id)
 
 
 async def test_a_person_signs_in_once_and_the_next_run_does_not_ask(
@@ -221,8 +238,9 @@ async def test_a_person_signs_in_once_and_the_next_run_does_not_ask(
     del local_sandbox_server, backend_server, configure_workspace_api_url
     ctx = await _context(authenticated_client, fixed_test_org, fixed_test_user)
     user_id = UUID(fixed_test_user["id"])
-    auth = _person_ctx(user_id)
-    service = _service(db_manager)
+    pod_id = ctx.pod_id
+    auth = _person_ctx(user_id, pod_id)
+    service = _service(db_manager, pod_id=pod_id)
 
     await _serve_the_site(ctx)
 
@@ -269,7 +287,7 @@ async def test_a_person_signs_in_once_and_the_next_run_does_not_ask(
         # 4. Answering resumes the run and reports what the site looks like.
         #    Answered the way the page answers: by naming the pause.
         finished = await _service(
-            db_manager, waiting_on=tool_call_id, owner=user_id
+            db_manager, pod_id=pod_id, waiting_on=tool_call_id, owner=user_id
         ).answer(
             conversation_id=ctx.conversation_id,
             tool_call_id=tool_call_id,
@@ -323,7 +341,11 @@ async def test_a_person_signs_in_once_and_the_next_run_does_not_ask(
         #    copy and left the browser signed in, so this assertion could not
         #    have been written against it.
         removed = await authenticated_client.request(
-            "DELETE", "/web-logins", params={"origin": site}
+            "DELETE",
+            "/web-logins",
+            # The pod's browser, where the sign-in was made. Without it the
+            # route manages the person's personal browser.
+            params={"origin": site, "pod_id": str(pod_id)},
         )
         assert removed.status_code == status.HTTP_200_OK, removed.text
         assert removed.json()["forgotten"] is True

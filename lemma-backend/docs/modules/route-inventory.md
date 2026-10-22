@@ -164,10 +164,13 @@ run `uv run python scripts/generate_route_inventory.py`.
 | --- | --- | --- | --- |
 | DELETE | `/organizations/{organization_id}/connectors/accounts/{account_id}` | `connector.account.delete` | Delete Account |
 | DELETE | `/organizations/{organization_id}/connectors/auth-configs/{auth_config_name}` | `connector.auth_config.delete` | Delete Auth Config |
+| DELETE | `/pods/{pod_id}/connector-accounts/{pod_account_id}` | `pod.connector_account.remove` | Remove An Account From The Pod |
+| DELETE | `/pods/{pod_id}/connectors/{slug}` | `pod.connector.delete` | Remove Pod Connector |
 | GET | `/connectors` | `connector.list` | List Connectors |
 | GET | `/connectors/connect-requests/oauth/callback` | `connector.oauth.callback` | OAuth Callback |
 | GET | `/connectors/{connector_id}` | `connector.get` | Get Connector |
 | GET | `/connectors/{connector_id}/skill` | `connector.skill.get` | Get Connector Skill |
+| GET | `/me/connectors/accounts/{account_id}/pods` | `connector.account.pods` | Where One Of My Accounts Is Used |
 | GET | `/organizations/{organization_id}/connector-operations` | `connector.operation.search` | Search Connector Operations Across Installs |
 | GET | `/organizations/{organization_id}/connectors/accounts` | `connector.account.list` | List Accounts |
 | GET | `/organizations/{organization_id}/connectors/accounts/{account_id}` | `connector.account.get` | Get Account |
@@ -179,8 +182,16 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/organizations/{organization_id}/connectors/{auth_config_name}/operations/{operation_name}` | `connector.operation.detail` | Get Connector Operation Details |
 | GET | `/organizations/{organization_id}/connectors/{auth_config_name}/triggers` | `connector.trigger.list` | List Connector Triggers |
 | GET | `/organizations/{organization_id}/connectors/{auth_config_name}/triggers/{trigger_name}` | `connector.trigger.get` | Get Connector Trigger |
+| GET | `/organizations/{organization_id}/installations/{auth_config_id}/impact` | `connector.installation.impact` | What Removing An Installation Would Stop |
+| GET | `/pods/{pod_id}/connector-accounts` | `pod.connector_account.list` | List Accounts In Use In The Pod |
+| GET | `/pods/{pod_id}/connectors` | `pod.connector.list` | List Pod Connectors |
+| GET | `/pods/{pod_id}/connectors/{slug}` | `pod.connector.get` | Get Pod Connector |
+| GET | `/pods/{pod_id}/connectors/{slug}/operations` | `pod.connector.operation.list` | Discover Pod Connector Operations |
+| GET | `/pods/{pod_id}/connectors/{slug}/operations/{operation_name}` | `pod.connector.operation.get` | Get Pod Connector Operation |
 | PATCH | `/organizations/{organization_id}/connectors/accounts/{account_id}` | `connector.account.update` | Update Account |
 | PATCH | `/organizations/{organization_id}/connectors/auth-configs/{auth_config_name}` | `connector.auth_config.update` | Update Auth Config |
+| PATCH | `/pods/{pod_id}/connector-accounts/{pod_account_id}` | `pod.connector_account.update` | Share Or Withdraw Your Account In The Pod |
+| PATCH | `/pods/{pod_id}/connectors/{slug}` | `pod.connector.update` | Update Pod Connector |
 | POST | `/organizations/{organization_id}/connectors/accounts` | `connector.account.create` | Create Account |
 | POST | `/organizations/{organization_id}/connectors/accounts/{account_id}/github/installations` | `connector.account.bind_installation` | Bind Account Installation |
 | POST | `/organizations/{organization_id}/connectors/auth-configs` | `connector.auth_config.create` | Create Auth Config |
@@ -188,7 +199,9 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/organizations/{organization_id}/connectors/connect-requests` | `connector.connect_request.create` | Initiate Connect Request |
 | POST | `/organizations/{organization_id}/connectors/connect-requests/install` | `connector.connect_request.install` | Start Install Step |
 | POST | `/organizations/{organization_id}/connectors/{auth_config_name}/operations/details` | `connector.operation.details.batch` | Get Connector Operation Details In Batch |
-| POST | `/organizations/{organization_id}/connectors/{auth_config_name}/operations/{operation_name}/execute` | `connector.operation.execute` | Execute Connector Operation |
+| POST | `/pods/{pod_id}/connector-accounts` | `pod.connector_account.add` | Add One Of Your Accounts To The Pod |
+| POST | `/pods/{pod_id}/connectors` | `pod.connector.create` | Declare A Pod Connector |
+| POST | `/pods/{pod_id}/connectors/{slug}/operations/{operation_name}/execute` | `pod.connector.operation.execute` | Execute Pod Connector Operation |
 
 ## contacts
 

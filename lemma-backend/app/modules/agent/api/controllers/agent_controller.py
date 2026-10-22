@@ -9,7 +9,7 @@ from fastapi import APIRouter, Query, status
 
 from app.core.api.dependencies import CurrentUser, UoWDep
 from app.core.authorization.dependencies import PodContextDep
-from app.core.authorization.conferral import assert_can_confer
+from app.core.authorization.conferral import assert_can_confer_grants
 from app.core.authorization.grants import (
     apply_inline_workload_grants,
     list_grantee_resource_grants,
@@ -127,6 +127,7 @@ async def create_agent(
         grantee_id=agent.id,
         permissions=data.permissions,
         created_by_user_id=user.id,
+        ctx=ctx,
     )
     # After the block above, never before it: an inline `permissions` list
     # REPLACES this agent's grants, so a memory grant applied first would be the
@@ -309,19 +310,16 @@ async def replace_agent_permissions(
     # Granting an agent a permission is conferral like any other (PS-ACCESS-010):
     # an agent acts on its grants, so handing it one the granter does not hold
     # would be a way to do through the agent what you may not do yourself.
-    assert_can_confer(
-        ctx,
-        [
-            permission_id
-            for grant in data.grants
-            for permission_id in grant.permission_ids
-        ],
-        action="grant an agent permissions you do not hold",
-    )
     grants = await normalize_pod_resource_grants(
         uow.session,
         pod_id=pod_id,
         grants=data.grants,
+    )
+    await assert_can_confer_grants(
+        ctx,
+        grants,
+        pod_id=pod_id,
+        action="grant an agent permissions you could not use",
     )
     await replace_grantee_resource_grants(
         uow.session,
@@ -388,6 +386,7 @@ async def update_agent(
         grantee_id=agent.id,
         permissions=data.permissions,
         created_by_user_id=user.id,
+        ctx=ctx,
     )
     # From the agent as it now stands, not from the request: a PATCH that never
     # mentions toolsets must not read as "memory off".

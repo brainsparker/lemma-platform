@@ -8,10 +8,6 @@ import type { BundleSourceKind } from './BundleSourceKind.js';
  */
 export type ImportStartRequest = {
     /**
-     * Connector account for a private GitHub repo.
-     */
-    account_id?: (string | null);
-    /**
      * URL (a lemma signed download URL) or GITHUB (a public repo).
      */
     kind: BundleSourceKind;

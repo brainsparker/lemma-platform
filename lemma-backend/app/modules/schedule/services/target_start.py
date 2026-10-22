@@ -18,7 +18,7 @@ from uuid import UUID
 
 from pydantic import JsonValue
 
-from app.core.authorization.context import ResourceRef, ResourceType
+from app.core.authorization.context import Context, ResourceRef, ResourceType
 from app.core.authorization.current import reset_current_context, set_current_context
 from app.core.authorization.delegation import is_pod_default_agent
 from app.core.authorization.factory import create_authorization_data_service
@@ -45,6 +45,8 @@ from app.modules.workflow.contracts.run_work import (
 logger = get_logger(__name__)
 
 TARGET_MISSING = "ScheduleTargetMissing"
+#: Why a run whose person has left the pod started nothing.
+OWNER_NOT_A_MEMBER = "owner_not_a_member"
 
 
 async def start_reserved_run(uow: SqlAlchemyUnitOfWork, run_id: UUID) -> None:
@@ -62,15 +64,37 @@ async def start_reserved_run(uow: SqlAlchemyUnitOfWork, run_id: UUID) -> None:
     if not schedule.is_active and not _is_its_one_shot(schedule, run):
         await ledger.settle_skipped(run.id, metadata={"skipped_because": "inactive"})
         return
+    owner_ctx = await _run_owner_context(uow, run, schedule)
+    if owner_ctx is not None and not owner_ctx.belongs_to_its_pod():
+        # The authorizer would refuse the target's execute anyway, but as a
+        # dead letter saying only "DomainError", counted against the breaker
+        # and mailed to somebody no longer in the pod. A schedule runs as its
+        # owner; with no owner in the pod, it runs as nobody.
+        await ledger.settle_skipped(
+            run.id, metadata={"skipped_because": OWNER_NOT_A_MEMBER}
+        )
+        return
     if schedule.workflow_id is not None:
         await _hand_to_workflow(uow, run, schedule)
         return
     try:
-        await _start_agent(uow, run, schedule)
+        await _start_agent(uow, run, schedule, owner_ctx)
     except DomainError as exc:
         if exc.status_code >= 500:
             raise
         raise PermanentFailure(f"{type(exc).__name__}: {exc.code}") from exc
+
+
+async def _run_owner_context(
+    uow: SqlAlchemyUnitOfWork, run: ScheduleRun, schedule: ScheduleEntity
+) -> Context | None:
+    """Who this run is for, as of now -- the schedule's owner, or whoever
+    redrove it -- or ``None`` for a run with nobody to ask about."""
+    if run.user_id is None or schedule.pod_id is None:
+        return None
+    return await create_authorization_data_service(uow).build_user_context(
+        user_id=run.user_id, pod_id=schedule.pod_id
+    )
 
 
 async def dead_letter_run(
@@ -170,7 +194,10 @@ def _object(value: JsonValue) -> dict[str, JsonValue]:
 
 
 async def _start_agent(
-    uow: SqlAlchemyUnitOfWork, run: ScheduleRun, schedule: ScheduleEntity
+    uow: SqlAlchemyUnitOfWork,
+    run: ScheduleRun,
+    schedule: ScheduleEntity,
+    owner_ctx: Context | None,
 ) -> None:
     from app.modules.agent.contracts.workflow_control import (
         build_agent_control_adapter,
@@ -182,7 +209,7 @@ async def _start_agent(
     started = await FireLedger(uow.session).begin_start(run.id)
     if started is None or started.user_id is None or started.target_run_id is None:
         return
-    ctx = await create_authorization_data_service(uow).build_user_context(
+    ctx = owner_ctx or await create_authorization_data_service(uow).build_user_context(
         user_id=started.user_id, pod_id=pod_id
     )
     await ctx.require(Permissions.AGENT_EXECUTE, _agent_ref(schedule, pod_id=pod_id))
@@ -258,8 +285,8 @@ def conversation_metadata(
 
     ``started_by`` is how a run tells that nobody is waiting on it, so it does
     not reach for ``ask_user`` at six in the morning. A webhook source's
-    repository context, when present, becomes the run's checkout, cloned as
-    the schedule's own account.
+    repository context, when present, becomes the run's checkout, cloned
+    through the pod's `github` connector.
     """
     started: dict[str, JsonValue] = {
         "started_by": "SCHEDULE",
@@ -269,8 +296,7 @@ def conversation_metadata(
         started["schedule_name"] = schedule.name
     repo = metadata.get("repo")
     if isinstance(repo, dict) and repo:
-        bound = dict(repo)
-        if schedule.account_id is not None:
-            bound["account_id"] = str(schedule.account_id)
-        started["repo"] = bound
+        # The repository only. Which account clones it is the pod's `github`
+        # connector's decision, for the person the run acts for.
+        started["repo"] = dict(repo)
     return started

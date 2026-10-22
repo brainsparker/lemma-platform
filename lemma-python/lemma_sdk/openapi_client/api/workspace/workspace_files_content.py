@@ -1,5 +1,6 @@
 from http import HTTPStatus
 from typing import Any, cast
+from uuid import UUID
 
 import httpx
 
@@ -12,6 +13,8 @@ from ...types import UNSET, Response, Unset
 def _get_kwargs(
     *,
     path: str,
+    pod_id: None | Unset | UUID = UNSET,
+    agent: None | Unset | UUID = UNSET,
     offset: int | Unset = 0,
     length: int | None | Unset = UNSET,
     range_: None | str | Unset = UNSET,
@@ -27,6 +30,24 @@ def _get_kwargs(
     params: dict[str, Any] = {}
 
     params["path"] = path
+
+    json_pod_id: None | str | Unset
+    if isinstance(pod_id, Unset):
+        json_pod_id = UNSET
+    elif isinstance(pod_id, UUID):
+        json_pod_id = str(pod_id)
+    else:
+        json_pod_id = pod_id
+    params["pod_id"] = json_pod_id
+
+    json_agent: None | str | Unset
+    if isinstance(agent, Unset):
+        json_agent = UNSET
+    elif isinstance(agent, UUID):
+        json_agent = str(agent)
+    else:
+        json_agent = agent
+    params["agent"] = json_agent
 
     params["offset"] = offset
 
@@ -82,6 +103,8 @@ def sync_detailed(
     *,
     client: AuthenticatedClient | Client,
     path: str,
+    pod_id: None | Unset | UUID = UNSET,
+    agent: None | Unset | UUID = UNSET,
     offset: int | Unset = 0,
     length: int | None | Unset = UNSET,
     range_: None | str | Unset = UNSET,
@@ -91,6 +114,10 @@ def sync_detailed(
 
     Args:
         path (str):
+        pod_id (None | Unset | UUID): The pod whose workspace to use. Each pod has its own, with
+            its own files and browser. Omitted, your personal workspace.
+        agent (None | Unset | UUID): A named agent of `pod_id`, to use that agent's workspace.
+            Each agent has its own. Omitted, the pod assistant's.
         offset (int | Unset):  Default: 0.
         length (int | None | Unset):
         range_ (None | str | Unset):
@@ -106,6 +133,8 @@ def sync_detailed(
 
     kwargs = _get_kwargs(
         path=path,
+        pod_id=pod_id,
+        agent=agent,
         offset=offset,
         length=length,
         range_=range_,
@@ -123,6 +152,8 @@ def sync(
     *,
     client: AuthenticatedClient | Client,
     path: str,
+    pod_id: None | Unset | UUID = UNSET,
+    agent: None | Unset | UUID = UNSET,
     offset: int | Unset = 0,
     length: int | None | Unset = UNSET,
     range_: None | str | Unset = UNSET,
@@ -132,6 +163,10 @@ def sync(
 
     Args:
         path (str):
+        pod_id (None | Unset | UUID): The pod whose workspace to use. Each pod has its own, with
+            its own files and browser. Omitted, your personal workspace.
+        agent (None | Unset | UUID): A named agent of `pod_id`, to use that agent's workspace.
+            Each agent has its own. Omitted, the pod assistant's.
         offset (int | Unset):  Default: 0.
         length (int | None | Unset):
         range_ (None | str | Unset):
@@ -148,6 +183,8 @@ def sync(
     return sync_detailed(
         client=client,
         path=path,
+        pod_id=pod_id,
+        agent=agent,
         offset=offset,
         length=length,
         range_=range_,
@@ -159,6 +196,8 @@ async def asyncio_detailed(
     *,
     client: AuthenticatedClient | Client,
     path: str,
+    pod_id: None | Unset | UUID = UNSET,
+    agent: None | Unset | UUID = UNSET,
     offset: int | Unset = 0,
     length: int | None | Unset = UNSET,
     range_: None | str | Unset = UNSET,
@@ -168,6 +207,10 @@ async def asyncio_detailed(
 
     Args:
         path (str):
+        pod_id (None | Unset | UUID): The pod whose workspace to use. Each pod has its own, with
+            its own files and browser. Omitted, your personal workspace.
+        agent (None | Unset | UUID): A named agent of `pod_id`, to use that agent's workspace.
+            Each agent has its own. Omitted, the pod assistant's.
         offset (int | Unset):  Default: 0.
         length (int | None | Unset):
         range_ (None | str | Unset):
@@ -183,6 +226,8 @@ async def asyncio_detailed(
 
     kwargs = _get_kwargs(
         path=path,
+        pod_id=pod_id,
+        agent=agent,
         offset=offset,
         length=length,
         range_=range_,
@@ -198,6 +243,8 @@ async def asyncio(
     *,
     client: AuthenticatedClient | Client,
     path: str,
+    pod_id: None | Unset | UUID = UNSET,
+    agent: None | Unset | UUID = UNSET,
     offset: int | Unset = 0,
     length: int | None | Unset = UNSET,
     range_: None | str | Unset = UNSET,
@@ -207,6 +254,10 @@ async def asyncio(
 
     Args:
         path (str):
+        pod_id (None | Unset | UUID): The pod whose workspace to use. Each pod has its own, with
+            its own files and browser. Omitted, your personal workspace.
+        agent (None | Unset | UUID): A named agent of `pod_id`, to use that agent's workspace.
+            Each agent has its own. Omitted, the pod assistant's.
         offset (int | Unset):  Default: 0.
         length (int | None | Unset):
         range_ (None | str | Unset):
@@ -224,6 +275,8 @@ async def asyncio(
         await asyncio_detailed(
             client=client,
             path=path,
+            pod_id=pod_id,
+            agent=agent,
             offset=offset,
             length=length,
             range_=range_,

@@ -10,8 +10,10 @@ teammate's own bot there:
   a guest only where a group welcomes people from outside the pod, never in a
   private chat, and nobody Slack did not describe;
 * routes a person Slack proved as that person, whatever their profile email
-  says, and never routes a Slack user who merely carries a proven person's
-  email as them;
+  says, on a teammate app Lemma made, and never routes a Slack user who merely
+  carries a proven person's email as them. (On an app the org brought, whose
+  signing secret a person holds, the proof does not name the sender: see
+  ``test_sender_attestation_e2e``);
 * asks nobody to sign up by email code first -- but only where the bot's own
   pod's organization holds the workspace. A bot in a workspace another
   organization holds behaves as it always did;
@@ -24,6 +26,8 @@ Each test has a workspace of its own: a binding is one per workspace.
 """
 
 from __future__ import annotations
+
+from app.modules.agent_surfaces.tests.e2e.helpers import share_account_as_connector
 
 from typing import Any
 from uuid import UUID, uuid4
@@ -45,6 +49,7 @@ from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
 )
 from app.modules.agent_surfaces.infrastructure.models import (
+    AgentSurface,
     AgentSurfaceExternalUser,
 )
 from app.modules.agent_surfaces.infrastructure.onboarding_models import (
@@ -408,6 +413,18 @@ async def test_a_member_the_pod_has_not_recognised_yet_is_never_made_a_contact(
 # -- who a Slack user is ---------------------------------------------------------
 
 
+async def _made_by_lemma(surface: dict) -> None:
+    """The teammate's app is one Lemma made through the manifest flow, as the
+    Allow's binding records (``bind_allowed_app``)."""
+    async with async_session_maker() as session:
+        row = await session.get(AgentSurface, UUID(surface["id"]))
+        assert row is not None
+        config = dict(row.config or {})
+        config["slack"] = {**(config.get("slack") or {}), "app_made_by_lemma": True}
+        row.config = config
+        await session.commit()
+
+
 @pytest.mark.parametrize("cache_cleared", [False, True])
 async def test_a_person_slack_proved_routes_as_themselves_whatever_their_email(
     authenticated_client,
@@ -418,10 +435,12 @@ async def test_a_person_slack_proved_routes_as_themselves_whatever_their_email(
     cache_cleared,
 ):
     """A profile phone change clears every cached platform identity of its
-    person; the proof still says who they are."""
+    person; the proof still says who they are. On a teammate app Lemma made --
+    whose secret no person brought -- as on Lemma's own."""
     bot = await _held_bot(
         authenticated_client, db_session, test_pod, fixed_test_user, fake_slack
     )
+    await _made_by_lemma(bot.surface)
     me = _colleague(fake_slack)  # Slack's email for them is not their Lemma one
     await _prove(bot.workspace.team, me, fixed_test_user["id"])
     if cache_cleared:
@@ -640,7 +659,9 @@ async def test_a_contact_policy_sent_with_a_new_bot_is_kept_as_sent(
         f"/pods/{test_pod['id']}/surfaces",
         json={
             "platform": "SLACK",
-            "account_id": str(account.id),
+            "pod_connector": await share_account_as_connector(
+                authenticated_client, test_pod["id"], account.id
+            ),
             "name": f"slack-{bot.lower()}",
             "default_agent_name": agent["name"],
             **({"config": sent} if sent else {}),

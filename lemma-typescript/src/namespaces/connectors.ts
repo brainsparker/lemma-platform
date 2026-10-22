@@ -4,6 +4,10 @@ import type { ConnectRequestInitiateSchema } from "../openapi_client/models/Conn
 import type { ConnectRequestResponseSchema } from "../openapi_client/models/ConnectRequestResponseSchema.js";
 import type { OperationDetailsBatchRequest } from "../openapi_client/models/OperationDetailsBatchRequest.js";
 import type { OperationExecutionRequest } from "../openapi_client/models/OperationExecutionRequest.js";
+import type { PodAccountCreateRequest } from "../openapi_client/models/PodAccountCreateRequest.js";
+import type { PodAccountUpdateRequest } from "../openapi_client/models/PodAccountUpdateRequest.js";
+import type { PodConnectorCreateRequest } from "../openapi_client/models/PodConnectorCreateRequest.js";
+import type { PodConnectorUpdateRequest } from "../openapi_client/models/PodConnectorUpdateRequest.js";
 import type { AccountCreateSchema } from "../openapi_client/models/AccountCreateSchema.js";
 import type { AccountListResponseSchema } from "../openapi_client/models/AccountListResponseSchema.js";
 import type { AccountResponseSchema } from "../openapi_client/models/AccountResponseSchema.js";
@@ -22,12 +26,11 @@ export type {
 };
 
 type ConnectRequestInput = string | ConnectRequestInitiateSchema;
+/** An org installation, for discovering what it offers. Running an operation
+ *  goes through a pod connector instead (`connectors.pod.execute`). */
 type OperationScope = {
   organizationId: string;
   authConfigName: string;
-  /** Where `{ pod_path }` and `{ file_id }` file arguments resolve, and where a
-   *  file result lands. Implied inside a pod; name it from outside one. */
-  podId?: string;
 };
 type EnableAppOptions = Omit<AuthConfigCreateSchema, "connector_id" | "config"> & {
   config?: Record<string, unknown> | null;
@@ -41,6 +44,7 @@ export class ConnectorsNamespace {
   constructor(
     private readonly client: GeneratedClientAdapter,
     private readonly http: HttpClient,
+    private readonly podId: () => string,
   ) {}
 
   list(options: { limit?: number; pageToken?: string } = {}) {
@@ -81,18 +85,63 @@ export class ConnectorsNamespace {
         body,
       ));
     },
-    execute: (scope: OperationScope, operationName: string, payload: Record<string, unknown>, accountId?: string) => {
-      const body: OperationExecutionRequest = {
-        payload,
-        account_id: accountId,
-        ...(scope.podId ? { pod_id: scope.podId } : {}),
-      };
-      return this.client.request(() => ConnectorsService.connectorOperationExecute(
-        scope.organizationId,
-        scope.authConfigName,
+  };
+
+  /**
+   * The connectors this pod declares, addressed by slug. Running an operation
+   * always goes through one: the pod connector decides whose account it runs
+   * as (the caller's own, or the one the pod shares), so a call never names an
+   * account. A missing or expired account comes back as a typed error carrying
+   * `connect_url`, where the caller can fix it.
+   */
+  readonly pod = {
+    list: () =>
+      this.client.request(() => ConnectorsService.podConnectorList(this.podId())),
+    get: (slug: string) =>
+      this.client.request(() => ConnectorsService.podConnectorGet(this.podId(), slug)),
+    create: (payload: PodConnectorCreateRequest) =>
+      this.client.request(() => ConnectorsService.podConnectorCreate(this.podId(), payload)),
+    update: (slug: string, payload: PodConnectorUpdateRequest) =>
+      this.client.request(() => ConnectorsService.podConnectorUpdate(this.podId(), slug, payload)),
+    delete: (slug: string) =>
+      this.client.request(() => ConnectorsService.podConnectorDelete(this.podId(), slug)),
+    operations: async (slug: string, options: { query?: string; limit?: number } = {}) => {
+      const response = await this.client.request(() => ConnectorsService.podConnectorOperationList(
+        this.podId(),
+        slug,
+        options.query,
+        options.limit ?? 100,
+      ));
+      return response.items ?? [];
+    },
+    operation: (slug: string, operationName: string) =>
+      this.client.request(() => ConnectorsService.podConnectorOperationGet(
+        this.podId(),
+        slug,
+        operationName,
+      )),
+    execute: (slug: string, operationName: string, payload: Record<string, unknown>) => {
+      const body: OperationExecutionRequest = { payload };
+      return this.client.request(() => ConnectorsService.podConnectorOperationExecute(
+        this.podId(),
+        slug,
         operationName,
         body,
       ));
+    },
+    accounts: {
+      list: () =>
+        this.client.request(() => ConnectorsService.podConnectorAccountList(this.podId())),
+      add: (payload: PodAccountCreateRequest) =>
+        this.client.request(() => ConnectorsService.podConnectorAccountAdd(this.podId(), payload)),
+      update: (podAccountId: string, payload: PodAccountUpdateRequest) =>
+        this.client.request(() => ConnectorsService.podConnectorAccountUpdate(
+          this.podId(),
+          podAccountId,
+          payload,
+        )),
+      remove: (podAccountId: string) =>
+        this.client.request(() => ConnectorsService.podConnectorAccountRemove(this.podId(), podAccountId)),
     },
   };
 

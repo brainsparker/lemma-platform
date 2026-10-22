@@ -11,7 +11,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.authorization.authz_epoch import bump_after_commit
-from app.core.authorization.context import ResourceType
+from app.core.authorization.context import Context, ResourceType
 from app.core.authorization.grant_generation import (
     AGENT_GRANTEE,
     bump_agent_grant_generations,
@@ -21,7 +21,6 @@ from app.core.authorization.models import ResourcePermissionGrantModel
 from app.core.authorization.permissions import PERMISSION_BY_ID
 from app.core.authorization.resource_actions import RESOURCE_ACTIONS
 from app.core.authorization.resource_names import (
-    connector_resource_id,
     resolve_resource_ids_by_names,
     resolve_resource_names_by_ids,
 )
@@ -35,7 +34,6 @@ __all__ = [
     "delete_resource_sharing_grants",
     "ensure_grant_uses_resource_name",
     "grant_resource_type_values",
-    "connector_resource_id",
     "list_grantee_resource_grants",
     "list_resource_grants",
     "normalize_pod_resource_grants",
@@ -140,16 +138,9 @@ def validate_pod_resource_grant_permissions(
 
 
 def _applicable_permission_ids(resource_type: ResourceType) -> frozenset[str]:
-    if resource_type in (
-        ResourceType.CONNECTOR,
-        ResourceType.CONNECTOR_ACCOUNT,
-    ):
-        return frozenset(
-            permission_id
-            for permission_id, definition in PERMISSION_BY_ID.items()
-            if definition.resource_type == resource_type.value
-            and definition.scope.value == "POD"
-        )
+    # The resource's role-grantable actions and nothing else. Owner-only
+    # actions -- sharing a pod account -- are absent by construction, so no
+    # grant can hand one out.
     return frozenset(RESOURCE_ACTIONS.get(resource_type, ()))
 
 
@@ -523,6 +514,7 @@ async def apply_inline_workload_grants(
     grantee_id: UUID,
     permissions,
     created_by_user_id: UUID,
+    ctx: Context,
 ) -> bool:
     """Apply a create/update payload's inline ``permissions`` block.
 
@@ -549,6 +541,16 @@ async def apply_inline_workload_grants(
         session,
         pod_id=pod_id,
         grants=grants_payload,
+    )
+    # Conferral like the permissions-replace route: an inline block used to
+    # skip it, so an editor could arm an agent with deletes they could not do.
+    from app.core.authorization.conferral import assert_can_confer_grants
+
+    await assert_can_confer_grants(
+        ctx,
+        grants,
+        pod_id=pod_id,
+        action=f"grant {grantee_type.lower()} permissions you could not use",
     )
     await replace_grantee_resource_grants(
         session,

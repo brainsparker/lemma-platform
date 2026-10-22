@@ -2,20 +2,17 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Query
 
 from app.core.api.dependencies import CurrentUser
 from app.modules.connectors.api.dependencies import (
     ConnectorOperationServiceDep,
-    ConnectorOperationUseCasesDep,
 )
 from app.modules.connectors.api.schemas.connector_operation_schemas import (
     OperationDetail,
     OperationDetailsBatchRequest,
     OperationDetailsBatchResponse,
     OperationDiscoverResponse,
-    OperationExecutionRequest,
-    OperationExecutionResponse,
 )
 
 router = APIRouter(
@@ -126,36 +123,4 @@ async def get_operation_details(
         organization_id=organization_id,
         auth_config_name=auth_config_name,
         operation_name=operation_name,
-    )
-
-
-@router.post(
-    "/{operation_name}/execute",
-    response_model=OperationExecutionResponse,
-    operation_id="connector.operation.execute",
-    summary="Execute Connector Operation",
-)
-async def execute_operation(
-    organization_id: UUID,
-    auth_config_name: str,
-    operation_name: str,
-    body: OperationExecutionRequest,
-    request: Request,
-    user: CurrentUser,
-    use_cases: ConnectorOperationUseCasesDep,
-) -> OperationExecutionResponse:
-    # No request-scoped service/context dependency: the use-case authorizes +
-    # resolves inside a short DB scope and runs the (1-45s) external operation
-    # call with no pooled connection held. Authorization is preserved -- the
-    # org/delegation Context is built in-scope and threaded as the actor.
-    account_id = UUID(body.account_id) if body.account_id else None
-    return await use_cases.execute_operation_for_auth_config(
-        organization_id=organization_id,
-        auth_config_name=auth_config_name,
-        operation_name=operation_name,
-        payload=body.payload,
-        user_id=user.id,
-        request=request,
-        account_id=account_id,
-        pod_id=body.pod_id,
     )

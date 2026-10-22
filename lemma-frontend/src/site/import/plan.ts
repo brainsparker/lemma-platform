@@ -97,7 +97,7 @@ export function askedVariables(variables: VariableSpec[]): VariableSpec[] {
     return variables.filter((v) => v.kind !== "pod_member");
 }
 
-/** `slack_account` → "Slack account", `triage-channel` → "Triage channel". */
+/** `app_slug` → "App slug", `triage-channel` → "Triage channel". */
 export function humanize(name: string): string {
     const words = name
         .replace(/[_-]+/g, " ")
@@ -147,8 +147,7 @@ export function slugify(name: string): string {
 
 /** What a variable is worth when nobody has chosen a value.
  *
- *  An account cannot be invented — it belongs to whoever is installing — but a
- *  free variable is only ever a name (an app's slug, say), and the teammate's
+ *  A free variable is only ever a name (an app's slug, say), and the teammate's
  *  name is the one thing the person has already chosen. Deriving it is what
  *  lets the plain path install without asking a non-technical person what a
  *  slug is; the developer path shows the same value in an editable field. */
@@ -159,10 +158,9 @@ export function suggestedValue(variable: VariableSpec, who: string): string {
 }
 
 /** Whether the plain path has to put this variable in front of the person:
- *  because nothing can fill it in for them, or because the name we would have
- *  derived came out empty. */
+ *  because the name we would have derived came out empty. */
 export function needsAnswer(variable: VariableSpec, who: string): boolean {
-    return variable.kind === "account" || !suggestedValue(variable, who);
+    return !suggestedValue(variable, who);
 }
 
 /** What a bundle brings, as one line: "2 agents, 1 workflow and 1 table".

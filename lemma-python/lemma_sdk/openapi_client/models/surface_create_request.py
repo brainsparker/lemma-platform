@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, TypeVar, cast
-from uuid import UUID
 
 from attrs import define as _attrs_define
 
@@ -37,32 +36,25 @@ class SurfaceCreateRequest:
                 Graph drafts, and a signed URL the provider downloads server-side. Reaching
                 a Gmail *account* is still something an agent does, through the connector;
                 it is just not a surface.
-            account_id (None | Unset | UUID):
             config (SurfaceBehaviorConfigInput | Unset):
             credential_mode (SurfaceCredentialMode | Unset):
             default_agent_name (None | str | Unset):
             is_enabled (bool | Unset):  Default: True.
             name (None | str | Unset): Pod-unique surface identifier. Defaults to the lowercased platform.
+            pod_connector (None | str | Unset): Slug of the SHARED pod connector this surface runs as: an account its owner
+                shared with the pod. Omit to run on Lemma's own credentials where the platform has them.
     """
 
     platform: SurfacePlatform
-    account_id: None | Unset | UUID = UNSET
     config: SurfaceBehaviorConfigInput | Unset = UNSET
     credential_mode: SurfaceCredentialMode | Unset = UNSET
     default_agent_name: None | str | Unset = UNSET
     is_enabled: bool | Unset = True
     name: None | str | Unset = UNSET
+    pod_connector: None | str | Unset = UNSET
 
     def to_dict(self) -> dict[str, Any]:
         platform = self.platform.value
-
-        account_id: None | str | Unset
-        if isinstance(self.account_id, Unset):
-            account_id = UNSET
-        elif isinstance(self.account_id, UUID):
-            account_id = str(self.account_id)
-        else:
-            account_id = self.account_id
 
         config: dict[str, Any] | Unset = UNSET
         if not isinstance(self.config, Unset):
@@ -86,6 +78,12 @@ class SurfaceCreateRequest:
         else:
             name = self.name
 
+        pod_connector: None | str | Unset
+        if isinstance(self.pod_connector, Unset):
+            pod_connector = UNSET
+        else:
+            pod_connector = self.pod_connector
+
         field_dict: dict[str, Any] = {}
 
         field_dict.update(
@@ -93,8 +91,6 @@ class SurfaceCreateRequest:
                 "platform": platform,
             }
         )
-        if account_id is not UNSET:
-            field_dict["account_id"] = account_id
         if config is not UNSET:
             field_dict["config"] = config
         if credential_mode is not UNSET:
@@ -105,6 +101,8 @@ class SurfaceCreateRequest:
             field_dict["is_enabled"] = is_enabled
         if name is not UNSET:
             field_dict["name"] = name
+        if pod_connector is not UNSET:
+            field_dict["pod_connector"] = pod_connector
 
         return field_dict
 
@@ -114,23 +112,6 @@ class SurfaceCreateRequest:
 
         d = dict(src_dict)
         platform = SurfacePlatform(d.pop("platform"))
-
-        def _parse_account_id(data: object) -> None | Unset | UUID:
-            if data is None:
-                return data
-            if isinstance(data, Unset):
-                return data
-            try:
-                if not isinstance(data, str):
-                    raise TypeError()
-                account_id_type_0 = UUID(data)
-
-                return account_id_type_0
-            except TypeError, ValueError, AttributeError, KeyError:
-                pass
-            return cast(None | Unset | UUID, data)
-
-        account_id = _parse_account_id(d.pop("account_id", UNSET))
 
         _config = d.pop("config", UNSET)
         config: SurfaceBehaviorConfigInput | Unset
@@ -168,14 +149,23 @@ class SurfaceCreateRequest:
 
         name = _parse_name(d.pop("name", UNSET))
 
+        def _parse_pod_connector(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        pod_connector = _parse_pod_connector(d.pop("pod_connector", UNSET))
+
         surface_create_request = cls(
             platform=platform,
-            account_id=account_id,
             config=config,
             credential_mode=credential_mode,
             default_agent_name=default_agent_name,
             is_enabled=is_enabled,
             name=name,
+            pod_connector=pod_connector,
         )
 
         return surface_create_request

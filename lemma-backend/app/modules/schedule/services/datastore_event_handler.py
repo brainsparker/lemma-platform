@@ -186,7 +186,6 @@ def trigger_change(change: Change, *, table_name: str) -> TriggerChange:
         row=row or {},
         changed=change.changed,
         previous=change.old_values if change.op is ChangeOp.UPDATE else None,
-        owner_user_id=change.owner_user_id,
         occurred_at=change.at,
         from_outside=change.outside_actor is not None,
         metadata=metadata,

@@ -12,15 +12,12 @@ from app.core.authorization.dependencies import PodContextDep, require_action
 from app.core.authorization.permissions import Permissions
 from app.core.api.dependencies import CurrentUser, UoWDep
 from app.core.api.pagination import parse_uuid_page_token
-from app.modules.connectors.contracts.surfaces import (
-    account,
-    require_account_owner,
-)
 from app.modules.agent.contracts.agents import (
     agent_id_for_name,
     agent_name_for_id,
     agent_names_for_ids,
 )
+from app.modules.agent_surfaces.services.surface_connector import bound_account
 from app.modules.agent_surfaces.api.dependencies import (
     SurfaceConnectionResolverDep,
     MemberReachDep,
@@ -53,7 +50,6 @@ from app.modules.agent_surfaces.services.surface_config_input import (
     resolve_surface_config,
 )
 from app.modules.agent_surfaces.api.surface_config_resolver import (
-    require_own_account,
     require_surface_agent_action,
     surface_setup_for_reader,
 )
@@ -82,7 +78,7 @@ async def _resolve_surface_reaches(
     return await SurfaceReachResolver().resolve_many(
         surfaces,
         credential_resolver=service.credential_resolver,
-        find_account=partial(account, uow),
+        find_account=partial(bound_account, uow),
         surface_repository=service.surface_repository,
     )
 
@@ -230,12 +226,6 @@ async def create_surface(
     pod-unique handle the API addresses it by. A second surface of the same
     platform has to belong to a different agent: one agent reaches a platform in
     one place — one Slack app, one WhatsApp number, one Telegram bot."""
-    await require_own_account(
-        request.account_id,
-        user_id=user.id,
-        organization_id=ctx.organization_id,
-        assert_owner=partial(require_account_owner, uow),
-    )
     agent_name_id = (
         await agent_id_for_name(
             uow.session, pod_id=pod_id, name=request.default_agent_name
@@ -271,7 +261,7 @@ async def create_surface(
         name=request.name,
         config=config,
         credential_mode=request.credential_mode,
-        account_id=request.account_id,
+        pod_connector_slug=request.pod_connector,
         ctx=ctx,
         # Sent or not, which the resolved config cannot tell: "off" is also
         # what an omitted policy resolves to.
@@ -346,15 +336,9 @@ async def update_surface(
     """Partially update a surface. Only fields present in the request are
     applied; the surface's platform and name are immutable.
 
-    Passing ``account_id`` rebinds the surface to a different connected account
-    — the repair when the account it runs on expires, or its owner leaves the
-    pod. It must be an account the caller owns."""
-    await require_own_account(
-        request.account_id,
-        user_id=user.id,
-        organization_id=ctx.organization_id,
-        assert_owner=partial(require_account_owner, uow),
-    )
+    Passing ``pod_connector`` rebinds the surface to a different SHARED pod
+    connector -- the repair when the account it runs as is withdrawn or
+    expires. The caller must be able to use that connector and its account."""
     update_agent_id = "default_agent_name" in request.model_fields_set
     agent_name_id = (
         await agent_id_for_name(
@@ -401,7 +385,7 @@ async def update_surface(
             if "credential_mode" in request.model_fields_set
             else None
         ),
-        account_id=request.account_id,
+        pod_connector_slug=request.pod_connector,
         is_active=(
             request.is_enabled if "is_enabled" in request.model_fields_set else None
         ),

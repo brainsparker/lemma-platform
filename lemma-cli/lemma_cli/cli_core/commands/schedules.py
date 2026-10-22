@@ -148,9 +148,9 @@ def _create_target(
     *,
     agent: str | None,
     workflow: str | None,
-    account: str | None,
+    connector: str | None,
 ) -> tuple[str | None, str | None, str | None]:
-    """``(agent, workflow, account)``, from the flags or else the payload.
+    """``(agent, workflow, pod connector)``, from the flags or else the payload.
 
     A flag wins. Resolved before the check and before the request is built:
     the flags used to be written over the payload unconditionally, so a target
@@ -163,7 +163,14 @@ def _create_target(
             "Provide exactly one of --agent or --workflow (or agent_name / "
             "workflow_name in the payload)."
         )
-    return agent, workflow, account or _text_field(payload, "account_id")
+    if "account_id" in payload:
+        fail(
+            "A schedule listens through a pod connector, never an account: pass "
+            "--connector <slug> (or pod_connector in the payload). The "
+            "connector decides the account -- your own for a per-member one, "
+            "the shared one for a shared one."
+        )
+    return agent, workflow, connector or _text_field(payload, "pod_connector")
 
 
 @app.command("create")
@@ -207,7 +214,15 @@ def create_schedule(
         ),
     ),
     webhook_source: str | None = typer.Option(None, "--webhook-source"),
-    account: str | None = typer.Option(None, "--account"),
+    connector: str | None = typer.Option(
+        None,
+        "--connector",
+        help=(
+            "Pod connector, by slug, a WEBHOOK schedule listens through -- for "
+            "--connector-trigger or an MCP server's event. See `lemma "
+            "connectors pod-list`."
+        ),
+    ),
     connector_trigger: str | None = typer.Option(
         None,
         "--connector-trigger",
@@ -227,8 +242,8 @@ def create_schedule(
 ) -> None:
     """Create a schedule."""
     extra = read_json(json_payload, file, required=False)
-    agent, workflow, account = _create_target(
-        extra, agent=agent, workflow=workflow, account=account
+    agent, workflow, connector = _create_target(
+        extra, agent=agent, workflow=workflow, connector=connector
     )
     schedule_type = "TIME"
     config: dict[str, object] = {}
@@ -266,7 +281,7 @@ def create_schedule(
                     "workflow_name": workflow,
                     "config": config,
                     "instruction": instruction or extra.get("instruction"),
-                    "account_id": account,
+                    "pod_connector": connector,
                     "connector_trigger_id": connector_trigger
                     or extra.get("connector_trigger_id"),
                     "filter_instruction": filter_instruction

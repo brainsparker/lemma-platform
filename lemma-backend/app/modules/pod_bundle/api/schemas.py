@@ -135,23 +135,6 @@ class VariableSpecResponse(BaseModel):
     description: str | None = None
     required: bool = False
     default: str | None = None
-    connector: str | None = Field(
-        default=None,
-        description=(
-            "For a connector account variable, the connector the account must "
-            "belong to (e.g. 'slack'), so the importer can connect the right "
-            "connector. Null for non-connector variables."
-        ),
-    )
-    connector_kind: str | None = Field(
-        default=None,
-        description=(
-            "For a connector account variable, which of the connector's kinds "
-            "the source install used ('composio', 'http', 'mcp', 'sql'), so "
-            "the importer selects an account of the same kind. "
-            "Null for non-connector variables."
-        ),
-    )
 
 
 class ImportPlanResponse(BaseModel):
@@ -187,8 +170,6 @@ class ImportPlanResponse(BaseModel):
                     description=v.description,
                     required=v.required,
                     default=v.default,
-                    connector=v.connector,
-                    connector_kind=v.connector_kind,
                 )
                 for v in plan.variables
             ],
@@ -199,6 +180,10 @@ class ImportPlanResponse(BaseModel):
 
 class ImportStartRequest(BaseModel):
     """Body for starting a URL-based import."""
+
+    # A GitHub import used to take an `account_id` and ignore it; refusing
+    # unknown fields keeps a stale client from believing it chose an account.
+    model_config = ConfigDict(extra="forbid")
 
     kind: BundleSourceKind = Field(
         ..., description="URL (a lemma signed download URL) or GITHUB (a public repo)."
@@ -214,9 +199,6 @@ class ImportStartRequest(BaseModel):
     repo: str | None = Field(default=None, description="GITHUB repo name.")
     ref: str | None = Field(
         default=None, description="GITHUB branch/tag/sha (optional)."
-    )
-    account_id: UUID | None = Field(
-        default=None, description="Connector account for a private GitHub repo."
     )
 
 
@@ -306,6 +288,13 @@ class ImportStatusResponse(BaseModel):
     events_url: str
     error: str | None = None
     error_code: str | None = None
+    connect_url: str | None = Field(
+        default=None,
+        description=(
+            "Where to connect the GitHub account the pod's `github` connector "
+            "needs, when the job failed for want of one."
+        ),
+    )
     retryable: bool = False
     warnings: list[str] = Field(default_factory=list)
     cancel_requested_at: datetime | None = None
@@ -334,6 +323,7 @@ class ImportStatusResponse(BaseModel):
             ),
             error=state.error,
             error_code=state.error_code,
+            connect_url=state.connect_url,
             retryable=state.retryable,
             warnings=state.warnings,
             cancel_requested_at=state.cancel_requested_at,
@@ -348,6 +338,8 @@ class ImportStatusResponse(BaseModel):
 
 class PublishStartRequest(BaseModel):
     """Body for publishing a pod to GitHub."""
+
+    model_config = ConfigDict(extra="forbid")
 
     repo_name: str = Field(
         ...,
@@ -378,7 +370,6 @@ class PublishStartRequest(BaseModel):
             "created with."
         ),
     )
-    account_id: UUID = Field(..., description="GitHub connector account to publish as.")
     ai_readme: bool = Field(
         default=False, description="Polish the generated README with the system model."
     )
@@ -417,12 +408,18 @@ class PublishStatusResponse(BaseModel):
     repo_name: str
     mode: PublishMode
     private: bool
-    account_id: UUID | None
     repo_url: str | None = None
     progress: ExportProgressResponse = Field(default_factory=ExportProgressResponse)
     events_url: str
     error: str | None = None
     error_code: str | None = None
+    connect_url: str | None = Field(
+        default=None,
+        description=(
+            "Where to connect the GitHub account the pod's `github` connector "
+            "needs, when the publish failed for want of one."
+        ),
+    )
     retryable: bool = False
     warnings: list[str] = Field(default_factory=list)
 
@@ -435,12 +432,12 @@ class PublishStatusResponse(BaseModel):
             repo_name=state.repo_name,
             mode=state.mode,
             private=state.private,
-            account_id=state.account_id,
             repo_url=state.repo_url,
             progress=ExportProgressResponse.from_domain(state.progress),
             events_url=f"/pods/{state.pod_id}/bundle/publishes/{state.publish_id}/events",
             error=state.error,
             error_code=state.error_code,
+            connect_url=state.connect_url,
             retryable=state.retryable,
             warnings=state.warnings,
         )

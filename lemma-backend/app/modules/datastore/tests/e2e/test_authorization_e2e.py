@@ -248,6 +248,7 @@ class TestDatastoreAuthorizationBoundaries:
             "datastore.table.read",
             "datastore.record.read",
             "datastore.record.write",
+            "datastore.record.delete",
             "datastore.table.update",
         }
         assert set(editor_table_items[table_names["editor"]]["allowed_actions"]) == {
@@ -259,6 +260,7 @@ class TestDatastoreAuthorizationBoundaries:
             "datastore.table.read",
             "datastore.record.read",
             "datastore.record.write",
+            "datastore.record.delete",
             "datastore.table.update",
         }
         editor_get_restricted_table = await editor_api.get_table(table_names["editor"])

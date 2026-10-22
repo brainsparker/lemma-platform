@@ -108,7 +108,13 @@ from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
 
-_KEY_PREFIX = "datastore:signedurl"
+# The entries hold a link's claims, so their shape is part of the key. It
+# changed when links stopped recording a minting workload (audit M22): an
+# entry cached before then carries a workload the fetch no longer re-checks,
+# and a hit never consults the row. A new prefix leaves every such entry
+# unread until it expires; a live link rehydrates from its row on its next
+# fetch, with its budget started over, as after any loss of Redis.
+_KEY_PREFIX = "datastore:signedlink"
 
 # How long a revocation tombstone blocks the cache from being rewritten. Only
 # has to outlive a rehydrate that is already in flight — a row read and a cache
@@ -144,21 +150,19 @@ class SignedUrlClaims:
     pod_id: UUID
     path: str
     created_by_user_id: UUID | None
-    minted_by_workload: str | None
     content_type: str
     filename: str
 
 
 def _claims_of(result: list[str | int]) -> SignedUrlClaims:
     """The claims in a fixed-arity answer from the consume script."""
-    pod_id, path, created_by, workload, content_type, filename = (
-        str(field) for field in result[1:7]
+    pod_id, path, created_by, content_type, filename = (
+        str(field) for field in result[1:6]
     )
     return SignedUrlClaims(
         pod_id=UUID(pod_id),
         path=path,
         created_by_user_id=UUID(created_by) if created_by else None,
-        minted_by_workload=workload or None,
         content_type=content_type or "application/octet-stream",
         filename=filename or path.rsplit("/", 1)[-1] or "file",
     )
@@ -200,7 +204,6 @@ class SignedUrlStore:
         file: DatastoreFileEntity,
         links: SignedLinkRepository,
         created_by_user_id: UUID | None = None,
-        minted_by_workload: str | None = None,
         expires_seconds: int | None = None,
         max_hits: int | None = None,
     ) -> tuple[str, str, datetime, int]:
@@ -246,7 +249,6 @@ class SignedUrlStore:
             code=code,
             pod_id=file.pod_id,
             created_by_user_id=created_by_user_id,
-            minted_by_workload=minted_by_workload,
             path=file.path,
             object_key=object_key,
             content_type=file.content_type,
@@ -336,7 +338,6 @@ class SignedUrlStore:
             str(link.pod_id),
             link.path,
             str(link.created_by_user_id) if link.created_by_user_id else "",
-            link.minted_by_workload or "",
             link.content_type,
             link.filename,
             link.max_hits,

@@ -20,6 +20,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Request, status
 from fastapi.responses import StreamingResponse
 
+from app.core.api.actor_policy import refuse_named_workloads
 from app.core.api.dependencies import CurrentUser, get_uow_factory
 from app.core.api.streaming_multipart import (
     MultipartFileLimit,
@@ -50,7 +51,14 @@ from app.modules.pod_bundle.infrastructure.state_store import (
     get_pod_bundle_state_store,
 )
 
-router = APIRouter(prefix="/pods", tags=["Pod Bundle"], redirect_slashes=False)
+# A bundle job runs as the person, not as a workload's grants: named agents
+# and functions stay out of every bundle route (the assistant keeps them).
+router = APIRouter(
+    prefix="/pods",
+    tags=["Pod Bundle"],
+    redirect_slashes=False,
+    dependencies=[refuse_named_workloads("export, import or publish a pod")],
+)
 
 ChannelServiceDep = Annotated[RealtimeChannel, Depends(get_channel_service)]
 
@@ -66,7 +74,8 @@ _TERMINAL_EVENT_TYPES = {"completed", "error", "expired"}
     description=(
         "Import a pod bundle from a URL. kind=URL takes a lemma signed download "
         "URL (from an export, or from POST …/bundle/uploads); kind=GITHUB takes a "
-        "public repo (repo_url or owner+repo, with account_id for private repos). "
+        "repo (repo_url or owner+repo), fetched through the pod's `github` "
+        "connector as the importer, or anonymously for a public repo. "
         "Returns 202 with an import_id; poll status until AWAITING_CONFIRMATION, "
         "review the plan, then apply."
     ),
@@ -86,7 +95,6 @@ async def start_import(
         owner=data.owner,
         repo=data.repo,
         ref=data.ref,
-        account_id=data.account_id,
     )
     return ImportStatusResponse.from_state(state)
 

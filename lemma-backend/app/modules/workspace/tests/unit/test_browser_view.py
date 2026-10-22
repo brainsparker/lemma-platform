@@ -220,11 +220,20 @@ class _FakeService:
         self.closed = False
 
     async def open_vnc_session(
-        self, user_id, *, mode, origin=None, conversation_id=None
+        self,
+        user_id,
+        *,
+        mode,
+        pod_id=None,
+        actor_id=None,
+        origin=None,
+        conversation_id=None,
     ):
         self.opened.append(
             {
                 "user_id": user_id,
+                "pod_id": pod_id,
+                "actor_id": actor_id,
                 "mode": mode,
                 "origin": origin,
                 "conversation_id": conversation_id,
@@ -234,7 +243,7 @@ class _FakeService:
             raise self.fail
         return "ws://sandbox.test/vnc?mode=view", {"X-Lemma-Relay-Token": "t"}
 
-    async def status(self, user_id):
+    async def status(self, user_id, *, pod_id=None, actor_id=None):
         return {"state": "stopped"}
 
     async def close(self) -> None:
@@ -413,7 +422,7 @@ def _service_with_relay(relay: _VncRelay):
     from app.modules.workspace.services import browser_view_service as module
 
     class _Service(module.BrowserViewService):
-        async def _relay(self, user_id, *, start):
+        async def _relay(self, user_id, *, pod_id, actor_id=None, start):
             return relay
 
     return _Service()
@@ -573,10 +582,10 @@ class _ResettableService:
     #: image that cannot answer.
     watching: int | None = 0
 
-    async def viewers(self, _user_id) -> int | None:
+    async def viewers(self, _user_id, *, pod_id=None, actor_id=None) -> int | None:
         return self.watching
 
-    async def reset_display(self, _user_id) -> str:
+    async def reset_display(self, _user_id, *, pod_id=None, actor_id=None) -> str:
         self.resets += 1
         if self.fails:
             raise RuntimeError("the relay went away")
@@ -785,7 +794,7 @@ async def test_a_refused_port_renders_a_state_rather_than_a_traceback() -> None:
             raise BrowserRelayNotServed("this sandbox does not serve the browser relay")
 
     class _Refusing(service_module.BrowserViewService):
-        async def _relay(self, user_id, *, start, deliver=True):
+        async def _relay(self, user_id, *, pod_id, actor_id=None, start, deliver=True):
             return _RefusedRelay()
 
     found = await _Refusing().status(uuid4())
@@ -818,7 +827,7 @@ async def test_a_poll_for_the_current_page_writes_nothing_into_the_sandbox() -> 
             return [{"url": "https://example.test/account"}]
 
     class _Reading(service_module.BrowserViewService):
-        async def _relay(self, user_id, *, start, deliver=True):
+        async def _relay(self, user_id, *, pod_id, actor_id=None, start, deliver=True):
             relay = _CountingRelay()
             if deliver:
                 await relay.deliver_token()
@@ -833,7 +842,7 @@ async def test_a_poll_for_the_current_page_writes_nothing_into_the_sandbox() -> 
 
     # And the flag is a choice rather than a removal: the default still writes,
     # which is what an arriving viewer depends on.
-    await service._relay(uuid4(), start=True)
+    await service._relay(uuid4(), pod_id=None, start=True)
     assert delivered == ["token", "proxy"]
 
 
@@ -876,3 +885,36 @@ def test_a_definitive_sandbox_refusal_is_a_close_the_pane_stops_on() -> None:
     code, closed = _close_code_for(SandboxRejected("no such port"))
     assert code == view.CLOSE_RELAY_ABSENT
     assert closed
+
+
+def test_a_sign_in_link_opens_the_browser_of_the_conversations_agent() -> None:
+    """The page names only its conversation. The browser is the one that
+    conversation's agent runs beside -- one per person, pod and actor -- so a
+    sign-in made there is where the agent will find it."""
+    from sandbox_runtime.errors import SandboxRejected
+
+    conversation_pod, agent_id, conversation = uuid4(), uuid4(), uuid4()
+    asked: list[dict] = []
+
+    async def choose(user_id, *, pod_id, agent, conversation):
+        del user_id
+        asked.append({"pod_id": pod_id, "agent": agent, "conversation": conversation})
+        return conversation_pod, agent_id
+
+    service = _FakeService(fail=SandboxRejected("stop after opening"))
+
+    async def _signed_in(_websocket):
+        return str(uuid4())
+
+    client = _client(service)
+    client.app.dependency_overrides[user_id_resolver] = lambda: _signed_in
+    client.app.dependency_overrides[view.view_workspaces] = lambda: choose
+    with client.websocket_connect(
+        f"/workspace/browser/view?conversation={conversation}",
+        headers={"Origin": "https://app.lemma.test"},
+    ) as socket:
+        socket.receive()
+
+    assert asked == [{"pod_id": None, "agent": None, "conversation": conversation}]
+    assert service.opened[0]["pod_id"] == conversation_pod
+    assert service.opened[0]["actor_id"] == agent_id

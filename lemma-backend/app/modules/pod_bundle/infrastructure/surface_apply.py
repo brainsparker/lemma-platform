@@ -3,8 +3,7 @@
 Split out of ``applier.py`` because it is by a wide margin the largest step
 there -- roughly a fifth of the file -- and that file is past the 600-line
 ceiling the architecture ratchet sets. Nothing about it is shared, which is what
-makes it the clean cut: the account-binding rule it leans on *is* shared with
-the schedule step, and lives in ``account_binding.py``.
+makes it the clean cut.
 """
 
 from __future__ import annotations
@@ -15,9 +14,6 @@ from uuid import UUID
 
 from app.modules.pod_bundle.domain.errors import PodBundleDomainError
 from app.modules.pod_bundle.domain.state import PlanStep
-from app.modules.pod_bundle.infrastructure.account_binding import (
-    validate_account_binding,
-)
 
 
 async def apply_surface(
@@ -28,8 +24,9 @@ async def apply_surface(
     pod_id: UUID,
     load: Callable[[str, str], dict[str, Any]],
 ) -> None:
-    """Create or update a pod surface, binding the connector ``account_id``
-    resolved from the required ``${..._account}`` variable. A pod may have
+    """Create or update a pod surface, bound to the pod connector the bundle
+    names by slug -- the importing pod's own, so its account is that pod's
+    decision and none travels in the bundle. A pod may have
     several surfaces per platform, each addressed by a stable pod-unique
     ``name`` (defaults to the lowercased platform), so import is an idempotent
     upsert keyed by that name — mirroring the surface create/update
@@ -75,8 +72,6 @@ async def apply_surface(
     ).strip() or AgentSurfaceEntity.default_name_for(platform)
 
     # Only the create-request fields (extra='forbid'); drop export-only keys.
-    # account_id has already been substituted from the provided account
-    # variable by load.
     request = SurfaceCreateRequest.model_validate(
         {
             "platform": platform.value,
@@ -87,21 +82,13 @@ async def apply_surface(
                 if key
                 in {
                     "default_agent_name",
-                    "account_id",
+                    "pod_connector",
                     "credential_mode",
                     "config",
                     "is_enabled",
                 }
             },
         }
-    )
-
-    await validate_account_binding(
-        uow,
-        account_id=request.account_id,
-        expected_connector=payload.get("connector_id"),
-        expected_kind=payload.get("connector_kind") or payload.get("provider"),
-        resource_label=f"Surface '{resolved_name}'",
     )
 
     agent = (
@@ -129,7 +116,7 @@ async def apply_surface(
             name=resolved_name,
             config=config,
             credential_mode=request.credential_mode,
-            account_id=request.account_id,
+            pod_connector_slug=request.pod_connector,
             ctx=ctx,
         )
         if not request.is_enabled:
@@ -155,7 +142,7 @@ async def apply_surface(
             if "credential_mode" in request.model_fields_set
             else None
         ),
-        account_id=request.account_id,
+        pod_connector_slug=request.pod_connector,
         is_active=(
             request.is_enabled if "is_enabled" in request.model_fields_set else None
         ),

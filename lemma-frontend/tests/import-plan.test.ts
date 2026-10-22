@@ -116,19 +116,6 @@ test("a bundle's own default still wins over the teammate's name", () => {
     assert.equal(suggestedValue(variable, "Smart Inbox"), "queue");
 });
 
-test("an account belongs to whoever is installing, so it is always asked", () => {
-    const account: VariableSpec = {
-        name: "slack_account",
-        kind: "account",
-        description: null,
-        required: true,
-        default: null,
-        connector: "slack",
-    };
-    assert.equal(suggestedValue(account, "Smart Inbox"), "");
-    assert.equal(needsAnswer(account, "Smart Inbox"), true);
-});
-
 test("a required name nothing can be derived from is still put in front of the person", () => {
     const variable: VariableSpec = {
         name: "slug",

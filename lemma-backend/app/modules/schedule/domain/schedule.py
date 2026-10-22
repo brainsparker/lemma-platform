@@ -354,8 +354,10 @@ class ScheduleEntity(Entity):
     filter_instruction: str | None = None
     filter_output_schema: dict[str, Any] | None = None
 
-    # For WEBHOOK schedules backed by connector provider triggers.
-    account_id: UUID | None = None
+    # For WEBHOOK schedules that listen through a connector -- a provider
+    # trigger, or an MCP server's event: the pod connector, by slug. Which
+    # account that means is resolved on every use, as the schedule's owner.
+    pod_connector_slug: str | None = None
     connector_trigger_id: str | None = None
 
     # DATASTORE only. A row added from outside the pod -- an open table's form
@@ -409,13 +411,13 @@ class ScheduleEntity(Entity):
         )
 
     @property
-    def listens_through_account(self) -> bool:
-        """Whether its subscription is made on its author's account -- a
+    def listens_through_connector(self) -> bool:
+        """Whether its subscription is made through a pod connector -- a
         connector trigger, or an MCP server's event -- and so is created,
         swapped and dropped with the schedule."""
         return (
             self.schedule_type == ScheduleType.WEBHOOK
-            and self.account_id is not None
+            and self.pod_connector_slug is not None
             and (bool(self.connector_trigger_id) or self.listens_to_mcp)
         )
 
@@ -440,7 +442,7 @@ class ScheduleCreateEntity(BaseModel):
     instruction: str | None = None
     filter_instruction: str | None = None
     filter_output_schema: dict[str, Any] | None = None
-    account_id: UUID | None = None
+    pod_connector_slug: str | None = None
     connector_trigger_id: str | None = None
     include_outside_rows: bool = False
     # None means "caller did not specify": DATASTORE and GLOBAL-workflow

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from uuid import NAMESPACE_URL, uuid5
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from app.core.log.log import get_logger
 from app.modules.agent.domain.outsiders import refuse_owner_workspace
@@ -177,7 +177,18 @@ async def get_workspace_session(
         initial_cwd=runtime_context.initial_cwd,
         close_on_exit=close_on_exit,
         conversation_id=ctx.conversation_id,
+        # The run's own sandbox, whatever the token is minted for: a command
+        # run with borrowed authority still belongs beside this run's files,
+        # not in another agent's sandbox.
+        actor_id=_run_actor(ctx),
     )
+
+
+def _run_actor(ctx: BaseAgentContext) -> UUID | None:
+    """The agent this run is, for picking its sandbox; ``None`` is the assistant."""
+    if (getattr(ctx, "workload_type", None) or "").lower() == "agent":
+        return getattr(ctx, "workload_id", None)
+    return None
 
 
 WORKSPACE_RECREATED_NOTICE = (

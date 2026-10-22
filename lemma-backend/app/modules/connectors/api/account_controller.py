@@ -20,7 +20,12 @@ from app.modules.connectors.api.schemas import (
 )
 from app.modules.connectors.contracts.github import install_state_for
 from app.modules.connectors.domain.errors import ConnectorValidationError
+from app.modules.connectors.services.auth.github_bindings import (
+    bound_organization,
+    claim_for_account,
+)
 from app.modules.connectors.services.auth.github_installation import (
+    administers,
     verify_installation,
 )
 from app.modules.connectors.services.auth.github_reconciler import (
@@ -263,16 +268,27 @@ async def bind_account_installation(
     reveal = getattr(token, "get_secret_value", None)
     if callable(reveal):
         token = reveal()
-    proved = False
+    session = connector_service.uow.session
+    # Nobody holds it yet: binding it needs proof this person controls it on
+    # GitHub's side, not only that they can see it (audit H4).
+    needs_proof = await bound_organization(session, data.installation_id) is None
+    proved = administered = False
     if token:
-        # The write below wants the session back, so only the round trip to
-        # GitHub happens without a pooled connection held.
-        async with connection_released(getattr(connector_service.uow, "session", None)):
+        # The write below wants the session back, so only the round trips to
+        # GitHub happen without a pooled connection held.
+        async with connection_released(session):
             proved = await verify_installation(str(token), data.installation_id)
+            if proved and needs_proof:
+                administered = await administers(str(token), data.installation_id)
     if not proved:
         raise ConnectorValidationError(
             "That installation is not one this account can reach."
         )
+    # Reaching it is not owning it (audit H4): one another organization holds
+    # is refused, and one nobody holds needs its GitHub owner.
+    await claim_for_account(
+        session, account, data.installation_id, administered=administered
+    )
     account.external_ref = data.installation_id
     await connector_service.account_repository.update(account)
     await connector_service.uow.commit()

@@ -119,6 +119,10 @@ class _FakeService:
     async def _get_sandbox(self, user_id):
         return SimpleNamespace(status="RUNNING") if self._running else None
 
+    async def resolve_workspace_id(self, user_id, pod_id, *, actor_id=None):
+        assert pod_id is None and actor_id is None
+        return user_id
+
     async def get_session(self, user_id, **kwargs):
         self.sessions_created += 1
         return self.session

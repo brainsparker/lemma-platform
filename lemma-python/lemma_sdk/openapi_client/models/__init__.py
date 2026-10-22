@@ -17,6 +17,8 @@ _NAME_TO_MODULE = {
     'AccountCredentialsUpdateSchemaCredentials': 'account_credentials_update_schema_credentials',
     'AccountInstallationsSchema': 'account_installations_schema',
     'AccountListResponseSchema': 'account_list_response_schema',
+    'AccountPodUsage': 'account_pod_usage',
+    'AccountPodUsageResponse': 'account_pod_usage_response',
     'AccountResponseSchema': 'account_response_schema',
     'AccountResponseSchemaPreferencesType0': 'account_response_schema_preferences_type_0',
     'AddColumnRequest': 'add_column_request',
@@ -319,6 +321,8 @@ _NAME_TO_MODULE = {
     'FunctionSummaryResponse': 'function_summary_response',
     'FunctionType': 'function_type',
     'GenerationSettings': 'generation_settings',
+    'GranteeRef': 'grantee_ref',
+    'GranteeRefGranteeType': 'grantee_ref_grantee_type',
     'GroupPublicResponse': 'group_public_response',
     'HarnessKind': 'harness_kind',
     'HistoryMessage': 'history_message',
@@ -330,6 +334,7 @@ _NAME_TO_MODULE = {
     'IconUploadResponse': 'icon_upload_response',
     'IdentityKind': 'identity_kind',
     'IdentityStrength': 'identity_strength',
+    'ImpactedPodConnector': 'impacted_pod_connector',
     'ImportPlanResponse': 'import_plan_response',
     'ImportStartRequest': 'import_start_request',
     'ImportStatus': 'import_status',
@@ -341,6 +346,7 @@ _NAME_TO_MODULE = {
     'InstallRequestResponseSchema': 'install_request_response_schema',
     'InstallationBindSchema': 'installation_bind_schema',
     'InstallationChoiceSchema': 'installation_choice_schema',
+    'InstallationImpactResponse': 'installation_impact_response',
     'InstalledAppSummary': 'installed_app_summary',
     'JsonObject': 'json_object',
     'LineDelivery': 'line_delivery',
@@ -426,7 +432,20 @@ _NAME_TO_MODULE = {
     'PersonRef': 'person_ref',
     'PlanStepResponse': 'plan_step_response',
     'PlanStepResponseDetail': 'plan_step_response_detail',
+    'PodAccountCreateRequest': 'pod_account_create_request',
+    'PodAccountListResponse': 'pod_account_list_response',
+    'PodAccountResponse': 'pod_account_response',
+    'PodAccountSource': 'pod_account_source',
+    'PodAccountUpdateRequest': 'pod_account_update_request',
+    'PodAccountVisibility': 'pod_account_visibility',
     'PodConfig': 'pod_config',
+    'PodConnectorCreateRequest': 'pod_connector_create_request',
+    'PodConnectorListResponse': 'pod_connector_list_response',
+    'PodConnectorMode': 'pod_connector_mode',
+    'PodConnectorResponse': 'pod_connector_response',
+    'PodConnectorStatus': 'pod_connector_status',
+    'PodConnectorUpdateRequest': 'pod_connector_update_request',
+    'PodConnectorVisibility': 'pod_connector_visibility',
     'PodContactSettings': 'pod_contact_settings',
     'PodCreateRequest': 'pod_create_request',
     'PodEffectivePermissionsResponse': 'pod_effective_permissions_response',
@@ -535,6 +554,7 @@ _NAME_TO_MODULE = {
     'SessionResponse': 'session_response',
     'SetDefaultSurfaceRequest': 'set_default_surface_request',
     'SetOrganizationDefaultRuntimeRequest': 'set_organization_default_runtime_request',
+    'SharedAccountSummary': 'shared_account_summary',
     'SharedResourceBody': 'shared_resource_body',
     'SignInOutcomeResponse': 'sign_in_outcome_response',
     'SignedUrlListResponse': 'signed_url_list_response',
@@ -723,6 +743,8 @@ if TYPE_CHECKING:
     from .account_credentials_update_schema_credentials import AccountCredentialsUpdateSchemaCredentials
     from .account_installations_schema import AccountInstallationsSchema
     from .account_list_response_schema import AccountListResponseSchema
+    from .account_pod_usage import AccountPodUsage
+    from .account_pod_usage_response import AccountPodUsageResponse
     from .account_response_schema import AccountResponseSchema
     from .account_response_schema_preferences_type_0 import AccountResponseSchemaPreferencesType0
     from .add_column_request import AddColumnRequest
@@ -1025,6 +1047,8 @@ if TYPE_CHECKING:
     from .function_summary_response import FunctionSummaryResponse
     from .function_type import FunctionType
     from .generation_settings import GenerationSettings
+    from .grantee_ref import GranteeRef
+    from .grantee_ref_grantee_type import GranteeRefGranteeType
     from .group_public_response import GroupPublicResponse
     from .harness_kind import HarnessKind
     from .history_message import HistoryMessage
@@ -1036,6 +1060,7 @@ if TYPE_CHECKING:
     from .icon_upload_response import IconUploadResponse
     from .identity_kind import IdentityKind
     from .identity_strength import IdentityStrength
+    from .impacted_pod_connector import ImpactedPodConnector
     from .import_plan_response import ImportPlanResponse
     from .import_start_request import ImportStartRequest
     from .import_status import ImportStatus
@@ -1047,6 +1072,7 @@ if TYPE_CHECKING:
     from .install_request_response_schema import InstallRequestResponseSchema
     from .installation_bind_schema import InstallationBindSchema
     from .installation_choice_schema import InstallationChoiceSchema
+    from .installation_impact_response import InstallationImpactResponse
     from .installed_app_summary import InstalledAppSummary
     from .json_object import JsonObject
     from .line_delivery import LineDelivery
@@ -1132,7 +1158,20 @@ if TYPE_CHECKING:
     from .person_ref import PersonRef
     from .plan_step_response import PlanStepResponse
     from .plan_step_response_detail import PlanStepResponseDetail
+    from .pod_account_create_request import PodAccountCreateRequest
+    from .pod_account_list_response import PodAccountListResponse
+    from .pod_account_response import PodAccountResponse
+    from .pod_account_source import PodAccountSource
+    from .pod_account_update_request import PodAccountUpdateRequest
+    from .pod_account_visibility import PodAccountVisibility
     from .pod_config import PodConfig
+    from .pod_connector_create_request import PodConnectorCreateRequest
+    from .pod_connector_list_response import PodConnectorListResponse
+    from .pod_connector_mode import PodConnectorMode
+    from .pod_connector_response import PodConnectorResponse
+    from .pod_connector_status import PodConnectorStatus
+    from .pod_connector_update_request import PodConnectorUpdateRequest
+    from .pod_connector_visibility import PodConnectorVisibility
     from .pod_contact_settings import PodContactSettings
     from .pod_create_request import PodCreateRequest
     from .pod_effective_permissions_response import PodEffectivePermissionsResponse
@@ -1241,6 +1280,7 @@ if TYPE_CHECKING:
     from .session_response import SessionResponse
     from .set_default_surface_request import SetDefaultSurfaceRequest
     from .set_organization_default_runtime_request import SetOrganizationDefaultRuntimeRequest
+    from .shared_account_summary import SharedAccountSummary
     from .shared_resource_body import SharedResourceBody
     from .sign_in_outcome_response import SignInOutcomeResponse
     from .signed_url_list_response import SignedUrlListResponse
@@ -1442,6 +1482,8 @@ __all__ = [
     'AccountCredentialsUpdateSchemaCredentials',
     'AccountInstallationsSchema',
     'AccountListResponseSchema',
+    'AccountPodUsage',
+    'AccountPodUsageResponse',
     'AccountResponseSchema',
     'AccountResponseSchemaPreferencesType0',
     'AddColumnRequest',
@@ -1744,6 +1786,8 @@ __all__ = [
     'FunctionSummaryResponse',
     'FunctionType',
     'GenerationSettings',
+    'GranteeRef',
+    'GranteeRefGranteeType',
     'GroupPublicResponse',
     'HarnessKind',
     'HistoryMessage',
@@ -1755,6 +1799,7 @@ __all__ = [
     'IconUploadResponse',
     'IdentityKind',
     'IdentityStrength',
+    'ImpactedPodConnector',
     'ImportPlanResponse',
     'ImportStartRequest',
     'ImportStatus',
@@ -1766,6 +1811,7 @@ __all__ = [
     'InstallRequestResponseSchema',
     'InstallationBindSchema',
     'InstallationChoiceSchema',
+    'InstallationImpactResponse',
     'InstalledAppSummary',
     'JsonObject',
     'LineDelivery',
@@ -1851,7 +1897,20 @@ __all__ = [
     'PersonRef',
     'PlanStepResponse',
     'PlanStepResponseDetail',
+    'PodAccountCreateRequest',
+    'PodAccountListResponse',
+    'PodAccountResponse',
+    'PodAccountSource',
+    'PodAccountUpdateRequest',
+    'PodAccountVisibility',
     'PodConfig',
+    'PodConnectorCreateRequest',
+    'PodConnectorListResponse',
+    'PodConnectorMode',
+    'PodConnectorResponse',
+    'PodConnectorStatus',
+    'PodConnectorUpdateRequest',
+    'PodConnectorVisibility',
     'PodContactSettings',
     'PodCreateRequest',
     'PodEffectivePermissionsResponse',
@@ -1960,6 +2019,7 @@ __all__ = [
     'SessionResponse',
     'SetDefaultSurfaceRequest',
     'SetOrganizationDefaultRuntimeRequest',
+    'SharedAccountSummary',
     'SharedResourceBody',
     'SignInOutcomeResponse',
     'SignedUrlListResponse',

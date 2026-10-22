@@ -289,3 +289,54 @@ __all__ = [
     "pod_organization_id",
     "refuse_pod_role_beyond_inviter",
 ]
+
+
+async def leave_organization_pods(
+    uow, *, organization_member_id: UUID, user_id: UUID
+) -> list[UUID]:
+    """Take a departing organization member out of every live pod they are in.
+
+    Through the pod's own removal, one membership at a time, so each one is
+    announced as ``PodMemberRemoved`` in this transaction. Deleting the
+    organization membership cascades these rows away in the database, and a
+    cascade says nothing: every module that lets go of a pod's departed member
+    -- their channel seats, the contacts they looked after, their pod accounts
+    -- never heard they had gone. Called before that deletion, so there is
+    nothing left for the cascade to take silently.
+
+    No last-administrator guard: leaving the organization is not refused for
+    the pods it empties of admins, as the cascade never was. A soft-deleted
+    pod is skipped; its own cleanup already ran.
+    """
+    repository = PodMemberRepository(uow)
+    left: list[UUID] = []
+    after: UUID | None = None
+    # A page at a time, by pod: a limit that stopped short would leave the
+    # person in every pod past it.
+    while True:
+        statement = (
+            select(PodMember.id, PodMember.pod_id)
+            .join(Pod, Pod.id == PodMember.pod_id)
+            .where(
+                PodMember.organization_member_id == organization_member_id,
+                Pod.is_deleted.is_(False),
+            )
+            .order_by(PodMember.pod_id)
+            .limit(_LEAVE_PAGE)
+        )
+        if after is not None:
+            statement = statement.where(PodMember.pod_id > after)
+        rows = (await uow.session.execute(statement)).all()
+        for pod_member_id, pod_id in rows:
+            member = await repository.get(pod_member_id)
+            if member is None:
+                continue
+            member.mark_removed(user_id=user_id)
+            if await repository.delete_entity(member):
+                left.append(pod_id)
+        if len(rows) < _LEAVE_PAGE:
+            return left
+        after = rows[-1].pod_id
+
+
+_LEAVE_PAGE = 200

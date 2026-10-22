@@ -412,3 +412,409 @@ async def test_M3_a_workload_is_refused_a_deleted_pod(
     response = await async_client.get(f"/pods/{pod_id}/agents", headers=headers)
 
     assert response.status_code in (403, 404), response.text
+
+
+# --- Checkpoint C: conferral bounded by the resource, and by who is asking ---
+
+
+def _grant(resource_type: str, name: str, *permission_ids: str) -> dict:
+    return {
+        "resource_type": resource_type,
+        "resource_name": name,
+        "permission_ids": list(permission_ids),
+    }
+
+
+async def test_H13_an_inline_grant_cannot_arm_an_agent_beyond_its_author(
+    authenticated_client: AsyncClient, async_client: AsyncClient, world
+):
+    """H13: create/update's inline ``permissions`` skipped the conferral bound,
+    so an editor gave an agent deletes they could not do themselves."""
+    editor, _ = await _member_of(
+        authenticated_client,
+        async_client,
+        org_id=world["org_id"],
+        pod_id=world["pod_id"],
+        role="POD_EDITOR",
+    )
+    table = await _table(authenticated_client, world["pod_id"], {})
+
+    response = await async_client.post(
+        f"/pods/{world['pod_id']}/agents",
+        headers=_bearer(editor),
+        json={
+            "name": f"armed_{uuid4().hex[:6]}",
+            "instruction": "Tidy up.",
+            "permissions": {
+                "grants": [_grant("datastore_table", table, "datastore.table.delete")]
+            },
+        },
+    )
+
+    assert response.status_code == status.HTTP_403_FORBIDDEN, response.text
+    assert response.json()["code"] == "CONFERRAL_EXCEEDS_HOLDER"
+
+
+async def test_M1_a_grant_is_bounded_by_the_resource_not_the_permission_id(
+    authenticated_client: AsyncClient, async_client: AsyncClient, world
+):
+    """M1: holding ``datastore.table.read`` by role is not reading a RESTRICTED
+    table nobody shared with you -- the bound compared ids, not access."""
+    editor, _ = await _member_of(
+        authenticated_client,
+        async_client,
+        org_id=world["org_id"],
+        pod_id=world["pod_id"],
+        role="POD_EDITOR",
+    )
+    secret = await _table(
+        authenticated_client, world["pod_id"], {}, visibility="RESTRICTED"
+    )
+    agent = await async_client.post(
+        f"/pods/{world['pod_id']}/agents",
+        headers=_bearer(editor),
+        json={"name": f"reader_{uuid4().hex[:6]}", "instruction": "Read."},
+    )
+    assert agent.status_code == status.HTTP_201_CREATED, agent.text
+
+    response = await async_client.put(
+        f"/pods/{world['pod_id']}/agents/{agent.json()['name']}/permissions",
+        headers=_bearer(editor),
+        json={"grants": [_grant("datastore_table", secret, "datastore.table.read")]},
+    )
+
+    assert response.status_code == status.HTTP_403_FORBIDDEN, response.text
+    assert response.json()["code"] == "CONFERRAL_EXCEEDS_HOLDER"
+
+
+async def test_M1_an_agent_cannot_rewrite_its_own_grants(
+    authenticated_client: AsyncClient, async_client: AsyncClient, world, fixed_test_user
+):
+    """M1: an agent holding ``agent.update`` on itself widened its own grants."""
+    name = f"self_{uuid4().hex[:6]}"
+    created = await authenticated_client.post(
+        f"/pods/{world['pod_id']}/agents",
+        json={"name": name, "instruction": "Help."},
+    )
+    assert created.status_code == status.HTTP_201_CREATED, created.text
+    agent_id = created.json()["id"]
+    armed = await authenticated_client.put(
+        f"/pods/{world['pod_id']}/agents/{name}/permissions",
+        json={"grants": [_grant("agent", name, "agent.read", "agent.update")]},
+    )
+    assert armed.status_code == status.HTTP_200_OK, armed.text
+    claims = build_delegation_claims(
+        workload_type="agent",
+        workload_id=UUID(agent_id),
+        workload_name=name,
+        pod_id=UUID(world["pod_id"]),
+        session_id=f"conformance-{uuid4().hex}",
+        invoked_by_user_id=UUID(fixed_test_user["id"]),
+    )
+    token = await get_user_token(UUID(fixed_test_user["id"]), delegation_claims=claims)
+
+    response = await async_client.put(
+        f"/pods/{world['pod_id']}/agents/{name}/permissions",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "grants": [
+                _grant("agent", name, "agent.read", "agent.update", "agent.delete")
+            ]
+        },
+    )
+
+    assert response.status_code == status.HTTP_403_FORBIDDEN, response.text
+    assert response.json()["code"] == "CONFERRAL_EXCEEDS_HOLDER"
+
+
+async def _agent_token(
+    authenticated_client: AsyncClient,
+    *,
+    pod_id: str,
+    user_id: str,
+    grants: list[dict],
+) -> dict[str, str]:
+    """A named agent with exactly ``grants``, and a token of it acting for the user."""
+    name = f"agent_{uuid4().hex[:6]}"
+    created = await authenticated_client.post(
+        f"/pods/{pod_id}/agents",
+        json={"name": name, "instruction": "Help.", "permissions": {"grants": grants}},
+    )
+    assert created.status_code == status.HTTP_201_CREATED, created.text
+    claims = build_delegation_claims(
+        workload_type="agent",
+        workload_id=UUID(created.json()["id"]),
+        workload_name=name,
+        pod_id=UUID(pod_id),
+        session_id=f"conformance-{uuid4().hex}",
+        invoked_by_user_id=UUID(user_id),
+    )
+    token = await get_user_token(UUID(user_id), delegation_claims=claims)
+    return {"Authorization": f"Bearer {token}"}
+
+
+async def test_H19_reading_a_tables_schema_is_not_reading_its_rows(
+    authenticated_client: AsyncClient, async_client: AsyncClient, world, fixed_test_user
+):
+    """H19: SQL checked ``table.read`` only; the records API needs ``record.read``."""
+    table = await _table(authenticated_client, world["pod_id"], {})
+    headers = await _agent_token(
+        authenticated_client,
+        pod_id=world["pod_id"],
+        user_id=fixed_test_user["id"],
+        grants=[_grant("datastore_table", table, "datastore.table.read")],
+    )
+
+    response = await async_client.post(
+        f"/pods/{world['pod_id']}/datastore/query",
+        headers=headers,
+        json={"query": f"SELECT note FROM {table}"},
+    )
+
+    assert response.status_code == status.HTTP_403_FORBIDDEN, response.text
+
+
+@pytest.mark.parametrize(
+    ("method", "suffix"),
+    [("POST", "bundle/exports"), ("POST", "bundle/imports")],
+)
+async def test_H17_a_named_agent_cannot_run_a_bundle_job_as_its_person(
+    authenticated_client: AsyncClient,
+    async_client: AsyncClient,
+    world,
+    fixed_test_user,
+    method: str,
+    suffix: str,
+):
+    """H17: bundle jobs rebuild the person's whole context, so an agent holding
+    only ``pod.read`` exported everything its person could read."""
+    headers = await _agent_token(
+        authenticated_client,
+        pod_id=world["pod_id"],
+        user_id=fixed_test_user["id"],
+        grants=[],
+    )
+
+    response = await async_client.request(
+        method, f"/pods/{world['pod_id']}/{suffix}", headers=headers, json={}
+    )
+
+    assert response.status_code == status.HTTP_403_FORBIDDEN, response.text
+    assert response.json()["code"] == WORKLOAD_NOT_ALLOWED
+
+
+async def test_H17_the_assistant_still_exports_its_pod(
+    async_client: AsyncClient, world
+):
+    response = await async_client.post(
+        f"/pods/{world['pod_id']}/bundle/exports",
+        headers=world["workloads"]["assistant"],
+        json={},
+    )
+
+    assert response.json().get("code") != WORKLOAD_NOT_ALLOWED, response.text
+
+
+async def test_M21_moving_a_file_into_a_folder_needs_write_there(
+    authenticated_client: AsyncClient, async_client: AsyncClient, world
+):
+    """M21: a move checked write on the source only. A POD_USER -- who may read
+    the pod's folders but not write them -- could move a file of their own into
+    a shared folder that creating it there would have been refused."""
+    from app.modules.datastore.tests.e2e.harness import DatastoreApi
+
+    user, _ = await _member_of(
+        authenticated_client,
+        async_client,
+        org_id=world["org_id"],
+        pod_id=world["pod_id"],
+        role="POD_USER",
+    )
+    shared = f"/shared_{uuid4().hex[:6]}"
+    await DatastoreApi(authenticated_client, world["pod_id"]).create_folder(shared)
+    user_api = DatastoreApi(async_client, world["pod_id"], user=user)
+    await user_api.upload_file("mine.md", b"# mine", directory_path="/me")
+
+    await user_api.update_file(
+        "/me/mine.md",
+        new_path=f"{shared}/mine.md",
+        expected_status=status.HTTP_403_FORBIDDEN,
+    )
+
+
+async def test_M22_a_named_agent_cannot_mint_a_public_link(
+    authenticated_client: AsyncClient, async_client: AsyncClient, world, fixed_test_user
+):
+    """M22: any ``folder.read`` holder -- agents included -- minted a 7-day
+    anonymous link to a file, outside every grant."""
+    from app.modules.datastore.tests.e2e.harness import DatastoreApi
+
+    owner_api = DatastoreApi(authenticated_client, world["pod_id"])
+    await owner_api.upload_file("notes.md", b"# notes")
+    headers = await _agent_token(
+        authenticated_client,
+        pod_id=world["pod_id"],
+        user_id=fixed_test_user["id"],
+        grants=[_grant("document", "/notes.md", "folder.read")],
+    )
+
+    response = await async_client.post(
+        f"/pods/{world['pod_id']}/datastore/files/signed-url",
+        params={"path": "/notes.md"},
+        headers=headers,
+        json={},
+    )
+
+    assert response.status_code == status.HTTP_403_FORBIDDEN, response.text
+
+
+async def test_M22_a_pod_admin_sees_and_revokes_any_members_link(
+    authenticated_client: AsyncClient, async_client: AsyncClient, world
+):
+    """M22: only the minter could list or revoke a link, so a departed member's
+    public links outlived their access with nobody able to withdraw them."""
+    from app.modules.datastore.tests.e2e.harness import DatastoreApi
+
+    editor, _ = await _member_of(
+        authenticated_client,
+        async_client,
+        org_id=world["org_id"],
+        pod_id=world["pod_id"],
+        role="POD_EDITOR",
+    )
+    editor_api = DatastoreApi(async_client, world["pod_id"], user=editor)
+    await editor_api.upload_file("handout.md", b"# handout")
+    minted = await async_client.post(
+        f"/pods/{world['pod_id']}/datastore/files/signed-url",
+        params={"path": "/handout.md"},
+        headers=_bearer(editor),
+        json={},
+    )
+    assert minted.status_code in (200, 201), minted.text
+    code = minted.json()["signed_url"].rstrip("/").rsplit("/", 1)[-1]
+
+    listed = await authenticated_client.get(
+        f"/pods/{world['pod_id']}/datastore/files/signed-urls"
+    )
+    revoked = await authenticated_client.delete(
+        f"/pods/{world['pod_id']}/datastore/files/signed-urls/{code}"
+    )
+
+    assert code in listed.text, listed.text
+    assert revoked.status_code in (200, 204), revoked.text
+
+
+# --- H14: deleting records is its own permission, and a destructive one ---
+
+
+def _records(pod_id: str, table: str) -> str:
+    return f"/pods/{pod_id}/datastore/tables/{table}/records"
+
+
+async def _record(client: AsyncClient, pod_id: str, table: str, headers) -> str:
+    response = await client.post(
+        _records(pod_id, table), headers=headers, json={"data": {"note": "keep"}}
+    )
+    assert response.status_code == status.HTTP_201_CREATED, response.text
+    return str(response.json()["id"])
+
+
+async def _deletes(
+    client: AsyncClient, pod_id: str, table: str, record_id: str, headers
+) -> tuple:
+    one = await client.delete(f"{_records(pod_id, table)}/{record_id}", headers=headers)
+    bulk = await client.post(
+        f"{_records(pod_id, table)}/bulk/delete",
+        headers=headers,
+        json={"record_ids": [record_id]},
+    )
+    return one, bulk
+
+
+async def test_H14_writing_records_is_not_deleting_them(
+    authenticated_client: AsyncClient, async_client: AsyncClient, world
+):
+    """H14: a record delete asked for ``record.write``, so whoever could write
+    one row of a table could delete every row of it."""
+    viewer, pod_member = await _member_of(
+        authenticated_client,
+        async_client,
+        org_id=world["org_id"],
+        pod_id=world["pod_id"],
+        role="POD_VIEWER",
+    )
+    table = await _table(authenticated_client, world["pod_id"], {})
+    granted = await authenticated_client.put(
+        f"/pods/{world['pod_id']}/resources/datastore_table/{table}"
+        f"/access/grantees/POD_MEMBER/{pod_member['pod_member_id']}",
+        json={"permission_ids": ["datastore.record.read", "datastore.record.write"]},
+    )
+    assert granted.status_code == status.HTTP_200_OK, granted.text
+    # The grant is real: the member writes.
+    record_id = await _record(async_client, world["pod_id"], table, _bearer(viewer))
+
+    one, bulk = await _deletes(
+        async_client, world["pod_id"], table, record_id, _bearer(viewer)
+    )
+    kept = await authenticated_client.get(
+        f"{_records(world['pod_id'], table)}/{record_id}"
+    )
+
+    assert one.status_code == status.HTTP_403_FORBIDDEN, one.text
+    assert bulk.status_code == status.HTTP_403_FORBIDDEN, bulk.text
+    assert kept.status_code == status.HTTP_200_OK, kept.text
+
+
+async def test_H14_the_assistant_asks_before_deleting_a_record(
+    authenticated_client: AsyncClient, async_client: AsyncClient, world
+):
+    """H14 / PS-ACCESS-021: record deletes were not destructive, so the pod's
+    assistant deleted rows -- all of them, in bulk -- without asking."""
+    table = await _table(authenticated_client, world["pod_id"], {})
+    record_id = await _record(authenticated_client, world["pod_id"], table, {})
+
+    one, bulk = await _deletes(
+        async_client,
+        world["pod_id"],
+        table,
+        record_id,
+        world["workloads"]["assistant"],
+    )
+    kept = await authenticated_client.get(
+        f"{_records(world['pod_id'], table)}/{record_id}"
+    )
+
+    for response in (one, bulk):
+        assert response.status_code == status.HTTP_403_FORBIDDEN, response.text
+        assert response.json()["code"] == "DESTRUCTIVE_ACTION_REQUIRES_APPROVAL"
+    assert kept.status_code == status.HTTP_200_OK, kept.text
+
+
+async def test_H14_a_named_agent_deletes_records_only_when_granted_it(
+    authenticated_client: AsyncClient, async_client: AsyncClient, world, fixed_test_user
+):
+    """H14: ``record.write`` carried deletes. Now a grant of
+    ``datastore.record.delete`` is the standing authority a headless run needs."""
+    table = await _table(authenticated_client, world["pod_id"], {})
+    writes = ["datastore.table.read", "datastore.record.read", "datastore.record.write"]
+    writer = await _agent_token(
+        authenticated_client,
+        pod_id=world["pod_id"],
+        user_id=fixed_test_user["id"],
+        grants=[_grant("datastore_table", table, *writes)],
+    )
+    deleter = await _agent_token(
+        authenticated_client,
+        pod_id=world["pod_id"],
+        user_id=fixed_test_user["id"],
+        grants=[_grant("datastore_table", table, *writes, "datastore.record.delete")],
+    )
+    record_id = await _record(async_client, world["pod_id"], table, writer)
+
+    refused, _ = await _deletes(async_client, world["pod_id"], table, record_id, writer)
+    allowed = await async_client.delete(
+        f"{_records(world['pod_id'], table)}/{record_id}", headers=deleter
+    )
+
+    assert refused.status_code == status.HTTP_403_FORBIDDEN, refused.text
+    assert allowed.status_code == status.HTTP_204_NO_CONTENT, allowed.text

@@ -191,12 +191,6 @@ async def test_variables_classified(tmp):
     root = _build_bundle(
         tmp,
         variables={
-            "acct": {
-                "type": "account",
-                "source_value": "x",
-                "connector": "slack",
-                "connector_kind": "composio",
-            },
             "owner": {"type": "member", "source_value": "y"},
             "region": {"type": "string", "source_value": "z"},
             "app_slug": {"type": "app_slug", "source_value": "s", "default": "s"},
@@ -204,14 +198,6 @@ async def test_variables_classified(tmp):
     )
     plan = await PlanBuilder(FakeExisting()).build_plan(bundle_root=root)
     by_name = {v.name: v for v in plan.variables}
-    # Connector accounts must be supplied by the importer -> required, and carry
-    # the connector + provider so the UI can prompt for the right one.
-    assert by_name["acct"].kind == "account"
-    assert by_name["acct"].required is True
-    assert by_name["acct"].connector == "slack"
-    assert by_name["acct"].connector_kind == "composio"
-    # A variable with no connector context leaves it None.
-    assert by_name["region"].connector is None
     # Pod members auto-resolve to the importing user -> not required.
     assert by_name["owner"].kind == "pod_member"
     assert by_name["owner"].required is False
@@ -223,22 +209,10 @@ async def test_variables_classified(tmp):
     assert by_name["app_slug"].default == "s"
 
 
-async def test_account_variable_missing_provider_is_rejected(tmp):
-    """A bundle built before connector/provider was mandatory (or hand-edited)
-    must be re-exported, not imported half-resolvable."""
-    from app.modules.pod_bundle.domain.errors import BundleInvalidError
-
-    root = _build_bundle(
-        tmp,
-        variables={
-            "acct": {"type": "account", "source_value": "x", "connector": "slack"},
-        },
-    )
-    with pytest.raises(BundleInvalidError, match="acct"):
-        await PlanBuilder(FakeExisting()).build_plan(bundle_root=root)
-
-
-async def test_account_variable_missing_connector_is_rejected(tmp):
+async def test_a_bundle_naming_accounts_is_refused(tmp):
+    """Bundles name the pod connector a resource runs through, by slug. One
+    that asks the importer for an account predates that, and would create
+    surfaces and schedules wired to an id nothing reads any more."""
     from app.modules.pod_bundle.domain.errors import BundleInvalidError
 
     root = _build_bundle(
@@ -247,11 +221,12 @@ async def test_account_variable_missing_connector_is_rejected(tmp):
             "acct": {
                 "type": "account",
                 "source_value": "x",
-                "connector_kind": "http",
+                "connector": "slack",
+                "connector_kind": "composio",
             },
         },
     )
-    with pytest.raises(BundleInvalidError, match="acct"):
+    with pytest.raises(BundleInvalidError, match="acct.*pod connector"):
         await PlanBuilder(FakeExisting()).build_plan(bundle_root=root)
 
 

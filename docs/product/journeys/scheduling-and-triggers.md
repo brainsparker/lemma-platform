@@ -79,9 +79,13 @@ about it when it eventually cannot.
   the system shall fire that schedule.
 - The system shall carry the changed record to whatever the schedule triggers,
   so the work does not have to go looking for it.
-- The system shall run the triggered work with the authority of the person who
-  owns the changed row, so that a data-triggered action sees exactly what that
-  person would see.
+- The system shall run the triggered work with the authority of the schedule's
+  owner -- the person who last chose what it does -- never of whoever wrote the
+  row, so writing a row cannot run someone else's instructions with your access.
+- When someone changes what a schedule does, the system shall make them its
+  owner, and shall refuse the change if they could not have created it.
+- If a schedule's owner is no longer in the pod, then the system shall skip each
+  run and say why, rather than run it with authority they no longer have.
 
 **Contracts:** `schedule.create`, `record.create`, `record.update`, `record.delete`
 
@@ -95,10 +99,12 @@ about it when it eventually cannot.
   once, carrying what the server sent.
 - If the server reports the same event again, then the system shall not start
   the work a second time.
-- The system shall listen to the server through the account of the person who
-  set the work up, and through no one else's.
+- The system shall listen to the server through the pod connector the work
+  names, as the person the work runs as: their own account for a per-member
+  connector, the account its owner shared for a shared one, and no one else's.
 - If someone other than that person changes what the work listens for, then
-  the system shall refuse the change.
+  the system shall listen as them from then on, or refuse the change when they
+  may not use the connector.
 - If a report claims to come from the server but cannot prove it, then the
   system shall ignore it.
 - If a report names a listener in another pod, then the system shall not start
@@ -111,6 +117,8 @@ about it when it eventually cannot.
   shall turn the work off and tell its author why.
 - If the person who set the work up leaves the pod, then the system shall turn
   the work off and tell them why.
+- If the connector no longer reaches the account the work was listening on,
+  then the system shall turn the work off and tell its author why.
 - When the work is deleted, the system shall stop listening to the server.
 
 **Contracts:** `schedule.event.list`, `schedule.create`, `schedule.update`, `schedule.get`, `schedule.delete`

@@ -109,13 +109,24 @@ class BrowserView(Protocol):
     """
 
     async def signed_in_sites(
-        self, user_id: UUID, *, wake: bool = False
+        self,
+        user_id: UUID,
+        *,
+        wake: bool = False,
+        pod_id: UUID | None = None,
+        actor_id: UUID | None = None,
     ) -> ProfileCookies:
         """Every cookie host the browser holds, and whether it is running."""
         ...
 
     async def forget_sites(
-        self, user_id: UUID, *, domains: list[str], sites: list[str]
+        self,
+        user_id: UUID,
+        *,
+        domains: list[str],
+        sites: list[str],
+        pod_id: UUID | None = None,
+        actor_id: UUID | None = None,
     ) -> int:
         """Clear these hosts, for these sites. Returns cookies dropped."""
         ...
@@ -135,6 +146,32 @@ def _browser() -> BrowserView:
 
 #: The live browser, or whatever a caller passes instead.
 Browser = Annotated[BrowserView, Depends(_browser)]
+
+#: Which browser. Each workspace -- one per person, pod and actor -- has its
+#: own, with its own sign-ins, so a login is managed where it was made.
+#: Omitted, the person's personal workspace, which is what these routes managed
+#: before workspaces were split.
+PodId = Annotated[
+    UUID | None,
+    Query(description="The pod whose browser to manage. Omitted, your personal one."),
+]
+AgentId = Annotated[
+    UUID | None,
+    Query(
+        description=(
+            "A named agent of `pod_id`, to manage that agent's browser. "
+            "Omitted, the pod assistant's."
+        )
+    ),
+]
+
+
+async def _require_browser(
+    user_id: UUID, pod_id: UUID | None, agent: UUID | None
+) -> None:
+    from app.modules.workspace.contracts.browser import require_browser_workspace
+
+    await require_browser_workspace(user_id, pod_id, agent)
 
 
 def _as_sites(
@@ -191,6 +228,8 @@ def _as_sites(
 async def list_web_logins(
     current_user: CurrentUser,
     browser: Browser,
+    pod_id: PodId = None,
+    agent: AgentId = None,
     wake: bool = Query(
         default=False,
         description=(
@@ -199,8 +238,11 @@ async def list_web_logins(
         ),
     ),
 ) -> WebLoginListResponse:
+    await _require_browser(current_user.id, pod_id, agent)
     try:
-        answer = await browser.signed_in_sites(current_user.id, wake=wake)
+        answer = await browser.signed_in_sites(
+            current_user.id, wake=wake, pod_id=pod_id, actor_id=agent
+        )
     except SandboxCapabilityUnsupported:
         # A fabric with no reachable browser. Not an error to a reader: there
         # is nothing signed in because there is nowhere to be signed in.
@@ -236,6 +278,8 @@ async def forget_web_login(
     current_user: CurrentUser,
     browser: Browser,
     origin: str = Query(description="The site to forget, as an origin or a host."),
+    pod_id: PodId = None,
+    agent: AgentId = None,
 ) -> ForgetResponse:
     try:
         site = site_from_origin(normalize_origin(origin))
@@ -244,8 +288,11 @@ async def forget_web_login(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
         ) from exc
 
+    await _require_browser(current_user.id, pod_id, agent)
     try:
-        answer = await browser.signed_in_sites(current_user.id)
+        answer = await browser.signed_in_sites(
+            current_user.id, pod_id=pod_id, actor_id=agent
+        )
     except (SandboxCapabilityUnsupported, _relay_unavailable()) as exc:
         # Refusing rather than reporting success: a person pressing "forget"
         # on a sleeping computer has not had their browser signed out, and
@@ -279,7 +326,11 @@ async def forget_web_login(
     if not hosts:
         return ForgetResponse(site=site, forgotten=False)
     dropped = await browser.forget_sites(
-        current_user.id, domains=sorted(set(hosts)), sites=[site]
+        current_user.id,
+        domains=sorted(set(hosts)),
+        sites=[site],
+        pod_id=pod_id,
+        actor_id=agent,
     )
     return ForgetResponse(site=site, forgotten=dropped > 0)
 

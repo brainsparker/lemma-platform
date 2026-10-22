@@ -47,19 +47,15 @@ export interface PlanStep {
     error: string | null;
 }
 
+/** A value the bundle asks for at install time. `pod_member` fills itself in
+ *  with whoever installs; `free` is a name. A bundle's connectors are pod
+ *  connectors it declares, not variables — nobody picks an account here. */
 export interface VariableSpec {
     name: string;
-    kind: string;
+    kind: "pod_member" | "free";
     description: string | null;
     required: boolean;
     default: string | null;
-    /** For `account`-kind variables: the connector, e.g. "slack". */
-    connector?: string | null;
-    /** For `account`-kind variables: which of the connector's kinds the source
-     * install used ("composio", "http", "mcp", ...), so the picker selects
-     * or creates an account of the same kind rather than any account for that
-     * connector. */
-    connector_kind?: string | null;
 }
 
 export interface ImportPlan {
@@ -81,6 +77,9 @@ export interface ImportStatusResponse {
     events_url: string;
     error: string | null;
     error_code: string | null;
+    /** Where to connect the GitHub account the pod's `github` connector
+     *  needs, when the job failed for want of one. */
+    connect_url: string | null;
     retryable: boolean;
     warnings: string[];
 }
@@ -97,12 +96,14 @@ export interface PublishStatusResponse {
     repo_name: string;
     mode: PublishMode;
     private: boolean;
-    account_id: string | null;
     repo_url: string | null;
     progress: BundleProgress;
     events_url: string;
     error: string | null;
     error_code: string | null;
+    /** As on an import: where to connect the GitHub account a publish
+     *  needed. */
+    connect_url: string | null;
     retryable: boolean;
     warnings: string[];
 }

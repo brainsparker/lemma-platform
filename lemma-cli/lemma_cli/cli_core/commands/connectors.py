@@ -936,26 +936,6 @@ def get_operation(
         emit(state, result)
 
 
-def _resolve_account(client: Any, state: Any, account: str | None) -> str | None:
-    """Accept an account id OR the email it was connected with.
-
-    An agent reading `connectors overview` sees emails, not ids; making it map
-    one to the other by hand is a lookup call for no reason. Only a value that
-    looks like an email triggers the lookup — anything else is passed through as
-    an id, so this never intercepts an identifier scheme it doesn't recognize.
-    """
-    if not account or "@" not in account:
-        return account
-    needle = account.strip().casefold()
-    for item in list_items(_list_accounts(client, state, connector=None, limit=200)):
-        if str(item.get("email") or "").casefold() == needle:
-            return str(item.get("id"))
-    raise typer.BadParameter(
-        f"No connected account matches '{account}'. See `lemma connectors overview`.",
-        param_hint="--account",
-    )
-
-
 _ATTACH_HELP = (
     "Attach a file to an argument, as FIELD=PATH (repeatable; repeat a FIELD "
     "for a list). A pod path such as /me/q3.pdf is read server-side; "
@@ -1018,74 +998,47 @@ def _file_reference(client: Any, state: Any, target: str) -> dict:
     return {"pod_path": str(uploaded.get("path") or f"/me/{local.name}")}
 
 
-def _names_pod_files(value: Any) -> bool:
-    if isinstance(value, dict):
-        if "pod_path" in value or "file_id" in value:
-            return True
-        return any(_names_pod_files(item) for item in value.values())
-    if isinstance(value, list):
-        return any(_names_pod_files(item) for item in value)
-    return False
+def _pod_connectors(client: Any, state: Any) -> Any:
+    """The selected pod's connectors: what operations run through.
 
-
-def _pod_for_files(client: Any, state: Any, body: dict) -> str | None:
-    """The selected pod, when this call reads or writes pod files.
-
-    Connector operations are organization-level, so a person's call carries no
-    pod and ``/me/...`` would have nothing to resolve against. Sent only when a
-    file is involved, so every other call is exactly the call it was.
+    A pod connector names one of the organization's installations under a
+    pod-local slug and decides which account a call runs as -- the caller's own
+    (per-member) or the one its owner shared (shared). So a call names the slug
+    and nothing else.
     """
-    if not (_names_pod_files(body) or body.get("output_path")):
-        return None
-    from ..context import selected_pod
-    from ..sdk import _ensure_pod_uuid
+    from ..sdk import pod_client
 
-    pod = selected_pod(state, required=False)
-    return _ensure_pod_uuid(client, state, pod) if pod else None
+    return pod_client(client, state).connectors
 
 
 def _execute_operation(
     client: Any,
     state: Any,
     *,
-    auth_config: str,
+    connector: str,
     operation: str,
     payload: dict,
-    account: str | None,
     attach: list[str] | None = None,
 ) -> Any:
-    account_id = _resolve_account(client, state, account or payload.get("account_id"))
-    body = _attach_files(client, state, payload.get("payload", payload), attach or [])
-    if hasattr(client.connectors, "execute"):
-        pod_id = _pod_for_files(client, state, body)
-        return client.connectors.execute(
-            auth_config,
-            operation,
-            payload=body,
-            account_id=account_id,
-            **({"pod_id": pod_id} if pod_id else {}),
+    if "account_id" in payload:
+        raise typer.BadParameter(
+            "account_id is gone: the pod connector decides which account a call "
+            "runs as. Name the pod connector instead (`lemma connectors pod-list`).",
+            param_hint="--data",
         )
-    return client.connectors.execute_operation(
-        auth_config,
-        operation,
-        organization_id=org_for(client, state),
-        payload=body,
-        account_id=account_id,
-    )
+    body = _attach_files(client, state, payload.get("payload", payload), attach or [])
+    return _pod_connectors(client, state).execute(connector, operation, body)
 
 
 @operations_app.command("execute")
 def execute_operation(
     ctx: typer.Context,
-    first: str = typer.Argument(
+    connector: str = typer.Argument(
         ...,
-        metavar="[AUTH_CONFIG] OPERATION",
-        help="Auth config/connector, or the operation name when only one is given.",
+        metavar="CONNECTOR",
+        help="The pod connector's slug (gmail, support-inbox).",
     ),
-    operation: Optional[str] = typer.Argument(None, hidden=True),
-    auth_config_opt: str | None = typer.Option(
-        None, "--auth-config", "-c", help="Auth config name or connector id."
-    ),
+    operation: str = typer.Argument(..., help="Operation name."),
     json_payload: str | None = typer.Option(
         None, "--data", "-d", help="Raw JSON payload (`-` reads stdin)."
     ),
@@ -1097,9 +1050,6 @@ def execute_operation(
         dir_okay=False,
         readable=True,
     ),
-    account: str | None = typer.Option(
-        None, "--account", "--account-id", help="Account id or connected email."
-    ),
     metadata_only: bool = typer.Option(
         False,
         "--metadata-only",
@@ -1107,10 +1057,12 @@ def execute_operation(
     ),
     attach: list[str] = typer.Option([], "--attach", help=_ATTACH_HELP),
 ) -> None:
-    """Execute a connector operation.
+    """Execute an operation through one of the selected pod's connectors.
 
     The payload goes under a top-level `payload` key, but a bare object is
-    accepted too. Operations that take no input need no `--data` at all.
+    accepted too. Operations that take no input need no `--data` at all. The
+    account it runs as is the connector's decision: yours for a per-member
+    connector, the shared one for a shared connector.
     """
     # Not required: plenty of operations take no input, and demanding `-d '{}'`
     # for those was pure ceremony.
@@ -1118,18 +1070,12 @@ def execute_operation(
     state = state_from_ctx(ctx)
 
     def run(client, s):  # type: ignore[no-untyped-def]
-        target, name = _split_target_and_rest(
-            client, first, operation, option=auth_config_opt
-        )
-        if not name:
-            raise typer.BadParameter("Give an operation name.", param_hint="OPERATION")
         return _execute_operation(
             client,
             s,
-            auth_config=_resolve_auth_config(client, target),
-            operation=name,
+            connector=connector,
+            operation=operation,
             payload=payload,
-            account=account,
             attach=attach,
         )
 
@@ -1350,39 +1296,53 @@ def _required_input_fields(input_schema: Any) -> list[str]:
     return [str(field) for field in required] if isinstance(required, list) else []
 
 
+def _pod_connector_slugs(pod_connectors: Any) -> list[str]:
+    try:
+        listed = list_items(to_plain(pod_connectors.pod_connectors()))
+    except Exception:  # noqa: BLE001 -- only decorates an error already raised
+        return []
+    return [str(item.get("slug")) for item in listed if item.get("slug")]
+
+
 def _resolve_operation(
-    client: Any, state: Any, auth_config: str, selector: str
+    pod_connectors: Any, connector: str, selector: str
 ) -> tuple[dict[str, Any], bool]:
     """Turn an operation id OR a plain-English intent into one concrete operation.
 
-    Tries an exact (case-insensitive) id first, then falls back to ranked search.
-    Returns ``(detail, inferred)`` — the operation's detail dict, so the caller
-    already holds the input schema, plus whether the name was *guessed* from
-    natural language rather than given.
+    Tries an exact operation id on the pod connector first, then falls back to
+    ranked search. Returns ``(detail, inferred)`` — the operation's detail dict,
+    so the caller already holds the input schema, plus whether the name was
+    *guessed* from natural language rather than given.
 
     Ranked search is lexical, so a read intent can match a write operation:
     "list recent emails" ranked ADD_LABEL_TO_EMAIL above FETCH_EMAILS. A read
     intent therefore prefers the best NON-mutating hit, and anything inferred
     stays flagged so the caller can refuse to run a write nobody asked for.
     """
+    from lemma_sdk.errors import LemmaAPIError
+
     try:
-        detail = to_plain(_operation_batch(client, state, auth_config, [selector]))
-        items = detail.get("items") or []
-        if items:
-            return dict(items[0]), False
-    except Exception:  # noqa: BLE001 — an unknown id just means "search instead"
-        pass
+        return dict(to_plain(pod_connectors.pod_operation(connector, selector))), False
+    except LemmaAPIError as exc:
+        if exc.code == "POD_CONNECTOR_NOT_FOUND":
+            declared = ", ".join(_pod_connector_slugs(pod_connectors)) or "none"
+            raise typer.BadParameter(
+                f"This pod has no connector '{connector}'. It declares: {declared}.",
+                param_hint="CONNECTOR",
+            ) from None
+        if exc.status_code != 404:
+            raise
 
     hits = (
-        to_plain(_search_operations(client, state, auth_config, selector, 5)).get(
-            "items"
+        list_items(
+            to_plain(pod_connectors.pod_operations(connector, selector, limit=5))
         )
         or []
     )
     if not hits:
         raise typer.BadParameter(
-            f"No operation on '{auth_config}' matches '{selector}'. Browse them "
-            f"with `lemma connectors operations list {auth_config}`.",
+            f"No operation on '{connector}' matches '{selector}'. Browse them "
+            f"with `lemma connectors pod-operations {connector}`.",
             param_hint="OPERATION",
         )
     chosen = hits[0]
@@ -1404,16 +1364,14 @@ def _resolve_operation(
         + (f" (also matched: {others})" if others else ""),
         err=True,
     )
-    detail = to_plain(_operation_batch(client, state, auth_config, [best]))
-    items = detail.get("items") or []
-    return (dict(items[0]) if items else {"name": best, "input_schema": {}}), True
+    return dict(to_plain(pod_connectors.pod_operation(connector, best))), True
 
 
 @app.command("run")
 def run_connector_operation(
     ctx: typer.Context,
     connector: str = typer.Argument(
-        ..., help="Connector id (gmail, slack) or an auth-config name."
+        ..., help="The pod connector's slug (gmail, support-inbox)."
     ),
     operation: str = typer.Argument(
         ..., help="Operation id, or plain-English intent ('list recent emails')."
@@ -1423,9 +1381,6 @@ def run_connector_operation(
     ),
     file: Path | None = typer.Option(
         None, "--file", "-f", exists=True, dir_okay=False, readable=True
-    ),
-    account: str | None = typer.Option(
-        None, "--account", "--account-id", help="Account id or connected email."
     ),
     dry_run: bool = typer.Option(
         False,
@@ -1447,11 +1402,10 @@ def run_connector_operation(
 ) -> None:
     """Run a connector operation in ONE call: resolve, check, execute.
 
-    Doing anything through a connector used to take four commands — `overview`
-    to learn the auth-config name, `operations search` to learn the operation id,
-    `operations get` to learn the payload shape, then `execute`. This collapses
-    that into one, and never guesses silently: the resolved connector, operation,
-    and account are printed, so the next run can name them exactly.
+    CONNECTOR is one of the selected pod's connectors, by slug. It decides the
+    account the call runs as: yours for a per-member connector, the one its
+    owner shared for a shared connector. This never guesses silently: the
+    resolved operation is printed, so the next run can name it exactly.
 
     Omit `--data` on an operation that needs input and it prints the input schema
     instead of failing — the same thing `--dry-run` does on purpose.
@@ -1466,8 +1420,8 @@ def run_connector_operation(
     gave_payload = json_payload is not None or file is not None or bool(attach)
 
     def run(client, s):  # type: ignore[no-untyped-def]
-        auth_config = _resolve_auth_config(client, connector)
-        detail, inferred = _resolve_operation(client, s, auth_config, operation)
+        pod_connectors = _pod_connectors(client, s)
+        detail, inferred = _resolve_operation(pod_connectors, connector, operation)
         name = str(detail.get("name") or operation)
         input_schema = detail.get("input_schema") or {}
         required = _required_input_fields(input_schema)
@@ -1498,7 +1452,7 @@ def run_connector_operation(
                 err=True,
             )
             return {
-                "auth_config": auth_config,
+                "connector": connector,
                 "operation": name,
                 "input_schema": input_schema,
                 "required": required,
@@ -1508,17 +1462,12 @@ def run_connector_operation(
         result = _execute_operation(
             client,
             s,
-            auth_config=auth_config,
+            connector=connector,
             operation=name,
             payload=payload,
-            account=account,
             attach=attach,
         )
-        typer.echo(
-            f"Ran {auth_config} / {name}"
-            + (f" (account {account})" if account else ""),
-            err=True,
-        )
+        typer.echo(f"Ran {connector} / {name}", err=True)
         return result
 
     result = run_with_client(ctx, run)
@@ -1527,6 +1476,117 @@ def run_connector_operation(
     if metadata_only:
         result = _strip_body_fields(to_plain(result))
     emit(state, result)
+
+
+@app.command("pod-list")
+def list_pod_connectors(ctx: typer.Context) -> None:
+    """List the selected pod's connectors: slug, mode and status.
+
+    The slug is what `run` and `operations execute` take.
+    """
+    state = state_from_ctx(ctx)
+    result = run_with_client(
+        ctx, lambda client, s: _pod_connectors(client, s).pod_connectors()
+    )
+    if result is not None:
+        emit(state, result)
+
+
+def _auth_config_id(client: Any, selector: str) -> str:
+    name = _resolve_auth_config(client, selector)
+    for item in _auth_config_items(client) or []:
+        if name in (item.get("name"), item.get("id")):
+            return str(item.get("id") or name)
+    return name
+
+
+@app.command("pod-add")
+def add_pod_connector(
+    ctx: typer.Context,
+    slug: str = typer.Argument(
+        ..., help="Pod-local name agents, apps and bundles address it by."
+    ),
+    install: str = typer.Argument(
+        ..., help="The org installation: auth-config name, id, or connector id."
+    ),
+    mode: str = typer.Option(
+        "PER_MEMBER",
+        "--mode",
+        help="PER_MEMBER (each caller's own account) or SHARED (one shared account).",
+    ),
+    shared_account: str | None = typer.Option(
+        None,
+        "--shared-account",
+        help="SHARED: the pod account it runs as (one its owner already shared).",
+    ),
+    required: bool = typer.Option(
+        False, "--required", help="PER_MEMBER: ask every member to connect."
+    ),
+    purpose: str | None = typer.Option(
+        None, "--purpose", help="Shown to members asked to connect."
+    ),
+) -> None:
+    """Declare one of the org's installations in the selected pod."""
+    state = state_from_ctx(ctx)
+
+    def run(client, s):  # type: ignore[no-untyped-def]
+        return _pod_connectors(client, s).declare_pod_connector(
+            slug,
+            _auth_config_id(client, install),
+            mode.upper(),
+            shared_pod_account_id=shared_account,
+            required=required,
+            purpose=purpose,
+        )
+
+    result = run_with_client(ctx, run)
+    if result is not None:
+        emit(state, result)
+
+
+@app.command("pod-share")
+def share_account_in_pod(
+    ctx: typer.Context,
+    account: str = typer.Argument(..., help="Your connected account's id."),
+    visibility: str = typer.Option(
+        "POD",
+        "--visibility",
+        help="POD shares it with the pod; PERSONAL keeps it to your own calls.",
+    ),
+) -> None:
+    """Bring one of your own accounts into the selected pod, shared by default.
+
+    Only an account's owner can share it. A pod editor can then point a SHARED
+    connector at it (`pod-add --mode SHARED --shared-account <pod account id>`).
+    """
+    state = state_from_ctx(ctx)
+    result = run_with_client(
+        ctx,
+        lambda client, s: _pod_connectors(client, s).add_pod_account(
+            account, visibility=visibility.upper()
+        ),
+    )
+    if result is not None:
+        emit(state, result)
+
+
+@app.command("pod-operations")
+def search_pod_connector_operations(
+    ctx: typer.Context,
+    connector: str = typer.Argument(..., help="The pod connector's slug."),
+    query: str | None = typer.Argument(None, help="What you want to do."),
+    limit: int = typer.Option(20, "--limit"),
+) -> None:
+    """Search the operations one of the pod's connectors offers."""
+    state = state_from_ctx(ctx)
+    result = run_with_client(
+        ctx,
+        lambda client, s: _pod_connectors(client, s).pod_operations(
+            connector, query, limit=limit
+        ),
+    )
+    if result is not None:
+        emit(state, result)
 
 
 @app.command("overview")

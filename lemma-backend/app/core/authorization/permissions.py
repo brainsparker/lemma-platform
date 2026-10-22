@@ -28,6 +28,9 @@ class Permissions:
     ORG_MEMBER_MANAGE: ClassVar[str] = "org.member.manage"
     ORG_INVITATION_MANAGE: ClassVar[str] = "org.invitation.manage"
     ORG_BILLING_MANAGE: ClassVar[str] = "org.billing.manage"
+    #: Create, update, disable, re-enable and delete the organization's
+    #: connector installations, and refresh their operations.
+    ORG_INSTALLATION_MANAGE: ClassVar[str] = "org.installation.manage"
 
     POD_READ: ClassVar[str] = "pod.read"
     POD_CREATE: ClassVar[str] = "pod.create"
@@ -35,6 +38,10 @@ class Permissions:
     POD_DELETE: ClassVar[str] = "pod.delete"
     POD_MEMBER_MANAGE: ClassVar[str] = "pod.member.manage"
     POD_ROLE_MANAGE: ClassVar[str] = "pod.role.manage"
+    #: Declare, change and remove the pod's connectors, choose a SHARED
+    #: connector's account among those already shared, and remove any account
+    #: from the pod. Never share one: that is the owner's alone.
+    POD_CONNECTOR_MANAGE: ClassVar[str] = "pod.connector.manage"
 
     DATASTORE_TABLE_READ: ClassVar[str] = "datastore.table.read"
     DATASTORE_TABLE_CREATE: ClassVar[str] = "datastore.table.create"
@@ -42,6 +49,10 @@ class Permissions:
     DATASTORE_TABLE_DELETE: ClassVar[str] = "datastore.table.delete"
     DATASTORE_RECORD_READ: ClassVar[str] = "datastore.record.read"
     DATASTORE_RECORD_WRITE: ClassVar[str] = "datastore.record.write"
+    #: Delete a table's rows, one or in bulk. Its own permission, not part of
+    #: ``record.write``: whoever could write one row could otherwise empty the
+    #: table, and a workload deleting rows is destructive (audit H14).
+    DATASTORE_RECORD_DELETE: ClassVar[str] = "datastore.record.delete"
 
     FOLDER_READ: ClassVar[str] = "folder.read"
     FOLDER_WRITE: ClassVar[str] = "folder.write"
@@ -86,12 +97,16 @@ class Permissions:
     CONTACT_READ: ClassVar[str] = "contact.read"
     CONTACT_MESSAGE: ClassVar[str] = "contact.message"
 
+    #: Run operations through a pod connector.
     CONNECTOR_USE: ClassVar[str] = "connector.use"
-    CONNECTOR_MANAGE: ClassVar[str] = "connector.manage"
+    #: Use a pod account: the account half of a SHARED connector's call.
     CONNECTOR_ACCOUNT_USE: ClassVar[str] = "connector_account.use"
-    CONNECTOR_ACCOUNT_MANAGE: ClassVar[str] = "connector_account.manage"
+    #: Change who a pod account serves -- its visibility and the grants on it.
+    #: An owner action only (``OWNER_RESOURCE_ACTIONS``): held by no role and
+    #: grantable to nobody, because only the person whose credential it is may
+    #: put it in front of anyone else.
+    CONNECTOR_ACCOUNT_SHARE: ClassVar[str] = "connector_account.share"
     WEB_LOGIN_USE: ClassVar[str] = "web_login.use"
-    CONNECTOR_AUTH_CONFIG_MANAGE: ClassVar[str] = "connector_auth_config.manage"
 
 
 PERMISSION_DEFINITIONS: tuple[PermissionDefinition, ...] = (
@@ -126,6 +141,12 @@ PERMISSION_DEFINITIONS: tuple[PermissionDefinition, ...] = (
         "Manage organization billing",
     ),
     PermissionDefinition(
+        Permissions.ORG_INSTALLATION_MANAGE,
+        PermissionScope.ORG,
+        "installation",
+        "Manage the organization's connector installations",
+    ),
+    PermissionDefinition(
         Permissions.POD_READ, PermissionScope.POD, "pod", "Read pod metadata"
     ),
     PermissionDefinition(
@@ -148,6 +169,12 @@ PERMISSION_DEFINITIONS: tuple[PermissionDefinition, ...] = (
     ),
     PermissionDefinition(
         Permissions.POD_ROLE_MANAGE, PermissionScope.POD, "role", "Manage pod roles"
+    ),
+    PermissionDefinition(
+        Permissions.POD_CONNECTOR_MANAGE,
+        PermissionScope.POD,
+        "pod",
+        "Declare and change the pod's connectors",
     ),
     PermissionDefinition(
         Permissions.DATASTORE_TABLE_READ,
@@ -184,6 +211,12 @@ PERMISSION_DEFINITIONS: tuple[PermissionDefinition, ...] = (
         PermissionScope.POD,
         "datastore_record",
         "Write datastore records",
+    ),
+    PermissionDefinition(
+        Permissions.DATASTORE_RECORD_DELETE,
+        PermissionScope.POD,
+        "datastore_record",
+        "Delete datastore records",
     ),
     PermissionDefinition(
         Permissions.FOLDER_READ, PermissionScope.POD, "folder", "Read folders and files"
@@ -322,37 +355,25 @@ PERMISSION_DEFINITIONS: tuple[PermissionDefinition, ...] = (
         Permissions.CONNECTOR_USE,
         PermissionScope.POD,
         "connector",
-        "Use pod-enabled connectors",
-    ),
-    PermissionDefinition(
-        Permissions.CONNECTOR_MANAGE,
-        PermissionScope.ORG,
-        "connector",
-        "Enable and configure organization connectors",
+        "Run operations through a pod connector",
     ),
     PermissionDefinition(
         Permissions.CONNECTOR_ACCOUNT_USE,
         PermissionScope.POD,
         "connector_account",
-        "Use connected connector accounts",
+        "Use an account shared with the pod",
     ),
     PermissionDefinition(
-        Permissions.CONNECTOR_ACCOUNT_MANAGE,
+        Permissions.CONNECTOR_ACCOUNT_SHARE,
         PermissionScope.POD,
         "connector_account",
-        "Manage connected connector accounts",
+        "Share or withdraw one's own account in a pod (owner only)",
     ),
     PermissionDefinition(
         Permissions.WEB_LOGIN_USE,
         PermissionScope.POD,
         "web_login",
         "Sign in to a saved site with a stored session",
-    ),
-    PermissionDefinition(
-        Permissions.CONNECTOR_AUTH_CONFIG_MANAGE,
-        PermissionScope.ORG,
-        "connector_auth_config",
-        "Manage organization connector auth configs",
     ),
 )
 
@@ -379,6 +400,12 @@ POD_USER_PERMISSIONS: frozenset[str] = frozenset(
     set(POD_VIEWER_PERMISSIONS)
     | {
         Permissions.DATASTORE_RECORD_WRITE,
+        # Held wherever writing is, and bounded the same way: on a table with
+        # row-level security a member reaches only the rows that are theirs,
+        # and every row only in admin mode, which takes ``table.delete``. What
+        # separating it changes is software -- a workload's delete is
+        # destructive -- and a grant of ``record.write`` no longer carries it.
+        Permissions.DATASTORE_RECORD_DELETE,
         Permissions.AGENT_EXECUTE,
         Permissions.FUNCTION_EXECUTE,
         Permissions.WORKFLOW_EXECUTE,
@@ -422,6 +449,7 @@ POD_EDITOR_PERMISSIONS: frozenset[str] = frozenset(
         # Who the pod's contacts are, and what they said to it, is theirs and
         # the pod's -- not every member's. Those who answer for the pod see it.
         Permissions.CONTACT_READ,
+        Permissions.POD_CONNECTOR_MANAGE,
     }
 )
 POD_ADMIN_PERMISSIONS: frozenset[str] = frozenset(
@@ -438,7 +466,6 @@ POD_ADMIN_PERMISSIONS: frozenset[str] = frozenset(
         Permissions.FUNCTION_DELETE,
         Permissions.WORKFLOW_DELETE,
         Permissions.SCHEDULE_DELETE,
-        Permissions.CONNECTOR_ACCOUNT_MANAGE,
     }
 )
 
@@ -450,8 +477,7 @@ ORG_EDITOR_PERMISSIONS: frozenset[str] = frozenset(
         Permissions.ORG_MEMBER_MANAGE,
         Permissions.ORG_INVITATION_MANAGE,
         Permissions.POD_CREATE,
-        Permissions.CONNECTOR_MANAGE,
-        Permissions.CONNECTOR_AUTH_CONFIG_MANAGE,
+        Permissions.ORG_INSTALLATION_MANAGE,
     }
 )
 ORG_OWNER_PERMISSIONS: frozenset[str] = frozenset(
@@ -487,9 +513,6 @@ IMPLIED_PERMISSIONS: dict[str, frozenset[str]] = {
     Permissions.DATASTORE_TABLE_UPDATE: frozenset({Permissions.DATASTORE_TABLE_READ}),
     Permissions.DATASTORE_TABLE_DELETE: frozenset(
         {Permissions.DATASTORE_TABLE_UPDATE, Permissions.DATASTORE_TABLE_READ}
-    ),
-    Permissions.CONNECTOR_ACCOUNT_MANAGE: frozenset(
-        {Permissions.CONNECTOR_ACCOUNT_USE}
     ),
     Permissions.CONVERSATION_WRITE: frozenset({Permissions.CONVERSATION_READ}),
     Permissions.CHANNEL_WRITE: frozenset({Permissions.CHANNEL_READ}),

@@ -265,67 +265,66 @@ class TestCacheExpiry:
         assert store._redis.calls == []
 
 
-class TestMintingWorkload:
-    """Who a live link is re-checked as, recorded at mint."""
+class TestWhoMayMint:
+    """A public link is a person's act; no agent or function mints one."""
 
-    AGENT_ID = "00000000-0000-0000-0000-0000000000a1"
+    AGENT_ID = UUID("00000000-0000-0000-0000-0000000000a1")
     USER_ID = UUID("00000000-0000-0000-0000-0000000000b2")
+    POD_ID = UUID("00000000-0000-0000-0000-0000000000c3")
+
+    class _Reader:
+        """Records whether the mint got as far as reading the file."""
+
+        class Reached(Exception):
+            pass
+
+        def __init__(self) -> None:
+            self.asked = False
+
+        async def get_file_by_path(self, *_args, **_kwargs):
+            self.asked = True
+            raise self.Reached
 
     @staticmethod
-    def _ctx(actor, actor_id, *, user_id=None):
+    def _ctx(actor, *, user_id=None):
         from app.core.authorization.context import Context
 
         return Context(
-            actor=actor, actor_id=actor_id, user_id=user_id, authorizer=object()
+            actor=actor, actor_id=str(user_id), user_id=user_id, authorizer=object()
         )
 
-    def test_a_person_minting_for_themselves_is_the_person_alone(self):
-        from app.core.authorization.context import Person
-        from app.modules.datastore.services.files.signed_links import minting_workload
+    async def _mint(self, ctx):
+        from app.modules.datastore.services.files.signed_links import SignedLinks
 
-        ctx = self._ctx(
-            Person(user_id=self.USER_ID), str(self.USER_ID), user_id=self.USER_ID
-        )
-        assert minting_workload(ctx) is None
+        reader = self._Reader()
+        links = SignedLinks(reader, file_repository=None)
+        with pytest.raises(Exception) as raised:
+            await links.create(self.POD_ID, "/notes.md", ctx)
+        return reader, raised.value
 
-    def test_the_default_agent_acts_as_the_person(self):
-        from app.core.authorization.context import Assistant
-        from app.modules.datastore.services.files.signed_links import minting_workload
-
-        ctx = self._ctx(
-            Assistant(user_id=self.USER_ID),
-            f"agent:{self.AGENT_ID}",
-            user_id=self.USER_ID,
-        )
-        assert minting_workload(ctx) is None
-
-    def test_an_agent_acting_for_a_person_is_recorded_with_them(self):
+    @pytest.mark.parametrize("for_user", [True, False], ids=["for-a-person", "alone"])
+    async def test_an_agent_is_refused_before_anything_is_read(self, for_user):
         from app.core.authorization.context import Workload, WorkloadKind
-        from app.modules.datastore.services.files.signed_links import minting_workload
+        from app.modules.datastore.domain.errors import DatastoreAccessDeniedError
 
+        user_id = self.USER_ID if for_user else None
         ctx = self._ctx(
             Workload(
                 kind=WorkloadKind.AGENT,
-                workload_id=UUID(self.AGENT_ID),
-                for_user_id=self.USER_ID,
+                workload_id=self.AGENT_ID,
+                for_user_id=user_id,
             ),
-            f"agent:{self.AGENT_ID}",
-            user_id=self.USER_ID,
+            user_id=user_id,
         )
-        assert minting_workload(ctx) == f"agent:{self.AGENT_ID}"
+        reader, error = await self._mint(ctx)
+        assert isinstance(error, DatastoreAccessDeniedError)
+        assert error.code == "DATASTORE_ACCESS_DENIED"
+        assert reader.asked is False
 
-    def test_an_agent_acting_for_nobody_says_so(self):
-        """The permissive case is the one that has to be explicit: a link that
-        does not say `alone:` needs its person at fetch time."""
-        from app.core.authorization.context import Workload, WorkloadKind
-        from app.modules.datastore.services.files.signed_links import (
-            ACTING_ALONE,
-            minting_workload,
-        )
+    async def test_the_assistant_mints_as_its_person(self):
+        from app.core.authorization.context import Assistant
 
-        ctx = self._ctx(
-            Workload(kind=WorkloadKind.AGENT, workload_id=UUID(self.AGENT_ID)),
-            self.AGENT_ID,
+        _reader, error = await self._mint(
+            self._ctx(Assistant(user_id=self.USER_ID), user_id=self.USER_ID)
         )
-        assert minting_workload(ctx) == f"{ACTING_ALONE}agent:{self.AGENT_ID}"
-        assert len(minting_workload(ctx)) <= 80
+        assert isinstance(error, self._Reader.Reached)

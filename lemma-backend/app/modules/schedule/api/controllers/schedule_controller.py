@@ -124,7 +124,7 @@ async def create_schedule(
         "workflow_name": request.workflow_name,
         "config": request.config,
         "instruction": request.instruction,
-        "account_id": request.account_id,
+        "pod_connector_slug": request.pod_connector,
         "connector_trigger_id": request.connector_trigger_id,
         "filter_instruction": request.filter_instruction,
         "filter_output_schema": request.filter_output_schema,

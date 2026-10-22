@@ -39,19 +39,35 @@ The design intentionally uses different lifecycle policies for the two workloads
 
 | Workload | Logical owner | Durable state | Idle action | Physical isolation |
 | --- | --- | --- | --- | --- |
-| Workspace | User | home-directory files | Quiesce and release | One sandbox per user |
+| Workspace | User, in a pod, as an actor | home-directory files | Quiesce and release | One sandbox per user per pod per actor |
 | Function | Pod | None | Destroy after five minutes | One sandbox per pod |
 
 The logical identity is a composite key. A UUID is never interpreted without its
 workload kind:
 
 ```text
-(WORKSPACE, user_id)
+(WORKSPACE, user_id, pod_id, actor)   # actor: the pod assistant or a named agent;
+                                     # pod_id absent: the person's personal workspace
 (FUNCTION, pod_id)
 ```
 
 The function logical ID is therefore exactly the pod ID without sharing a namespace
-with user workspaces. Provider-generated IDs remain private sandbox data.
+with user workspaces. A personal workspace's ID is the user ID; a pod workspace's
+is a tagged UUIDv8 derived from the user, the pod and the actor
+(`app/modules/workspace/domain/workspace_identity.py`), so it is found without a
+lookup and is never mistaken for a person's. Provider-generated IDs remain
+private sandbox data.
+
+**Why per pod and actor.** Every process in a workspace sandbox runs as one UID over one
+home directory, and each shell carries its run's delegated token in its
+environment. Any process can read any other's `/proc/<pid>/environ`, and any run
+that can write `~/.bashrc` or a `~/.local/bin` shim runs code in the next run's
+shell. So nothing inside a sandbox separates one run's token from another's: the
+sandbox is the boundary. A token is pinned to its pod and cut down to its
+agent's grants. A sandbox shared across pods let a run in one pod -- or one
+organization -- lift a token minted for another; one shared across a pod's
+agents let a named agent lift the assistant's, which acts with the person's own
+authority. Runs of the same actor share a sandbox, and hold the same grants.
 
 ## 2. Problem statement
 
@@ -534,6 +550,9 @@ idle threshold expire, the allocation is destroyed on every provider.
 - Reusable human access/refresh tokens never enter function sandboxes.
 - Workspace credentials are short-lived, session-scoped, and removed before
   release.
+- One workspace sandbox belongs to one user in one pod as one actor (the pod
+  assistant, or one named agent). A run's delegated token only ever enters the
+  sandbox of its own pod and actor.
 - Function invocation and the Lemma SDK use one delegated function-session bearer,
   cached for up to five minutes by `(user, pod, function, revision hash)`. Grants
   remain live backend data and are checked when the token is used rather than

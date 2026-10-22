@@ -92,7 +92,6 @@ class TriggerChange:
     row: Mapping[str, JsonValue] = field(default_factory=dict)
     changed: Sequence[str] | None = None
     previous: Mapping[str, JsonValue] | None = None
-    owner_user_id: UUID | None = None
     occurred_at: datetime | None = None
     from_outside: bool = False
     metadata: Mapping[str, JsonValue] = field(default_factory=dict)
@@ -345,7 +344,6 @@ def _event(change: TriggerChange) -> TriggerEvent:
             "changed": list(change.changed or []),
             "previous": dict(change.previous or {}),
         },
-        user_id=change.owner_user_id,
         source_occurred_at=change.occurred_at,
     )
 

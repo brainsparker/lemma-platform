@@ -76,7 +76,7 @@ class ScheduleRepository(ScheduleRepositoryInterface):
             filter_instruction=entity.filter_instruction,
             filter_output_schema=entity.filter_output_schema,
             include_outside_rows=entity.include_outside_rows,
-            account_id=entity.account_id,
+            pod_connector_slug=entity.pod_connector_slug,
             connector_trigger_id=entity.connector_trigger_id,
             visibility=entity.visibility,
             is_active=entity.is_active,

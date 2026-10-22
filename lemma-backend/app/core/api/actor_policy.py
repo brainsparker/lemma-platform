@@ -45,8 +45,9 @@ WORKLOAD_ROUTES: frozenset[tuple[str, str]] = frozenset(
         ("GET", "/connectors"),
         ("GET", "/connectors/{connector_id}"),
         ("GET", "/connectors/{connector_id}/skill"),
-        # Using connectors. Execution resolves the account through the
-        # workload's own context (connector.use, account grants, intersection).
+        # Reading what the org has installed. Running an operation is not
+        # here: it goes through a pod connector under /pods/{pod_id}, where the
+        # pod pin and the workload's grants apply.
         ("GET", "/organizations/{organization_id}/connectors/status"),
         ("GET", "/organizations/{organization_id}/connectors/accounts"),
         ("GET", "/organizations/{organization_id}/connectors/accounts/{account_id}"),
@@ -71,13 +72,6 @@ WORKLOAD_ROUTES: frozenset[tuple[str, str]] = frozenset(
             (
                 "/organizations/{organization_id}/connectors/{auth_config_name}"
                 "/operations/details"
-            ),
-        ),
-        (
-            "POST",
-            (
-                "/organizations/{organization_id}/connectors/{auth_config_name}"
-                "/operations/{operation_name}/execute"
             ),
         ),
         (
@@ -154,7 +148,27 @@ def require_person(action_label: str):
     return Depends(_dependency)
 
 
+def refuse_named_workloads(action_label: str):
+    """Close a pod route to named agents and functions, but not the assistant.
+
+    For work done as the person in a background job -- exporting, importing or
+    publishing the whole pod -- which cannot carry a workload's grants into the
+    job. The pod's assistant acts as its person anyway, so it keeps them; a named
+    agent holding only ``pod.read`` used to export everything its person could
+    read.
+    """
+    from app.core.authorization.delegation import is_default_pod_agent_claims
+
+    async def _dependency(request: Request) -> None:
+        claims = getattr(request.state, "delegation_claims", None)
+        if claims is not None and not is_default_pod_agent_claims(claims):
+            raise refuse_workload(action_label)
+
+    return Depends(_dependency)
+
+
 __all__ = [
+    "refuse_named_workloads",
     "POD_SCOPED_PREFIX",
     "WORKLOAD_NOT_ALLOWED",
     "WORKLOAD_ROUTES",

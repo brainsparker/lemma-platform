@@ -326,15 +326,9 @@ def _normalize_surface_payload(surface: dict[str, Any]) -> dict[str, Any]:
         "platform": platform,
         "default_agent_name": surface.get("agent_name"),
         "credential_mode": surface.get("credential_mode"),
-        "account_id": surface.get("account_id"),
-        # Ground-truth connector identity for the bound account, resolved by
-        # the exporter from the account itself (never inferred from the
-        # surface's own platform) — carried through so the portable-variable
-        # tokenizer can stamp every account variable with connector/kind.
-        # `provider` is the pre-rename spelling, still read so a bundle
-        # exported before it keeps its metadata.
-        "connector_id": surface.get("connector_id"),
-        "connector_kind": surface.get("connector_kind") or surface.get("provider"),
+        # The pod connector the surface runs through, by slug: portable as it
+        # is, since the importing pod's connector decides the account.
+        "pod_connector": surface.get("pod_connector"),
         "is_enabled": status != "INACTIVE",
     }
     if behavior_config:

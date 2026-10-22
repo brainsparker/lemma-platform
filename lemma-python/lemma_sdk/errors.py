@@ -37,11 +37,25 @@ class LemmaAPIError(LemmaError):
     raw_response: Any | None = None
     request_id: str | None = None
 
+    @property
+    def connect_url(self) -> str | None:
+        """Where to connect or reconnect the account a connector needs.
+
+        Set on ``CONNECTION_REQUIRED`` and ``REAUTH_REQUIRED`` refusals (the
+        latter only for the account's owner, the one person who can fix it).
+        """
+        if isinstance(self.details, dict):
+            url = self.details.get("connect_url")
+            if isinstance(url, str) and url:
+                return url
+        return None
+
     def __str__(self) -> str:
         prefix = f"[{self.status_code}]"
         code = f" {self.code}:" if self.code else ""
+        link = f" Connect at {self.connect_url}" if self.connect_url else ""
         suffix = f" (request_id={self.request_id})" if self.request_id else ""
-        return f"{prefix}{code} {self.message}{suffix}"
+        return f"{prefix}{code} {self.message}{link}{suffix}"
 
 
 # Typed subclasses so callers can `except LemmaNotFoundError` / `except

@@ -316,6 +316,108 @@ async def test_get_session_uses_canonical_logical_workspace_id(
 
 
 @pytest.mark.asyncio
+async def test_one_persons_runs_in_two_pods_never_share_a_sandbox(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Every process in a sandbox can read every other's environment, and each
+    # carries its run's pod-pinned token. A sandbox shared across pods let a run
+    # in one lift a live token minted for another.
+    user_id, pod_a, pod_b = uuid4(), uuid4(), uuid4()
+    sandbox = _FakeSandbox()
+    manager_client = _FakeManagerClient()
+    _mint_session_tokens(monkeypatch)
+    service = _service(sandbox, manager_client=manager_client)
+
+    async def session_in(pod_id: UUID | None, session_id: str):
+        # The organization is given so minting the environment reads no pod.
+        return await service.get_session(
+            user_id=user_id,
+            pod_id=pod_id,
+            organization_id=uuid4(),
+            session_id=session_id,
+        )
+
+    in_a = await session_in(pod_a, "a")
+    in_b = await session_in(pod_b, "b")
+    again_in_a = await session_in(pod_a, "a2")
+    personal = await session_in(None, "p")
+
+    assert in_a.logical_id != in_b.logical_id
+    assert again_in_a.logical_id == in_a.logical_id
+    assert personal.logical_id == user_id
+    assert user_id not in {in_a.logical_id, in_b.logical_id}
+    # The fabric was asked for each pod's own sandbox, not the person's.
+    assert set(sandbox.ensure_calls) == {in_a.logical_id, in_b.logical_id, user_id}
+    assert {logical for logical, _ in manager_client.directories} == {
+        in_a.logical_id,
+        in_b.logical_id,
+        user_id,
+    }
+
+
+@pytest.mark.asyncio
+async def test_the_assistant_and_a_named_agent_never_share_a_sandbox(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A named agent's token is the person's access cut down to its grants; the
+    # assistant's is the person's own. Beside each other, the restricted one
+    # reads the other's out of /proc.
+    user_id, pod_id, named = uuid4(), uuid4(), uuid4()
+    _mint_session_tokens(monkeypatch)
+    service = _service(_FakeSandbox(), manager_client=_FakeManagerClient())
+
+    async def session_as(**identity: object):
+        return await service.get_session(
+            user_id=user_id,
+            pod_id=pod_id,
+            organization_id=uuid4(),
+            session_id=str(uuid4()),
+            **identity,
+        )
+
+    # The assistant, by every name it has gone by: its pod's id, or none.
+    assistant = await session_as(workload_type="agent", workload_id=pod_id)
+    unnamed = await session_as()
+    agent = await session_as(workload_type="agent", workload_id=named)
+    # A command the agent runs with borrowed authority -- a token minted for
+    # nobody in particular -- still runs in the agent's own sandbox.
+    borrowed = await session_as(actor_id=named)
+
+    assert assistant.logical_id == unnamed.logical_id
+    assert agent.logical_id != assistant.logical_id
+    assert borrowed.logical_id == agent.logical_id
+
+
+@pytest.mark.asyncio
+async def test_a_pods_browser_grant_names_that_pods_sandbox(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user_id, pod_id = uuid4(), uuid4()
+    sandbox = _FakeSandbox()
+
+    class _GrantRecorder(_FakeManagerClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.granted: list[UUID] = []
+
+        async def create_port_access(self, kind, logical_id, port, **_kwargs):
+            del kind, port
+            self.granted.append(logical_id)
+            return object()
+
+    manager_client = _GrantRecorder()
+    service = _service(sandbox, manager_client=manager_client)
+
+    await service.create_browser_access(user_id, pod_id=pod_id, ttl_seconds=60)
+    await service.create_browser_access(user_id, ttl_seconds=60)
+
+    pod_sandbox, personal_sandbox = manager_client.granted
+    assert pod_sandbox != user_id
+    assert personal_sandbox == user_id
+    assert sandbox.ensure_calls == [pod_sandbox, user_id]
+
+
+@pytest.mark.asyncio
 async def test_get_session_coalesces_concurrent_directory_checks_but_revalidates_later(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

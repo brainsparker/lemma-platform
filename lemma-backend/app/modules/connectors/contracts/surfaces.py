@@ -301,17 +301,6 @@ async def refreshed_credentials(
     return _as_mapping(credentials)
 
 
-async def require_account_owner(
-    uow, account_id: UUID, *, user_id: UUID, organization_id: UUID | None
-) -> None:
-    """Assert this person owns this account; raise ``AccountNotFoundError`` if not.
-
-    "Not yours" and "no such account" are deliberately the same answer, so the
-    caller learns nothing about accounts they do not own.
-    """
-    await get_connector_service(uow).get_account(account_id, user_id, organization_id)
-
-
 async def auth_config(uow, auth_config_id: UUID) -> SurfaceAuthConfig | None:
     """The install behind an account, or ``None`` when it is gone."""
     found = await _auth_configs(uow).get(auth_config_id)
@@ -384,7 +373,6 @@ __all__ = [
     "app_signing_secret",
     "auth_config",
     "refreshed_credentials",
-    "require_account_owner",
     "surface_connector",
     "upsert_bot_token_account",
 ]

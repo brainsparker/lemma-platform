@@ -250,7 +250,7 @@ function PartPage({ pod, part, orgId, orgName, onBack, onOpenAgent, onOpenTeamma
             body = <WhatItRemembers pod={pod} onFile={onFile} />;
             break;
         case "schedules":
-            body = <StandingWork podId={pod.id} teammate={pod.name} members={pod.members} orgId={orgId} onOpenRun={onOpenRun} onOpenConversation={onOpenConversation} />;
+            body = <StandingWork podId={pod.id} teammate={pod.name} members={pod.members} onOpenRun={onOpenRun} onOpenConversation={onOpenConversation} />;
             break;
         case "agents":
             action = (

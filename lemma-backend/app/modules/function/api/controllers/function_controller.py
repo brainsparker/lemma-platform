@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, Query, Request, status
 
 from app.core.api.dependencies import UoWDep, get_uow_factory
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.core.authorization.conferral import assert_can_confer
+from app.core.authorization.conferral import assert_can_confer_grants
 from app.core.authorization.grants import (
     normalize_pod_resource_grants,
     replace_grantee_resource_grants,
@@ -132,7 +132,12 @@ async def create_function(
         pod_id=pod_id, entity=entity, user_id=user.id, code=data.code, request=request
     )
     await apply_function_grants(
-        uow_factory, pod_id=pod_id, function=function, data=data, user=user
+        uow_factory,
+        pod_id=pod_id,
+        function=function,
+        data=data,
+        user=user,
+        request=request,
     )
     return await _function_action_response(function)
 
@@ -292,19 +297,16 @@ async def replace_function_permissions(
     validate_pod_resource_grant_permissions(data.grants)
     # See the agent equivalent: a function runs on its grants, so granting one a
     # permission you do not hold is conferral (PS-ACCESS-010).
-    assert_can_confer(
-        ctx,
-        [
-            permission_id
-            for grant in data.grants
-            for permission_id in grant.permission_ids
-        ],
-        action="grant a function permissions you do not hold",
-    )
     grants = await normalize_pod_resource_grants(
         uow.session,
         pod_id=pod_id,
         grants=data.grants,
+    )
+    await assert_can_confer_grants(
+        ctx,
+        grants,
+        pod_id=pod_id,
+        action="grant a function permissions you could not use",
     )
     await replace_grantee_resource_grants(
         uow.session,
@@ -411,7 +413,12 @@ async def update_function(
         request=request,
     )
     await apply_function_grants(
-        uow_factory, pod_id=pod_id, function=function, data=data, user=user
+        uow_factory,
+        pod_id=pod_id,
+        function=function,
+        data=data,
+        user=user,
+        request=request,
     )
     return await _function_action_response(function)
 

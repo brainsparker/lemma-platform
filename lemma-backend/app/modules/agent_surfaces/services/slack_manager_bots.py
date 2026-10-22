@@ -26,11 +26,19 @@ from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
+from app.modules.agent_surfaces.services.surface_connector import connector_slug_for
+from app.modules.connectors.contracts.pod_connectors import (
+    share_own_account_as_pod_connector,
+)
 from app.modules.agent_surfaces.domain.entities import (
     SurfaceCredentialMode,
     SurfacePlatform,
 )
 from app.modules.agent_surfaces.domain.errors import SlackAppCreationForbiddenError
+from app.modules.agent_surfaces.domain.surface_config import (
+    SurfaceConfig,
+    SurfaceSlackConfig,
+)
 from app.modules.agent_surfaces.domain.slack_manager import (
     SLACK_TEAMMATE_APP_PURPOSE,
     AddForm,
@@ -406,14 +414,33 @@ async def bind_allowed_app(
     row_id, organization_id = row.id, row.organization_id
     pod_id, agent_id = row.pod_id, row.agent_id
     team_id, slack_user_id = row.team_id, row.slack_user_id
+    # The pending row knows the app's id only when Lemma made the app; one made
+    # by hand arrives as three pasted values and no id. Written down now,
+    # because the row is deleted below and nothing else remembers it.
+    made_by_lemma = row.app_id is not None
     try:
+        name = await _free_surface_name(uow, pod_id, team_id)
+        # The person whose Allow made the account set this teammate up for
+        # this pod, which is the consent sharing it needs: it goes into the
+        # pod as a SHARED connector, and the surface runs as that.
+        pod_connector_slug = await share_own_account_as_pod_connector(
+            uow,
+            pod_id=pod_id,
+            account_id=fact.account_id,
+            owner_user_id=fact.user_id,
+            slug_base=connector_slug_for(SurfacePlatform.SLACK, name),
+            purpose="A Slack teammate's own app",
+        )
         surface = await build_surface_service(uow).create_surface(
             pod_id=pod_id,
             agent_id=agent_id,
             platform=SurfacePlatform.SLACK,
-            name=await _free_surface_name(uow, pod_id, team_id),
+            name=name,
+            config=SurfaceConfig(
+                slack=SurfaceSlackConfig(app_made_by_lemma=made_by_lemma)
+            ),
             credential_mode=SurfaceCredentialMode.CUSTOM,
-            account_id=fact.account_id,
+            pod_connector_slug=pod_connector_slug,
         )
     except DomainError as exc:
         await uow.rollback()

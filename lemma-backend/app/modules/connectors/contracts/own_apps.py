@@ -25,9 +25,6 @@ from app.modules.connectors.domain.errors import (
     ConnectorConflictError,
     ConnectorNotFoundError,
 )
-from app.modules.connectors.services.connect_request_lifecycle import (
-    was_browser_bound,
-)
 
 
 async def may_manage_installs(uow, *, user_id: UUID, organization_id: UUID) -> bool:
@@ -186,27 +183,6 @@ async def ensure_system_install(
             return raced
         raise
     return made.id
-
-
-async def grant_is_browser_bound(uow, *, account_id: UUID) -> bool:
-    """Whether this account's latest grant came back to the browser of the
-    person who started it.
-
-    The OAuth callback is completed by ``state`` alone, so a consent link
-    somebody was sent stores *their* grant on the sender's account. What a
-    grant says about the provider's user -- which Slack user installed an app
-    -- is proof only when this holds.
-    """
-    service = get_connector_service(uow)
-    account = await service.account_repository.get(account_id)
-    if account is None or account.auth_config_id is None:
-        return False
-    grant = await service.connect_request_repository.latest_grant(
-        account_id=account_id,
-        user_id=account.user_id,
-        auth_config_id=account.auth_config_id,
-    )
-    return grant is not None and was_browser_bound(grant)
 
 
 @dataclass(frozen=True, slots=True)

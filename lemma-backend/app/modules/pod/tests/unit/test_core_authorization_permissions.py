@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -21,7 +22,6 @@ from app.core.authorization.context import (
 )
 from app.core.authorization.grants import (
     grant_resource_type_values,
-    connector_resource_id,
     normalize_pod_resource_grants,
     validate_pod_resource_grant_permissions,
 )
@@ -94,9 +94,20 @@ def test_system_role_permissions_are_explicit_unions():
     assert Permissions.POD_ROLE_MANAGE in POD_ADMIN_PERMISSIONS
     assert Permissions.POD_ROLE_MANAGE not in POD_EDITOR_PERMISSIONS
     assert Permissions.CONNECTOR_USE in POD_USER_PERMISSIONS
-    assert Permissions.CONNECTOR_MANAGE not in POD_EDITOR_PERMISSIONS
-    assert Permissions.CONNECTOR_MANAGE in ORG_EDITOR_PERMISSIONS
-    assert Permissions.CONNECTOR_ACCOUNT_MANAGE in POD_ADMIN_PERMISSIONS
+    assert Permissions.CONNECTOR_ACCOUNT_USE in POD_USER_PERMISSIONS
+    assert Permissions.CONNECTOR_USE not in POD_VIEWER_PERMISSIONS
+    assert Permissions.CONNECTOR_ACCOUNT_USE not in POD_VIEWER_PERMISSIONS
+    # Editors declare the pod's connectors; installing one is the org's.
+    assert Permissions.POD_CONNECTOR_MANAGE in POD_EDITOR_PERMISSIONS
+    assert Permissions.POD_CONNECTOR_MANAGE not in POD_USER_PERMISSIONS
+    assert Permissions.ORG_INSTALLATION_MANAGE in ORG_EDITOR_PERMISSIONS
+    # Sharing an account is its owner's alone: in no role, not even an org
+    # owner's (audit H3).
+    for role_permissions in (POD_ADMIN_PERMISSIONS, ORG_OWNER_PERMISSIONS):
+        assert Permissions.CONNECTOR_ACCOUNT_SHARE not in role_permissions
+    assert Permissions.CONNECTOR_ACCOUNT_SHARE in owner_actions_for_resource(
+        ResourceType.CONNECTOR_ACCOUNT
+    )
     # Pod users can create their own schedules, but managing pod-wide schedules
     # (update/delete on schedules they do not own) stays an editor/admin power.
     assert Permissions.SCHEDULE_CREATE in POD_USER_PERMISSIONS
@@ -158,9 +169,8 @@ def test_equivalent_permission_ids_include_higher_resource_permissions():
     assert equivalent_permission_ids(Permissions.CONNECTOR_USE) == {
         Permissions.CONNECTOR_USE
     }
-    assert equivalent_permission_ids(Permissions.CONNECTOR_ACCOUNT_USE) >= {
-        Permissions.CONNECTOR_ACCOUNT_USE,
-        Permissions.CONNECTOR_ACCOUNT_MANAGE,
+    assert equivalent_permission_ids(Permissions.CONNECTOR_ACCOUNT_USE) == {
+        Permissions.CONNECTOR_ACCOUNT_USE
     }
 
 
@@ -206,19 +216,13 @@ def test_implied_permissions_map_is_valid_and_flattened():
             assert IMPLIED_PERMISSIONS.get(permission_id, frozenset()) <= implied
 
 
-def test_connector_resource_ref_factories_are_pod_and_org_scoped():
+def test_connector_resource_refs_name_pod_rows():
     pod_id = uuid4()
     pod_connector_id = uuid4()
     pod_account_id = uuid4()
-    organization_id = uuid4()
-    auth_config_id = uuid4()
 
     pod_app_ref = ResourceRef.connector(pod_id, pod_connector_id)
     pod_account_ref = ResourceRef.connector_account(pod_id, pod_account_id)
-    auth_config_ref = ResourceRef.connector_auth_config(
-        organization_id,
-        auth_config_id,
-    )
 
     assert pod_app_ref.resource_type == ResourceType.CONNECTOR
     assert pod_app_ref.resource_id == pod_connector_id
@@ -226,9 +230,6 @@ def test_connector_resource_ref_factories_are_pod_and_org_scoped():
     assert pod_account_ref.resource_type == ResourceType.CONNECTOR_ACCOUNT
     assert pod_account_ref.resource_id == pod_account_id
     assert pod_account_ref.pod_id == pod_id
-    assert auth_config_ref.resource_type == ResourceType.CONNECTOR_AUTH_CONFIG
-    assert auth_config_ref.resource_id == auth_config_id
-    assert auth_config_ref.organization_id == organization_id
 
 
 @pytest.mark.asyncio
@@ -262,7 +263,7 @@ def test_resource_grant_validation_only_accepts_pod_permissions():
 
     validate_pod_resource_grant_permissions([Grant()])
 
-    Grant.permission_ids = [Permissions.CONNECTOR_MANAGE]
+    Grant.permission_ids = [Permissions.ORG_INSTALLATION_MANAGE]
     with pytest.raises(BadRequestError) as exc_info:
         validate_pod_resource_grant_permissions([Grant()])
     assert exc_info.value.status_code == 400
@@ -306,6 +307,20 @@ def test_connector_grants_validate_use_permission():
     assert "do not apply to the resource type" in exc_info.value.message
 
 
+def test_sharing_a_pod_account_cannot_be_granted():
+    """`connector_account.share` is an owner action. A grant carrying it would
+    let somebody else decide who uses the owner's credential."""
+
+    class Grant:
+        resource_type = ResourceType.CONNECTOR_ACCOUNT
+        resource_name = str(uuid4())
+        permission_ids = [Permissions.CONNECTOR_ACCOUNT_SHARE]
+
+    with pytest.raises(BadRequestError) as exc_info:
+        validate_pod_resource_grant_permissions([Grant()])
+    assert "do not apply to the resource type" in exc_info.value.message
+
+
 class _FakeScalarResult:
     def __init__(self, values):
         self._values = values
@@ -328,21 +343,28 @@ class _FakeSession:
 
 
 @pytest.mark.asyncio
-async def test_resource_grant_normalization_resolves_connector_app_string_id():
+async def test_resource_grant_normalization_resolves_a_pod_connector_by_slug():
     pod_id = uuid4()
+    pod_connector_id = uuid4()
 
     class Grant:
         resource_type = ResourceType.CONNECTOR
         resource_name = "telegram"
         permission_ids = [Permissions.CONNECTOR_USE]
 
+    class _NamedSession:
+        async def execute(self, _stmt):
+            return SimpleNamespace(all=lambda: [("telegram", pod_connector_id)])
+
     normalized = await normalize_pod_resource_grants(
-        _FakeSession(["telegram"]),
+        _NamedSession(),
         pod_id=pod_id,
         grants=[Grant()],
     )
 
-    assert normalized[0].resource_id == connector_resource_id("telegram")
+    # The pod connector row, not a uuid5 of the catalog id: a grant on
+    # `telegram` in one pod reaches nothing in another, nor another install.
+    assert normalized[0].resource_id == pod_connector_id
     assert normalized[0].permission_ids == [Permissions.CONNECTOR_USE]
 
 
@@ -1127,6 +1149,10 @@ async def test_default_pod_agent_destructive_action_allowed_with_session_approva
 
     assert decision.allowed  # falls through to the normal user-mirror path
     assert seen and seen[0]["permission_id"] == Permissions.DATASTORE_TABLE_DELETE
+    # Looked up for the person the assistant acts for, so another member's
+    # approval in the same conversation is not this one (M5).
+    assert ctx.delegating_user_id is not None
+    assert seen[0]["person_user_id"] == ctx.delegating_user_id
 
 
 @pytest.mark.asyncio

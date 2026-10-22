@@ -30,6 +30,7 @@ from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.workspace_cli.models import ExecCommandRequest
 from app.modules.agent.tools.workspace_cli.workspace_cli import exec_command_internal
 from app.modules.test_support.e2e.waiters import eventually
+from app.modules.workspace.domain.workspace_identity import workspace_sandbox_id
 from app.modules.workspace.infrastructure.sandbox_repository import SandboxRepository
 from app.modules.workspace.services.sandbox_sweeper import SandboxSweeper
 from sandbox_runtime.paths import WORKSPACE_ROOT
@@ -80,6 +81,14 @@ async def _run(ctx, command: str):
     return result
 
 
+def _sandbox_id(ctx: BaseAgentContext) -> UUID:
+    """The sandbox `ctx`'s commands run in: its person's, in its pod, as the
+    pod's assistant. A workspace is one per person, pod and actor, so the
+    person's id alone names a different one -- their personal workspace, which
+    nothing here ever touched."""
+    return workspace_sandbox_id(ctx.user_id, ctx.pod_id)
+
+
 def _sandbox_service():
     from app.modules.workspace.services.sandbox_composition import get_sandbox_service
 
@@ -102,7 +111,7 @@ async def test_a_workspace_keeps_its_files_across_a_release_and_resume(
     """
     del local_sandbox_server, backend_server, configure_workspace_api_url
     ctx = await _context(authenticated_client, fixed_test_org, fixed_test_user)
-    user_id = UUID(fixed_test_user["id"])
+    sandbox_id = _sandbox_id(ctx)
 
     await _run(
         ctx,
@@ -110,14 +119,14 @@ async def test_a_workspace_keeps_its_files_across_a_release_and_resume(
     )
 
     service = _sandbox_service()
-    before = await service.get(user_id)
+    before = await service.get(sandbox_id)
     assert before is not None
-    await service.release(user_id)
+    await service.release(sandbox_id)
 
     read_back = await _run(ctx, f"cat {WORKSPACE_ROOT}/keep/file")
     assert "durable" in (read_back.stdout or ""), read_back
 
-    after = await service.get(user_id)
+    after = await service.get(sandbox_id)
     assert after is not None
     # The generation is the signal an agent reads as "your files are gone". A
     # release must never move it -- that is the difference between a resume and
@@ -206,7 +215,7 @@ async def test_the_browser_profile_survives_a_release_and_resume(
     """
     del local_sandbox_server, backend_server, configure_workspace_api_url
     ctx = await _context(authenticated_client, fixed_test_org, fixed_test_user)
-    user_id = UUID(fixed_test_user["id"])
+    sandbox_id = _sandbox_id(ctx)
 
     await _run(ctx, "lemma-ensure-display about:blank")
     written = await _run(ctx, _cookie_script("set"))
@@ -217,9 +226,9 @@ async def test_the_browser_profile_survives_a_release_and_resume(
     await _run(ctx, "agent-browser close --all >/dev/null 2>&1 || true")
 
     service = _sandbox_service()
-    before = await service.get(user_id)
+    before = await service.get(sandbox_id)
     assert before is not None
-    await service.release(user_id)
+    await service.release(sandbox_id)
 
     # The next command resumes it. A fresh browser on the same disk: if the
     # profile came back, so did the cookie.
@@ -227,7 +236,7 @@ async def test_the_browser_profile_survives_a_release_and_resume(
     read_back = await _run(ctx, _cookie_script("get"))
     assert "FOUND survived" in (read_back.stdout or ""), read_back
 
-    after = await service.get(user_id)
+    after = await service.get(sandbox_id)
     assert after is not None
     # Same disk, not a new one. A moved generation would mean the cookie
     # above came from a replacement that happened to be built the same way
@@ -255,7 +264,7 @@ async def test_the_orphan_sweep_leaves_a_live_workspace_and_its_files_alone(
     """
     del local_sandbox_server, backend_server, configure_workspace_api_url
     ctx = await _context(authenticated_client, fixed_test_org, fixed_test_user)
-    user_id = UUID(fixed_test_user["id"])
+    sandbox_id = _sandbox_id(ctx)
 
     await _run(ctx, f"echo swept-but-alive > {WORKSPACE_ROOT}/sentinel")
 
@@ -263,14 +272,14 @@ async def test_the_orphan_sweep_leaves_a_live_workspace_and_its_files_alone(
     uow_factory = SessionUnitOfWorkFactory(db_manager.session_factory)
     sweeper = SandboxSweeper(service=service, uow_factory=uow_factory)
 
-    before = await service.get(user_id)
+    before = await service.get(sandbox_id)
     assert before is not None
 
     assert await sweeper.reclaim_orphans() == ()
 
     survived = await _run(ctx, f"cat {WORKSPACE_ROOT}/sentinel")
     assert "swept-but-alive" in (survived.stdout or ""), survived
-    after = await service.get(user_id)
+    after = await service.get(sandbox_id)
     assert after is not None
     assert after.storage_generation == before.storage_generation
 
@@ -312,7 +321,7 @@ async def test_a_deleted_workspace_is_still_reclaimed(
     """
     del local_sandbox_server, backend_server, configure_workspace_api_url
     ctx = await _context(authenticated_client, fixed_test_org, fixed_test_user)
-    user_id = UUID(fixed_test_user["id"])
+    sandbox_id = _sandbox_id(ctx)
     await _run(ctx, "true")
 
     service = _sandbox_service()
@@ -323,7 +332,7 @@ async def test_a_deleted_workspace_is_still_reclaimed(
 
     async with uow_factory() as uow:
         repository = SandboxRepository(uow)
-        await repository.set_desired_state(user_id, SandboxDesiredState.DELETED)
+        await repository.set_desired_state(sandbox_id, SandboxDesiredState.DELETED)
         await uow.commit()
 
     deadline = datetime.now(timezone.utc) + timedelta(seconds=120)

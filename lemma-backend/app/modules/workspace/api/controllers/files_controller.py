@@ -1,9 +1,10 @@
 """Read access to a person's own workspace sandbox files.
 
-Authorisation is free here and worth saying why: a workspace is keyed
-``(WORKSPACE, user_id)``, so ``CurrentUser`` is the whole check and there is no
-``sandbox_id`` parameter for a caller to point somewhere else. What still needs
-guarding is the *path*.
+Authorisation is nearly free here and worth saying why: a workspace is keyed
+by user and pod, so ``CurrentUser`` decides whose workspace this is and there
+is no ``sandbox_id`` parameter for a caller to point somewhere else. The pod is
+checked (see ``workspace_pod``) only so that a person cannot start sandboxes
+for pods they cannot see. What still needs guarding is the *path*.
 
 **These routes see ``/workspace`` and nothing else.** The sandbox runtime also
 allows ``/tmp``, and deliberately so — it is where ``github_credential_bridge``
@@ -30,6 +31,7 @@ from __future__ import annotations
 import posixpath
 from datetime import datetime
 from typing import AsyncIterator, Literal
+from uuid import UUID
 
 from typing import Annotated
 
@@ -46,6 +48,11 @@ from sandbox_runtime.paths import (
 from app.core.api.dependencies import CurrentUser
 from app.core.log.log import get_logger
 from app.modules.workspace.providers.runtime_client import WorkspaceRuntimeError
+from app.modules.workspace.api.controllers.workspace_pod import (
+    AgentQuery,
+    PodQuery,
+    require_workspace_pod,
+)
 from app.modules.workspace.api.controllers.workspace_file_ranges import (
     Unsatisfiable,
     matches_etag,
@@ -288,9 +295,17 @@ def _entry(stat: object) -> WorkspaceFileEntry:
     )
 
 
-async def _is_awake(service: WorkspaceSandboxService, user_id) -> bool:
+async def _is_awake(
+    service: WorkspaceSandboxService,
+    user_id: UUID,
+    pod_id: UUID | None,
+    actor_id: UUID | None,
+) -> bool:
     """Whether the workspace is already running, without starting one."""
-    info = await service.sandbox.get_sandbox(user_id)
+    workspace_id = await service.resolve_workspace_id(
+        user_id, pod_id, actor_id=actor_id
+    )
+    info = await service.sandbox.get_sandbox(workspace_id)
     return info is not None and info.status == "RUNNING"
 
 
@@ -304,6 +319,8 @@ async def list_workspace_files(
     user: CurrentUser,
     service: WorkspaceServiceDep,
     path: str | None = Query(default=None, max_length=4096),
+    pod_id: PodQuery = None,
+    agent: AgentQuery = None,
     wake: bool = Query(
         default=False,
         description="Start the workspace if it is paused. Off by default.",
@@ -317,12 +334,14 @@ async def list_workspace_files(
     ),
 ) -> WorkspaceFileListResponse:
     target = _workspace_path(path)
+    await require_workspace_pod(user.id, pod_id, agent)
     try:
-        if not wake and not await _is_awake(service, user.id):
+        if not wake and not await _is_awake(service, user.id, pod_id, agent):
             return WorkspaceFileListResponse(path=target, sleeping=True)
         session = await service.get_session(
             user.id,
-            pod_id=None,
+            pod_id=pod_id,
+            actor_id=agent,
             initial_cwd=_ROOT,
             close_on_exit=False,
             ready_timeout_seconds=INTERACTIVE_READY_SECONDS,
@@ -371,12 +390,16 @@ async def stat_workspace_file(
     user: CurrentUser,
     service: WorkspaceServiceDep,
     path: str = Query(min_length=1, max_length=4096),
+    pod_id: PodQuery = None,
+    agent: AgentQuery = None,
 ) -> WorkspaceFileEntry:
     target = _workspace_path(path)
+    await require_workspace_pod(user.id, pod_id, agent)
     try:
         session = await service.get_session(
             user.id,
-            pod_id=None,
+            pod_id=pod_id,
+            actor_id=agent,
             initial_cwd=_ROOT,
             close_on_exit=False,
             ready_timeout_seconds=INTERACTIVE_READY_SECONDS,
@@ -403,6 +426,8 @@ async def read_workspace_file(
     user: CurrentUser,
     service: WorkspaceServiceDep,
     path: str = Query(min_length=1, max_length=4096),
+    pod_id: PodQuery = None,
+    agent: AgentQuery = None,
     offset: int = Query(default=0, ge=0),
     length: int | None = Query(default=None, ge=1, le=_MAX_CONTENT_BYTES),
     # `Annotated` rather than a `Header(...)` default, so the default really
@@ -413,11 +438,13 @@ async def read_workspace_file(
     if_none_match: Annotated[str | None, Header(alias="If-None-Match")] = None,
 ) -> Response:
     target = _workspace_path(path)
+    await require_workspace_pod(user.id, pod_id, agent)
     session = None
     try:
         session = await service.get_session(
             user.id,
-            pod_id=None,
+            pod_id=pod_id,
+            actor_id=agent,
             initial_cwd=_ROOT,
             close_on_exit=False,
             ready_timeout_seconds=INTERACTIVE_READY_SECONDS,

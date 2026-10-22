@@ -2,8 +2,7 @@
 
 Split out of ``applier.py`` for the same reason ``surface_apply.py`` was: that
 file sits at the 600-line ceiling the architecture ratchet sets, and a schedule
-step shares nothing with its neighbours beyond the account-binding rule, which
-lives in ``account_binding.py``.
+step shares nothing with its neighbours.
 """
 
 from __future__ import annotations
@@ -17,10 +16,8 @@ from lemma_pod_bundle.apply_fields import (
     without_time_schedule_filter,
 )
 
+from app.modules.pod_bundle.domain.errors import BundleInvalidError
 from app.modules.pod_bundle.domain.state import PlanStep
-from app.modules.pod_bundle.infrastructure.account_binding import (
-    validate_account_binding,
-)
 
 
 async def apply_schedule(
@@ -60,6 +57,13 @@ async def apply_schedule(
             "was not imported."
         )
         return
+    if "account_id" in payload:
+        raise BundleInvalidError(
+            f"Schedule '{step.name}' names a connected account, which bundles "
+            "no longer carry: a schedule listens through a pod connector, by "
+            "slug. Re-export the pod, or replace `account_id` with "
+            "`pod_connector: <slug>`."
+        )
     existing = await get_schedule_by_name(uow, pod_id=pod_id, name=step.name, ctx=ctx)
     if existing is not None:
         # Create-once by name. The plan says SKIP for this case, so reaching
@@ -67,20 +71,17 @@ async def apply_schedule(
         return
     # Build from the shared allow-list (also used by lemma-cli's direct
     # import) so the two importers can't silently drift on which exported
-    # fields survive — this is what previously dropped account_id,
-    # connector_trigger_id, filter_instruction and filter_output_schema.
+    # fields survive — this is what previously dropped connector_trigger_id,
+    # filter_instruction and filter_output_schema.
     fields = {
         key: value for key, value in payload.items() if key in SCHEDULE_APPLY_FIELDS
     }
     fields["name"] = step.name
     fields["schedule_type"] = ScheduleType(str(payload.get("schedule_type")))
     fields["config"] = payload.get("config") or {}
-    await validate_account_binding(
-        uow,
-        account_id=fields.get("account_id"),
-        expected_connector=payload.get("connector_id"),
-        expected_kind=payload.get("connector_kind") or payload.get("provider"),
-        resource_label=f"Schedule '{step.name}'",
-    )
+    # The pod connector, by slug: whether the importer may listen through it
+    # -- and which account that means for them -- is asked when the schedule
+    # is created, exactly as for one made by hand.
+    fields["pod_connector_slug"] = fields.pop("pod_connector", None)
     entity = ScheduleCreateEntity(user_id=user_id, pod_id=pod_id, **fields)
     await create_schedule(uow, entity, ctx=ctx)

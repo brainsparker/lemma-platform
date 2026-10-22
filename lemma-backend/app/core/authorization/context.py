@@ -23,6 +23,7 @@ from app.core.authorization.actor import (
 )
 from app.core.authorization.permissions import equivalent_permission_ids
 from app.core.authorization.principals import PrincipalRef
+from app.core.authorization.session_approvals import APPROVABLE_REFUSALS, also_refused
 from app.core.authorization.denials import (
     denial_message as _denial_message,
     denial_resource_details as _denial_resource_details,
@@ -203,18 +204,6 @@ class ResourceRef:
             pod_id=pod_id,
         )
 
-    @classmethod
-    def connector_auth_config(
-        cls,
-        organization_id: UUID,
-        auth_config_id: UUID,
-    ) -> "ResourceRef":
-        return cls(
-            resource_type=ResourceType.CONNECTOR_AUTH_CONFIG,
-            resource_id=auth_config_id,
-            organization_id=organization_id,
-        )
-
 
 @dataclass(frozen=True, slots=True)
 class AuthorizationDecision:
@@ -292,6 +281,10 @@ class Context:
     #: run on a contact's behalf. The pod database names it to every session it
     #: opens for this context, so contact-owned tables show only their rows.
     contact_id: UUID | None = None
+    #: Every permission the action under way needs, when its caller knows them.
+    #: A refusal then names all the approvable ones at once, so the person is
+    #: asked one time per action (``session_approvals.also_refused``).
+    action_requirements: frozenset[str] = field(default_factory=frozenset)
     _decision_cache: dict[
         tuple[str, ResourceType | None, UUID | None], AuthorizationDecision
     ] = field(default_factory=dict)
@@ -415,6 +408,9 @@ class Context:
             )
         if decision.reason_code == RESOURCE_NOT_IN_POD:
             raise DomainError("Not found", code="NOT_FOUND", status_code=404)
+        permission_ids = [permission_id]
+        if decision.reason_code in APPROVABLE_REFUSALS:
+            permission_ids += await also_refused(self, permission_id, resource)
         raise DomainError(
             _denial_message(permission_id, decision),
             code=decision.reason_code,
@@ -423,7 +419,7 @@ class Context:
             # into a request_approval payload (session approvals key on it), and
             # so callers can act on the resource without parsing prose.
             details={
-                "permission_ids": [permission_id],
+                "permission_ids": permission_ids,
                 **_denial_resource_details(decision),
             },
         )

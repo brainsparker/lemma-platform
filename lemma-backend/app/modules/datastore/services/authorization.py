@@ -236,6 +236,26 @@ class DatastoreAuthorization:
         )
         await self._release_application_connection()
 
+    async def require_record_delete(
+        self,
+        *,
+        user_id: UUID,
+        ctx: TableContext,
+    ) -> None:
+        """Deleting rows asks for ``record.delete``, never ``record.write``.
+
+        It used to ride on the write, so anyone or anything able to write one
+        row could empty the table, and a workload's delete was not destructive
+        (audit H14). Row-level security bounds it as it bounds writes.
+        """
+        auth_ctx = self._context()
+        self._refuse_outsider_on_contact_rows(auth_ctx, ctx)
+        await auth_ctx.require(
+            Permissions.DATASTORE_RECORD_DELETE,
+            ResourceRef.table(ctx.pod_id, ctx.table_id),
+        )
+        await self._release_application_connection()
+
     async def can_admin_table(
         self,
         *,

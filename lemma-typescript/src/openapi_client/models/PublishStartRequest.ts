@@ -8,10 +8,6 @@ import type { PublishMode } from './PublishMode.js';
  */
 export type PublishStartRequest = {
     /**
-     * GitHub connector account to publish as.
-     */
-    account_id: string;
-    /**
      * Polish the generated README with the system model.
      */
     ai_readme?: boolean;

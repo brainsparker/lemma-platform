@@ -329,15 +329,17 @@ async def test_a_file_that_is_not_a_page_carries_nothing(
     ).status_code == status.HTTP_404_NOT_FOUND
 
 
-async def test_an_agents_page_carries_only_what_the_agent_may_read(
+async def test_only_a_person_shares_a_page_and_it_carries_what_they_may_read(
     pod_api: DatastoreApi,
     authenticated_client: AsyncClient,
     async_client: AsyncClient,
     test_app,
 ):
-    """PS-ACCESS-020 at fetch time: the person's access intersected with the
-    agent's, never the person's alone — or an agent narrower than its person
-    could publish what it was never granted by embedding it in a page."""
+    """PS-ACCESS-020 for a public link. An agent never exceeds the person it
+    acts for, and a link outlives every grant, so an agent mints none at all:
+    an agent narrower than its person could otherwise publish what it was never
+    granted by embedding it in a page. The person sharing it themselves carries
+    what they may read, and only while they are there to vouch for it."""
     pod_id = str(pod_api.pod_id)
     await pod_api.create_folder("/library")
     await pod_api.create_folder("/vault")
@@ -394,43 +396,42 @@ async def test_an_agents_page_carries_only_what_the_agent_may_read(
         base_url="http://testserver",
         headers={"Authorization": f"Bearer {token}"},
     ) as agent_client:
+        # The agent may read the page -- the refusal is about sharing it.
+        readable = await agent_client.get(
+            f"/pods/{pod_id}/datastore/files/by-path", params={"path": page["path"]}
+        )
+        assert readable.status_code == status.HTTP_200_OK, readable.text
         minted = await agent_client.post(
             f"/pods/{pod_id}/datastore/files/signed-url",
             params={"path": page["path"]},
             json={},
         )
-    assert minted.status_code == status.HTTP_201_CREATED, minted.text
-    agent_code = minted.json()["signed_url"].rsplit("/", 1)[-1]
+    assert minted.status_code == status.HTTP_403_FORBIDDEN, minted.text
+    assert minted.json()["code"] == "DATASTORE_ACCESS_DENIED", minted.text
 
-    assert (
-        await async_client.get(_embedded(agent_code, "cover.png"))
-    ).status_code == status.HTTP_200_OK
-    assert (
-        await async_client.get(_embedded(agent_code, "/vault/payroll.png"))
-    ).status_code == status.HTTP_404_NOT_FOUND
-
-    # The person, sharing the same page themselves, may carry both.
-    person_code = await _share(pod_api, page["path"])
-    assert (
-        await async_client.get(_embedded(person_code, "/vault/payroll.png"))
-    ).status_code == status.HTTP_200_OK
+    # The person, sharing the page themselves, may carry both.
+    code = await _share(pod_api, page["path"])
+    for reference in ("cover.png", "/vault/payroll.png"):
+        assert (
+            await async_client.get(_embedded(code, reference))
+        ).status_code == status.HTTP_200_OK, reference
 
     # The person's account goes (the row's person is nulled on delete) and the
-    # cache is lost. The agent minted for them, so with nobody to intersect
-    # with the link serves nothing — never the agent's own, wider, authority.
+    # cache is lost. Nobody is left to vouch for the link, so it serves nothing.
     async with SessionUnitOfWorkFactory(get_session_maker())() as uow:
         await uow.session.execute(
             update(DatastoreSignedLink)
-            .where(DatastoreSignedLink.code == agent_code)
+            .where(DatastoreSignedLink.code == code)
             .values(created_by_user_id=None)
         )
         await uow.commit()
     store = signed_url.get_signed_url_store()
-    await (await store._get_redis()).delete(store._key(agent_code))
+    await (await store._get_redis()).delete(store._key(code))
 
     assert (
-        await async_client.get(f"/public/s/{agent_code}")
+        await async_client.get(f"/public/s/{code}")
     ).status_code == status.HTTP_404_NOT_FOUND
-    assert (
-        await async_client.get(_embedded(agent_code, "cover.png"))
-    ).status_code == status.HTTP_404_NOT_FOUND
+    for reference in ("cover.png", "/vault/payroll.png"):
+        assert (
+            await async_client.get(_embedded(code, reference))
+        ).status_code == status.HTTP_404_NOT_FOUND, reference

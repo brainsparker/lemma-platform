@@ -1,17 +1,24 @@
-"""Executes an approved tool call with the *user's* authority instead of the agent's.
+"""Executes an approved tool call: as the agent, lent exactly what was refused.
 
 The agent restates the exact tool + args it wants run in ``request_approval``.
 On approval we dispatch that same tool, with exactly those args, through the
 shared ``AgentToolDispatcher`` under a context that carries an explicit
-``ApprovedExecution``: in-process tools (pod data, connectors, subagents) build
-the approver's user context from it (``tool_authorization_context``), and the
-agent workload identity is stripped so sandbox tools (exec_command,
-execute_python, ...) run in a workspace session minted with the user's token.
-Same conversation/pod/cwd as the original run.
+``ApprovedExecution``. Every tool runs as the agent, with exactly what the
+server refused it lent on top -- read from the server's record of the refusal
+(``approval_denials``), never from the ``permission_ids`` the model wrote:
 
-The approver is the conversation's owner -- the person the agent works for. A
-decision from anyone else is refused before it is recorded
-(``ApprovalCoordinator``), so it never reaches here.
+* in-process tools (pod data, connectors, subagents) build the agent's own
+  delegated context with those permissions answered as approved
+  (``tool_authorization_context``);
+* sandbox commands (exec_command, execute_python) keep the workload's token;
+  what that session's ``lemma`` calls were refused is written to the
+  session-approval store for the length of the command and withdrawn after it
+  (``approval_denials.lent_to_the_sandbox``).
+
+Same conversation/pod/cwd as the original run. The approver is the
+conversation's owner -- the person the agent works for. A decision from anyone
+else is refused before it is recorded (``ApprovalCoordinator``), so it never
+reaches here.
 """
 
 from __future__ import annotations
@@ -25,6 +32,13 @@ from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
     ConversationRepository,
 )
+from app.modules.agent.tools.approval_denials import (
+    SANDBOX_COMMAND_TOOLS,
+    lent_to_the_sandbox,
+    refused_permissions,
+    sandbox_refusals,
+)
+from app.modules.agent.tools.authority import workload_actor_id
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.dispatcher import AgentToolDispatcher
 from app.modules.agent.tools.tool_errors import (
@@ -74,6 +88,19 @@ class ApprovalExecutor:
         if Audience.of(conversation).answers_outsiders:
             raise OutsiderRunRefused(_NOTHING_RUNS_AS_THE_MEMBER)
 
+        actor = workload_actor_id(deps)
+        # A sandbox command's refusals were recorded per session by the API,
+        # since the shell's own call was never refused; everything else's per
+        # call, by the tool.
+        sandbox_lent = (
+            await sandbox_refusals(
+                conversation_id=deps.conversation_id,
+                person_user_id=deps.user_id,
+                workload_actor_id=actor,
+            )
+            if tool_name in SANDBOX_COMMAND_TOOLS
+            else frozenset()
+        )
         approved = ApprovedExecution(
             # The run's user is the conversation's owner: the person the agent
             # works for, and the only one whose decision is recorded.
@@ -82,32 +109,39 @@ class ApprovalExecutor:
             conversation_id=deps.conversation_id,
             tool_name=tool_name,
             approval_id=approval_id,
+            permission_ids=sandbox_lent
+            | await refused_permissions(
+                conversation_id=deps.conversation_id,
+                workload_actor_id=actor,
+                tool_args={"tool_name": tool_name, "args": args or {}},
+            ),
         )
         # The approval is explicit on the context; in-process tools read it via
-        # `tool_authorization_context`. The workload identity is stripped as
-        # well, so the workspace session token is minted for the user.
-        user_ctx = deps.model_copy(
-            update={
-                "approved_execution": approved,
-                "workload_type": None,
-                "workload_id": None,
-                "agent_name": None,
-            }
-        )
+        # `tool_authorization_context`. The workload identity stays: the call
+        # runs as the agent, and a refusal inside it is recorded under the
+        # agent, where the next approval of this call will look for it.
+        approved_ctx = deps.model_copy(update={"approved_execution": approved})
 
         try:
-            result = await self.dispatcher.call_tool(
-                agent=agent,
-                conversation=conversation,
-                ctx=user_ctx,
-                name=tool_name,
-                arguments=args or {},
-                agent_run_id=deps.agent_run_id,
-                # The approved call may be `answer_question` -- carried by a
-                # run with questions waiting on its member as a capability,
-                # not in a toolset this would otherwise assemble.
-                include_question_tools=True,
-            )
+            async with lent_to_the_sandbox(
+                conversation_id=deps.conversation_id,
+                person_user_id=deps.user_id,
+                workload_actor_id=actor,
+                permission_ids=sandbox_lent,
+            ):
+                result = await self.dispatcher.call_tool(
+                    agent=agent,
+                    conversation=conversation,
+                    ctx=approved_ctx,
+                    name=tool_name,
+                    arguments=args or {},
+                    agent_run_id=deps.agent_run_id,
+                    # The approved call may be `answer_question` -- carried by
+                    # a run with questions waiting on its member as a
+                    # capability, not in a toolset this would otherwise
+                    # assemble.
+                    include_question_tools=True,
+                )
         except Exception as exc:  # noqa: BLE001 - graceful tool-error boundary
             if is_control_flow_exception(exc):
                 raise

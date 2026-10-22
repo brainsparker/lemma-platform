@@ -68,25 +68,24 @@ async def resolve_account_connector(uow, account_id: UUID) -> tuple[str, str] | 
 async def resolve_operation(
     uow,
     *,
-    connector_id: str,
+    ctx: Context,
+    pod_id: UUID,
+    connector: str,
     operation_name: str,
     payload: dict[str, object],
-    user_id: UUID,
-    actor: Context | None,
-    account_id: UUID | None,
 ) -> ResolvedConnectorExecution:
-    """Authorize an operation and resolve its plan, credentials included.
+    """Authorize an operation through a pod connector and resolve its plan.
 
-    The only half that touches the database. Leave the session's scope before
-    calling :func:`execute_resolved`.
+    ``connector`` is the pod connector's slug; the account follows from its
+    mode and from ``ctx``. The only half that touches the database. Leave the
+    session's scope before calling :func:`execute_resolved`.
     """
-    return await build_connector_operation_service(uow).resolve_execution(
-        connector_id=connector_id,
+    return await build_connector_operation_service(uow).resolve_pod_connector_execution(
+        ctx,
+        pod_id=pod_id,
+        slug=connector,
         operation_name=operation_name,
         payload=payload,
-        user_id=user_id,
-        actor=actor,
-        account_id=account_id,
     )
 
 
@@ -97,29 +96,7 @@ async def execute_resolved(
     return await build_connector_operation_service(uow).execute_resolved(resolved)
 
 
-async def execute_operation(
-    uow,
-    *,
-    connector_id: str,
-    operation_name: str,
-    payload: dict[str, object],
-    user_id: UUID,
-    actor: Context | None,
-    account_id: UUID | None,
-) -> OperationExecutionResponse:
-    """Resolve and run an operation, holding the session for the whole call."""
-    return await build_connector_operation_service(uow).execute_operation(
-        connector_id=connector_id,
-        operation_name=operation_name,
-        payload=payload,
-        user_id=user_id,
-        actor=actor,
-        account_id=account_id,
-    )
-
-
 __all__ = [
-    "execute_operation",
     "execute_resolved",
     "get_account",
     "get_account_kind",

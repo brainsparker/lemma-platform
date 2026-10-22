@@ -16,7 +16,6 @@ import type { SurfacePlatform } from './SurfacePlatform.js';
  * second surface of the same platform.
  */
 export type SurfaceCreateRequest = {
-    account_id?: (string | null);
     config?: SurfaceBehaviorConfigInput;
     credential_mode?: SurfaceCredentialMode;
     default_agent_name?: (string | null);
@@ -26,4 +25,8 @@ export type SurfaceCreateRequest = {
      */
     name?: (string | null);
     platform: SurfacePlatform;
+    /**
+     * Slug of the SHARED pod connector this surface runs as: an account its owner shared with the pod. Omit to run on Lemma's own credentials where the platform has them.
+     */
+    pod_connector?: (string | null);
 };

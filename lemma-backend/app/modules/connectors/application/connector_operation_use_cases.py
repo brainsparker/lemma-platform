@@ -20,7 +20,6 @@ from fastapi import Request
 
 from app.core.authorization.scope import (
     UowContext,
-    current_context_scope,
     pod_context_scope,
     uow_scope,
 )
@@ -30,7 +29,6 @@ from app.modules.connectors.api.schemas.connector_operation_schemas import (
 )
 from app.modules.connectors.domain.errors import (
     ConnectorDomainError,
-    ConnectorValidationError,
     OperationExecutionAccessDeniedError,
     OperationExecutionInfrastructureError,
     OperationExecutionTimeoutError,
@@ -54,21 +52,6 @@ from app.modules.connectors.services.connector_operation_service import (
 )
 
 
-def _pod_for_files(context_pod: UUID | None, requested: UUID | None) -> UUID | None:
-    """The pod file references resolve in: the delegated one, or the named one.
-
-    A pod function's delegated token already fixes its pod; naming a different
-    one there is refused rather than quietly preferred, since it would read the
-    files of a pod the token was never issued for.
-    """
-    if requested is not None and context_pod is not None and requested != context_pod:
-        raise ConnectorValidationError(
-            "pod_id does not match the pod this call is running in.",
-            details={"reason": "pod_mismatch"},
-        )
-    return context_pod or requested
-
-
 class ConnectorOperationUseCases:
     """Owns the connector-operation execution saga (factory mode)."""
 
@@ -85,35 +68,31 @@ class ConnectorOperationUseCases:
         # and file results simply come back inline.
         self._pod_file_gateway_factory = pod_file_gateway_factory or (lambda _uow: None)
 
-    async def execute_operation_for_auth_config(
+    async def execute_pod_connector_operation(
         self,
         *,
-        organization_id: UUID,
-        auth_config_name: str,
+        pod_id: UUID,
+        slug: str,
         operation_name: str,
         payload: dict[str, Any],
         user_id: UUID,
         request: Request,
-        account_id: UUID | None = None,
-        pod_id: UUID | None = None,
     ) -> OperationExecutionResponse:
-        # Phase 1 (short scope): build + bind the request Context (org/delegation
-        # aware), resolve all DB state + authorize + resolve credentials. The
-        # scope commits any OAuth-token refresh and releases the connection on
-        # exit, before the external call.
-        async with current_context_scope(
-            self._uow_factory, request=request, user_id=user_id
+        # Phase 1 (short scope): build + bind the pod Context -- which pins a
+        # workload's token to its own pod -- then authorize, pick the account
+        # from the pod connector and resolve its credentials. The scope commits
+        # an auto-added pod account and any OAuth-token refresh, and releases
+        # the connection on exit, before the external call.
+        async with pod_context_scope(
+            self._uow_factory, request=request, user_id=user_id, pod_id=pod_id
         ) as scope:
-            resolved = await self._build(scope.uow).resolve_execution_for_auth_config(
-                user_id=user_id,
-                organization_id=organization_id,
-                auth_config_name=auth_config_name,
+            resolved = await self._build(scope.uow).resolve_pod_connector_execution(
+                scope.ctx,
+                pod_id=pod_id,
+                slug=slug,
                 operation_name=operation_name,
                 payload=payload,
-                actor=scope.ctx,
-                account_id=account_id,
             )
-            pod_id = _pod_for_files(getattr(scope.ctx, "pod_id", None), pod_id)
 
         # Phase 1b: read the files the arguments name, as the caller, in their
         # pod. Skipped outright -- no scope, no read -- when there are none,
@@ -171,20 +150,11 @@ class ConnectorOperationUseCases:
         )
 
     def _scope(
-        self, *, request: Request, user_id: UUID, pod_id: UUID | None
+        self, *, request: Request, user_id: UUID, pod_id: UUID
     ) -> AbstractAsyncContextManager[UowContext]:
-        """The caller's context, in the pod the call named when it named one.
-
-        An org-level call made by a person carries no pod, so `/me/...` had
-        nothing to resolve against. Naming one builds the pod context, which is
-        also where the person's membership of that pod is checked.
-        """
-        if pod_id is not None:
-            return pod_context_scope(
-                self._uow_factory, request=request, user_id=user_id, pod_id=pod_id
-            )
-        return current_context_scope(
-            self._uow_factory, request=request, user_id=user_id
+        """The caller's context in the pod the connector belongs to."""
+        return pod_context_scope(
+            self._uow_factory, request=request, user_id=user_id, pod_id=pod_id
         )
 
     async def _materialize_file_inputs(
@@ -193,7 +163,7 @@ class ConnectorOperationUseCases:
         *,
         user_id: UUID,
         request: Request,
-        pod_id: UUID | None,
+        pod_id: UUID,
     ) -> ResolvedConnectorExecution:
         from app.modules.connectors.services.files.operation_files import (
             OperationFiles,
@@ -219,7 +189,7 @@ class ConnectorOperationUseCases:
         user_id: UUID,
         request: Request,
         connector_id: str,
-        pod_id: UUID | None,
+        pod_id: UUID,
     ) -> OperationExecutionResponse:
         """Return a usable file, whatever shape the provider wrapped it in.
 
@@ -304,10 +274,11 @@ class ConnectorOperationUseCases:
         if resolved.account_id is None or resolved.account_user_id is None:
             return None
         try:
-            async with current_context_scope(
-                self._uow_factory, request=request, user_id=user_id
-            ) as scope:
-                service = self._build(scope.uow)
+            # No caller context: refreshing is bookkeeping on the account,
+            # done as its owner, and resolution already decided the caller
+            # may use it.
+            async with uow_scope(self._uow_factory) as uow:
+                service = self._build(uow)
                 if service.connector_service is None:
                     return None
                 refreshed = await service.connector_service.get_account_credentials(

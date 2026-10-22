@@ -1,5 +1,6 @@
 from http import HTTPStatus
 from typing import Any
+from uuid import UUID
 
 import httpx
 
@@ -12,10 +13,30 @@ from ...types import UNSET, Response, Unset
 
 def _get_kwargs(
     *,
+    pod_id: None | Unset | UUID = UNSET,
+    agent: None | Unset | UUID = UNSET,
     wake: bool | Unset = False,
 ) -> dict[str, Any]:
 
     params: dict[str, Any] = {}
+
+    json_pod_id: None | str | Unset
+    if isinstance(pod_id, Unset):
+        json_pod_id = UNSET
+    elif isinstance(pod_id, UUID):
+        json_pod_id = str(pod_id)
+    else:
+        json_pod_id = pod_id
+    params["pod_id"] = json_pod_id
+
+    json_agent: None | str | Unset
+    if isinstance(agent, Unset):
+        json_agent = UNSET
+    elif isinstance(agent, UUID):
+        json_agent = str(agent)
+    else:
+        json_agent = agent
+    params["agent"] = json_agent
 
     params["wake"] = wake
 
@@ -63,11 +84,16 @@ def _build_response(
 def sync_detailed(
     *,
     client: AuthenticatedClient | Client,
+    pod_id: None | Unset | UUID = UNSET,
+    agent: None | Unset | UUID = UNSET,
     wake: bool | Unset = False,
 ) -> Response[ErrorResponse | WebLoginListResponse]:
     """List the sites your browser is signed in to
 
     Args:
+        pod_id (None | Unset | UUID): The pod whose browser to manage. Omitted, your personal one.
+        agent (None | Unset | UUID): A named agent of `pod_id`, to manage that agent's browser.
+            Omitted, the pod assistant's.
         wake (bool | Unset): Start the computer if it is paused. Off by default so that rendering
             this list is never what wakes one. Default: False.
 
@@ -80,6 +106,8 @@ def sync_detailed(
     """
 
     kwargs = _get_kwargs(
+        pod_id=pod_id,
+        agent=agent,
         wake=wake,
     )
 
@@ -93,11 +121,16 @@ def sync_detailed(
 def sync(
     *,
     client: AuthenticatedClient | Client,
+    pod_id: None | Unset | UUID = UNSET,
+    agent: None | Unset | UUID = UNSET,
     wake: bool | Unset = False,
 ) -> ErrorResponse | WebLoginListResponse | None:
     """List the sites your browser is signed in to
 
     Args:
+        pod_id (None | Unset | UUID): The pod whose browser to manage. Omitted, your personal one.
+        agent (None | Unset | UUID): A named agent of `pod_id`, to manage that agent's browser.
+            Omitted, the pod assistant's.
         wake (bool | Unset): Start the computer if it is paused. Off by default so that rendering
             this list is never what wakes one. Default: False.
 
@@ -111,6 +144,8 @@ def sync(
 
     return sync_detailed(
         client=client,
+        pod_id=pod_id,
+        agent=agent,
         wake=wake,
     ).parsed
 
@@ -118,11 +153,16 @@ def sync(
 async def asyncio_detailed(
     *,
     client: AuthenticatedClient | Client,
+    pod_id: None | Unset | UUID = UNSET,
+    agent: None | Unset | UUID = UNSET,
     wake: bool | Unset = False,
 ) -> Response[ErrorResponse | WebLoginListResponse]:
     """List the sites your browser is signed in to
 
     Args:
+        pod_id (None | Unset | UUID): The pod whose browser to manage. Omitted, your personal one.
+        agent (None | Unset | UUID): A named agent of `pod_id`, to manage that agent's browser.
+            Omitted, the pod assistant's.
         wake (bool | Unset): Start the computer if it is paused. Off by default so that rendering
             this list is never what wakes one. Default: False.
 
@@ -135,6 +175,8 @@ async def asyncio_detailed(
     """
 
     kwargs = _get_kwargs(
+        pod_id=pod_id,
+        agent=agent,
         wake=wake,
     )
 
@@ -146,11 +188,16 @@ async def asyncio_detailed(
 async def asyncio(
     *,
     client: AuthenticatedClient | Client,
+    pod_id: None | Unset | UUID = UNSET,
+    agent: None | Unset | UUID = UNSET,
     wake: bool | Unset = False,
 ) -> ErrorResponse | WebLoginListResponse | None:
     """List the sites your browser is signed in to
 
     Args:
+        pod_id (None | Unset | UUID): The pod whose browser to manage. Omitted, your personal one.
+        agent (None | Unset | UUID): A named agent of `pod_id`, to manage that agent's browser.
+            Omitted, the pod assistant's.
         wake (bool | Unset): Start the computer if it is paused. Off by default so that rendering
             this list is never what wakes one. Default: False.
 
@@ -165,6 +212,8 @@ async def asyncio(
     return (
         await asyncio_detailed(
             client=client,
+            pod_id=pod_id,
+            agent=agent,
             wake=wake,
         )
     ).parsed

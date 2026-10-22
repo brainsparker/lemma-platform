@@ -16,6 +16,7 @@ from typer.testing import CliRunner
 
 from lemma_cli.cli_core.app import app
 from lemma_cli.cli_core.commands import connectors
+from lemma_sdk.errors import LemmaNotFoundError
 
 runner = CliRunner()
 
@@ -132,26 +133,75 @@ def _fake_client(captured: dict):
             captured["connect_request"] = {"connector": connector, **extra}
             return {"authorization_url": "https://acme.myshopify.com/admin/oauth"}
 
-        def execute(self, auth_config, operation, *, payload, account_id=None, **extra):
+    class PodConnectors:
+        """A pod's connectors: what `connectors run`/`execute` now talk to."""
+
+        def __init__(self, pod_id):
+            self.pod_id = pod_id
+
+        def pod_connectors(self):
+            return {"items": [{"slug": slug} for slug in _POD_CONNECTORS]}
+
+        def pod_operation(self, connector, operation):
+            captured.setdefault("op_gets", []).append((connector, operation))
+            if connector not in _POD_CONNECTORS:
+                raise LemmaNotFoundError(
+                    404, "no such connector", code="POD_CONNECTOR_NOT_FOUND"
+                )
+            if operation not in _OPERATIONS:
+                raise LemmaNotFoundError(404, "no such operation")
+            return _OPERATIONS[operation]
+
+        def pod_operations(self, connector, query=None, *, limit=100):
+            captured.setdefault("pod_searches", []).append((connector, query, limit))
+            hits = [
+                {"name": name, "description": op["description"]}
+                for name, op in _OPERATIONS.items()
+                if not query or query.split()[0].lower() in op["description"].lower()
+            ] or [
+                {"name": name, "description": op["description"]}
+                for name, op in _OPERATIONS.items()
+            ]
+            return {"items": hits[:limit]}
+
+        def declare_pod_connector(self, slug, auth_config_id, mode, **extra):
+            captured["declare"] = {
+                "slug": slug,
+                "auth_config_id": auth_config_id,
+                "mode": mode,
+                **extra,
+            }
+            return {"slug": slug}
+
+        def add_pod_account(self, account_id, *, visibility="PERSONAL"):
+            captured["add_account"] = (account_id, visibility)
+            return {"id": "pa-1"}
+
+        def execute(self, connector, operation, payload):
             captured["execute"] = {
-                "auth_config": auth_config,
+                "pod_id": self.pod_id,
+                "connector": connector,
                 "operation": operation,
                 "payload": payload,
-                "account_id": account_id,
-                **extra,
             }
             return {"result": {"ok": True}}
 
-    return SimpleNamespace(connectors=Connectors())
+    return SimpleNamespace(
+        connectors=Connectors(),
+        pod=lambda pod_id: SimpleNamespace(connectors=PodConnectors(pod_id)),
+    )
 
 
-def _patch(monkeypatch, client):
+_POD = "11111111-1111-1111-1111-111111111111"
+_POD_CONNECTORS = ("gmail", "support-inbox")
+
+
+def _patch(monkeypatch, client, *, pod=_POD):
+    runtime = {"org": "org-1", **({"pod": pod} if pod else {})}
     monkeypatch.setattr(
         connectors,
         "run_with_client",
-        lambda ctx, fn: fn(
-            client, SimpleNamespace(config={"_runtime": {"org": "org-1"}})
-        ),
+        lambda ctx, fn: fn(client, SimpleNamespace(config={"_runtime": runtime})),
     )
 
 
@@ -172,10 +222,16 @@ def test_run_resolves_connector_id_operation_and_executes(monkeypatch):
     )
 
     assert result.exit_code == 0, result.stdout
-    # `gmail` resolved to the DEFAULT install, not the first one listed.
-    assert captured["execute"]["auth_config"] == "workspace-gmail"
-    assert captured["execute"]["operation"] == "gmail_list_messages"
-    assert captured["execute"]["payload"] == {"max_results": 5}
+    # `gmail` is the pod connector's slug, run in the selected pod: the
+    # connector, not the caller, decides which account it runs as.
+    assert captured["execute"] == {
+        "pod_id": _POD,
+        "connector": "gmail",
+        "operation": "gmail_list_messages",
+        "payload": {"max_results": 5},
+    }
+    # Discovery went through the same pod connector.
+    assert captured["op_gets"] == [("gmail", "gmail_list_messages")]
 
 
 def test_run_resolves_a_plain_english_intent(monkeypatch):
@@ -205,7 +261,8 @@ def test_run_prints_the_schema_instead_of_failing_when_input_is_missing(monkeypa
     assert "to" in result.stdout  # the required field is named
 
 
-def test_run_accepts_an_account_email(monkeypatch):
+def test_run_takes_no_account(monkeypatch):
+    """The pod connector decides the account; there is nothing to pick."""
     captured: dict = {}
     _patch(monkeypatch, _fake_client(captured))
 
@@ -223,20 +280,32 @@ def test_run_accepts_an_account_email(monkeypatch):
         ],
     )
 
-    assert result.exit_code == 0, result.stdout
-    assert captured["execute"]["account_id"] == "acct-9"
+    assert result.exit_code != 0
+    assert "execute" not in captured
 
 
-def test_run_reports_an_unknown_connector_with_what_is_installed(monkeypatch):
+def test_run_reports_an_unknown_connector_with_what_the_pod_declares(monkeypatch):
     captured: dict = {}
     _patch(monkeypatch, _fake_client(captured))
 
     result = runner.invoke(app, ["connectors", "run", "notion", "anything"])
 
     assert result.exit_code != 0
-    # The error names the installs that DO exist, so the next command is obvious
-    # without a separate `overview` call.
-    assert "workspace-gmail" in result.output
+    # The error names the pod's connectors, so the next command is obvious.
+    assert "support-inbox" in result.output
+
+
+def test_run_needs_a_pod(monkeypatch):
+    captured: dict = {}
+    _patch(monkeypatch, _fake_client(captured), pod=None)
+    monkeypatch.delenv("LEMMA_POD_ID", raising=False)
+
+    result = runner.invoke(
+        app, ["connectors", "run", "gmail", "gmail_list_messages", "-d", "{}"]
+    )
+
+    assert result.exit_code != 0
+    assert "execute" not in captured
 
 
 def test_search_with_no_connector_searches_every_install(monkeypatch):
@@ -327,24 +396,20 @@ def test_operations_get_auto_discovers_like_its_siblings(monkeypatch):
     assert "gmail_send_email" in result.stdout
 
 
-def test_resolution_lists_installs_once_per_command(monkeypatch):
-    """Classifying a positional and resolving it must not cost two round trips."""
+def test_execute_runs_the_named_pod_connector_without_resolving_installs(monkeypatch):
+    """A pod connector slug is the whole address: nothing to look up first."""
     captured: dict = {}
     _patch(monkeypatch, _fake_client(captured))
 
     result = runner.invoke(
         app,
-        [
-            "connectors",
-            "operations",
-            "execute",
-            "workspace-gmail",
-            "gmail_list_messages",
-        ],
+        ["connectors", "operations", "execute", "support-inbox", "gmail_send_email"],
     )
 
     assert result.exit_code == 0, result.stdout
-    assert captured["auth_config_lists"] == 1
+    assert "auth_config_lists" not in captured
+    assert captured["execute"]["connector"] == "support-inbox"
+    assert captured["execute"]["pod_id"] == _POD
 
 
 def test_read_intent_skips_a_higher_ranked_write_operation(monkeypatch):
@@ -441,7 +506,7 @@ def test_attach_turns_pod_paths_into_file_references(monkeypatch):
             "connectors",
             "operations",
             "execute",
-            "workspace-gmail",
+            "gmail",
             "gmail_send_email",
             "-d",
             '{"to": "anukul@lemma.work"}',
@@ -461,28 +526,8 @@ def test_attach_turns_pod_paths_into_file_references(monkeypatch):
         "attachments": [{"pod_path": "/me/a.pdf"}, {"pod_path": "/me/b.pdf"}],
         "body": {"file": {"pod_path": "/shared/c.csv"}},
     }
-    # The pod the paths resolve in, sent only because a pod file is named.
-    assert sent["pod_id"] == "11111111-1111-1111-1111-111111111111"
-
-
-def test_a_call_without_files_sends_no_pod(monkeypatch):
-    captured: dict = {}
-    _patch(monkeypatch, _fake_client(captured))
-    monkeypatch.setenv("LEMMA_POD_ID", "11111111-1111-1111-1111-111111111111")
-
-    result = runner.invoke(
-        app,
-        [
-            "connectors",
-            "operations",
-            "execute",
-            "workspace-gmail",
-            "gmail_list_messages",
-        ],
-    )
-
-    assert result.exit_code == 0, result.output
-    assert "pod_id" not in captured["execute"]
+    # The paths resolve in the pod the connector is run in.
+    assert sent["pod_id"] == _POD
 
 
 def test_connect_request_passes_connection_fields(monkeypatch):
@@ -512,3 +557,62 @@ def test_connect_request_passes_connection_fields(monkeypatch):
         app, ["connectors", "connect-requests", "create", "shopify", "--field", "acme"]
     )
     assert refused.exit_code != 0
+
+
+def test_pod_list_and_pod_operations_read_the_selected_pods_connectors(monkeypatch):
+    captured: dict = {}
+    _patch(monkeypatch, _fake_client(captured))
+
+    listed = runner.invoke(app, ["--json", "connectors", "pod-list"])
+    assert listed.exit_code == 0, listed.output
+    assert [i["slug"] for i in json.loads(listed.stdout)["items"]] == list(
+        _POD_CONNECTORS
+    )
+
+    found = runner.invoke(
+        app, ["--json", "connectors", "pod-operations", "gmail", "send", "--limit", "3"]
+    )
+    assert found.exit_code == 0, found.output
+    assert captured["pod_searches"] == [("gmail", "send", 3)]
+
+
+def test_pod_add_declares_an_installation_under_a_slug(monkeypatch):
+    captured: dict = {}
+    _patch(monkeypatch, _fake_client(captured))
+
+    result = runner.invoke(
+        app,
+        [
+            "connectors",
+            "pod-add",
+            "support-inbox",
+            "gmail",
+            "--mode",
+            "SHARED",
+            "--shared-account",
+            "pa-1",
+            "--purpose",
+            "The team inbox",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    # `gmail` resolved to the org's default Gmail install, by id.
+    assert captured["declare"] == {
+        "slug": "support-inbox",
+        "auth_config_id": "ac-1",
+        "mode": "SHARED",
+        "shared_pod_account_id": "pa-1",
+        "required": False,
+        "purpose": "The team inbox",
+    }
+
+
+def test_pod_share_brings_ones_own_account_into_the_pod_shared(monkeypatch):
+    captured: dict = {}
+    _patch(monkeypatch, _fake_client(captured))
+
+    result = runner.invoke(app, ["connectors", "pod-share", "acct-9"])
+
+    assert result.exit_code == 0, result.output
+    assert captured["add_account"] == ("acct-9", "POD")

@@ -66,16 +66,13 @@ def test_publish_accepts_an_organisation_owner():
     """`owner/name` is what makes an organisation reachable. Publishing used to
     resolve the connected user's own login and nothing else, so a pod could
     only ever land in a personal namespace."""
-    request = PublishStartRequest(repo_name="acme-corp/my-pod", account_id=uuid4())
+    request = PublishStartRequest(repo_name="acme-corp/my-pod")
     assert request.repo_name == "acme-corp/my-pod"
 
 
-def test_publish_requires_account_and_defaults_to_create():
-    request = PublishStartRequest(repo_name="my-pod", account_id=uuid4())
+def test_publish_defaults_to_create():
+    request = PublishStartRequest(repo_name="my-pod")
     assert request.mode is PublishMode.CREATE
-
-    with pytest.raises(ValidationError):
-        PublishStartRequest(repo_name="my-pod")
 
 
 @pytest.mark.parametrize(
@@ -83,7 +80,7 @@ def test_publish_requires_account_and_defaults_to_create():
 )
 def test_publish_rejects_invalid_repository_names(repo_name: str):
     with pytest.raises(ValidationError):
-        PublishStartRequest(repo_name=repo_name, account_id=uuid4())
+        PublishStartRequest(repo_name=repo_name)
 
 
 # --- partial apply -----------------------------------------------------------
@@ -184,3 +181,48 @@ def test_no_partial_apply_when_the_pod_was_not_left_half_changed(status, committ
         statuses=[StepStatus.DONE, StepStatus.DONE],
     )
     assert ImportStatusResponse.from_state(state).partial_apply is None
+
+
+# --- GitHub jobs name no account ---------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "request_model, body",
+    [
+        ("ImportStartRequest", {"kind": "GITHUB", "url": "acme/crm"}),
+        ("PublishStartRequest", {"repo_name": "crm"}),
+    ],
+)
+def test_a_github_job_refuses_an_account_id(request_model, body):
+    """The account is the pod's `github` connector's decision. An `account_id`
+    used to be accepted and ignored, which told a client it had chosen."""
+    from app.modules.pod_bundle.api import schemas
+
+    model = getattr(schemas, request_model)
+    model.model_validate(body)
+    with pytest.raises(ValidationError, match="account_id"):
+        model.model_validate(
+            {**body, "account_id": "6d1f0b7e-0000-4000-8000-000000000000"}
+        )
+
+
+def test_a_refused_publish_carries_its_connect_link():
+    from uuid import uuid4
+
+    from app.modules.pod_bundle.api.schemas import PublishStatusResponse
+    from app.modules.pod_bundle.domain.state import PublishState
+
+    state = PublishState(
+        publish_id=uuid4(),
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        repo_name="crm",
+        error="Connect your github account to use 'github' in this pod.",
+        error_code="CONNECTION_REQUIRED",
+        connect_url="https://app.example/pods/p/connections?connector=github",
+    )
+
+    response = PublishStatusResponse.from_state(state).model_dump()
+
+    assert response["connect_url"].endswith("connector=github")
+    assert "account_id" not in response

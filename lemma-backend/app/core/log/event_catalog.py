@@ -130,6 +130,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent.mcp_tool_inputs.write_failed.degraded': EventSpec('warning', frozenset({'agent_run_id'})),
     'agent.memory.derivation_failed.degraded': EventSpec('warning', frozenset()),
     'agent.memory.folder_provisioning_denied.observed': EventSpec('warning', frozenset()),
+    'agent.memory_pass.finished': EventSpec('info', frozenset({'agent_run_id', 'conversation_id', 'outcome'})),
     'agent.message_replies.delivered': EventSpec('debug', frozenset({'conversation_id', 'started_new_run'})),
     'agent.mock_model.mock_llm_structured_output_required.diagnostic': EventSpec('debug', frozenset()),
     'agent.model_stream_budget.stream_abandoned.degraded': EventSpec('warning', frozenset({'elapsed_seconds', 'first_chunk', 'reason', 'url'})),

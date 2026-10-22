@@ -237,6 +237,24 @@ def test_a_delete_that_needs_approval_says_so_not_that_a_role_is_missing():
     assert "role is missing" not in message
 
 
+def test_a_route_closed_to_agents_does_not_send_them_for_approval():
+    """Some routes refuse a workload whatever it was approved for. Pointing the
+    agent at request_approval there earns the person a prompt that changes
+    nothing; it has to be told to hand the step back."""
+    from lemma_cli.cli_core.state import humanize_error
+    from lemma_sdk.errors import api_error
+
+    exc = api_error(
+        403,
+        "Delegated workloads may not mint a CLI session.",
+        code="WORKLOAD_NOT_ALLOWED",
+    )
+
+    message = humanize_error(exc)
+    assert "themselves" in message
+    assert "request_approval" not in message
+
+
 def test_a_status_with_no_obvious_next_step_gets_no_advice():
     """A guessed instruction is worse than none: a 500 is not the user's to fix."""
     from lemma_cli.cli_core.state import humanize_error

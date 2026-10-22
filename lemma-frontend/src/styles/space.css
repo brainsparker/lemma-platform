@@ -4671,53 +4671,52 @@ samp,
 }
 
 /* ── A box that hands its words and its files to the Chat tab ───────── */
+/* Three lines, of which only the middle one is the box: files waiting above
+   it, the box, and under it the model and anything refused. */
 .askbox {
     display: flex;
     flex-direction: column;
-    gap: 8px;
-    padding: 8px 8px 8px 18px;
-    border-radius: var(--r-xl);
-    background: var(--paper);
-    box-shadow: 0 0 0 1px var(--line-2), 0 4px 16px rgb(0 0 0 / 0.04);
-}
-.askbox:focus-within {
-    box-shadow: 0 0 0 1px var(--ink-3), 0 4px 16px rgb(0 0 0 / 0.05);
-}
-/* The whole box is the drop target, so the whole box is what lights up —
-   the same as the composer, which accepts the same drag. */
-.askbox--over {
-    background: var(--accent-soft);
+    gap: 6px;
 }
 /* The same layout the conversation's composer uses, because it is the same
    box: the row aligns to its bottom edge, so a growing draft pushes upward,
    and every control centres on the textarea's last line — the line the
    placeholder is on when the box is empty and the line being typed on when it
-   is not. The attach used to hang off the textarea's own bottom margin
-   instead, which put it a few pixels above the send button beside it: the one
-   control in the row that did not line up with the others. */
+   is not. */
 .askbox__row {
     display: flex;
     align-items: flex-end;
-    gap: 8px;
-    --askbox-line: 24px;
+    gap: 4px;
+    padding: 5px;
+    border-radius: var(--r-xl);
+    background: var(--paper);
+    box-shadow: 0 0 0 1px var(--line-2), 0 4px 16px rgb(0 0 0 / 0.04);
+    --askbox-line: 36px;
+}
+.askbox__row:focus-within {
+    box-shadow: 0 0 0 1px var(--ink-3), 0 4px 16px rgb(0 0 0 / 0.05);
+}
+/* The whole form takes the drop, and the box is what lights up — the same as
+   the composer, which accepts the same drag. */
+.askbox--over .askbox__row {
+    background: var(--accent-soft);
 }
 .askbox__files {
     display: flex;
     flex-wrap: wrap;
+    align-items: center;
     gap: 6px;
 }
 .askbox__picker {
     display: none;
 }
-/* Centred on that line: 7px is the textarea's own bottom margin, and the rest
-   is the difference between a 34px control and the line it sits on. */
 .askbox__attach {
     display: grid;
     place-items: center;
     flex: none;
     width: 34px;
     height: 34px;
-    margin-block-end: calc(7px + (var(--askbox-line) - 34px) / 2);
+    margin-block-end: calc((var(--askbox-line) - 34px) / 2);
     border: 0;
     border-radius: var(--r-sm);
     background: none;
@@ -4728,7 +4727,18 @@ samp,
     background: var(--chrome);
     color: var(--ink);
 }
+.askbox__foot {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+    padding: 0 10px;
+}
+.askbox__foot:empty {
+    display: none;
+}
 .askbox__note {
+    min-width: 0;
     font-size: 12px;
     color: var(--ink-3);
 }
@@ -4738,9 +4748,10 @@ samp,
 .askbox textarea {
     flex: 1;
     min-width: 0;
-    min-height: 24px;
-    margin: 0 0 7px;
-    padding: 0;
+    min-height: var(--askbox-line);
+    max-height: min(200px, 28vh);
+    margin: 0;
+    padding: calc((var(--askbox-line) - 1.5em) / 2) 6px;
     border: 0;
     outline: none;
     resize: none;
@@ -4752,6 +4763,9 @@ samp,
 }
 .askbox textarea::placeholder {
     color: var(--ink-3);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 .askbox__send {
     flex: none;
@@ -4759,7 +4773,7 @@ samp,
     place-items: center;
     width: 36px;
     height: 36px;
-    margin-block-end: calc(7px + (var(--askbox-line) - 36px) / 2);
+    margin-block-end: calc((var(--askbox-line) - 36px) / 2);
     border: 0;
     border-radius: 50%;
     background: var(--accent);
@@ -8114,69 +8128,19 @@ samp,
     font-size: 13px;
 }
 
-/* ── the conversation box: what you type on top, its tools under it ──── */
-/* One row held the model's name, the paperclip, the words, the voice and
-   the send button side by side, so a long model name pushed the words into
-   the middle of the box. Two rows instead, the way a chat box is laid out:
-   the words across the whole width, then the paperclip and the model on
-   the left and voice and send on the right. Markup unchanged; the floating
-   chat already worked this way. */
+/* ── the conversation box: one line, and what is about it under it ──── */
+/* The box holds what is done to it — attach, type, call, send — and nothing
+   else. It was two rows (the words, then the paperclip, the model, voice and
+   send), which made an empty box as tall as a paragraph. The model and the
+   note on what the conversation is waiting on are on the line under it
+   (`.composer__foot`), files wait above it, and the box is one line until a
+   draft grows it. */
 .composer .composer__box {
-    flex-wrap: wrap;
-    align-items: center;
+    flex-wrap: nowrap;
+    align-items: flex-end;
     gap: 4px;
-    padding: 12px 10px 8px 10px;
+    padding: 5px;
 }
 .composer .composer__input {
-    order: -1;
-    flex: 1 0 100%;
-    min-height: 26px;
-    padding: 2px 8px 8px;
-}
-.composer .composer__attach {
-    order: 1;
-    margin: 0;
-}
-.composer .modelpick {
-    order: 2;
-    margin: 0;
-}
-.composer .composer__wave {
-    order: 3;
-    margin: 0 0 0 auto;
-}
-.composer .composer__stop {
-    order: 4;
-}
-.composer .composer__send {
-    order: 5;
-    width: 36px;
-    height: 36px;
-}
-
-/* ── the ask box: the same two rows as a conversation's box ───────────── */
-/* Home starts the conversation the composer then carries, so it reads the
-   same: the words across the top, the paperclip and the model on the left,
-   send on the right. */
-.askbox {
-    padding: 12px 10px 8px 10px;
-}
-.askbox__row {
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 4px;
-}
-.askbox textarea {
-    order: -1;
-    flex: 1 0 100%;
-    min-height: 26px;
-    margin: 0;
-    padding: 2px 8px 8px;
-}
-.askbox__attach,
-.askbox__row .modelpick {
-    margin: 0;
-}
-.askbox__send {
-    margin: 0 0 0 auto;
+    padding-inline: 6px;
 }

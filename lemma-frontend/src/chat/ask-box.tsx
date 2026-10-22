@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
-import { AttachIcon, CloseIcon, FileIcon, SendIcon } from "@/ui/icons";
-import { canSend, describeSize, namePasted, offered, toAttachments, type Attachment } from "@/thread/attachments";
+import { AttachIcon, SendIcon } from "@/ui/icons";
+import { canSend, namePasted, offered, toAttachments, type Attachment } from "@/thread/attachments";
+import { AttachedFiles } from "@/thread/attached";
 
 /** A box to start a conversation from somewhere that is not one — Home, a
  *  bot's page. It holds no conversation of its own: the words and the files
@@ -15,7 +16,7 @@ import { canSend, describeSize, namePasted, offered, toAttachments, type Attachm
  *  reading it off the conversation is the Chat tab's job. */
 export function AskBox({ placeholder, fill, onFilled, onAsk, model }: {
     placeholder: string;
-    /** The model the conversation it starts answers on, beside the paperclip. */
+    /** The model the conversation it starts answers on, under the box. */
     model?: ReactNode;
     /** Words put in the box from outside, e.g. a starter on Home. */
     fill?: { text: string; id: number } | null;
@@ -55,6 +56,10 @@ export function AskBox({ placeholder, fill, onFilled, onAsk, model }: {
         const fit = () => {
             box.style.height = "auto";
             box.style.height = Math.min(box.scrollHeight, 200) + "px";
+            /* Scrolls only past the cap: a whole-pixel `scrollHeight` under a
+               fractional line is short of its content, and a box with
+               nothing in it showed a scrollbar for the difference. */
+            box.style.overflowY = box.scrollHeight > box.clientHeight + 1 ? "auto" : "hidden";
         };
         fit();
         if (typeof ResizeObserver === "undefined") return;
@@ -109,26 +114,11 @@ export function AskBox({ placeholder, fill, onFilled, onAsk, model }: {
                 offer(Array.from(event.dataTransfer.files));
             }}
         >
-            {held.length > 0 && (
-                <div className="askbox__files" aria-label="Attached files">
-                    {held.map((one) => (
-                        <span key={one.key} className="attached__chip">
-                            <FileIcon size={14} />
-                            <span className="attached__name" title={one.file.name}>{one.file.name}</span>
-                            <span className="attached__size">{describeSize(one.file.size)}</span>
-                            <button
-                                type="button"
-                                className="attached__drop"
-                                aria-label={"Remove " + one.file.name}
-                                title={"Remove " + one.file.name}
-                                onClick={() => setHeld(was => was.filter(kept => kept.key !== one.key))}
-                            >
-                                <CloseIcon size={12} />
-                            </button>
-                        </span>
-                    ))}
-                </div>
-            )}
+            <AttachedFiles
+                className="askbox__files"
+                files={held}
+                onRemove={(key) => setHeld(was => was.filter(kept => kept.key !== key))}
+            />
             <div className="askbox__row">
                 <input
                     ref={picker}
@@ -153,7 +143,6 @@ export function AskBox({ placeholder, fill, onFilled, onAsk, model }: {
                 >
                     <AttachIcon size={19} />
                 </button>
-                {model}
                 <textarea
                     ref={area}
                     rows={1}
@@ -185,8 +174,13 @@ export function AskBox({ placeholder, fill, onFilled, onAsk, model }: {
                     <SendIcon size={17} weight="bold" />
                 </button>
             </div>
-            {refused && (
-                <span className="askbox__note" data-bad="">{refused}</span>
+            {/* Under the box, the way the conversation's composer has it:
+                what would go wrong on the left, the model on the right. */}
+            {(refused || model) && (
+                <div className="askbox__foot">
+                    {refused && <span className="askbox__note" data-bad="">{refused}</span>}
+                    {model}
+                </div>
             )}
         </form>
     );

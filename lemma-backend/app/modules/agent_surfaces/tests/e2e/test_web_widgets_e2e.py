@@ -40,6 +40,10 @@ from app.modules.agent.infrastructure.models import ConversationModel
 from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
 from app.modules.agent_surfaces.events.visitor_retention import sweep_web_visitors
 from app.modules.agent_surfaces.services.channel_deliveries import WAITS_IN_WEB_CHAT
+from app.modules.agent_surfaces.services.channel_lines import web_place
+from app.modules.channels.contracts import ContactsHome, source_for
+from app.modules.channels.infrastructure.models import ChannelSourceModel
+from app.modules.channels.infrastructure.source_repository import MAX_PLACES
 from app.modules.agent_surfaces.tests.e2e.helpers import _messages_for_conversation
 from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
     run_scripted_agent_run,
@@ -62,7 +66,9 @@ from app.modules.agent.events.contact_merged_work import register_contact_merged
 from app.modules.channels.events.contact_merged_work import (
     register_contact_merged_work as register_channels_contact_merged_work,
 )
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.contacts.contracts import IdentityKind, IdentityStrength, open_contact
+from app.modules.contacts.contracts.outreach import SuppressionReason, opt_out
 from app.modules.contacts.infrastructure.models import (
     ContactIdentityModel,
     ContactModel,
@@ -937,6 +943,230 @@ async def test_a_members_line_waits_in_a_web_contacts_chat(
         f"/public/web/{key}/history", headers=_as(visitor)
     )
     assert after.status_code == 401
+
+
+async def _write_first(
+    client: AsyncClient,
+    pod_id: str,
+    contact_id: UUID,
+    handle: str,
+    kind: str,
+    text: str,
+):
+    return await client.post(
+        f"/pods/{pod_id}/contacts/{contact_id}/outreach",
+        json={"handle": handle, "kind": kind, "text": text},
+    )
+
+
+@pytest.mark.drives_work
+async def test_a_member_writes_first_to_a_visitor_who_left_no_address(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+):
+    """A lead who chatted on the site and never confirmed an email is written
+    to the next day: the line waits in their web chat, and they read it when
+    they come back with the secret their page kept."""
+    pod_id = test_pod["id"]
+    owner = UUID(fixed_test_user["id"])
+    widget = await _widget(authenticated_client, pod_id, name="Leads")
+    key = widget["public_key"]
+    visitor = await _session(authenticated_client, key)
+    conversation_id = await _say(
+        authenticated_client,
+        db_session,
+        key=key,
+        visitor=visitor,
+        text="Do you deliver to Leeds?",
+        owner=owner,
+        pod_id=pod_id,
+        script=[script_text("Let me find out.")],
+    )
+    contact = await _contact_of(db_session, conversation_id)
+    assert contact is not None
+    browser = str(_session_id(visitor))
+    text = f"We do -- next-day to Leeds [{uuid4().hex[:6]}]"
+
+    reached = await _write_first(
+        authenticated_client, pod_id, contact, browser, "WEB", text
+    )
+
+    assert reached.status_code == 201, reached.text
+    line, delivery = reached.json()["line"], reached.json()["delivery"]
+    assert delivery["status"] == "PENDING"
+    timeline = await authenticated_client.get(
+        f"/pods/{pod_id}/channels/{line['channel_id']}/messages"
+    )
+    [said] = [item for item in timeline.json()["items"] if item["id"] == line["id"]]
+    assert said["sender"]["kind"] == "MEMBER"
+    assert said["source_id"] == delivery["source_id"]
+    await send_deliveries()
+    [row] = await deliveries_of_line(line["id"])
+    assert (row.platform, row.status.value) == ("WEB", "SENT"), row.reason
+
+    # Their next visit: the secret their page kept, a new access token, and
+    # the line in their chat.
+    back = await _session(authenticated_client, key, secret=visitor["secret"])
+    assert _session_id(back) == _session_id(visitor)
+    history = await authenticated_client.get(
+        f"/public/web/{key}/history", headers=_as(back)
+    )
+    assert history.status_code == 200, history.text
+    assert [(m["role"], m["text"]) for m in history.json()["messages"]][-1] == (
+        "assistant",
+        text,
+    )
+
+    # Opt-out first, whatever else holds: a browser that asked not to be
+    # written to is not, and nothing is posted.
+    async with async_session_maker() as session:
+        uow = SqlAlchemyUnitOfWork(session)
+        await opt_out(
+            uow,
+            pod_id=UUID(pod_id),
+            kind=IdentityKind.WEB,
+            value=browser,
+            reason=SuppressionReason.STOP,
+        )
+        await uow.commit()
+    stopped = await _write_first(
+        authenticated_client, pod_id, contact, browser, "WEB", "One more thing"
+    )
+    assert stopped.status_code == 409, stopped.text
+
+    # A chat that has ended is never opened again, so nobody would read it.
+    other = await _session(authenticated_client, key)
+    await _say(
+        authenticated_client,
+        db_session,
+        key=key,
+        visitor=other,
+        text="Hello?",
+        owner=owner,
+        pod_id=pod_id,
+        script=[script_text("Hi.")],
+    )
+    gone = await _contact_of(db_session, await _conversation_of(db_session, other))
+    await db_session.execute(
+        update(VisitorSessionModel)
+        .where(VisitorSessionModel.id == _session_id(other))
+        .values(expires_at=datetime.now(timezone.utc) - timedelta(minutes=1))
+    )
+    await db_session.commit()
+    ended = await _write_first(
+        authenticated_client,
+        pod_id,
+        gone,
+        str(_session_id(other)),
+        "WEB",
+        "Still there?",
+    )
+    assert ended.status_code == 422, ended.text
+    assert "no chat on your website" in ended.json()["message"]
+    gone_channel = await contact_channel_id(authenticated_client, pod_id, str(gone))
+    unwritten = await authenticated_client.get(
+        f"/pods/{pod_id}/channels/{gone_channel}/messages"
+    )
+    assert "Still there?" not in [item["text"] for item in unwritten.json()["items"]]
+    # Opt-out is read before any chat is looked for: an ended chat whose
+    # browser asked not to be written to is refused as opted out.
+    async with async_session_maker() as session:
+        uow = SqlAlchemyUnitOfWork(session)
+        await opt_out(
+            uow,
+            pod_id=UUID(pod_id),
+            kind=IdentityKind.WEB,
+            value=str(_session_id(other)),
+            reason=SuppressionReason.STOP,
+        )
+        await uow.commit()
+    refused = await _write_first(
+        authenticated_client,
+        pod_id,
+        gone,
+        str(_session_id(other)),
+        "WEB",
+        "Still there?",
+    )
+    assert refused.status_code == 409, refused.text
+
+
+@pytest.mark.drives_work
+async def test_a_member_writes_first_to_a_customer_the_site_signed_in(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+):
+    """Named by the shop's token, they are written to at their latest chat on
+    a widget for that shop, and read it when they come back signed in."""
+    pod_id = test_pod["id"]
+    widget = await _widget(authenticated_client, pod_id, name="Account help")
+    key, secret = widget["public_key"], widget["signing_secret"]
+    visitor = await _session(
+        authenticated_client, key, host_token=_host_token(secret, key, subject="cust-9")
+    )
+    conversation_id = await _say(
+        authenticated_client,
+        db_session,
+        key=key,
+        visitor=visitor,
+        text="Can I change my plan?",
+        owner=UUID(fixed_test_user["id"]),
+        pod_id=pod_id,
+        script=[script_text("I'll ask the team.")],
+    )
+    contact = await _contact_of(db_session, conversation_id)
+    assert contact is not None
+    # More chats than a channel's places are read at once, all heard from
+    # since and all ended: none of them hides the one that is still live.
+    async with async_session_maker() as session:
+        uow = SqlAlchemyUnitOfWork(session)
+        for _ in range(MAX_PLACES + 5):
+            await source_for(
+                uow,
+                pod_id=UUID(pod_id),
+                place=web_place(widget_id=UUID(widget["id"]), session_id=uuid4()),
+                home=ContactsHome(contact_id=contact),
+            )
+        await session.execute(
+            update(ChannelSourceModel)
+            .where(
+                ChannelSourceModel.platform == "WEB",
+                ChannelSourceModel.external_user_id != str(_session_id(visitor)),
+            )
+            .values(last_inbound_at=datetime.now(timezone.utc) + timedelta(minutes=5))
+        )
+        await uow.commit()
+
+    reached = await _write_first(
+        authenticated_client,
+        pod_id,
+        contact,
+        "host:default:cust-9",
+        "HOST",
+        "Yes -- it's done from Settings, Plan.",
+    )
+
+    assert reached.status_code == 201, reached.text
+    line = reached.json()["line"]
+    await send_deliveries()
+    [row] = await deliveries_of_line(line["id"])
+    assert (row.platform, row.status.value) == ("WEB", "SENT"), row.reason
+    back = await _session(
+        authenticated_client,
+        key,
+        secret=visitor["secret"],
+        host_token=_host_token(secret, key, subject="cust-9"),
+    )
+    history = await authenticated_client.get(
+        f"/public/web/{key}/history", headers=_as(back)
+    )
+    assert ("assistant", "Yes -- it's done from Settings, Plan.") in [
+        (m["role"], m["text"]) for m in history.json()["messages"]
+    ]
 
 
 async def test_the_sweep_clears_ended_sessions_and_keeps_what_visitors_said(

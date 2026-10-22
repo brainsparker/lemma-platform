@@ -391,10 +391,17 @@ one:
   the same place; it ends with an unsubscribe line and a signed link
   (`/public/contacts/unsubscribe`, a confirmation page whose button does it).
   WhatsApp only within 24 hours of their last message to that number, and
-  Telegram only where they have written to the bot. Slack, Teams, web and host
-  handles are answered where the person writes, never written to first. A
-  handle that is not theirs, opted out, is outside its window or was never
-  written from posts nothing and says why. A bot for known contacts gives a
+  Telegram only where they have written to the bot. A web chat any time while
+  the person can still come back to it -- a `web` handle at its own session's
+  place, a `host` handle at their latest live session on a widget for the
+  product that named them -- with no window: there is nobody to hand the line
+  to, so it goes into their conversation and its delivery is `SENT` there, and
+  they read it in `/history` on their next visit (a page that keeps the
+  session's secret comes back to the same chat). A session that has ended is
+  never opened again, so a web handle without a live one posts nothing. Slack
+  and Teams handles are answered where the person writes, never written to
+  first. A handle that is not theirs, opted out, is outside its window or was
+  never written from posts nothing and says why. A bot for known contacts gives a
   stranger one short refusal a day.
 - **Unverified email** is parked as a line in the own channel of the member who
   looks after contacts, once an hour per sender and at most

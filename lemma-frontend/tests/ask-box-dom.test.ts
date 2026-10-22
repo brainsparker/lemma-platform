@@ -119,6 +119,54 @@ test("a screenshot pasted into the box is attached like a dropped one", async ()
     assert.match(box.chips()[0], /^pasted-\d{8}-\d{6}\.png$/);
 });
 
+/** Stands in for the browser's decoder, which jsdom does not have: `decodes`
+ *  says whether the picture it is given can be read. */
+function withDecoder(decodes: boolean) {
+    const saved = Object.getOwnPropertyDescriptor(globalThis, "createImageBitmap");
+    Object.defineProperty(globalThis, "createImageBitmap", {
+        configurable: true,
+        writable: true,
+        value: async () => {
+            if (!decodes) throw new Error("The source image could not be decoded.");
+            return { width: 320, height: 200, close() {} };
+        },
+    });
+    return () => {
+        if (saved) Object.defineProperty(globalThis, "createImageBitmap", saved);
+        else delete (globalThis as { createImageBitmap?: unknown }).createImageBitmap;
+    };
+}
+
+const picture = () => new File([new Uint8Array(1)], "image.png", { type: "image/png" });
+
+test("a pasted picture waits as the picture, not as its name", async (t) => {
+    t.after(withDecoder(true));
+    const box = await mount();
+
+    await box.hand("paste", [picture()]);
+
+    /* The name it is given is the time it was pasted, which says nothing
+       about which screenshot it is; the picture does. */
+    const drawn = box.container.querySelector(".askbox__files .attached__thumb canvas[role=img]");
+    assert.ok(drawn, "a pasted image is drawn, so it can be told apart from the last one");
+    assert.match(drawn.getAttribute("aria-label") ?? "", /^pasted-\d{8}-\d{6}(-\d+)?\.png$/);
+    assert.deepEqual(box.chips(), [], "and not also as a chip with its name");
+    assert.ok(
+        box.container.querySelector(".attached__thumb button[aria-label^='Remove pasted-']"),
+        "and it can still be taken off",
+    );
+});
+
+test("a picture the browser cannot read waits as its name", async (t) => {
+    t.after(withDecoder(false));
+    const box = await mount();
+
+    await box.hand("paste", [picture()]);
+
+    assert.equal(box.container.querySelector(".attached__thumb"), null, "no empty tile where a picture failed to draw");
+    assert.match(box.chips()[0] ?? "", /^pasted-\d{8}-\d{6}(-\d+)?\.png$/);
+});
+
 test("a file with nothing typed still goes, and a file too large never does", async () => {
     const box = await mount();
 

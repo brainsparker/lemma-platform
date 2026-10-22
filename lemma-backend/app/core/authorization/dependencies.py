@@ -269,6 +269,13 @@ OrgContextDep = Annotated[Context, Depends(get_org_context)]
 PodContextDep = Annotated[Context, Depends(get_pod_context)]
 
 
+#: What the three ``reject_delegated_workload*`` guards answer. Terminal: they
+#: turn a workload away whatever it was granted or approved, so the code must not
+#: be the approval gate's, which tells an agent to ask for an approval that would
+#: change nothing here.
+WORKLOAD_NOT_ALLOWED = "WORKLOAD_NOT_ALLOWED"
+
+
 def reject_delegated_workload(action_label: str):
     """Deny a delegated workload outright for an org-scoped destructive action.
 
@@ -284,7 +291,7 @@ def reject_delegated_workload(action_label: str):
 
             raise DomainError(
                 f"Delegated workloads may not {action_label}.",
-                code="DESTRUCTIVE_ACTION_REQUIRES_APPROVAL",
+                code=WORKLOAD_NOT_ALLOWED,
                 status_code=403,
             )
 
@@ -312,7 +319,7 @@ def reject_delegated_workload_anywhere(action_label: str):
 
         raise DomainError(
             f"Delegated workloads may not {action_label}.",
-            code="DESTRUCTIVE_ACTION_REQUIRES_APPROVAL",
+            code=WORKLOAD_NOT_ALLOWED,
             status_code=403,
         )
 
@@ -334,7 +341,7 @@ def reject_delegated_workload_pod(action_label: str):
 
             raise DomainError(
                 f"Delegated workloads may not {action_label}.",
-                code="DESTRUCTIVE_ACTION_REQUIRES_APPROVAL",
+                code=WORKLOAD_NOT_ALLOWED,
                 status_code=403,
             )
 

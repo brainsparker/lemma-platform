@@ -37,7 +37,7 @@ from app.modules.identity.infrastructure.supertokens_auth.token_factory import (
 
 pytestmark = pytest.mark.e2e
 
-_REFUSED = "DESTRUCTIVE_ACTION_REQUIRES_APPROVAL"
+_REFUSED = "WORKLOAD_NOT_ALLOWED"
 
 
 async def _pod(client: AsyncClient, org_id: str) -> str:

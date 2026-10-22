@@ -60,6 +60,10 @@ _NEXT_STEP_BY_CODE: dict[str, str] = {
         "An agent may not do this on its own. Ask the person to approve it "
         "(request_approval), then try again, or ask them to do it themselves."
     ),
+    "WORKLOAD_NOT_ALLOWED": (
+        "An agent may never do this, approved or not. Ask the person to do it "
+        "themselves."
+    ),
 }
 
 

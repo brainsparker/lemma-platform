@@ -251,9 +251,14 @@ OTEL_ALWAYS_SAMPLE_USER_IDS=0199a1b2-...,0199c3d4-...   # comma-separated
 ```
 
 A request whose access token (the `sAccessToken` cookie or a bearer token)
-carries one of those ids as `sub` is sampled. Everything it causes is sampled too: child spans and outbox work follow the
-sampled parent. Removing the id (and restarting) stops it. With the setting
-empty nothing is installed.
+carries one of those ids as `sub` is sampled, with every span created while
+the request is served -- its database and HTTP calls, and any model call made
+on the API's LLM tracer, which is forced the same way. Work the request hands
+to the worker is **not** guaranteed: a work item runs under its own root
+`work.execute` span and is sampled by the worker's sampler independently, so
+an agent turn the request started is kept only at the configured ratio.
+Removing the id (and restarting) stops it. With the setting empty nothing is
+installed.
 
 The decision has to be made when the server span starts, before
 authentication, so the `sub` is read from the token **without verifying it**

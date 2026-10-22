@@ -644,12 +644,11 @@ def _setup_llm_tracing(service_name: str) -> TracerProvider | None:
     endpoint = settings.llm_otel_exporter_otlp_endpoint
     if not settings.llm_otel_enabled or not endpoint:
         return None
+    llm = (settings.llm_otel_traces_sampler, settings.llm_otel_traces_sampler_arg)
     provider = TracerProvider(
         resource=_build_resource(service_name),
-        sampler=_build_sampler(
-            settings,
-            strategy=settings.llm_otel_traces_sampler,
-            ratio=settings.llm_otel_traces_sampler_arg,
+        sampler=forced_sampling.ForcibleSampler(
+            _build_sampler(settings, strategy=llm[0], ratio=llm[1])
         ),
     )
     provider.add_span_processor(AgentRunSpanEnricher())

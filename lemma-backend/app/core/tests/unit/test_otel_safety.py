@@ -19,7 +19,7 @@ from opentelemetry.trace import (
     TraceFlags,
 )
 
-from app.core.observability import otel_logging, telemetry
+from app.core.observability import forced_sampling, otel_logging, telemetry
 from app.core.observability.span_sanitizer import (
     SanitizingSpanExporter,
     sanitize_http_route,
@@ -483,6 +483,8 @@ def test_llm_pipeline_enables_content_and_uses_dedicated_provider(
             w for w in raised if issubclass(w.category, PydanticAIDeprecationWarning)
         ]
         assert provider is not None
+        # A chosen account's model calls are kept with the rest of its request.
+        assert isinstance(provider.sampler, forced_sampling.ForcibleSampler)
         assert len(captured) == 1
         instrumentation = captured[0]
         assert instrumentation.include_content is True

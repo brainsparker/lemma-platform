@@ -116,3 +116,35 @@ def test_an_oversized_or_garbled_token_names_nobody() -> None:
         unverified_subject([(b"authorization", b"Bearer " + b"a.b.c" * 4000)]) is None
     )
     assert unverified_subject([(b"authorization", b"Bearer a.!!!.c")]) is None
+
+
+def test_a_forced_span_keeps_its_parents_tracestate() -> None:
+    from opentelemetry import trace
+    from opentelemetry.trace import (
+        NonRecordingSpan,
+        SpanContext,
+        TraceFlags,
+        TraceState,
+    )
+
+    from app.core.observability import forced_sampling
+
+    state = TraceState([("vendor", "value")])
+    parent = trace.set_span_in_context(
+        NonRecordingSpan(
+            SpanContext(
+                trace_id=1,
+                span_id=2,
+                is_remote=True,
+                trace_flags=TraceFlags(0),
+                trace_state=state,
+            )
+        )
+    )
+    token = forced_sampling._forced.set(True)
+    try:
+        result = ForcibleSampler(ALWAYS_OFF).should_sample(parent, 1, "GET /pods")
+    finally:
+        forced_sampling._forced.reset(token)
+    assert result.decision.is_sampled()
+    assert result.trace_state == state

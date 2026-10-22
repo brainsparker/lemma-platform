@@ -27,7 +27,7 @@ import types
 
 from opentelemetry.context import Context
 from opentelemetry.sdk.trace.sampling import Decision, Sampler, SamplingResult
-from opentelemetry.trace import Link, SpanKind
+from opentelemetry.trace import Link, SpanKind, get_current_span
 from opentelemetry.util.types import Attributes
 from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -111,7 +111,14 @@ class ForcibleSampler(Sampler):
         trace_state=None,  # noqa: ANN001 - the SDK's own signature
     ) -> SamplingResult:
         if _forced.get():
-            return SamplingResult(Decision.RECORD_AND_SAMPLE, attributes, trace_state)
+            # The SDK does not pass ``trace_state``; keep the parent's, as the
+            # standard samplers do, so a vendor's ``tracestate`` survives.
+            parent = get_current_span(parent_context).get_span_context()
+            return SamplingResult(
+                Decision.RECORD_AND_SAMPLE,
+                attributes,
+                trace_state if trace_state is not None else parent.trace_state,
+            )
         return self.delegate.should_sample(
             parent_context, trace_id, name, kind, attributes, links, trace_state
         )

@@ -12,6 +12,10 @@ from app.modules.calls.services.agents import CallAgents, Party, Relay, Shown, W
 from app.modules.calls.services.gate import Caller, Route, route_turn
 from app.modules.decisions.contracts import DecisionResult, DecisionUnavailableError
 from app.modules.decisions.domain.answers import Answer
+from app.modules.usage.contracts import UsageLimitExceededError
+from pydantic_ai.exceptions import UnexpectedModelBehavior
+from redis.exceptions import ConnectionError as RedisConnectionError
+from sqlalchemy.exc import OperationalError
 
 pytestmark = pytest.mark.unit
 
@@ -162,8 +166,22 @@ async def test_only_a_confident_conversation_answer_keeps_a_turn_from_the_agents
     )
 
 
-async def test_a_gate_that_cannot_decide_sends_the_turn_to_the_agents() -> None:
+@pytest.mark.parametrize(
+    "failure",
+    [
+        DecisionUnavailableError("timeout"),
+        UsageLimitExceededError("spend is used up"),
+        UnexpectedModelBehavior("the model answered nonsense"),
+        OperationalError("select 1", {}, Exception("connection reset")),
+        RedisConnectionError("redis went away"),
+        TimeoutError(),
+    ],
+    ids=lambda failure: type(failure).__name__,
+)
+async def test_a_gate_that_cannot_decide_sends_the_turn_to_the_agents(
+    failure: BaseException,
+) -> None:
     async def decide(request, *, caller):
-        raise DecisionUnavailableError("timeout")
+        raise failure
 
     assert await route_turn("book it", [], _caller(), decide=decide) is Route.TEAM

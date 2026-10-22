@@ -92,10 +92,12 @@ async def test_words_heard_after_the_voice_begins_stay_in_the_callers_turn() -> 
     )
     finals = [e for e in _drain(engine) if isinstance(e, Heard) and e.final]
     assert finals == []
-    await asyncio.sleep(CALLER_TURN_GRACE_SECONDS + 0.1)
-    assert [e for e in _drain(engine) if isinstance(e, Heard) and e.final] == [
-        Heard("Book the cheapest one.", final=True)
-    ]
+    finals: list[VoiceEvent] = []
+    async with asyncio.timeout(CALLER_TURN_GRACE_SECONDS + 1):
+        while not finals:
+            await asyncio.sleep(0.01)
+            finals = [e for e in _drain(engine) if isinstance(e, Heard) and e.final]
+    assert finals == [Heard("Book the cheapest one.", final=True)]
 
 
 async def test_a_barge_in_ends_the_voices_turn_where_it_was() -> None:

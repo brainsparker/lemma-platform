@@ -19,17 +19,18 @@ from enum import StrEnum
 from typing import Protocol
 from uuid import UUID
 
+from pydantic_ai.exceptions import AgentRunError
+from redis.exceptions import RedisError
+from sqlalchemy.exc import SQLAlchemyError
+
+from app.core.domain.errors import DomainError
 from app.core.log.log import get_logger
 from app.modules.decisions.contracts import (
     DecisionCaller,
-    DecisionInvalidError,
-    DecisionLimitedError,
     DecisionRequest,
     DecisionResult,
-    DecisionUnavailableError,
 )
 from app.modules.decisions.contracts.decide import decide
-from app.modules.usage.contracts import UsageLimitExceededError
 
 logger = get_logger(__name__)
 
@@ -112,11 +113,15 @@ async def route_turn(
     )
     try:
         result = await decide(request, caller=who)
+    # Every way the decision path fails, by family rather than by name: its own
+    # refusals and spend limits (all `DomainError`), the model behind it, and
+    # the database, Redis and network it reaches. A gate that cannot answer
+    # sends the turn on; it must never be what drops a request.
     except (
-        DecisionUnavailableError,
-        DecisionLimitedError,
-        DecisionInvalidError,
-        UsageLimitExceededError,
+        DomainError,
+        AgentRunError,
+        SQLAlchemyError,
+        RedisError,
         OSError,
         TimeoutError,
     ):

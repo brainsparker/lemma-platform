@@ -23,6 +23,7 @@ the pump to the same moment, charging nothing.
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
@@ -41,6 +42,8 @@ from app.core.infrastructure.work import (
     registry as default_registry,
 )
 from app.core.log.log import get_logger
+from app.core.observability.product_metrics import record_surface_delivery
+from app.modules.agent_surfaces.platforms.delivery import track_sends
 from app.modules.agent_surfaces.domain.deliveries import (
     SEND_TIMEOUT,
     SENDING_LEASE,
@@ -108,6 +111,21 @@ async def _bounded_send(
     gets the row back PENDING and retried, instead of the row outliving its
     deadline and going UNKNOWN for good.
     """
+    started = time.monotonic()
+    with track_sends() as sends:
+        result = await _send_within(send, row, timeout)
+    record_surface_delivery(
+        sends.platform,
+        delivered=result.delivered,
+        transient=result.transient,
+        seconds=time.monotonic() - started,
+    )
+    return result
+
+
+async def _send_within(
+    send: DeliverySender, row: SurfaceDeliveryModel, timeout: timedelta
+) -> SendResult:
     try:
         async with asyncio.timeout(timeout.total_seconds()):
             return await send(row)

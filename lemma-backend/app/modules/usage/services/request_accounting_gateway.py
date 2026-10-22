@@ -18,8 +18,8 @@ from app.modules.usage.domain.accounting import (
 from app.modules.usage.domain.budget_windows import budget_windows
 from app.modules.usage.domain.errors import UsageLimitExceededError
 from app.modules.usage.domain.events import ModelUsageEvent
+from app.modules.usage.services.usage_metrics import record_usage_metrics
 from app.modules.usage.services.contacts_cap import applicable_contacts_cap
-from app.modules.usage.services.usage_service import UsageService
 from app.modules.usage.domain.ports import UsageLimitValues, normalize_limit_values
 from app.modules.usage.infrastructure import request_accounting
 from app.modules.usage.infrastructure.price_catalog import RateCard
@@ -222,7 +222,8 @@ class PostgresRequestAccountingGateway:
             uow.collect_events(events)
         for event in events:
             if isinstance(event, ModelUsageEvent):
-                UsageService._record_usage_metrics(
+                record_usage_metrics(
+                    organization_id=event.organization_id,
                     model_name=event.model_name,
                     usage_kind=event.usage_kind,
                     input_tokens=event.input_tokens,

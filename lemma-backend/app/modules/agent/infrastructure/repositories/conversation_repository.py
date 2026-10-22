@@ -11,6 +11,8 @@ from sqlalchemy.dialects.postgresql import JSONB, array
 from sqlalchemy.orm.attributes import set_committed_value
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.core.observability.product_metrics import record_conversation_started
+from app.modules.agent.domain.conversation_metadata import surface_of
 from app.modules.agent.domain.events import (
     AgentDomainEvent,
     ConversationStartedEvent,
@@ -98,6 +100,10 @@ class ConversationRepository(
                 )
             ]
         )
+        if model.parent_id is None:
+            # Roots only: a child is a sub-agent's thread inside one the
+            # person already started.
+            record_conversation_started(surface_of(conversation.metadata))
         return model.to_entity()
 
     async def update_conversation(

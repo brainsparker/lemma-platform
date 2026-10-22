@@ -37,6 +37,7 @@ async def run_time_fire(ctx: FastContext, payload: TimeFire) -> None:
     from app.modules.schedule.services.paused_notice import stage_paused_notice
     from app.modules.schedule.services.trigger_fire import TriggerEvent, fire_trigger
     from app.modules.schedule.work.kinds import time_source_event_id
+    from app.core.observability.product_metrics import record_schedule_fire_lag
 
     session = ctx.uow.session
     row = await session.scalar(
@@ -53,6 +54,7 @@ async def run_time_fire(ctx: FastContext, payload: TimeFire) -> None:
         return
     schedule = row.to_entity()
     now = datetime.now(timezone.utc)
+    record_schedule_fire_lag(row.schedule_type, (now - payload.fire_at).total_seconds())
     upcoming = coalesced_cursor(row.config, fire_at=payload.fire_at, now=now)
     one_shot = is_one_shot(row.config)
     if one_shot or upcoming is None:

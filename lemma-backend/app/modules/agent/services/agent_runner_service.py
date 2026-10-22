@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from functools import partial
+import time
 from app.modules.agent.contracts.run_observer import RunObserver
 from uuid import UUID
 from pydantic_ai.output import OutputSpec, ToolOutput
@@ -27,14 +28,9 @@ from app.modules.agent.config import agent_settings
 from app.modules.agent.services.context_budget import (
     context_budget_for,
 )
-from app.modules.agent.services.conversation_access import (
-    resolve_agent,
-    validate_conversation_access,
-)
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
-from app.modules.agent.domain.errors import ConversationNotFoundError
 from app.modules.agent.domain.outsiders import Audience
-from app.modules.agent.domain.private_notes import run_is_private
+from app.modules.agent.domain.run_origin import run_origin
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
@@ -46,10 +42,6 @@ from app.modules.agent.domain.value_objects import (
 from app.modules.agent.domain.runtime_profiles import RuntimeProfileProtocol
 from app.modules.agent.capabilities import build_lemma_harness_tooling
 from app.modules.agent.infrastructure.harnesses.registry import HarnessRegistry
-from app.modules.agent.infrastructure.repositories import (
-    AgentRepository,
-    ConversationRepository,
-)
 from app.modules.agent.services.runtime_profile_service import (
     AgentRuntimeProfileService,
     ResolvedAgentRuntime,
@@ -64,16 +56,20 @@ from app.modules.agent.services.run_limits import (
     harness_usage_limits,
     make_stop_checker,
 )
-from app.modules.agent.services.channel_background import with_channel_background
 from app.modules.agent.services.run_message_writer import RunMessageWriter
-from app.modules.agent.services.run_phase_spans import (
-    record_history_size,
-    run_phase,
+from app.modules.agent.services.run_context_loader import (
+    RunContextLoader,
+    load_run_context,
 )
-from app.modules.agent.services.runtime_history import (
-    MAX_HISTORY_AGENT_RUNS,
-    assemble_runtime_history,
-    without_private_runs,
+from app.modules.agent.services.run_metrics import (
+    AgentRunMetrics,
+    RunOutcomeLabel,
+    agent_run_metrics,
+    ended_as,
+    ended_by,
+)
+from app.modules.agent.services.run_phase_spans import (
+    run_phase,
 )
 from app.modules.agent.services.run_context_builder import build_run_context
 from app.modules.agent.services.run_event_pump import (
@@ -150,8 +146,12 @@ class AgentRunnerService:
         step_units: UnitOfWorkFactory | None = None,
         tool_units: UnitOfWorkFactory | None = None,
         lease_alive: Callable[[], bool] | None = None,
+        run_metrics: AgentRunMetrics | None = None,
+        load_context: RunContextLoader = load_run_context,
     ) -> None:
+        self.load_context = load_context
         self.uow_factory = uow_factory
+        self.run_metrics = run_metrics or agent_run_metrics
         self.harness_registry = harness_registry
         # The shared factory by default, so a run resolves exactly as the MCP
         # bridge and the routes do -- harness included.
@@ -218,11 +218,23 @@ class AgentRunnerService:
             return
         usage_reservation: UsageReservation | None = None
         runtime_profile_snapshot: dict[str, object | None] | None = None
+        run_kind = run_origin(
+            metadata=conversation.metadata,
+            parent_id=conversation.parent_id,
+            conversation_id=conversation.id,
+        ).origin
+        # Known once the runtime resolves; a run that fails before that is
+        # counted against no model rather than not counted.
+        run_model: str | None = None
+        run_started = time.monotonic()
+        self.run_metrics.run_started(kind=run_kind)
+        ended: RunOutcomeLabel = "failed"
         try:
             resolved_runtime = await self._runtime_for(
                 conversation, agent_run, user_id=user_id
             )
             harness = self.harness_registry.get(resolved_runtime.harness_kind)
+            run_model = resolved_runtime.model_name_for_harness
             outcome = RunOutcome()
             snapshot = resolved_runtime.runtime_snapshot()
             runtime_profile_snapshot = snapshot.as_payload()
@@ -351,6 +363,10 @@ class AgentRunnerService:
                 harness_kind=resolved_runtime.harness_kind.value,
                 model_name=resolved_runtime.model_name_for_harness,
             ) as telemetry_attributes:
+                # `agent.run` and not `agent.run {name}`: names are chosen per
+                # pod, so as a span name they would grow with the customer count
+                # and break every "group by span name" view. The name is on the
+                # span as `lemma.agent_name`, beside the ids.
                 with tracer.start_as_current_span("agent.run") as span:
                     for key, value in telemetry_attributes.items():
                         span.set_attribute(key, value)
@@ -359,6 +375,7 @@ class AgentRunnerService:
                         OpenInferenceSpanKindValues.AGENT.value,
                     )
                     span.set_attribute("gen_ai.agent.name", agent.name)
+                    span.set_attribute("lemma.run_kind", run_kind)
                     span.set_attribute(
                         "gen_ai.request.model",
                         resolved_runtime.model_name_for_harness,
@@ -394,6 +411,9 @@ class AgentRunnerService:
                                 observer=observer,
                                 conversation=conversation,
                                 ctx=ctx,
+                                on_first_token=partial(
+                                    self.run_metrics.first_token, model=run_model
+                                ),
                                 yield_requested=(
                                     yield_requested
                                     if resolved_runtime.harness_kind
@@ -417,10 +437,12 @@ class AgentRunnerService:
                         # it were the answer. Announced even when the start
                         # failed: the finish is what sends the answer.
                         if not raised:
+                            ended = ended_as(outcome.final_status)
                             await notify_run_finished(
                                 observer, conversation, ctx, agent_run_id
                             )
         except BaseException as exc:
+            ended = ended_by(exc)
             if is_usage_limit_error(exc):
                 # Exhaustion is an expected policy outcome, not a runtime crash.
                 logger.warning(
@@ -482,6 +504,13 @@ class AgentRunnerService:
             # like a success, so a deploy ended every conversation in flight.
             if run_is_not_over(exc):
                 raise
+        finally:
+            self.run_metrics.run_ended(
+                kind=run_kind,
+                outcome=ended,
+                model=run_model,
+                seconds=time.monotonic() - run_started,
+            )
 
     async def _runtime_for(
         self, conversation: Conversation, agent_run: AgentRun, *, user_id: UUID
@@ -534,43 +563,13 @@ class AgentRunnerService:
         pod_id: UUID,
         agent_name: str | None,
     ) -> tuple[Conversation, Agent, AgentRun, list[Message]]:
-        with run_phase("load_context") as span:
-            async with self.uow_factory() as uow:
-                repo = ConversationRepository(uow)
-                window = await repo.load_runtime_history_digests_by_run_id(
-                    agent_run_id, limit=MAX_HISTORY_AGENT_RUNS
-                )
-                runs = window.runs
-                # In the window or not -- see `RuntimeHistoryWindow`.
-                agent_run = window.current_run
-                if agent_run is None:
-                    raise ConversationNotFoundError()
-                conversation = validate_conversation_access(
-                    await repo.get_conversation(agent_run.conversation_id),
-                    user_id=user_id,
-                    pod_id=pod_id,
-                )
-                agent = await resolve_agent(
-                    conversation,
-                    user_id=user_id,
-                    agent_repository=AgentRepository(uow),
-                    agent_name=agent_name,
-                )
-                messages = await assemble_runtime_history(
-                    repo,
-                    window,
-                    conversation_id=agent_run.conversation_id,
-                    run_id=agent_run.id,
-                    read_channel=partial(with_channel_background, uow),
-                )
-                if Audience.of(conversation).answers_outsiders and not run_is_private(
-                    agent_run.metadata
-                ):
-                    messages = without_private_runs(
-                        messages, runs, current_run_id=agent_run.id
-                    )
-                record_history_size(span, runs=runs, sent=messages)
-                return conversation, agent, agent_run, messages
+        return await self.load_context(
+            self.uow_factory,
+            agent_run_id=agent_run_id,
+            user_id=user_id,
+            pod_id=pod_id,
+            agent_name=agent_name,
+        )
 
     def _resolve_output_type(
         self, agent: Agent, conversation: Conversation

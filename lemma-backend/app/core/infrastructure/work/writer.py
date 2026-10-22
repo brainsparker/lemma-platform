@@ -26,6 +26,7 @@ from app.core.infrastructure.work.registry import (
     WorkRegistry,
     registry as default_registry,
 )
+from app.core.infrastructure.work.trace_carry import TraceCarry, with_current_trace
 from app.core.infrastructure.work.types import WorkClass, validate_namespace
 
 _INSERT_ITEM = text(
@@ -148,6 +149,7 @@ class WorkWriter:
         delay: timedelta | None = None,
         concurrency_key: str | None = None,
         rate_key: str | None = None,
+        trace: TraceCarry = "parent",
     ) -> UUID | None:
         """Enqueue ``kind`` for namespace ``ns``.
 
@@ -169,7 +171,7 @@ class WorkWriter:
             raise ValueError(
                 f"work kind {kind!r} has a per-key rate: pass rate_key or concurrency_key"
             )
-        body = _payload_json(spec.payload_type, payload)
+        body = _payload_json(spec.payload_type, payload, trace)
         item_id = await self._session.scalar(
             _INSERT_ITEM,
             {
@@ -336,13 +338,16 @@ def _match_json(match: Mapping[str, JsonValue]) -> str:
 
 
 def _payload_json(
-    model: type[BaseModel], payload: BaseModel | Mapping[str, JsonValue] | None
+    model: type[BaseModel],
+    payload: BaseModel | Mapping[str, JsonValue] | None,
+    trace: TraceCarry = "parent",
 ) -> str:
     if isinstance(payload, BaseModel):
         validated = model.model_validate(payload.model_dump(mode="json"))
     else:
         validated = model.model_validate(dict(payload or {}))
-    return json.dumps(validated.model_dump(mode="json"), separators=(",", ":"))
+    body = with_current_trace(validated.model_dump(mode="json"), trace)
+    return json.dumps(body, separators=(",", ":"))
 
 
 #: What ``WorkWriter.cancel`` found under the key.

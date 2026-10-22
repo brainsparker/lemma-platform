@@ -962,3 +962,77 @@ def test_the_instance_and_the_flag_agree_field_for_field(captured_stdout) -> Non
     assert diagnostic_keys <= by_task["via-instance"].keys()
     assert by_task["via-instance"].keys() == by_task["via-flag"].keys()
     assert by_task["via-instance"]["error_type"] == by_task["via-flag"]["error_type"]
+
+
+_CLOUD_TRACE_KEYS = {
+    "logging.googleapis.com/trace",
+    "logging.googleapis.com/spanId",
+    "logging.googleapis.com/trace_sampled",
+}
+
+
+def _inside_a_span(monkeypatch, *, sampled: bool) -> None:
+    from opentelemetry.trace import SpanContext, TraceFlags
+
+    class FakeSpan:
+        def get_span_context(self):
+            return SpanContext(
+                trace_id=1,
+                span_id=2,
+                is_remote=False,
+                trace_flags=TraceFlags(TraceFlags.SAMPLED if sampled else 0),
+            )
+
+    monkeypatch.setattr(logmod.trace, "get_current_span", lambda: FakeSpan())
+
+
+def test_a_line_in_a_span_carries_cloud_loggings_trace_fields(
+    monkeypatch, captured_stdout
+) -> None:
+    monkeypatch.setenv("OBSERVABILITY_TRACE_PROJECT_ID", "lemma-development")
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "somewhere-else")
+    _inside_a_span(monkeypatch, sampled=True)
+    setup_logging("development", service_name="lemma-api", json_logs=True)
+    get_logger("app.demo").info("service.started")
+    record = captured_stdout()[-1]
+    assert _CLOUD_TRACE_KEYS <= set(record)
+    assert record["logging.googleapis.com/trace"] == (
+        f"projects/lemma-development/traces/{1:032x}"
+    )
+    assert record["logging.googleapis.com/spanId"] == f"{2:016x}"
+    assert record["logging.googleapis.com/trace_sampled"] is True
+    # The payload keys other readers use stay.
+    assert record["trace_id"] == f"{1:032x}"
+
+
+def test_the_trace_project_falls_back_to_the_cloud_project(
+    monkeypatch, captured_stdout
+) -> None:
+    monkeypatch.delenv("OBSERVABILITY_TRACE_PROJECT_ID", raising=False)
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "lemma-production")
+    _inside_a_span(monkeypatch, sampled=False)
+    setup_logging("development", service_name="lemma-api", json_logs=True)
+    get_logger("app.demo").info("service.started")
+    record = captured_stdout()[-1]
+    assert record["logging.googleapis.com/trace"] == (
+        f"projects/lemma-production/traces/{1:032x}"
+    )
+    assert record["logging.googleapis.com/trace_sampled"] is False
+
+
+def test_no_cloud_trace_fields_without_a_project_or_a_span(
+    monkeypatch, captured_stdout
+) -> None:
+    monkeypatch.delenv("OBSERVABILITY_TRACE_PROJECT_ID", raising=False)
+    monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+    _inside_a_span(monkeypatch, sampled=True)
+    setup_logging("development", service_name="lemma-api", json_logs=True)
+    get_logger("app.demo").info("service.started")
+    assert not _CLOUD_TRACE_KEYS & set(captured_stdout()[-1])
+
+    monkeypatch.setenv("OBSERVABILITY_TRACE_PROJECT_ID", "lemma-development")
+    monkeypatch.setattr(
+        logmod.trace, "get_current_span", lambda: logmod.trace.INVALID_SPAN
+    )
+    get_logger("app.demo").info("service.started")
+    assert not _CLOUD_TRACE_KEYS & set(captured_stdout()[-1])

@@ -276,3 +276,103 @@ async def test_a_repeated_source_event_does_not_inflate_the_streak():
 
     assert recorded is False
     service.run_repository.dead_letter.assert_not_awaited()
+
+
+# --- lemma.schedule.* metrics -------------------------------------------------
+
+from datetime import datetime, timedelta, timezone  # noqa: E402
+
+from app.modules.test_support.metric_capture import (  # noqa: E402
+    metric_reader,
+    total,
+)
+
+
+def _metric_delta(name: str, **labels: object):
+    metric_reader()
+    before = total(name, **labels)
+    return lambda: total(name, **labels) - before
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("status", "outcome"),
+    [
+        (ScheduleRunStatus.COMPLETED, "completed"),
+        (ScheduleRunStatus.TARGET_FAILED, "failed"),
+    ],
+)
+async def test_a_terminal_outcome_times_the_run(status, outcome):
+    service, _ = _service()
+    schedule = _schedule()
+    started = datetime(2026, 10, 22, 9, 0, tzinfo=timezone.utc)
+    service.run_repository.transition_target_outcome.return_value = SimpleNamespace(
+        schedule_id=schedule.id,
+        started_at=started,
+        completed_at=started + timedelta(seconds=42),
+    )
+    service.schedule_repository.get_for_update.return_value = schedule
+    service.run_repository.consecutive_terminal_failures.return_value = 0
+    timed = _metric_delta(
+        "lemma.schedule.run.duration", schedule_type="datastore", outcome=outcome
+    )
+
+    await service.record_target_outcome(
+        target_kind="WORKFLOW",
+        target_run_id=str(uuid4()),
+        status=status,
+        completed_at=None,
+    )
+
+    assert timed() == 1
+
+
+@pytest.mark.anyio
+async def test_a_filtered_event_is_counted_once_and_a_redelivery_not_at_all():
+    service, _ = _service()
+    service.run_repository.insert_filtered = AsyncMock(side_effect=[True, False])
+    filtered = _metric_delta(
+        "lemma.schedule.runs", schedule_type="datastore", outcome="filtered"
+    )
+    for _ in range(2):
+        await service.record_filtered(
+            _schedule(),
+            source_event_id="e1",
+            user_id=uuid4(),
+            metadata=None,
+            llm_output=None,
+        )
+    assert filtered() == 1
+
+
+@pytest.mark.anyio
+async def test_a_tripped_breaker_is_counted(monkeypatch):
+    monkeypatch.setattr(
+        "app.modules.schedule.services.run_outcome_service.schedule_settings.schedule_max_consecutive_failures",
+        5,
+    )
+    service, _ = _service()
+    schedule = _schedule()
+    service.run_repository.consecutive_terminal_failures.return_value = 5
+    service.schedule_repository.deactivate_if_active.return_value = True
+    tripped = _metric_delta(
+        "lemma.schedule.runs", schedule_type="datastore", outcome="breaker_tripped"
+    )
+    await service._apply_breaker(schedule)
+    assert tripped() == 1
+
+
+def test_fire_decisions_fold_onto_the_run_vocabulary():
+    from app.modules.schedule.services.trigger_fire import FireOutcome, _counted
+
+    schedule = _schedule().model_copy(update={"schedule_type": ScheduleType.TIME})
+    triggered = _metric_delta(
+        "lemma.schedule.runs", schedule_type="time", outcome="triggered"
+    )
+    skipped = _metric_delta(
+        "lemma.schedule.runs", schedule_type="time", outcome="skipped"
+    )
+    for outcome in FireOutcome:
+        assert _counted(schedule, outcome) is outcome
+    assert triggered() == 1
+    assert skipped() == 2  # the fire cap and the run cap

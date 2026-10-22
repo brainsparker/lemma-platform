@@ -1,18 +1,23 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from uuid import uuid4
 
 import pytest
 
 
 from app.core.authorization.context import (
-    ActorType,
+    Assistant,
     AuthorizationDecision,
     Context,
+    Delegation,
+    Person,
     PrincipalRef,
     ResourceRef,
     ResourceType,
     ResourceVisibility,
+    Workload,
+    WorkloadKind,
 )
 from app.core.authorization.grants import (
     grant_resource_type_values,
@@ -229,10 +234,11 @@ async def test_context_caches_authorization_decisions():
         resource_id=uuid4(),
         pod_id=uuid4(),
     )
+    user_id = uuid4()
     ctx = Context(
-        actor_type=ActorType.USER,
+        actor=Person(user_id=user_id),
         actor_id=str(uuid4()),
-        user_id=uuid4(),
+        user_id=user_id,
         permission_ids=frozenset({Permissions.APP_READ}),
         authorizer=authorizer,
     )
@@ -418,9 +424,10 @@ async def test_resource_grant_can_satisfy_specific_resource_without_broad_permis
         pod_id=uuid4(),
         visibility=ResourceVisibility.POD,
     )
+    function_id = uuid4()
     ctx = Context(
-        actor_type=ActorType.DELEGATED_USER_WORKLOAD,
-        actor_id=f"function:{uuid4()}",
+        actor=Workload(kind=WorkloadKind.FUNCTION, workload_id=function_id),
+        actor_id=f"function:{function_id}",
         user_id=uuid4(),
         pod_id=resource.pod_id,
         permission_ids=frozenset(),
@@ -469,15 +476,15 @@ async def test_named_delegated_workload_needs_its_grant_and_its_invoker(
         pod_id=uuid4(),
         visibility=ResourceVisibility.POD,
     )
+    invoker_id = uuid4()
     ctx = Context(
-        actor_type=ActorType.DELEGATED_USER_WORKLOAD,
+        actor=_named_workload(workload_principal_refs, invoker_id),
         actor_id=f"{workload_type.lower()}:{next(iter(workload_principal_refs)).id}",
-        user_id=uuid4(),
+        user_id=invoker_id,
         pod_id=resource.pod_id,
         # The invoking person's own permissions; the delegated context keeps
         # them unmerged from the workload's for exactly this check.
         permission_ids=frozenset({Permissions.DATASTORE_RECORD_WRITE}),
-        workload_principal_refs=workload_principal_refs,
         authorizer=authorizer,
     )
 
@@ -518,13 +525,13 @@ async def test_named_delegated_workload_cannot_exceed_its_invoker(
         pod_id=uuid4(),
         visibility=ResourceVisibility.POD,
     )
+    invoker_id = uuid4()
     ctx = Context(
-        actor_type=ActorType.DELEGATED_USER_WORKLOAD,
+        actor=_named_workload(workload_principal_refs, invoker_id),
         actor_id=f"{workload_type.lower()}:{next(iter(workload_principal_refs)).id}",
-        user_id=uuid4(),
+        user_id=invoker_id,
         pod_id=resource.pod_id,
         permission_ids=frozenset({Permissions.DATASTORE_RECORD_READ}),
-        workload_principal_refs=workload_principal_refs,
         authorizer=authorizer,
     )
 
@@ -567,13 +574,13 @@ async def test_named_delegated_workload_requires_workload_grant_for_pod_visible_
         pod_id=uuid4(),
         visibility=ResourceVisibility.POD,
     )
+    invoker_id = uuid4()
     ctx = Context(
-        actor_type=ActorType.DELEGATED_USER_WORKLOAD,
+        actor=_named_workload(workload_principal_refs, invoker_id),
         actor_id=f"function:{next(iter(workload_principal_refs)).id}",
-        user_id=uuid4(),
+        user_id=invoker_id,
         pod_id=resource.pod_id,
         permission_ids=frozenset({Permissions.DATASTORE_RECORD_READ}),
-        workload_principal_refs=workload_principal_refs,
         authorizer=authorizer,
     )
 
@@ -623,15 +630,15 @@ async def test_named_delegated_workload_restricted_resource_needs_both_grants(
         pod_id=uuid4(),
         visibility=ResourceVisibility.RESTRICTED,
     )
+    invoker_id = uuid4()
     ctx = Context(
-        actor_type=ActorType.DELEGATED_USER_WORKLOAD,
+        actor=_named_workload(workload_principal_refs, invoker_id),
         actor_id=f"function:{next(iter(workload_principal_refs)).id}",
-        user_id=uuid4(),
+        user_id=invoker_id,
         pod_id=resource.pod_id,
         permission_ids=frozenset({Permissions.DATASTORE_RECORD_READ}),
         principal_refs=user_principal_refs | workload_principal_refs,
         grant_principal_sets=(user_principal_refs, workload_principal_refs),
-        workload_principal_refs=workload_principal_refs,
         invoker_principal_refs=user_principal_refs,
         authorizer=authorizer,
     )
@@ -671,15 +678,15 @@ async def test_named_delegated_workload_restricted_resource_refuses_a_lone_grant
         pod_id=uuid4(),
         visibility=ResourceVisibility.RESTRICTED,
     )
+    invoker_id = uuid4()
     ctx = Context(
-        actor_type=ActorType.DELEGATED_USER_WORKLOAD,
+        actor=_named_workload(workload_principal_refs, invoker_id),
         actor_id=f"function:{next(iter(workload_principal_refs)).id}",
-        user_id=uuid4(),
+        user_id=invoker_id,
         pod_id=resource.pod_id,
         permission_ids=frozenset({Permissions.DATASTORE_RECORD_READ}),
         principal_refs=user_principal_refs | workload_principal_refs,
         grant_principal_sets=(user_principal_refs, workload_principal_refs),
-        workload_principal_refs=workload_principal_refs,
         invoker_principal_refs=user_principal_refs,
         authorizer=authorizer,
     )
@@ -714,14 +721,17 @@ async def test_delegation_scope_is_implication_expanded(monkeypatch):
     pod_id = uuid4()
 
     def make_ctx():
+        invoker_id = uuid4()
         return Context(
-            actor_type=ActorType.DELEGATED_USER_WORKLOAD,
+            actor=_named_workload(
+                workload_principal_refs,
+                invoker_id,
+                delegation=Delegation(scope=frozenset({Permissions.FUNCTION_EXECUTE})),
+            ),
             actor_id=f"agent:{next(iter(workload_principal_refs)).id}",
-            user_id=uuid4(),
+            user_id=invoker_id,
             pod_id=pod_id,
             permission_ids=frozenset(),
-            workload_principal_refs=workload_principal_refs,
-            delegation_scope=frozenset({Permissions.FUNCTION_EXECUTE}),
             authorizer=authorizer,
         )
 
@@ -774,13 +784,13 @@ async def test_personal_resource_owned_by_other_denied_despite_workload_grant(
         visibility=ResourceVisibility.PERSONAL,
         owner_user_id=uuid4(),
     )
+    invoker_id = uuid4()
     ctx = Context(
-        actor_type=ActorType.DELEGATED_USER_WORKLOAD,
+        actor=_named_workload(workload_principal_refs, invoker_id),
         actor_id=f"agent:{next(iter(workload_principal_refs)).id}",
-        user_id=uuid4(),
+        user_id=invoker_id,
         pod_id=resource.pod_id,
         permission_ids=frozenset({Permissions.DATASTORE_RECORD_READ}),
-        workload_principal_refs=workload_principal_refs,
         authorizer=authorizer,
     )
 
@@ -812,10 +822,11 @@ async def test_default_pod_agent_delegation_runs_as_user_without_workload_grants
         pod_id=uuid4(),
         visibility=ResourceVisibility.POD,
     )
+    user_id = uuid4()
     ctx = Context(
-        actor_type=ActorType.DELEGATED_USER_WORKLOAD,
+        actor=Assistant(user_id=user_id),
         actor_id=f"agent:{uuid4()}",
-        user_id=uuid4(),
+        user_id=user_id,
         pod_id=resource.pod_id,
         permission_ids=frozenset({Permissions.DATASTORE_RECORD_READ}),
         authorizer=authorizer,
@@ -831,18 +842,32 @@ async def test_default_pod_agent_delegation_runs_as_user_without_workload_grants
     assert decision.reason_code == "POD_VISIBLE"
 
 
+def _named_workload(
+    workload_principal_refs, invoker_id, *, delegation=Delegation()
+) -> Workload:
+    """A named agent or function acting for ``invoker_id``, as its one ref names."""
+    ref = next(iter(workload_principal_refs))
+    return Workload(
+        kind=WorkloadKind(ref.type),
+        workload_id=ref.id,
+        for_user_id=invoker_id,
+        principal_refs=workload_principal_refs,
+        delegation=delegation,
+    )
+
+
 def _default_pod_agent_ctx(
     *, pod_id, permission_ids, role_names=frozenset(), authorizer=None
 ):
     """A user-equivalent default-pod-agent delegated context (no workload refs)."""
+    user_id = uuid4()
     return Context(
-        actor_type=ActorType.DELEGATED_USER_WORKLOAD,
+        actor=Assistant(user_id=user_id),
         actor_id=f"agent:{uuid4()}",
-        user_id=uuid4(),
+        user_id=user_id,
         pod_id=pod_id,
         role_names=role_names,
         permission_ids=frozenset(permission_ids),
-        is_user_equivalent=True,
         authorizer=authorizer,
     )
 
@@ -997,9 +1022,10 @@ async def test_resource_grant_does_not_bypass_someone_else_personal_resource(
         owner_user_id=uuid4(),
         visibility=ResourceVisibility.PERSONAL,
     )
+    function_id = uuid4()
     ctx = Context(
-        actor_type=ActorType.DELEGATED_USER_WORKLOAD,
-        actor_id=f"function:{uuid4()}",
+        actor=Workload(kind=WorkloadKind.FUNCTION, workload_id=function_id),
+        actor_id=f"function:{function_id}",
         user_id=uuid4(),
         pod_id=resource.pod_id,
         permission_ids=frozenset(),
@@ -1081,7 +1107,7 @@ async def test_default_pod_agent_destructive_action_allowed_with_session_approva
         permission_ids=frozenset({Permissions.DATASTORE_TABLE_DELETE}),
         authorizer=authorizer,
     )
-    ctx.delegation_session_id = str(uuid4())
+    ctx.actor = replace(ctx.actor, delegation=Delegation(session_id=str(uuid4())))
 
     decision = await authorizer.authorize(
         ctx, Permissions.DATASTORE_TABLE_DELETE, resource
@@ -1123,13 +1149,13 @@ async def test_named_workload_destructive_explicit_grant_is_standing_authority(
         pod_id=uuid4(),
         visibility=ResourceVisibility.POD,
     )
+    invoker_id = uuid4()
     ctx = Context(
-        actor_type=ActorType.DELEGATED_USER_WORKLOAD,
+        actor=_named_workload(workload_principal_refs, invoker_id),
         actor_id=f"agent:{next(iter(workload_principal_refs)).id}",
-        user_id=uuid4(),
+        user_id=invoker_id,
         pod_id=resource.pod_id,
         permission_ids=frozenset({Permissions.DATASTORE_TABLE_DELETE}),
-        workload_principal_refs=workload_principal_refs,
         authorizer=authorizer,
     )
 
@@ -1171,16 +1197,19 @@ async def test_named_workload_destructive_without_grant_needs_session_approval(
         pod_id=uuid4(),
         visibility=ResourceVisibility.POD,
     )
+    invoker_id = uuid4()
     ctx = Context(
-        actor_type=ActorType.DELEGATED_USER_WORKLOAD,
+        actor=_named_workload(
+            workload_principal_refs,
+            invoker_id,
+            delegation=Delegation(session_id=str(uuid4())),
+        ),
         actor_id=f"agent:{next(iter(workload_principal_refs)).id}",
-        user_id=uuid4(),
+        user_id=invoker_id,
         pod_id=resource.pod_id,
         # The person approving holds the permission themselves — anything else
         # is the escalation the test below pins separately.
         permission_ids=frozenset({Permissions.DATASTORE_TABLE_DELETE}),
-        workload_principal_refs=workload_principal_refs,
-        delegation_session_id=str(uuid4()),
         authorizer=authorizer,
     )
 
@@ -1219,14 +1248,17 @@ async def test_a_session_approval_does_not_lift_the_invoker_ceiling(monkeypatch)
         pod_id=uuid4(),
         visibility=ResourceVisibility.POD,
     )
+    invoker_id = uuid4()
     ctx = Context(
-        actor_type=ActorType.DELEGATED_USER_WORKLOAD,
+        actor=_named_workload(
+            workload_principal_refs,
+            invoker_id,
+            delegation=Delegation(session_id=str(uuid4())),
+        ),
         actor_id=f"agent:{next(iter(workload_principal_refs)).id}",
-        user_id=uuid4(),
+        user_id=invoker_id,
         pod_id=resource.pod_id,
         permission_ids=frozenset({Permissions.DATASTORE_RECORD_READ}),
-        workload_principal_refs=workload_principal_refs,
-        delegation_session_id=str(uuid4()),
         authorizer=authorizer,
     )
 
@@ -1256,10 +1288,11 @@ async def test_user_actor_destructive_action_is_ungated(monkeypatch):
         pod_id=uuid4(),
         visibility=ResourceVisibility.POD,
     )
+    user_id = uuid4()
     ctx = Context(
-        actor_type=ActorType.USER,
+        actor=Person(user_id=user_id),
         actor_id=str(uuid4()),
-        user_id=uuid4(),
+        user_id=user_id,
         pod_id=resource.pod_id,
         permission_ids=frozenset({Permissions.DATASTORE_TABLE_DELETE}),
         authorizer=authorizer,

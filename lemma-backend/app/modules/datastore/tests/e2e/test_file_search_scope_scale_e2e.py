@@ -27,10 +27,12 @@ from sqlalchemy.orm import aliased
 
 from app.core.authorization import sql_actions
 from app.core.authorization.context import (
-    ActorType,
     Context,
+    Person,
     PrincipalRef,
     ResourceType,
+    Workload,
+    WorkloadKind,
 )
 from app.core.authorization.grants import grant_resource_type_values
 from app.core.authorization.models import ResourcePermissionGrantModel
@@ -158,6 +160,16 @@ async def _seed_platform(session, pod_id: UUID, owner: UUID, stranger: UUID) -> 
     assert present.scalar_one_or_none(), "the folder-visibility index is missing"
 
 
+def _function_for(function: PrincipalRef, owner: UUID) -> Workload:
+    """The function, run by ``owner``: its own grants are the ones that count."""
+    return Workload(
+        kind=WorkloadKind.FUNCTION,
+        workload_id=function.id,
+        for_user_id=owner,
+        principal_refs=frozenset({function}),
+    )
+
+
 async def _grant(session, pod_id: UUID, grantee: PrincipalRef) -> None:
     for paths, permission in (
         (_READ_GRANTS, Permissions.FOLDER_READ),
@@ -207,20 +219,20 @@ async def platform(db_session, pod_api: DatastoreApi) -> dict:
     assert 2_000 <= pod_rows <= 5_000, pod_rows
 
     workload = Context(
-        actor_type=ActorType.DELEGATED_USER_WORKLOAD,
+        actor=_function_for(function, owner),
         actor_id=f"function:{function.id}",
         authorizer=None,
         user_id=owner,
         pod_id=pod_id,
         permission_ids=frozenset({Permissions.FOLDER_READ}),
         principal_refs=frozenset({function}),
-        workload_principal_refs=frozenset({function}),
     )
+    member_id = uuid4()
     member = Context(
-        actor_type=ActorType.USER,
+        actor=Person(user_id=member_id),
         actor_id="member",
         authorizer=None,
-        user_id=uuid4(),
+        user_id=member_id,
         pod_id=pod_id,
         permission_ids=frozenset({Permissions.FOLDER_READ}),
         principal_refs=frozenset({PrincipalRef("ROLE", uuid4())}),
@@ -522,13 +534,12 @@ async def test_a_scope_that_runs_out_of_time_post_filters_instead_of_failing(
         {"pod": pod_id, "type": function.type, "id": function.id},
     )
     ctx = Context(
-        actor_type=ActorType.DELEGATED_USER_WORKLOAD,
+        actor=_function_for(function, owner),
         actor_id=f"function:{function.id}",
         authorizer=None,
         user_id=owner,
         pod_id=pod_id,
         principal_refs=frozenset({function}),
-        workload_principal_refs=frozenset({function}),
     )
     paths = {"/t1/s1/d1.md", "/t3/s1/d1.md"}
     ids = dict(

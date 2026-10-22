@@ -50,7 +50,7 @@ def minting_workload(ctx: Context) -> str | None:
     acts for nobody (``alone:agent:<id>``). The pod's default agent acts *as*
     the person, so it is recorded as the person alone.
     """
-    if ctx.is_user_equivalent:
+    if ctx.is_assistant:
         return None
     if ctx.actor_type is ActorType.DELEGATED_USER_WORKLOAD:
         return ctx.actor_id

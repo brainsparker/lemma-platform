@@ -12,11 +12,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.bounded import BoundedSet
 from app.core.authorization.context import (
-    ActorType,
+    Assistant,
     Context,
+    Delegation,
+    Person,
     PrincipalRef,
     ResourceRef,
     ResourceType,
+    Workload,
+    WorkloadKind,
 )
 from app.core.authorization.cache import (
     RoleSnapshot,
@@ -458,7 +462,7 @@ class AuthorizationDataService:
         authorizer = Authorizer(self.session)
         if organization_id is None and pod_id is None:
             return Context(
-                actor_type=ActorType.USER,
+                actor=Person(user_id=user_id),
                 actor_id=str(user_id),
                 user_id=user_id,
                 authorizer=authorizer,
@@ -498,7 +502,7 @@ class AuthorizationDataService:
 
         if cached is not None:
             return Context(
-                actor_type=ActorType.USER,
+                actor=Person(user_id=user_id),
                 actor_id=str(user_id),
                 user_id=user_id,
                 organization_id=cached.organization_id,
@@ -564,7 +568,7 @@ class AuthorizationDataService:
         )
         await self._cache_snapshot_without_holding(user_id, snapshot)
         return Context(
-            actor_type=ActorType.USER,
+            actor=Person(user_id=user_id),
             actor_id=str(user_id),
             user_id=user_id,
             organization_id=snapshot.organization_id,
@@ -589,10 +593,10 @@ class AuthorizationDataService:
     ) -> Context:
         authorizer = Authorizer(self.session)
         normalized_principal_type = principal_type.upper()
-        actor_type = (
-            ActorType.AGENT
+        kind = (
+            WorkloadKind.AGENT
             if normalized_principal_type == "AGENT"
-            else ActorType.FUNCTION
+            else WorkloadKind.FUNCTION
         )
 
         # Ask the cache FIRST, exactly as the user path does. The pod-scoped key
@@ -617,7 +621,11 @@ class AuthorizationDataService:
             organization_id = pod.organization_id if pod is not None else None
         if cached is not None:
             return Context(
-                actor_type=actor_type,
+                actor=Workload(
+                    kind=kind,
+                    workload_id=principal_id,
+                    principal_refs=cached.principal_refs,
+                ),
                 actor_id=str(principal_id),
                 organization_id=cached.organization_id,
                 pod_id=cached.pod_id,
@@ -661,7 +669,11 @@ class AuthorizationDataService:
         )
         await self._cache_snapshot_without_holding(principal_id, snapshot)
         return Context(
-            actor_type=actor_type,
+            actor=Workload(
+                kind=kind,
+                workload_id=principal_id,
+                principal_refs=snapshot.principal_refs,
+            ),
             actor_id=str(principal_id),
             organization_id=organization_id,
             pod_id=pod_id,
@@ -692,20 +704,17 @@ class AuthorizationDataService:
             pod_id=pod_id,
             request_id=request_id,
         )
+        delegation = Delegation(
+            session_id=delegation_session_id,
+            scope=delegation_scope or frozenset(),
+            name=delegation_actor_name,
+        )
         if is_default_pod_agent:
-            user_ctx.actor_type = ActorType.DELEGATED_USER_WORKLOAD
-            user_ctx.actor_id = f"{principal_type.lower()}:{principal_id}"
-            user_ctx.delegated_by_user_id = user_id
-            user_ctx.delegation_scope = delegation_scope or frozenset()
-            user_ctx.delegation_session_id = delegation_session_id
-            user_ctx.delegation_actor_name = delegation_actor_name
             # The default pod agent acts as the invoking user within its own pod
-            # (org-wide actions go through gated approval tools, not this token).
-            # Mark it user-equivalent so pod-scoped USER-only shortcuts apply —
-            # otherwise an org-owner user whose pod permissions come only from the
-            # org-owner shortcut loses them here (e.g. app.read -> spurious 403 on
-            # `lemma pods import` / app deploys from the workspace).
-            user_ctx.is_user_equivalent = True
+            # (org-wide actions go through gated approval tools, not this token):
+            # the person's context, with the assistant as its actor.
+            user_ctx.actor = Assistant(user_id=user_id, delegation=delegation)
+            user_ctx.actor_id = f"{principal_type.lower()}:{principal_id}"
             return user_ctx
 
         workload_ctx = await self.build_workload_context(
@@ -719,7 +728,17 @@ class AuthorizationDataService:
             workload_ctx.principal_refs,
         )
         return Context(
-            actor_type=ActorType.DELEGATED_USER_WORKLOAD,
+            actor=Workload(
+                kind=(
+                    WorkloadKind.AGENT
+                    if principal_type.upper() == "AGENT"
+                    else WorkloadKind.FUNCTION
+                ),
+                workload_id=principal_id,
+                for_user_id=user_id,
+                principal_refs=workload_ctx.principal_refs,
+                delegation=delegation,
+            ),
             actor_id=f"{principal_type.lower()}:{principal_id}",
             user_id=user_id,
             organization_id=user_ctx.organization_id,
@@ -735,13 +754,8 @@ class AuthorizationDataService:
             permission_ids=user_ctx.permission_ids,
             principal_refs=user_ctx.principal_refs | workload_ctx.principal_refs,
             grant_principal_sets=grant_principal_sets,
-            workload_principal_refs=workload_ctx.principal_refs,
             invoker_principal_refs=user_ctx.principal_refs,
             invoker_role_names=user_ctx.role_names,
-            delegated_by_user_id=user_id,
-            delegation_scope=delegation_scope or frozenset(),
-            delegation_session_id=delegation_session_id,
-            delegation_actor_name=delegation_actor_name,
             authorizer=Authorizer(self.session),
             request_id=request_id,
         )

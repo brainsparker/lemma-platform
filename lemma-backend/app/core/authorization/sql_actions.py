@@ -22,8 +22,9 @@ from sqlalchemy.orm import aliased
 from sqlalchemy.sql import ColumnElement
 
 from app.core.authorization.context import (
-    ActorType,
     Context,
+    OtherPod,
+    Person,
     PrincipalRef,
     ResourceType,
 )
@@ -87,10 +88,7 @@ def allowed_actions_expr(
         dict.fromkeys([*owner_actions_for_resource(resource_type), *role_actions])
     )
     grant_candidate_actions: Sequence[str] = resource_actions
-    if (
-        ctx.actor_type == ActorType.DELEGATED_USER_WORKLOAD
-        and not ctx.workload_principal_refs
-    ):
+    if ctx.is_assistant:
         # Default pod agent (user-equivalent): destructive actions never
         # project as available — at execution time they require a session
         # approval (DESTRUCTIVE_ACTION_REQUIRES_APPROVAL otherwise).
@@ -103,7 +101,7 @@ def allowed_actions_expr(
 
     # Before the outsider branch: another pod is an outsider too, but one this
     # pod may have granted things to.
-    if ctx.actor_type == ActorType.POD:
+    if isinstance(ctx.actor, OtherPod):
         return _pod_allowed_actions_expr(
             ctx=ctx,
             resource_type=resource_type,
@@ -122,10 +120,7 @@ def allowed_actions_expr(
             pod_id=ctx.pod_id,
         )
 
-    if (
-        ctx.actor_type == ActorType.DELEGATED_USER_WORKLOAD
-        and ctx.workload_principal_refs
-    ):
+    if ctx.is_named_workload:
         return _delegated_allowed_actions_expr(
             ctx=ctx,
             resource_type=resource_type,
@@ -154,7 +149,7 @@ def allowed_actions_expr(
     # POD and PUBLIC used to share one branch here, which is the listing half of
     # the bug that made PUBLIC do nothing.
     visibility_read_actions: list[str] = []
-    if ctx.actor_type == ActorType.USER and ctx.user_id is not None:
+    if isinstance(ctx.actor, Person) and ctx.user_id is not None:
         visibility_read_actions = [a for a in resource_actions if a.endswith(".read")]
     public_actions = list(dict.fromkeys([*role_actions, *visibility_read_actions]))
 

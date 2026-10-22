@@ -14,7 +14,15 @@ from uuid import uuid4
 
 import pytest
 
-from app.core.authorization.context import ActorType, Context, PrincipalRef
+from app.core.authorization.context import (
+    Actor,
+    Assistant,
+    Context,
+    Person,
+    PrincipalRef,
+    Workload,
+    WorkloadKind,
+)
 from app.core.authorization.dependencies import require_pod_membership
 from app.core.domain.errors import DomainError
 
@@ -23,7 +31,7 @@ POD_ID = uuid4()
 
 def _ctx(
     *,
-    actor_type: ActorType = ActorType.USER,
+    actor: Actor | None = None,
     is_pod_member: bool = False,
     role_names: frozenset[str] = frozenset(),
     is_superuser: bool = False,
@@ -31,10 +39,11 @@ def _ctx(
     principal_refs = set()
     if is_pod_member:
         principal_refs.add(PrincipalRef("POD_MEMBER", uuid4()))
+    user_id = uuid4()
     return Context(
-        actor_type=actor_type,
+        actor=actor if actor is not None else Person(user_id=user_id),
         actor_id="actor",
-        user_id=uuid4(),
+        user_id=user_id,
         pod_id=POD_ID,
         role_names=frozenset(role_names),
         principal_refs=frozenset(principal_refs),
@@ -115,18 +124,19 @@ async def test_allows_superuser():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "actor_type",
+    "actor",
     [
-        ActorType.DELEGATED_USER_WORKLOAD,
-        ActorType.AGENT,
-        ActorType.FUNCTION,
-        ActorType.SYSTEM,
+        Assistant(user_id=uuid4()),
+        Workload(kind=WorkloadKind.AGENT, workload_id=uuid4(), for_user_id=uuid4()),
+        Workload(kind=WorkloadKind.AGENT, workload_id=uuid4()),
+        Workload(kind=WorkloadKind.FUNCTION, workload_id=uuid4()),
     ],
+    ids=["assistant", "named-workload", "agent", "function"],
 )
-async def test_workload_actors_are_not_gated(actor_type: ActorType):
+async def test_workload_actors_are_not_gated(actor: Actor):
     # Workloads keep the grant-first projection this change never widened, so
     # gating them here would break agents listing files they already may read.
-    await _run(_ctx(actor_type=actor_type))
+    await _run(_ctx(actor=actor))
 
 
 @pytest.mark.asyncio
@@ -136,8 +146,8 @@ async def test_workload_actors_are_not_gated(actor_type: ActorType):
         _ctx(role_names=frozenset({"ORG_OWNER"})),
         _ctx(is_pod_member=True),
         _ctx(is_superuser=True),
-        _ctx(actor_type=ActorType.AGENT),
-        _ctx(actor_type=ActorType.FUNCTION),
+        _ctx(actor=Workload(kind=WorkloadKind.AGENT, workload_id=uuid4())),
+        _ctx(actor=Workload(kind=WorkloadKind.FUNCTION, workload_id=uuid4())),
     ],
     ids=["org-owner", "pod-member", "superuser", "agent", "function"],
 )

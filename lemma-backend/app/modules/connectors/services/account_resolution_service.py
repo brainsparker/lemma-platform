@@ -32,7 +32,7 @@ non-delegated caller another person's account outright, whatever it says.
 
 from uuid import UUID
 
-from app.core.authorization.context import ActorType, Context, ResourceRef
+from app.core.authorization.context import Context, ResourceRef
 from app.core.authorization.current import get_current_context
 from app.core.authorization.permissions import Permissions
 from app.core.authorization.grants import connector_resource_id
@@ -198,7 +198,7 @@ class AccountResolutionService:
         account_id: UUID | None = None,
     ) -> AccountEntity:
         auth_ctx = auth_actor or get_current_context()
-        if auth_ctx is None or auth_ctx.delegated_by_user_id is None:
+        if auth_ctx is None or not auth_ctx.is_delegated:
             raise ConnectorAccessDeniedError("Missing delegated workload context")
         organization_id = self._context_org_id(auth_ctx)
 
@@ -259,17 +259,12 @@ class AccountResolutionService:
     def _is_default_pod_agent_delegation(ctx: Context) -> bool:
         """Whether this context is the pod's assistant acting as its user.
 
-        ``is_user_equivalent`` is set in exactly one place -- the branch of
-        ``build_delegated_workload_context`` that the assistant takes -- so
-        reading it is the same answer the context was built from. Re-deriving
-        it here from ``actor_id`` meant parsing a string into a type and an id
-        and re-comparing both, which is how this came to disagree with the
-        builder in two independent ways at once.
+        The actor's type says so: ``build_delegated_workload_context`` makes the
+        assistant an ``Assistant``. Re-deriving it from ``actor_id`` meant
+        parsing a string into a type and an id and re-comparing both, which is
+        how this once came to disagree with the builder.
         """
-        return (
-            ctx.actor_type == ActorType.DELEGATED_USER_WORKLOAD
-            and ctx.is_user_equivalent
-        )
+        return ctx.is_assistant
 
     async def _require_delegated_access(
         self,
@@ -302,7 +297,7 @@ class AccountResolutionService:
         account_id: UUID | None = None,
     ) -> AccountEntity:
         auth_ctx = auth_actor or get_current_context()
-        if auth_ctx is not None and auth_ctx.delegated_by_user_id is not None:
+        if auth_ctx is not None and auth_ctx.is_delegated:
             return await self._resolve_workload_account(
                 connector_id=connector_id,
                 user_id=user_id,
@@ -327,7 +322,7 @@ class AccountResolutionService:
         account_id: UUID | None = None,
     ) -> AccountEntity:
         auth_ctx = auth_actor or get_current_context()
-        if auth_ctx is not None and auth_ctx.delegated_by_user_id is not None:
+        if auth_ctx is not None and auth_ctx.is_delegated:
             account = await self._resolve_workload_account(
                 connector_id=connector_id,
                 user_id=user_id,

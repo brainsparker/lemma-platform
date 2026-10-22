@@ -13,9 +13,9 @@ from app.core.authorization.grants import (
     replace_grantee_resource_grants,
     validate_pod_resource_grant_permissions,
 )
+from app.core.api.actor_policy import require_person
 from app.core.authorization.dependencies import (
     PodContextDep,
-    reject_delegated_workload_pod,
 )
 from app.core.api.pagination import parse_uuid_page_token
 from app.core.helpers.slug import normalize_resource_name
@@ -342,7 +342,7 @@ async def replace_function_permissions(
         "`contact_id`, which its input schema must declare. Takes pod settings "
         "permission and either owning the function or administering the pod."
     ),
-    dependencies=[reject_delegated_workload_pod("open a function to contacts")],
+    dependencies=[require_person("open a function to contacts")],
 )
 async def update_function_contact_access(
     request: Request,

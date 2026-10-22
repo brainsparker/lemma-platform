@@ -18,13 +18,16 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.authorization.context import (
-    ActorType,
+    Assistant,
     AuthorizationDecision,
     Context,
+    OtherPod,
+    Person,
     PrincipalRef,
     ResourceRef,
     ResourceType,
     ResourceVisibility,
+    WorkloadKind,
 )
 from app.core.authorization.delegation import (
     DESTRUCTIVE_ACTIONS,
@@ -147,10 +150,7 @@ class Authorizer(ResourceHydrationMixin, GrantResolutionMixin):
         # layer and must go through the user-approval-gated tools instead. Named
         # agent/function workloads are not user-equivalent and take the
         # stricter intersection path in ``workload_authority`` below.
-        clamp_to_pod = (
-            ctx.actor_type == ActorType.DELEGATED_USER_WORKLOAD
-            and ctx.is_user_equivalent
-        )
+        clamp_to_pod = ctx.is_assistant
         if clamp_to_pod and not self._is_pod_scoped_permission(permission_id):
             return AuthorizationDecision(
                 False, "DELEGATED_POD_SCOPE_ONLY", permission_id, resource
@@ -209,10 +209,7 @@ class Authorizer(ResourceHydrationMixin, GrantResolutionMixin):
             )
         if self._is_org_owner_of_pod(ctx, permission_id, hydrated):
             return AuthorizationDecision(True, "ORG_OWNER_POD", permission_id, hydrated)
-        if (
-            ctx.actor_type == ActorType.DELEGATED_USER_WORKLOAD
-            and ctx.workload_principal_refs
-        ):
+        if ctx.is_named_workload:
             return await authorize_delegated_workload(
                 self,
                 ctx,
@@ -302,7 +299,7 @@ class Authorizer(ResourceHydrationMixin, GrantResolutionMixin):
         read what is Public and nothing more; another pod, asking over a link,
         may also use what this pod granted it.
         """
-        if ctx.actor_type == ActorType.POD:
+        if isinstance(ctx.actor, OtherPod):
             return await self._pod_decision(ctx, permission_id, resource)
         if resource and await self._is_public_read(
             permission_id, resource, pod_id=ctx.pod_id
@@ -381,14 +378,11 @@ class Authorizer(ResourceHydrationMixin, GrantResolutionMixin):
         approval unlocks a destructive action without conferring authority the
         approving person does not have.
         """
-        if (
-            ctx.actor_type != ActorType.DELEGATED_USER_WORKLOAD
-            or permission_id not in DESTRUCTIVE_ACTIONS
-        ):
+        if ctx.delegation is None or permission_id not in DESTRUCTIVE_ACTIONS:
             return None
         if await _session_approval(
             ctx,
-            session_id=ctx.delegation_session_id,
+            session_id=ctx.delegation.session_id,
             workload_actor_id=ctx.actor_id,
             permission_id=permission_id,
         ):
@@ -428,7 +422,7 @@ class Authorizer(ResourceHydrationMixin, GrantResolutionMixin):
         flipping a resource to PUBLIC can never widen what an agent or function
         may do, nor let anyone edit what they can now read.
         """
-        if ctx.actor_type != ActorType.USER or ctx.user_id is None:
+        if not isinstance(ctx.actor, Person) or ctx.user_id is None:
             return None
         if not self._is_read_permission(permission_id):
             return None
@@ -462,7 +456,7 @@ class Authorizer(ResourceHydrationMixin, GrantResolutionMixin):
         app bundle upload that follows app.create). Org-level actions are not
         covered: they still require the org permission itself.
         """
-        if ctx.actor_type != ActorType.USER and not ctx.is_user_equivalent:
+        if not isinstance(ctx.actor, (Person, Assistant)):
             return False
         if not Authorizer._is_pod_scoped_permission(permission_id):
             return False
@@ -483,11 +477,14 @@ class Authorizer(ResourceHydrationMixin, GrantResolutionMixin):
             or resource.resource_id is None
         ):
             return False
-        if ctx.actor_type == ActorType.FUNCTION and ctx.actor_id == str(
+        workload = ctx.workload
+        if workload is None or workload.kind != WorkloadKind.FUNCTION:
+            return False
+        if workload.for_user_id is None and workload.workload_id == (
             resource.resource_id
         ):
             return True
-        if ctx.actor_type != ActorType.DELEGATED_USER_WORKLOAD:
+        if workload.for_user_id is None:
             return False
         return PrincipalRef(
             WorkloadPrincipalType.FUNCTION.value.upper(), resource.resource_id
@@ -501,10 +498,7 @@ class Authorizer(ResourceHydrationMixin, GrantResolutionMixin):
         pod_id: UUID,
     ) -> frozenset[UUID]:
         principal_sets = ctx.grant_principal_sets or (ctx.principal_refs,)
-        if (
-            ctx.actor_type == ActorType.DELEGATED_USER_WORKLOAD
-            and ctx.workload_principal_refs
-        ):
+        if ctx.is_named_workload:
             # The workload's own grants: the FIRST half of the intersection
             # ``workload_authority`` applies. The second half — could
             # the invoking person reach it themselves — is not expressible as a

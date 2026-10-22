@@ -14,6 +14,10 @@ from app.core.infrastructure.db.transaction_locks import safe_to_release
 
 
 class ActorType(str, Enum):
+    """The label an actor is reported under -- in audit rows, analytics and
+    traces. Decisions read ``Context.actor``, whose type *is* the actor; this
+    enum only names it. ``SYSTEM`` labels work no actor started (analytics)."""
+
     USER = "USER"
     AGENT = "AGENT"
     FUNCTION = "FUNCTION"
@@ -103,6 +107,107 @@ def normalize_resource_visibility(
 class PrincipalRef:
     type: str
     id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class Delegation:
+    """What a person's software carries about the run it is part of."""
+
+    #: Session approvals (APPROVE_FOR_SESSION) are keyed by it.
+    session_id: str | None = None
+    #: Permissions the token was narrowed to; empty means not narrowed.
+    scope: frozenset[str] = frozenset()
+    #: How the workload is named in denials and audit ("research-agent").
+    name: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Person:
+    """A signed-in person acting for themselves."""
+
+    user_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class Assistant:
+    """A pod's default agent, acting as the person who invoked it.
+
+    It holds no grants of its own: it mirrors that person's access inside its
+    one pod, and is refused anything org-scoped.
+    """
+
+    user_id: UUID
+    delegation: Delegation = Delegation()
+
+
+class WorkloadKind(str, Enum):
+    AGENT = "AGENT"
+    FUNCTION = "FUNCTION"
+
+
+@dataclass(frozen=True, slots=True)
+class Workload:
+    """A named agent or function.
+
+    With ``for_user_id`` it acts for that person and gets their access
+    intersected with its own grants (PS-ACCESS-020). Without one it is a
+    person-less run -- a function serving a contact or an anonymous visitor --
+    and has its grants alone.
+    """
+
+    kind: WorkloadKind
+    workload_id: UUID
+    for_user_id: UUID | None = None
+    #: The workload's own principals: its id and its roles. Grants to these
+    #: are the workload half of the intersection.
+    principal_refs: frozenset[PrincipalRef] = frozenset()
+    delegation: Delegation = Delegation()
+
+
+class OutsiderKind(str, Enum):
+    ANONYMOUS = "ANONYMOUS"
+    CONTACT = "CONTACT"
+
+
+@dataclass(frozen=True, slots=True)
+class Outsider:
+    """Somebody outside the pod: an anonymous visitor, or a contact it knows by
+    a vouched-for handle. Reads what is Public in one pod, nothing else."""
+
+    kind: OutsiderKind
+    contact_id: UUID | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class OtherPod:
+    """Another pod, asking this one over a link: Public reads plus what this
+    pod granted that pod (``authorization.pod_principal``)."""
+
+    pod_id: UUID
+
+
+Actor = Person | Assistant | Workload | Outsider | OtherPod
+
+
+def actor_type_of(actor: Actor) -> ActorType:
+    """The label ``actor`` is reported under."""
+    match actor:
+        case Person():
+            return ActorType.USER
+        case Assistant():
+            return ActorType.DELEGATED_USER_WORKLOAD
+        case Workload(for_user_id=None, kind=WorkloadKind.AGENT):
+            return ActorType.AGENT
+        case Workload(for_user_id=None):
+            return ActorType.FUNCTION
+        case Workload():
+            return ActorType.DELEGATED_USER_WORKLOAD
+        case Outsider(kind=OutsiderKind.ANONYMOUS):
+            return ActorType.ANONYMOUS
+        case Outsider():
+            return ActorType.CONTACT
+        case OtherPod():
+            return ActorType.POD
 
 
 @dataclass(frozen=True, slots=True)
@@ -319,7 +424,9 @@ class AuthorizerProtocol(Protocol):
 
 @dataclass(slots=True)
 class Context:
-    actor_type: ActorType
+    #: Who is acting. Its type is the actor kind; there is no separate flag.
+    actor: Actor
+    #: The actor's audit label ("<user id>", "agent:<id>", "pod:<id>").
     actor_id: str
     authorizer: AuthorizerProtocol
     request_id: str | None = None
@@ -331,7 +438,6 @@ class Context:
     permission_ids: frozenset[str] = field(default_factory=frozenset)
     principal_refs: frozenset[PrincipalRef] = field(default_factory=frozenset)
     grant_principal_sets: tuple[frozenset[PrincipalRef], ...] = ()
-    workload_principal_refs: frozenset[PrincipalRef] = field(default_factory=frozenset)
     #: The invoking person's OWN principals and role names, kept unmerged.
     #:
     #: ``principal_refs`` and ``role_names`` above are the union of the person's
@@ -343,17 +449,7 @@ class Context:
     #: person holds no grants", never "skip the check".
     invoker_principal_refs: frozenset[PrincipalRef] = field(default_factory=frozenset)
     invoker_role_names: frozenset[str] = field(default_factory=frozenset)
-    delegated_by_user_id: UUID | None = None
-    delegation_session_id: str | None = None
-    delegation_scope: frozenset[str] = field(default_factory=frozenset)
-    delegation_actor_name: str | None = None
     is_superuser: bool = False
-    # The default pod agent (``pod_default``) runs as a DELEGATED_USER_WORKLOAD but
-    # inherits the invoking user's context verbatim, scoped to its own pod. This
-    # flag lets pod-scoped USER-only authorization shortcuts (e.g. the org-owner
-    # pod allow) treat it as the user it is acting for — without widening
-    # real (grant-backed) agent/function workloads, which leave it False.
-    is_user_equivalent: bool = False
     #: Whether the pod this context is scoped to has been deleted.
     #:
     #: A deleted pod is soft-deleted: its rows, its memberships and its role
@@ -379,6 +475,11 @@ class Context:
     _session_approval_cache: dict[str, bool] = field(default_factory=dict)
 
     @property
+    def actor_type(self) -> ActorType:
+        """The label this actor is reported under. Not for decisions."""
+        return actor_type_of(self.actor)
+
+    @property
     def is_authenticated(self) -> bool:
         return not self.is_outsider
 
@@ -387,11 +488,57 @@ class Context:
         """Somebody outside the pod: an anonymous visitor, a contact, or another
         pod asking over a link. None of them is a member, and the pod database
         reads each as nobody in particular (``RowPrincipal.of``)."""
-        return self.actor_type in (
-            ActorType.ANONYMOUS,
-            ActorType.CONTACT,
-            ActorType.POD,
-        )
+        return isinstance(self.actor, (Outsider, OtherPod))
+
+    @property
+    def is_assistant(self) -> bool:
+        """The pod's default agent, mirroring the person who invoked it."""
+        return isinstance(self.actor, Assistant)
+
+    @property
+    def workload(self) -> Workload | None:
+        """The named agent or function acting, if one is."""
+        return self.actor if isinstance(self.actor, Workload) else None
+
+    @property
+    def is_named_workload(self) -> bool:
+        """A named agent or function acting for a person: the intersection
+        actor (person's access ∩ its own grants)."""
+        return isinstance(self.actor, Workload) and self.actor.for_user_id is not None
+
+    @property
+    def workload_principal_refs(self) -> frozenset[PrincipalRef]:
+        """A named workload's own principals, when it acts for a person.
+
+        Empty for every other actor -- including a person-less run, whose
+        principals are already the context's own ``principal_refs``, and which
+        is decided on them alone rather than as one half of an intersection.
+        """
+        if self.is_named_workload:
+            return self.actor.principal_refs  # type: ignore[union-attr]
+        return frozenset()
+
+    @property
+    def delegation(self) -> Delegation | None:
+        """Present when software acts for a person: the assistant, or a named
+        workload with a person behind it. None for a person, an outsider, and a
+        person-less run."""
+        if isinstance(self.actor, Assistant) or self.is_named_workload:
+            return self.actor.delegation  # type: ignore[union-attr]
+        return None
+
+    @property
+    def is_delegated(self) -> bool:
+        return self.delegation is not None
+
+    @property
+    def delegating_user_id(self) -> UUID | None:
+        """The person a piece of software acts for; None otherwise."""
+        if isinstance(self.actor, Assistant):
+            return self.actor.user_id
+        if isinstance(self.actor, Workload):
+            return self.actor.for_user_id
+        return None
 
     def has_permission(self, permission_id: str) -> bool:
         return bool(equivalent_permission_ids(permission_id) & self.permission_ids)

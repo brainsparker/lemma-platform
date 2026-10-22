@@ -18,6 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.authorization.context import (
+    RESOURCE_NOT_IN_POD,
     Assistant,
     AuthorizationDecision,
     Context,
@@ -471,15 +472,26 @@ class Authorizer(ResourceHydrationMixin, GrantResolutionMixin):
         that reaches every pod (an org owner's). Outside the pod a person still
         reads what is Public, as before.
         """
-        if ctx.pod_is_deleted and resource.pod_id == ctx.pod_id:
+        if (
+            ctx.pod_is_deleted
+            and resource.pod_id == ctx.pod_id
+            and permission_id != Permissions.POD_DELETE
+        ):
             # A soft-deleted pod keeps its rows and memberships, so nothing
             # else would refuse it. Every actor, not only those a route checked.
+            # Deleting it again stays allowed: an idempotent no-op.
             return AuthorizationDecision(False, "POD_DELETED", permission_id, resource)
         if not (isinstance(ctx.actor, (Person, Assistant)) or ctx.is_named_workload):
             return None
         if resource.pod_id is None or ctx.pod_id is None:
             return None
-        if resource.pod_id == ctx.pod_id and ctx.belongs_to_its_pod():
+        if resource.pod_id != ctx.pod_id:
+            # The row lives in another pod than the one the request is in: to
+            # this pod it does not exist (PS-ACCESS-031).
+            return AuthorizationDecision(
+                False, RESOURCE_NOT_IN_POD, permission_id, resource
+            )
+        if ctx.belongs_to_its_pod():
             return None
         visibility = self._visibility_read_decision(ctx, permission_id, resource)
         if visibility is not None and visibility.allowed:

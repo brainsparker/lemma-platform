@@ -231,6 +231,11 @@ class AuthorizationDecision:
     resource_name: str | None = None
 
 
+#: A row named on one pod's route that lives in another pod. ``require`` answers
+#: it as not found: to the pod being asked, it does not exist.
+RESOURCE_NOT_IN_POD = "RESOURCE_NOT_IN_POD"
+
+
 class AuthorizerProtocol(Protocol):
     async def authorize(
         self,
@@ -408,6 +413,8 @@ class Context:
                 code="AUTH_REQUIRED",
                 status_code=401,
             )
+        if decision.reason_code == RESOURCE_NOT_IN_POD:
+            raise DomainError("Not found", code="NOT_FOUND", status_code=404)
         raise DomainError(
             _denial_message(permission_id, decision),
             code=decision.reason_code,
@@ -535,6 +542,7 @@ class Context:
 
 
 __all__ = [
+    "RESOURCE_NOT_IN_POD",
     "Actor",
     "ActorType",
     "Assistant",

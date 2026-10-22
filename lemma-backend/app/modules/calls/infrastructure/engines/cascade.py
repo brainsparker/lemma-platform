@@ -93,7 +93,11 @@ class CascadeEngine:
         self._talker = talker
         self._events: asyncio.Queue[VoiceEvent] = asyncio.Queue(maxsize=EVENT_BACKLOG)
         self._history: list[Line] = []
+        #: The newest reply: a draft, or the next one to speak.
         self._reply: _Reply | None = None
+        #: The reply holding the floor. Usually the newest, but not while a team
+        #: update waits behind it, and a barge-in must stop this one.
+        self._speaking: _Reply | None = None
         self._turn = asyncio.Lock()
         self._dropping_audio = False
         self._tasks: list[asyncio.Task[None]] = []
@@ -136,7 +140,9 @@ class CascadeEngine:
             match turn.event:
                 case "StartOfTurn":
                     offer(self._events, UserSpeaking())
-                    if self._reply is not None and self._reply.committed.is_set():
+                    if self._speaking is not None or (
+                        self._reply is not None and self._reply.committed.is_set()
+                    ):
                         await self._interrupt()
                 case "Update":
                     if turn.transcript:
@@ -150,7 +156,11 @@ class CascadeEngine:
                         await self._cancel_reply()
                 case "EndOfTurn":
                     self._end_of_turn(turn.transcript)
-        offer(self._events, EngineClosed("Speech recognition disconnected."))
+        offer(
+            self._events,
+            EngineClosed("Speech recognition disconnected."),
+            essential=True,
+        )
 
     def _end_of_turn(self, transcript: str) -> None:
         if not transcript.strip():
@@ -185,6 +195,7 @@ class CascadeEngine:
             if self._reply is not reply and not reply.committed.is_set():
                 return
             history = self._history[-_HISTORY_LINES:]
+            self._speaking = reply
             try:
                 await self._write_and_speak(reply, history)
             except asyncio.CancelledError:
@@ -203,6 +214,9 @@ class CascadeEngine:
                 logger.warning("calls.cascade.reply.failed", exc_info=True)
                 self._record(reply, interrupted=True)
                 return
+            finally:
+                if self._speaking is reply:
+                    self._speaking = None
             self._record(reply, interrupted=False)
 
     async def _write_and_speak(self, reply: _Reply, history: Sequence[Line]) -> None:
@@ -255,13 +269,15 @@ class CascadeEngine:
         offer(self._events, Interrupted())
 
     async def _cancel_reply(self) -> None:
-        reply = self._reply
-        self._reply = None
-        if reply is None or reply.task is None:
-            return
-        reply.task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await reply.task
+        """Stop the reply speaking and any waiting behind it."""
+        replies = {id(r): r for r in (self._speaking, self._reply) if r is not None}
+        self._reply = self._speaking = None
+        for reply in replies.values():
+            if reply.task is None:
+                continue
+            reply.task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await reply.task
 
     # -- playing -----------------------------------------------------------
 

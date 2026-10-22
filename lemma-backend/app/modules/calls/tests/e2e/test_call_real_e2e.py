@@ -108,6 +108,34 @@ class Call:
         self._reader.cancel()
 
 
+async def _running_child(client, pod_id: str, call_id: str) -> str | None:
+    """The coordinator's sub-agent, while its run is still going."""
+    page = (
+        await client.get(
+            f"/pods/{pod_id}/conversations/{call_id}/messages", params={"limit": 200}
+        )
+    ).json()
+    for message in page.get("items", []):
+        result = message.get("tool_result")
+        if (
+            message.get("tool_name") == "spawn_subagent"
+            and message.get("kind") == "TOOL_RETURN"
+            and isinstance(result, dict)
+            and result.get("conversation_id")
+        ):
+            child = (
+                await client.get(
+                    f"/pods/{pod_id}/conversations/{result['conversation_id']}"
+                )
+            ).json()
+            if (
+                child.get("status") == "RUNNING"
+                or child.get("last_run_status") == "RUNNING"
+            ):
+                return result["conversation_id"]
+    return None
+
+
 async def _record(client, pod_id: str, call_id: str, call: Call, started: float):
     """The call's conversations, walked from the coordinator through each spawn,
     and -- when ``CALL_E2E_RECORD`` names a file -- everything written there."""
@@ -210,7 +238,15 @@ async def test_a_call_delegates_steers_and_shows_its_work(
             "three good venues with their nightly prices, and show me a comparison?"
         )
         await call.until("the voice answers", call.voice_lines, seconds=30)
-        await asyncio.sleep(25)
+        # The correction has to land on work in progress, or it proves nothing
+        # about steering: wait for the coordinator's sub-agent to be running.
+        await eventually(
+            label="a sub-agent is working on the request",
+            probe=lambda: _running_child(client, pod_id, call_id),
+            done=bool,
+            timeout_seconds=120,
+            interval_seconds=1.0,
+        )
         await call.say("Oh, and actually make it 15 people, not 12.")
         await call.until(
             "something is on the canvas", lambda: call.of("canvas.item"), seconds=300
@@ -221,7 +257,6 @@ async def test_a_call_delegates_steers_and_shows_its_work(
             lambda: len(call.voice_lines()) > said_before,
             seconds=60,
         )
-        await asyncio.sleep(10)
     finally:
         await call.close()
         tree = await _record(client, pod_id, call_id, call, started)

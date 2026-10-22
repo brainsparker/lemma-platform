@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { source } from "@/data";
 import { NEW_CONVERSATION } from "@/data/types";
@@ -70,17 +70,27 @@ export function useHuddle({ pod, teammate, conversationId }: {
             await startCall(opened.call_id, { teammate, pod: pod.name, context: brief });
         } catch (problem) {
             if (attempt !== setupAttempt.current) return;
+            setCallId(null);
             setSetupError(problem instanceof Error ? problem.message : "Could not start the call.");
             setExpanded(false);
         }
     }, [pod.id, pod.name, teammate, context, startCall]);
 
+    /* The call's id goes with it: the shell adopts the call's conversation
+       while one is set, and an ended call must not pull the person back to it
+       when they open something else. */
     const end = useCallback(() => {
         setupAttempt.current++;
         setSetupError(null);
+        setCallId(null);
         endCall();
         setExpanded(false);
     }, [endCall]);
+
+    // Ended from the other side -- the server, the network -- as well as here.
+    useEffect(() => {
+        if (call.status === "ended" || call.status === "error") setCallId(null);
+    }, [call.status]);
 
     const deck = useMemo(() => canvasDeck(call.canvas), [call.canvas]);
 

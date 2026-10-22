@@ -110,12 +110,14 @@ export function useCall({ podId }: { podId: string }) {
         }
     }, [podId, onFrame, end, teardown]);
 
+    /* The ref first, outside React's updater: the microphone callback reads it
+       on its own schedule, and an updater runs when React gets to it (twice in
+       Strict Mode), so audio could still go out after Mute was pressed. */
     const toggleMute = useCallback(() => {
-        setMuted((was) => {
-            mutedRef.current = !was;
-            connectionRef.current?.send({ type: "mute", muted: !was });
-            return !was;
-        });
+        const next = !mutedRef.current;
+        mutedRef.current = next;
+        connectionRef.current?.send({ type: "mute", muted: next });
+        setMuted(next);
     }, []);
 
     /** The person paged to this canvas item: the voice should know what they see. */

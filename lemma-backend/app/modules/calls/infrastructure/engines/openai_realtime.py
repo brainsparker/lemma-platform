@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import time
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING
 
@@ -79,7 +80,10 @@ class OpenAIRealtimeEngine:
         self._reader: asyncio.Task[None] | None = None
         self._item_id: str | None = None
         self._delivered_ms = 0.0
-        self._responding = False
+        #: When the reply's first audio went out. The caller hears it in real
+        #: time from then, which is what a truncate has to measure.
+        self._audio_started_at: float | None = None
+        self._configured = False
 
     async def open(self) -> None:
         import websockets
@@ -171,32 +175,39 @@ class OpenAIRealtimeEngine:
             async for raw in socket:
                 closed = await self._handle(decode(raw))
                 if closed is not None:
-                    offer(self._events, closed)
+                    offer(self._events, closed, essential=True)
                     return
         except websockets.ConnectionClosed:
             offer(
                 self._events,
                 EngineClosed("The voice connection dropped. Please call again."),
+                essential=True,
             )
             return
-        offer(self._events, EngineClosed())
+        offer(self._events, EngineClosed(), essential=True)
 
     async def _handle(self, frame: dict[str, JsonValue]) -> EngineClosed | None:
         match frame.get("type"):
             case "input_audio_buffer.speech_started":
                 offer(self._events, UserSpeaking())
-                if self._responding:
+                # Audio arrives faster than it plays, so a reply the provider
+                # has finished can still be playing; that one is cut too.
+                if self._still_playing():
                     await self._truncate()
+            case "session.updated":
+                self._configured = True
             case "conversation.item.input_audio_transcription.delta":
                 offer(self._events, Heard(_str(frame.get("delta")), final=False))
             case "conversation.item.input_audio_transcription.completed":
                 offer(self._events, Heard(_str(frame.get("transcript")), final=True))
             case "response.created":
-                self._responding = True
                 self._delivered_ms = 0.0
+                self._audio_started_at = None
             case "response.output_audio.delta":
                 self._item_id = _str(frame.get("item_id")) or self._item_id
                 pcm = base64.b64decode(_str(frame.get("delta")))
+                if self._audio_started_at is None:
+                    self._audio_started_at = time.monotonic()
                 self._delivered_ms += duration_ms(pcm, PROVIDER_SAMPLE_RATE)
                 offer(self._events, AudioOut(pcm, PROVIDER_SAMPLE_RATE))
             case "response.output_audio_transcript.delta":
@@ -204,14 +215,27 @@ class OpenAIRealtimeEngine:
             case "response.output_audio_transcript.done":
                 offer(self._events, Said(_str(frame.get("transcript")), final=True))
             case "response.done":
-                self._responding = False
                 offer(self._events, TurnDone())
             case "error":
                 return self._error(frame)
         return None
 
+    def _played_ms(self) -> float:
+        if self._audio_started_at is None:
+            return 0.0
+        elapsed = (time.monotonic() - self._audio_started_at) * 1000
+        return min(self._delivered_ms, elapsed)
+
+    def _still_playing(self) -> bool:
+        return (
+            self._audio_started_at is not None
+            and self._played_ms() < self._delivered_ms
+        )
+
     async def _truncate(self) -> None:
         offer(self._events, Interrupted())
+        played = self._played_ms()
+        self._audio_started_at = None
         if self._item_id is None:
             return
         await self._send(
@@ -219,7 +243,7 @@ class OpenAIRealtimeEngine:
                 "type": "conversation.item.truncate",
                 "item_id": self._item_id,
                 "content_index": 0,
-                "audio_end_ms": int(self._delivered_ms),
+                "audio_end_ms": int(played),
             }
         )
 
@@ -233,6 +257,10 @@ class OpenAIRealtimeEngine:
         logger.warning("calls.openai.provider_error.degraded", code=str(code))
         if code in {"invalid_api_key", "session_expired", "insufficient_quota"}:
             return EngineClosed("The voice provider ended the call.")
+        if not self._configured:
+            # The session itself was refused: a voice that never got its
+            # instructions or audio format cannot hold a call.
+            return EngineClosed("The voice could not be set up.")
         return None
 
 

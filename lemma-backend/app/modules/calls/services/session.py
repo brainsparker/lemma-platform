@@ -100,7 +100,10 @@ class CallSession:
         self._muted = False
         self._working: bool | None = None
         self._lines: list[str] = []
-        self._unsent: list[str] = []
+        #: What was said since the agents last got a turn, numbered in order,
+        #: so a turn takes only what came before it.
+        self._unsent: list[tuple[int, str]] = []
+        self._said_count = 0
         self._routing = asyncio.Lock()
         self._titles: dict[str, str] = {}
         self.end_reason: str | None = None
@@ -252,24 +255,30 @@ class CallSession:
                 return True
         return False
 
-    def _remember(self, line: str) -> None:
+    def _remember(self, line: str) -> int:
         self._lines.append(line)
-        self._unsent.append(line)
+        self._said_count += 1
+        self._unsent.append((self._said_count, line))
         del self._unsent[:-_EARLIER_LINES]
+        return self._said_count
 
     def _finished_turn(self, text: str) -> None:
         recent = self._lines[-_RECENT_LINES:]
-        self._remember(f"Caller: {text}")
-        create_inherited_task(self._route(text, recent), name="calls.session.route")
+        number = self._remember(f"Caller: {text}")
+        create_inherited_task(
+            self._route(text, recent, number), name="calls.session.route"
+        )
 
-    async def _route(self, text: str, recent: Sequence[str]) -> None:
+    async def _route(self, text: str, recent: Sequence[str], number: int) -> None:
         # In order: a correction must not overtake the request it corrects.
         async with self._routing:
             route = await self._gate(text, recent)
             if route is Route.VOICE:
                 return
-            earlier = [line for line in self._unsent if line != f"Caller: {text}"]
-            self._unsent.clear()
+            # Only what was said before this turn is its context. A turn heard
+            # while this one was being routed is still to come, as its own.
+            earlier = [line for seq, line in self._unsent if seq < number]
+            self._unsent = [(seq, line) for seq, line in self._unsent if seq > number]
             content = f"[caller] {text}"
             if earlier:
                 content += (

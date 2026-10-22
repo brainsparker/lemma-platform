@@ -117,8 +117,10 @@ async def test_a_draft_started_early_is_spoken_once_the_turn_is_confirmed() -> N
     await engine.open()
     listener.turns_in.put_nowait(TurnInfo("StartOfTurn", ""))
     listener.turns_in.put_nowait(TurnInfo("EagerEndOfTurn", "find a flight"))
-    await asyncio.sleep(0.05)
-    assert speaker.spoken == []  # drafted, not said
+    async with asyncio.timeout(2):
+        while not talker.prompts:
+            await asyncio.sleep(0)
+    assert speaker.spoken == []  # drafting, not said
     listener.turns_in.put_nowait(TurnInfo("EndOfTurn", "Find a flight."))
     seen: list[VoiceEvent] = []
     await _until(engine, TurnDone, seen)
@@ -182,14 +184,43 @@ async def test_a_team_note_to_speak_is_said_and_one_to_know_is_only_remembered()
     engine, listener, speaker = _engine(talker)
     await engine.open()
     await engine.inject("[team] venues are on screen", Inject.CONTEXT)
-    await asyncio.sleep(0.05)
-    assert talker.prompts == []
+    assert talker.prompts == []  # known, and nothing started to say it
     await engine.inject("[team] three venues found", Inject.SPEAK)
     seen: list[VoiceEvent] = []
     await _until(engine, TurnDone, seen)
     assert "three venues found" in talker.prompts[0]
     assert Line("note", "[team] venues are on screen") in talker.histories[0]
     assert speaker.spoken == ["Okay."]
+    await engine.close()
+
+
+async def test_a_barge_in_stops_the_reply_speaking_not_the_update_queued_behind_it() -> (
+    None
+):
+    talker = ScriptedTalker(
+        {"tell me everything": ["One. ", "Two. ", "Three. ", "Four. ", "Five."]},
+        pause=0.05,
+    )
+    engine, listener, speaker = _engine(talker)
+    await engine.open()
+    listener.turns_in.put_nowait(TurnInfo("EndOfTurn", "tell me everything"))
+    seen: list[VoiceEvent] = []
+    async with asyncio.timeout(2):
+        async for event in engine.events():
+            seen.append(event)
+            if isinstance(event, Said) and not event.final:
+                break
+    # A team update arrives while the reply is speaking, and waits behind it.
+    await engine.inject("[team] found it", Inject.SPEAK)
+    listener.turns_in.put_nowait(TurnInfo("StartOfTurn", ""))
+    await _until(engine, Interrupted, seen)
+    assert speaker.cleared == 1
+    # The reply that was speaking is the one that ended, cut short -- not the
+    # update waiting behind it, with the reply talking on over the caller.
+    said = [e for e in seen if isinstance(e, Said) and e.final]
+    assert len(said) == 1 and "Five." not in said[0].text
+    assert engine._history[-1].speaker == "voice"
+    assert engine._history[-1].text.endswith("—")
     await engine.close()
 
 

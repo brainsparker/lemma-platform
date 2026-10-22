@@ -101,11 +101,20 @@ class Agents:
             yield await self.signals_in.get()
 
 
-def _gate(answers: dict[str, Route]):
-    async def gate(turn: str, recent: Sequence[str]) -> Route:
-        return answers.get(turn, Route.TEAM)
+class Gate:
+    """Answers from a script, and remembers what it was asked."""
 
-    return gate
+    def __init__(self, answers: dict[str, Route]) -> None:
+        self.answers = answers
+        self.asked: list[str] = []
+
+    async def __call__(self, turn: str, recent: Sequence[str]) -> Route:
+        self.asked.append(turn)
+        return self.answers.get(turn, Route.TEAM)
+
+
+def _gate(answers: dict[str, Route]) -> Gate:
+    return Gate(answers)
 
 
 def _session(caller: Caller, voice: Voice, agents: Agents, gate) -> CallSession:
@@ -118,21 +127,24 @@ def _session(caller: Caller, voice: Voice, agents: Agents, gate) -> CallSession:
     )
 
 
-async def _settle() -> None:
-    for _ in range(20):
-        await asyncio.sleep(0.01)
+async def _until(condition, *, within: float = 2.0) -> None:
+    """Let the session's tasks run until ``condition`` holds."""
+    async with asyncio.timeout(within):
+        while not condition():
+            await asyncio.sleep(0)
 
 
 async def test_chit_chat_waits_and_rides_along_with_the_next_real_request() -> None:
     caller, voice, agents = Caller(), Voice(), Agents()
-    session = _session(caller, voice, agents, _gate({"hey there": Route.VOICE}))
+    gate = _gate({"hey there": Route.VOICE})
+    session = _session(caller, voice, agents, gate)
     running = asyncio.create_task(session.run())
     await voice.out.put(Heard("hey there", final=True))
     await voice.out.put(Said("Hi! What can I do?", final=True))
-    await _settle()
+    await _until(lambda: "hey there" in gate.asked)
     assert agents.turns == []
     await voice.out.put(Heard("plan a Goa offsite for twelve", final=True))
-    await _settle()
+    await _until(lambda: agents.turns)
     assert len(agents.turns) == 1
     turn = agents.turns[0]
     assert turn.startswith("[caller] plan a Goa offsite for twelve")
@@ -151,11 +163,13 @@ async def test_microphone_audio_reaches_the_voice_unless_muted_and_its_audio_rea
     caller.inbox.put_nowait(json.dumps({"type": "mute", "muted": True}))
     caller.inbox.put_nowait(b"\x03\x04")
     await voice.out.put(AudioOut(b"\x05\x06", 24_000))
-    await _settle()
-    assert voice.heard == [b"\x01\x02"]
-    assert caller.audio == [b"\x05\x06"]
+    await _until(lambda: caller.audio)
+    # The caller's frames are taken in order, so once `end` ends the call,
+    # everything sent before it has been handled.
     caller.inbox.put_nowait(json.dumps({"type": "end"}))
     await running
+    assert voice.heard == [b"\x01\x02"]
+    assert caller.audio == [b"\x05\x06"]
 
 
 async def test_relays_are_known_at_once_or_spoken_at_the_next_pause() -> None:
@@ -164,11 +178,10 @@ async def test_relays_are_known_at_once_or_spoken_at_the_next_pause() -> None:
     await agents.signals_in.put(Relay("research started", "context"))
     await agents.signals_in.put(Relay("three venues found", "when_idle"))
     await voice.out.put(AudioOut(b"\x00\x00", 24_000))  # the voice is mid-sentence
-    await _settle()
-    assert voice.injected == [("[team] research started", Inject.CONTEXT)]
+    await _until(lambda: voice.injected and caller.audio)
+    assert voice.injected[0] == ("[team] research started", Inject.CONTEXT)
     await voice.out.put(TurnDone())
-    await _settle()
-    assert ("[team] three venues found", Inject.SPEAK) in voice.injected
+    await _until(lambda: ("[team] three venues found", Inject.SPEAK) in voice.injected)
     caller.inbox.put_nowait(None)
     await running
 
@@ -203,7 +216,9 @@ async def test_what_is_shown_goes_to_the_screen_and_the_voice_is_told_what_is_on
     )
     await agents.signals_in.put(Working(running=True))
     await agents.signals_in.put(Working(running=True))
-    await _settle()
+    # Signals are handled in order: once this one lands, so have the rest.
+    await agents.signals_in.put(Relay("done", "context"))
+    await _until(lambda: ("[team] done", Inject.CONTEXT) in voice.injected)
     items = caller.of("canvas.item")
     assert [item.get("replay") for item in items] == [True, None]
     assert items[1]["item"] == {
@@ -233,7 +248,7 @@ async def test_what_is_shown_goes_to_the_screen_and_the_voice_is_told_what_is_on
             }
         )
     )
-    await _settle()
+    await _until(lambda: agents.turns)
     assert (
         "[canvas] The person is looking at: /me/plan.pdf",
         Inject.CONTEXT,
@@ -269,7 +284,7 @@ async def test_a_request_the_agents_never_got_is_not_promised() -> None:
     agents = Failing()
     running = asyncio.create_task(_session(caller, voice, agents, _gate({})).run())
     await voice.out.put(Heard("book the cheapest one", final=True))
-    await _settle()
+    await _until(lambda: voice.injected)
     assert (
         voice.injected and "did not receive the last request" in voice.injected[-1][0]
     )
@@ -281,3 +296,29 @@ def test_the_session_takes_call_agents() -> None:
     # The stand-in above mirrors these; a renamed method should fail here first.
     for name in ("send_turn", "canvas", "signals"):
         assert hasattr(CallAgents, name)
+
+
+async def test_a_turn_heard_while_another_is_routed_is_not_called_handled() -> None:
+    caller, voice, agents = Caller(), Voice(), Agents()
+    release = asyncio.Event()
+
+    class Slow(Gate):
+        async def __call__(self, turn: str, recent: Sequence[str]) -> Route:
+            self.asked.append(turn)
+            if turn == "find venues":
+                await release.wait()
+            return Route.TEAM
+
+    running = asyncio.create_task(_session(caller, voice, agents, Slow({})).run())
+    await voice.out.put(Heard("find venues", final=True))
+    await voice.out.put(Heard("and flights too", final=True))
+    await _until(lambda: len(caller.of("transcript")) == 2)
+    release.set()
+    await _until(lambda: len(agents.turns) == 2)
+    first, second = agents.turns
+    # The second request was not sent to the agents as already handled
+    # context of the first: it arrives as its own turn.
+    assert "and flights too" not in first
+    assert second.startswith("[caller] and flights too")
+    caller.inbox.put_nowait(None)
+    await running

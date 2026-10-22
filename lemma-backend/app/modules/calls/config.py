@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core.settings_env import dotenv_path
@@ -124,6 +124,26 @@ class CallsSettings(BaseSettings):
             "asked to be said at the next pause is spoken."
         ),
     )
+
+    @field_validator(
+        "gemini_api_key",
+        "gemini_live_voice",
+        "openai_api_key",
+        "deepgram_api_key",
+        "cascade_eager_eot_threshold",
+        "cascade_talker_model",
+        "cascade_talker_reasoning_effort",
+        "call_coordinator_model",
+        mode="before",
+    )
+    @classmethod
+    def _blank_is_unset(cls, value: object) -> object:
+        # The documented `.env` writes these as `KEY=`. Read verbatim, a blank
+        # key would offer an engine that cannot connect, and a blank threshold
+        # would fail validation instead of meaning "wait for the confirmed end".
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
 
 calls_settings = CallsSettings()

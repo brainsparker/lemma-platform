@@ -40,10 +40,19 @@ def encode(frame: Frame) -> str:
     return json.dumps(frame)
 
 
-def offer[T](queue: asyncio.Queue[T], item: T) -> None:
+def offer[T](queue: asyncio.Queue[T], item: T, *, essential: bool = False) -> None:
     """Put ``item`` on a bounded queue, dropping it if the consumer has fallen
-    that far behind."""
+    that far behind.
+
+    An ``essential`` item -- the event that ends a stream -- is never the one
+    dropped: the oldest waiting item makes room for it, because a reader that
+    never sees its stream end waits on it forever.
+    """
     try:
         queue.put_nowait(item)
+        return
     except asyncio.QueueFull:
         logger.warning("calls.frames.backlog_full.degraded", item=type(item).__name__)
+    if essential:
+        queue.get_nowait()
+        queue.put_nowait(item)

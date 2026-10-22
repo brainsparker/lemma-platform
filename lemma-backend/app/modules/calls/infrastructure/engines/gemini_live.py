@@ -60,6 +60,9 @@ _ENDPOINT = (
     "google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
 )
 OUTPUT_SAMPLE_RATE = 24_000
+#: How long the caller's transcript must be quiet, once the voice has begun,
+#: before their turn is taken as finished.
+CALLER_TURN_GRACE_SECONDS = 0.6
 _SETUP_TIMEOUT_SECONDS = 15.0
 #: Each reconnect replays nothing; more than a few in a row means the provider
 #: is refusing us, not rotating the connection.
@@ -93,6 +96,7 @@ class GeminiLiveEngine:
         self._heard: list[str] = []
         self._said: list[str] = []
         self._voice_turn_open = False
+        self._closing_turn: asyncio.TimerHandle | None = None
 
     async def open(self) -> None:
         await self._connect()
@@ -182,6 +186,8 @@ class GeminiLiveEngine:
 
     async def close(self) -> None:
         self._closing = True
+        if self._closing_turn is not None:
+            self._closing_turn.cancel()
         if self._reader is not None:
             self._reader.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -211,16 +217,17 @@ class GeminiLiveEngine:
                 offer(
                     self._events,
                     EngineClosed("The voice connection dropped. Please call again."),
+                    essential=True,
                 )
                 return
             reconnects += 1
             try:
                 await self._connect()
             except EngineUnavailable as exc:
-                offer(self._events, EngineClosed(str(exc)))
+                offer(self._events, EngineClosed(str(exc)), essential=True)
                 return
             logger.info("calls.gemini.resumed.observed", attempt=reconnects)
-        offer(self._events, EngineClosed())
+        offer(self._events, EngineClosed(), essential=True)
 
     def _handle_frame(self, frame: dict[str, JsonValue]) -> None:
         update = frame.get("sessionResumptionUpdate")
@@ -247,6 +254,10 @@ class GeminiLiveEngine:
                 offer(self._events, UserSpeaking())
             self._heard.append(heard)
             offer(self._events, Heard(heard, final=False))
+            if self._voice_turn_open:
+                # Words still arriving after the voice began: the caller's
+                # turn is not over until they stop.
+                self._close_caller_turn_soon()
         turn = content.get("modelTurn")
         if isinstance(turn, dict):
             self._voice_starts()
@@ -267,11 +278,24 @@ class GeminiLiveEngine:
             self._end_voice_turn()
 
     def _voice_starts(self) -> None:
-        # The voice answering is the provider's end-of-turn for the caller.
-        self._close_caller_turn()
-        self._voice_turn_open = True
+        # The voice answering is the provider's end-of-turn for the caller, but
+        # its transcript runs behind the audio: the last words can land after
+        # the first audio frame. The turn closes once they stop arriving.
+        if not self._voice_turn_open:
+            self._voice_turn_open = True
+            self._close_caller_turn_soon()
+
+    def _close_caller_turn_soon(self) -> None:
+        if self._closing_turn is not None:
+            self._closing_turn.cancel()
+        self._closing_turn = asyncio.get_running_loop().call_later(
+            CALLER_TURN_GRACE_SECONDS, self._close_caller_turn
+        )
 
     def _close_caller_turn(self) -> None:
+        if self._closing_turn is not None:
+            self._closing_turn.cancel()
+            self._closing_turn = None
         if self._heard:
             text = "".join(self._heard).strip()
             self._heard.clear()

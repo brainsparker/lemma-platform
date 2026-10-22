@@ -117,6 +117,8 @@ async def route_turn(
         DecisionLimitedError,
         DecisionInvalidError,
         UsageLimitExceededError,
+        OSError,
+        TimeoutError,
     ):
         logger.warning("calls.gate.undecided.degraded", exc_info=True)
         return Route.TEAM

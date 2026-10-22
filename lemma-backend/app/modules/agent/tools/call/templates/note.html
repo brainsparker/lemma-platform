@@ -7,10 +7,14 @@
   #cv-body code { font-family: var(--w-mono, ui-monospace, monospace); font-size: 13px; }
 </style>
 <script type="module">
-  import { marked } from "https://cdn.jsdelivr.net/npm/marked@15.0.7/lib/marked.esm.js";
-  import DOMPurify from "https://cdn.jsdelivr.net/npm/dompurify@3.2.4/dist/purify.es.mjs";
   const d = lemma.data || {};
   try {
+    /* Loaded here rather than imported at the top: a library that cannot load
+       must reach the failure path like any other error, not leave a blank. */
+    const [{ marked }, { default: DOMPurify }] = await Promise.all([
+      import("https://cdn.jsdelivr.net/npm/marked@15.0.7/lib/marked.esm.js"),
+      import("https://cdn.jsdelivr.net/npm/dompurify@3.2.4/dist/purify.es.mjs"),
+    ]);
     document.getElementById("cv-body").innerHTML = DOMPurify.sanitize(marked.parse(d.markdown || ""));
   } catch (error) { window.canvasFailed((error && error.message) || "invalid note"); }
 </script>

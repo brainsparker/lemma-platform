@@ -7,6 +7,7 @@ answering is the only end-of-turn the caller's side ever gets.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 
 import pytest
@@ -20,7 +21,10 @@ from app.modules.calls.domain.voice import (
     UserSpeaking,
     VoiceEvent,
 )
-from app.modules.calls.infrastructure.engines.gemini_live import GeminiLiveEngine
+from app.modules.calls.infrastructure.engines.gemini_live import (
+    CALLER_TURN_GRACE_SECONDS,
+    GeminiLiveEngine,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -53,7 +57,7 @@ def _audio(pcm: bytes) -> dict[str, object]:
     }
 
 
-def test_a_turn_heard_answered_and_finished() -> None:
+async def test_a_turn_heard_answered_and_finished() -> None:
     engine = _engine()
     engine._handle_frame(
         {"serverContent": {"inputTranscription": {"text": "Find me "}}}
@@ -68,15 +72,33 @@ def test_a_turn_heard_answered_and_finished() -> None:
         UserSpeaking(),
         Heard("Find me ", final=False),
         Heard("a flight.", final=False),
-        Heard("Find me a flight.", final=True),
         AudioOut(b"\x01\x00" * 4, 24_000),
         Said("Sure.", final=False),
+        Heard("Find me a flight.", final=True),
         Said("Sure.", final=True),
         TurnDone(),
     ]
 
 
-def test_a_barge_in_ends_the_voices_turn_where_it_was() -> None:
+async def test_words_heard_after_the_voice_begins_stay_in_the_callers_turn() -> None:
+    engine = _engine()
+    engine._handle_frame(
+        {"serverContent": {"inputTranscription": {"text": "Book the "}}}
+    )
+    engine._handle_frame({"serverContent": _audio(b"\x01\x00" * 4)})
+    # The transcript runs behind the audio: the last words land late.
+    engine._handle_frame(
+        {"serverContent": {"inputTranscription": {"text": "cheapest one."}}}
+    )
+    finals = [e for e in _drain(engine) if isinstance(e, Heard) and e.final]
+    assert finals == []
+    await asyncio.sleep(CALLER_TURN_GRACE_SECONDS + 0.1)
+    assert [e for e in _drain(engine) if isinstance(e, Heard) and e.final] == [
+        Heard("Book the cheapest one.", final=True)
+    ]
+
+
+async def test_a_barge_in_ends_the_voices_turn_where_it_was() -> None:
     engine = _engine()
     engine._handle_frame(
         {"serverContent": {"outputTranscription": {"text": "The first venue is"}}}
@@ -104,7 +126,7 @@ def test_resumption_handles_are_kept_and_go_away_rotates_the_connection() -> Non
     assert setup["contextWindowCompression"] == {"slidingWindow": {}}
 
 
-def test_text_that_is_not_pcm_audio_is_not_played() -> None:
+async def test_text_that_is_not_pcm_audio_is_not_played() -> None:
     engine = _engine()
     engine._handle_frame(
         {

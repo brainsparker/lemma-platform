@@ -26,7 +26,7 @@ from app.core.ports.widget_content import (
     WidgetContentReader,
     WidgetSourceUnavailable,
 )
-from app.modules.agent.tools.call.widgets import canvas_widget
+from app.modules.agent.tools.user_interaction.models import widget_data
 from app.modules.agent.infrastructure.widget_asset_repository import (
     WidgetAssetRepository,
 )
@@ -84,12 +84,6 @@ class WidgetAssetService(WidgetContentReader):
         title = ""
         data: object = None
         for tool_args in rows:
-            drawn = canvas_widget(tool_args)
-            if drawn is not None:
-                # A call canvas item: data the agent wrote, drawn by a template.
-                content, data = drawn
-                title = str(tool_args.get("title") or "")
-                break
             inline = tool_args.get("content")
             source = tool_args.get("path")
             # A call carries one or the other; whichever it is, the row that
@@ -103,7 +97,8 @@ class WidgetAssetService(WidgetContentReader):
             name = tool_args.get("name")
             if isinstance(name, str):
                 title = name
-            data = tool_args.get("data")
+            # As shown: an object a model wrote as its JSON text is the object.
+            data = widget_data(tool_args.get("data"))
             break
 
         if content is None and path is None:

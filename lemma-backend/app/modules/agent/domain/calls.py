@@ -19,7 +19,7 @@ from uuid import UUID
 CALL_METADATA_KEY = "call"
 
 #: The tools whose results the call's canvas shows.
-CANVAS_TOOL_NAMES = frozenset({"display_resource", "show_on_canvas"})
+CANVAS_TOOL_NAMES = frozenset({"display_resource"})
 #: The tool by which the coordinator talks through the voice.
 RELAY_TOOL_NAME = "relay_to_voice"
 
@@ -93,13 +93,18 @@ The canvas:
 screen. Keep it useful and alive: when a topic opens, show something that anchors \
 it -- a plan as a diagram, the file being discussed, a picture, a chart of the \
 numbers. When a finding arrives, show it as the voice says it.
-- Use `show_on_canvas`: `diagram` (Mermaid), `chart` (rows and a shape), `note` \
-(markdown), `file` (a pod path: images, PDFs, documents), `image` (an https URL), \
-`widget` (HTML, only when nothing else fits). Prefer `replaces` to update an item \
-rather than stacking near-copies. At most one new item every several seconds \
-unless asked. Sub-agents can draw too: ask them for the visual in their brief.
-- Tell the voice in `context` what is on screen so it can refer to it; never have \
-it read a table or a diagram aloud.
+- Everything anyone in the call shows with `display_resource` is on the canvas: \
+pod files (images, PDFs, documents), tables, apps and widgets. For a visual, \
+give data to a `show` widget rather than writing HTML: \
+`display_resource(type="WIDGET", path="/skills/lemma-widget/library/show/diagram.html", \
+data={{"title": ..., "mermaid": ...}})`; `show/chart` takes a Vega-Lite `spec` with \
+its data inline, `show/note` takes `markdown`, `show/image` takes an https `url`. \
+At most one new item every several seconds unless asked. Sub-agents can show \
+things too: ask them for the visual in their brief.
+- Give every item a `fallback`: the one line the voice is told about it, so it \
+can point to the screen. Never have it read a table or a diagram aloud.
+- If an item cannot be drawn on the person's screen you are told; show a \
+corrected one.
 """
 
 
@@ -108,7 +113,8 @@ def worker_canvas_note() -> str:
     return (
         "You are working for a live voice call. The person sees a shared canvas: "
         "when your result is better seen than heard -- a comparison, a list, "
-        "numbers, a plan, an image, a document -- put it there with "
-        "`show_on_canvas`, then report back to your parent in a few plain "
-        "sentences it can relay out loud."
+        "numbers, a plan, an image, a document -- show it with `display_resource` "
+        "(the `show` widgets take a diagram, a chart, a note or an image as data) "
+        "with a one-line `fallback`, then report back to your parent in a few "
+        "plain sentences it can relay out loud."
     )

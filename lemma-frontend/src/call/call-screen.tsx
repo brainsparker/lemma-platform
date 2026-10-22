@@ -93,7 +93,8 @@ export function CallScreen({
         if (paged) onLooking?.(onScreen);
     }, [onScreen, active, newest, onLooking]);
 
-    /* A canvas widget that cannot draw says so to its parent frame. Which item
+    /* A widget that cannot draw says so to its parent frame (the widget kit's
+       `lemma.fail`, and any error it did not catch). Which item
        it was is read off the frame that sent it, not off the message, so a
        widget cannot report a failure on another's behalf. */
     const deckRef = useRef<HTMLDivElement | null>(null);
@@ -101,7 +102,7 @@ export function CallScreen({
         if (!onRenderFailed) return;
         const heard = (event: MessageEvent) => {
             const data = event.data as { type?: unknown; message?: unknown } | null;
-            if (!data || data.type !== "lemma-canvas-error") return;
+            if (!data || data.type !== "lemma-widget-error") return;
             for (const slide of deckRef.current?.querySelectorAll<HTMLElement>("[data-canvas-item]") ?? []) {
                 const frames = Array.from(slide.querySelectorAll("iframe"));
                 if (!frames.some((frame) => frame.contentWindow === event.source)) continue;

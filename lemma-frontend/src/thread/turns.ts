@@ -598,7 +598,6 @@ export function buildTurns(messages: RawMessage[]): Turn[] {
                        so there was nothing on screen to debug. */
                     const emptyWidget =
                         resource.type === "WIDGET" &&
-                        !resource.drawn &&
                         !resource.publicUrl &&
                         !resource.path &&
                         !(resource.content && /<[a-z][\s\S]*>/i.test(resource.content));

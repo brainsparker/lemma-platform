@@ -113,6 +113,16 @@ class Gate:
         return self.answers.get(turn, Route.TEAM)
 
 
+#: A chart shown the way any run shows one: a `show` widget given data, with
+#: the line the voice is told about it as its `fallback`.
+CHART: dict[str, object] = {
+    "type": "WIDGET",
+    "path": "/skills/lemma-widget/library/show/chart.html",
+    "data": {"title": "Venue prices", "spec": {"mark": "bar"}},
+    "fallback": "nightly rate by venue",
+}
+
+
 def _gate(answers: dict[str, Route]) -> Gate:
     return Gate(answers)
 
@@ -205,12 +215,8 @@ async def test_what_is_shown_goes_to_the_screen_and_the_voice_is_told_what_is_on
         Shown(
             conversation_id=child,
             tool_call_id="t-1",
-            tool_name="show_on_canvas",
-            args={
-                "kind": "chart",
-                "title": "Venue prices",
-                "caption": "nightly rate by venue",
-            },
+            tool_name="display_resource",
+            args=CHART,
             result={"success": True, "item_id": "t-1"},
         )
     )
@@ -224,12 +230,8 @@ async def test_what_is_shown_goes_to_the_screen_and_the_voice_is_told_what_is_on
     assert items[1]["item"] == {
         "conversation_id": str(child),
         "tool_call_id": "t-1",
-        "tool_name": "show_on_canvas",
-        "args": {
-            "kind": "chart",
-            "title": "Venue prices",
-            "caption": "nightly rate by venue",
-        },
+        "tool_name": "display_resource",
+        "args": CHART,
         "result": {"success": True, "item_id": "t-1"},
     }
     assert (
@@ -239,26 +241,20 @@ async def test_what_is_shown_goes_to_the_screen_and_the_voice_is_told_what_is_on
     assert caller.of("work") == [{"type": "work", "running": True}]
     # The person paging back to the earlier file is told to the voice.
     caller.inbox.put_nowait(json.dumps({"type": "canvas.focus", "tool_call_id": "t-0"}))
-    caller.inbox.put_nowait(
-        json.dumps(
-            {
-                "type": "canvas.render_failed",
-                "tool_call_id": "t-1",
-                "error": "Parse error",
-            }
-        )
+    failed = json.dumps(
+        {"type": "canvas.render_failed", "tool_call_id": "t-1", "error": "Parse error"}
     )
-    await _until(lambda: agents.turns)
+    # Reported twice, as a screen redrawing on reconnect would: told once.
+    caller.inbox.put_nowait(failed)
+    caller.inbox.put_nowait(failed)
+    caller.inbox.put_nowait(json.dumps({"type": "end"}))
+    await running
+    assert len(agents.turns) == 1
     assert (
-        "[canvas] The person is looking at: /me/plan.pdf",
+        "[canvas] The person is looking at: plan.pdf",
         Inject.CONTEXT,
     ) in voice.injected
-    assert (
-        agents.turns
-        and "'Venue prices' (item_id t-1) could not be drawn" in agents.turns[-1]
-    )
-    caller.inbox.put_nowait(None)
-    await running
+    assert "'Venue prices' could not be drawn" in agents.turns[0]
 
 
 async def test_a_voice_that_drops_ends_the_call_with_its_reason() -> None:

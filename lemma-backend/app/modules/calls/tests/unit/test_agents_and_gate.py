@@ -78,23 +78,27 @@ def test_a_canvas_item_is_shown_once_its_tool_succeeds_from_anyone_in_the_call()
 ):
     agents, _ = _agents()
     child = uuid4()
-    args = {"kind": "diagram", "title": "Plan", "mermaid": "flowchart LR; A-->B"}
-    agents._read(child, _message("TOOL_CALL", "show_on_canvas", "c1", tool_args=args))
+    args = {
+        "type": "WIDGET",
+        "path": "/skills/lemma-widget/library/show/diagram.html",
+        "data": {"title": "Plan", "mermaid": "flowchart LR; A-->B"},
+    }
+    agents._read(child, _message("TOOL_CALL", "display_resource", "c1", tool_args=args))
     agents._read(
         child,
         _message(
             "TOOL_RETURN",
-            "show_on_canvas",
+            "display_resource",
             "c1",
             tool_result={"success": True, "item_id": "c1"},
         ),
     )
-    agents._read(child, _message("TOOL_CALL", "show_on_canvas", "c2", tool_args=args))
+    agents._read(child, _message("TOOL_CALL", "display_resource", "c2", tool_args=args))
     agents._read(
         child,
         _message(
             "TOOL_RETURN",
-            "show_on_canvas",
+            "display_resource",
             "c2",
             tool_result={"success": False, "error": "bad"},
         ),
@@ -103,7 +107,7 @@ def test_a_canvas_item_is_shown_once_its_tool_succeeds_from_anyone_in_the_call()
         Shown(
             conversation_id=child,
             tool_call_id="c1",
-            tool_name="show_on_canvas",
+            tool_name="display_resource",
             args=args,
             result={"success": True, "item_id": "c1"},
         )

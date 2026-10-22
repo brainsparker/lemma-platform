@@ -1,12 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { source } from "@/data";
 import { NEW_CONVERSATION } from "@/data/types";
 import { lemma } from "@/session/client";
 import { buildTurns } from "@/thread/turns";
-import { canvasDeck } from "./canvas";
 import { historyBrief } from "./history-brief";
 import { podBrief } from "./pod-brief";
 import { useCall } from "./use-call";
@@ -92,7 +91,6 @@ export function useHuddle({ pod, teammate, conversationId }: {
         if (call.status === "ended" || call.status === "error") setCallId(null);
     }, [call.status]);
 
-    const deck = useMemo(() => canvasDeck(call.canvas), [call.canvas]);
 
     return {
         status: call.status,
@@ -104,7 +102,7 @@ export function useHuddle({ pod, teammate, conversationId }: {
         thinking: call.working,
         level: call.level,
         active: call.active,
-        canvas: deck,
+        canvas: call.canvas,
         callConversationId: callId,
         expanded: expanded && call.active,
         expand: useCallback(() => setExpanded(true), []),

@@ -44,7 +44,7 @@ from app.modules.agent.contracts.conversations_for_surfaces import (
 logger = get_logger(__name__)
 
 _CONVERSATION_STREAM = "agent.conversation"
-_CANVAS_TOOLS = frozenset({"display_resource", "show_on_canvas"})
+_CANVAS_TOOLS = frozenset({"display_resource"})
 _RELAY_TOOL = "relay_to_voice"
 _SPAWN_TOOL = "spawn_subagent"
 _RUN_ENDINGS = frozenset({"completed", "error", "stopped"})

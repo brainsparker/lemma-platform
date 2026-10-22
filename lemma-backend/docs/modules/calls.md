@@ -32,7 +32,7 @@ PCM), the voice down at the rate the `ready` frame names. Text frames are JSON.
 | up | `start` | First frame: `teammate`, `pod`, `context` (what came before the call), optional `engine` |
 | up | `mute`, `text`, `end` | Mute the microphone; a typed turn; hang up |
 | up | `canvas.focus` | The person paged to an item; the voice is told what they see |
-| up | `canvas.render_failed` | An item could not draw; the coordinator is told so it can redraw it |
+| up | `canvas.render_failed` | An item could not draw; the coordinator is told, once per item, so it can show a corrected one |
 | down | `ready` | The voice is connected: `engine`, `sample_rate` |
 | down | `transcript` | `speaker` (`caller` / `voice`), `text`, `final` |
 | down | `clear` | The caller cut in: drop queued audio |
@@ -77,13 +77,21 @@ flowchart LR
 
 ## The canvas
 
-Every run in a call gets `show_on_canvas` (agent module,
-`tools/call/`); the coordinator also gets `relay_to_voice`. Both come with
-the conversation's call mark, not with an agent's configured toolsets.
-`show_on_canvas` takes data rather than markup -- Mermaid, rows and a chart
-shape, markdown, a pod path, an image URL -- and the widget route draws it from
-a server-side template when it is served (`tools/call/widgets.py`), so items
-look the same on the call screen and in the conversation afterwards.
+The canvas is not a tool of its own. Everything any run in the call shows with
+`display_resource` -- the coordinator's and every sub-agent's -- is on it, in the
+order it was shown, so an item reads the same on the call screen, in the
+conversation afterwards and on any surface. The coordinator also gets
+`relay_to_voice` (agent module, `tools/call/`), attached by the conversation's
+call mark rather than by the agent's configured toolsets.
+
+- Visuals given as data use the widget library's `show` widgets
+  (`/skills/lemma-widget/library/show/`): `diagram` (Mermaid), `chart` (a
+  Vega-Lite spec), `note` (markdown) and `image` (an https URL).
+- The voice is told about an item by its `fallback`, the plain-text line every
+  surface that cannot render gets.
+- A widget that cannot draw reports it through the widget kit (`lemma.fail`,
+  and any uncaught error) as a `lemma-widget-error` message to its frame; the
+  call screen sends it up the socket, and the coordinator is told once per item.
 
 ## Configuration
 

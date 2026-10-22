@@ -106,6 +106,7 @@ class CallSession:
         self._said_count = 0
         self._routing = asyncio.Lock()
         self._titles: dict[str, str] = {}
+        self._failures_reported: set[str] = set()
         self.end_reason: str | None = None
 
     def _now_ms(self) -> float:
@@ -190,13 +191,15 @@ class CallSession:
     async def _render_failed(self, control: dict[str, JsonValue]) -> None:
         item = str(control.get("tool_call_id") or "")
         error = str(control.get("error") or "")[:500]
-        if not item:
+        # Once per item: a screen that redraws the canvas on reconnect would
+        # otherwise start a coordinator run for the same broken item each time.
+        if not item or item in self._failures_reported:
             return
+        self._failures_reported.add(item)
         title = self._titles.get(item, "an item")
         await self._agents.send_turn(
-            f"[canvas] '{title}' (item_id {item}) could not be drawn on the "
-            f"person's screen: {error}. Fix it with show_on_canvas(replaces="
-            f'"{item}") or show something else.'
+            f"[canvas] '{title}' could not be drawn on the person's screen: "
+            f"{error}. Show a corrected one, or something else."
         )
 
     # -- the voice -----------------------------------------------------------
@@ -349,10 +352,19 @@ class CallSession:
 
 
 def _describe(shown: Shown) -> tuple[str, str]:
-    """A canvas item's title and caption, as the voice is told them."""
+    """A canvas item's title and the line the voice is told about it.
+
+    The line is the item's `fallback`: the plain-text summary every surface
+    that cannot render gets, which a voice is one of.
+    """
     args = shown.args if isinstance(shown.args, dict) else {}
+    data = args.get("data") if isinstance(args.get("data"), dict) else {}
+    path = args.get("path")
     title = (
-        args.get("title") or args.get("name") or args.get("path") or args.get("type")
+        args.get("name")
+        or data.get("title")
+        or (str(path).rsplit("/", 1)[-1] if path else None)
+        or str(args.get("type") or "").lower()
     )
-    caption = args.get("caption") or args.get("fallback") or ""
+    caption = args.get("fallback") or data.get("caption") or ""
     return str(title or "an item"), str(caption)

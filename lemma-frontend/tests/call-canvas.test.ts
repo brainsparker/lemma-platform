@@ -1,51 +1,40 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { canvasDeck, canvasItemFrom } from "../src/call/canvas.ts";
+import { canvasItemFrom } from "../src/call/canvas.ts";
 import { callSocketUrl } from "../src/call/call-socket.ts";
-import { parseDisplayResource } from "../src/thread/display-resource.ts";
 
 const frame = (id: string, args: Record<string, unknown>, result: unknown = { success: true }) => ({
     conversation_id: "child-conversation",
     tool_call_id: id,
-    tool_name: "show_on_canvas",
+    tool_name: "display_resource",
     args,
     result,
 });
 
-test("a drawn canvas item is a widget served by the tool call that drew it", () => {
-    const item = canvasItemFrom(frame("t1", { kind: "diagram", title: "Plan", caption: "the three phases", mermaid: "flowchart LR; A-->B" }));
+test("a widget on the canvas is served by the conversation and tool call that showed it", () => {
+    const item = canvasItemFrom(frame("t1", {
+        type: "WIDGET",
+        name: "Offsite plan",
+        path: "/skills/lemma-widget/library/show/diagram.html",
+        data: { mermaid: "flowchart LR; A-->B" },
+    }));
     assert.ok(item);
     assert.equal(item.id, "t1");
+    // A sub-agent's item is served from the sub-agent's conversation.
     assert.equal(item.conversationId, "child-conversation");
-    assert.deepEqual(item.resource, { type: "WIDGET", name: "Plan", caption: "the three phases", drawn: true });
-    assert.equal(item.label, "Plan");
+    assert.equal(item.resource.type, "WIDGET");
+    assert.equal(item.resource.path, "/skills/lemma-widget/library/show/diagram.html");
+    assert.equal(item.label, "Offsite plan");
 });
 
-test("a pod file goes on the canvas as itself and a refused item does not at all", () => {
-    assert.deepEqual(canvasItemFrom(frame("t2", { kind: "file", title: "Brochure", path: "/me/brochure.pdf" }))?.resource, {
-        type: "FILE", path: "/me/brochure.pdf", name: "Brochure", caption: undefined,
-    });
-    assert.equal(canvasItemFrom(frame("t3", { kind: "chart", title: "x" }, { success: false, error: "needs rows" })), null);
-    assert.equal(canvasItemFrom(frame("t4", { kind: "sculpture", title: "x" })), null);
+test("a pod file, a table or an app goes on the canvas as itself", () => {
+    assert.equal(canvasItemFrom(frame("t2", { type: "FILE", path: "/me/brochure.pdf" }))?.label, "brochure.pdf");
+    assert.equal(canvasItemFrom(frame("t3", { type: "TABLE", name: "venues" }))?.resource.type, "TABLE");
 });
 
-test("display_resource from anyone in the call lands on the canvas too", () => {
-    const item = canvasItemFrom({ ...frame("t5", { type: "TABLE", name: "venues" }), tool_name: "display_resource" });
-    assert.deepEqual(item?.resource.type, "TABLE");
-});
-
-test("a redrawn item takes the place of the one it replaces, even down a chain", () => {
-    const a = canvasItemFrom(frame("a", { kind: "note", title: "v1", markdown: "x" }))!;
-    const b = canvasItemFrom(frame("b", { kind: "chart", title: "other", chart: {} }))!;
-    const a2 = canvasItemFrom(frame("a2", { kind: "note", title: "v2", markdown: "y", replaces: "a" }))!;
-    const a3 = canvasItemFrom(frame("a3", { kind: "note", title: "v3", markdown: "z", replaces: "a2" }))!;
-    assert.deepEqual(canvasDeck([a, b, a2, a3]).map((item) => item.id), ["a3", "b"]);
-});
-
-test("the transcript renders a canvas item from its stored tool call", () => {
-    assert.deepEqual(parseDisplayResource({ kind: "image", title: "Beach", url: "https://example.com/b.jpg" }, { success: true }), {
-        type: "WIDGET", name: "Beach", caption: undefined, drawn: true,
-    });
+test("something that is not a resource does not go on the canvas", () => {
+    assert.equal(canvasItemFrom(frame("t4", { kind: "sculpture" })), null);
+    assert.equal(canvasItemFrom({ ...frame("", { type: "FILE", path: "/me/a.pdf" }) }), null);
 });
 
 test("the call socket rides the API origin, with the token when there is one", () => {

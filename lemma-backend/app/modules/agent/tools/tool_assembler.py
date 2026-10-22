@@ -321,19 +321,20 @@ def _add_view_image(
 def _call_toolsets(
     conversation: Conversation | None,
 ) -> list[AbstractToolset[ConversationContext]]:
-    """The canvas for every run in a live call, and the voice for its coordinator.
+    """The voice, for a live call's coordinator.
 
     By the conversation's call mark rather than a declared toolset: an agent
-    gets these by being called, whatever it was configured with.
+    gets it by being called, whatever it was configured with. Its sub-agents
+    show things with `display_resource` like any run, and only it speaks.
     """
-    from app.modules.agent.domain.calls import call_mark
+    from app.modules.agent.domain.calls import CallRole, call_mark
 
     mark = call_mark(conversation.metadata if conversation is not None else None)
-    if mark is None:
+    if mark is None or mark.role is not CallRole.COORDINATOR:
         return []
-    from app.modules.agent.tools.call.pydantic_adapter import call_toolset
+    from app.modules.agent.tools.call.pydantic_adapter import coordinator_toolset
 
-    return [cast(AbstractToolset[ConversationContext], call_toolset(mark.role))]
+    return [cast(AbstractToolset[ConversationContext], coordinator_toolset)]
 
 
 def _in_a_group(conversation: Conversation | None) -> bool:

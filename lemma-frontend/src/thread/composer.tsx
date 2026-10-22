@@ -1,12 +1,12 @@
-import { VoiceIcon, StopIcon, SendIcon, AttachIcon, CloseIcon, FileIcon } from "@/ui/icons";
+import { VoiceIcon, StopIcon, SendIcon, AttachIcon, CloseIcon } from "@/ui/icons";
 import { memo, useEffect, useId, useLayoutEffect, useRef, useState, type DragEvent, type KeyboardEvent, type ReactNode } from "react";
 import {
     canSend,
-    describeSize,
     namePasted,
     offered,
     type Attachment,
 } from "./attachments";
+import { AttachedFiles } from "./attached";
 import { composerActions, type Queued } from "./queued";
 import { draftStore, readDraft, writeDraft } from "./drafts";
 
@@ -130,8 +130,8 @@ export const Composer = memo(function Composer({
      *  after switching away and back (`drafts.ts`). Null keeps it only as long
      *  as the box. */
     draftKey?: string | null;
-    /** Which model this conversation answers on, drawn in the action row
-     *  beside the paperclip. A node rather than a prop per field, because what
+    /** Which model this conversation answers on, drawn on the line under the
+     *  box, at its right. A node rather than a prop per field, because what
      *  it holds — the runtimes, the conversation's own pin — is the pane's to
      *  read, and the box has no business knowing about either. */
     model?: ReactNode;
@@ -221,6 +221,12 @@ export const Composer = memo(function Composer({
         const resize = () => {
             field.style.height = "auto";
             field.style.height = Math.min(field.scrollHeight, 200) + "px";
+            /* A scrollbar only once the draft is past the cap. `scrollHeight`
+               is a whole number of pixels and a line at 1.5 of 15px is 22.5,
+               so a field set to it is up to a pixel short of its own content,
+               and `overflow: auto` drew a scrollbar for that pixel in an empty
+               box. */
+            field.style.overflowY = field.scrollHeight > field.clientHeight + 1 ? "auto" : "hidden";
             const tall = field.scrollHeight > TALL_PX;
             if (tall !== tallNow.current) {
                 tallNow.current = tall;
@@ -303,33 +309,10 @@ export const Composer = memo(function Composer({
                     ))}
                 </div>
             )}
-            {held.length > 0 && (
-                <div className="attached" aria-label="Attached files">
-                    {held.map((one) => (
-                        <span key={one.key} className="attached__chip" data-status={one.status}>
-                            <FileIcon size={14} />
-                            <span className="attached__name" title={one.error ?? one.file.name}>{one.file.name}</span>
-                            <span className="attached__size">
-                                {one.status === "uploading" ? "sending…"
-                                    : one.status === "failed" ? "failed"
-                                    : describeSize(one.file.size)}
-                            </span>
-                            <button
-                                className="attached__drop"
-                                aria-label={"Remove " + one.file.name}
-                                title={"Remove " + one.file.name}
-                                onClick={() => onRemoveAttachment?.(one.key)}
-                            >
-                                <CloseIcon size={12} />
-                            </button>
-                        </span>
-                    ))}
-                </div>
-            )}
+            <AttachedFiles files={held} onRemove={onRemoveAttachment} />
             <div className="composer__row">
                 {choices && <Choices choices={choices} />}
                 <div className="composer__box">
-                    {model}
                     {takesFiles && (
                         <>
                             <input
@@ -412,18 +395,27 @@ export const Composer = memo(function Composer({
                         </button>
                     )}
                 </div>
-                {(refused || note || uploading) && (
-                    <span className="composer__note" data-bad={refused ? "" : undefined}>
-                        <i />
-                        {refused ?? (uploading ? "attaching…" : note)}
-                        {!refused && !uploading && note && onDismissNote && (
-                            <button type="button" className="linkish" aria-label="Dismiss" onClick={onDismissNote}>
-                                <CloseIcon size={12} />
-                            </button>
-                        )}
-                    </span>
-                )}
                 {chosen && <p className="composer__hint" id={hintId}>{chosen.hint}</p>}
+                {/* Under the box rather than in it: what the conversation is
+                    waiting on, and the model it answers on, are about the box
+                    and not things done to it. In the box they made it two rows
+                    tall with nothing typed. */}
+                {(refused || note || uploading || model) && (
+                    <div className="composer__foot">
+                        {(refused || note || uploading) && (
+                            <span className="composer__note" data-bad={refused ? "" : undefined}>
+                                <i />
+                                {refused ?? (uploading ? "attaching…" : note)}
+                                {!refused && !uploading && note && onDismissNote && (
+                                    <button type="button" className="linkish" aria-label="Dismiss" onClick={onDismissNote}>
+                                        <CloseIcon size={12} />
+                                    </button>
+                                )}
+                            </span>
+                        )}
+                        {model}
+                    </div>
+                )}
             </div>
         </div>
     );

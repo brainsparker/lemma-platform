@@ -119,6 +119,24 @@ test("a screenshot pasted into the box is attached like a dropped one", async ()
     assert.match(box.chips()[0], /^pasted-\d{8}-\d{6}\.png$/);
 });
 
+test("a pasted picture waits as the picture, not as its name", async () => {
+    const box = await mount();
+
+    await box.hand("paste", [new File([new Uint8Array(1)], "image.png", { type: "image/png" })]);
+
+    /* The name it is given is the time it was pasted, which says nothing
+       about which screenshot it is; the picture does. */
+    const picture = box.container.querySelector(".askbox__files .attached__thumb img");
+    assert.ok(picture, "a pasted image is drawn, so it can be told apart from the last one");
+    assert.match(picture.getAttribute("src") ?? "", /^blob:/);
+    assert.match(picture.getAttribute("alt") ?? "", /^pasted-\d{8}-\d{6}(-\d+)?\.png$/);
+    assert.deepEqual(box.chips(), [], "and not also as a chip with its name");
+    assert.ok(
+        box.container.querySelector(".attached__thumb button[aria-label^='Remove pasted-']"),
+        "and it can still be taken off",
+    );
+});
+
 test("a file with nothing typed still goes, and a file too large never does", async () => {
     const box = await mount();
 

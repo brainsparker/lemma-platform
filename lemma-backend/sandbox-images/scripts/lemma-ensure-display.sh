@@ -291,7 +291,12 @@ if ! pgrep -f "Xvfb ${DISPLAY_VALUE} " >/dev/null 2>&1; then
   # Only in this branch: if Xvfb is still up, its clients are attached to the
   # server we are keeping and restarting them would be the bug rather than the
   # fix.
+  # Whichever VNC server the image has: `start-vnc-bridge` prefers TigerVNC's
+  # `X0tigervnc` and falls back to x11vnc, and both outlive their display. The
+  # WebRTC streamer holds an X connection too and goes with them.
   pkill -f "x11vnc .*-rfbport ${LEMMA_BROWSER_VNC_PORT:-5900}" >/dev/null 2>&1 || true
+  pkill -f "X0tigervnc .*-rfbport ${LEMMA_BROWSER_VNC_PORT:-5900}" >/dev/null 2>&1 || true
+  pkill -x lemma-streamer >/dev/null 2>&1 || true
   pkill -f "matchbox-window-manager -display ${DISPLAY_VALUE}" >/dev/null 2>&1 || true
   # `setsid`, not just `nohup` -- the same reason `start-browser-relay` needs it.
   # This script is usually reached from an `exec_command` the backend makes, and

@@ -17,6 +17,7 @@ from app.modules.workspace.api.controllers import browser_view_controller as vie
 from app.modules.workspace.api.controllers.browser_view_session import (
     user_id_resolver,
 )
+from app.modules.workspace.services.browser_view_service import ViewUpstream
 from app.modules.workspace.services.ws_bridge import (
     origins_from,
     MAX_FRAME_BYTES,
@@ -220,7 +221,14 @@ class _FakeService:
         self.closed = False
 
     async def open_vnc_session(
-        self, user_id, *, mode, origin=None, conversation_id=None
+        self,
+        user_id,
+        *,
+        mode,
+        origin=None,
+        conversation_id=None,
+        viewer=None,
+        transport="vnc",
     ):
         self.opened.append(
             {
@@ -232,7 +240,9 @@ class _FakeService:
         )
         if self.fail is not None:
             raise self.fail
-        return "ws://sandbox.test/vnc?mode=view", {"X-Lemma-Relay-Token": "t"}
+        return ViewUpstream(
+            "ws://sandbox.test/vnc?mode=view", {"X-Lemma-Relay-Token": "t"}, "sbx-1"
+        )
 
     async def status(self, user_id):
         return {"state": "stopped"}
@@ -399,7 +409,9 @@ class _VncRelay(_Relay):
         self.ensured = {"origin": origin, "session": session, "domain": domain}
         return {"session": session or "workspace"}
 
-    async def vnc_socket_url(self, *, mode, session):
+    provider_id = "sbx-1"
+
+    async def vnc_socket_url(self, *, mode, session, viewer=None, transport="vnc"):
         return f"ws://sandbox.test/vnc?mode={mode}&session={session}", {}
 
 

@@ -142,7 +142,10 @@ def workspace_template():
                 # `xrandr`, for resizing the display to match the pane it is
                 # being watched in.
                 "x11-xserver-utils",
-                "x11vnc",
+                # TigerVNC's scraping server, and the clipboard tool the
+                # WebRTC streamer uses. See Dockerfile.workspace.
+                "tigervnc-scraping-server",
+                "xclip",
                 "xz-utils",
                 "xvfb",
             ],
@@ -430,6 +433,11 @@ def workspace_template():
         .copy(
             "lemma-backend/sandbox-images/scripts/start-vnc-bridge.sh",
             "/usr/local/bin/start-vnc-bridge",
+            mode=0o755,
+        )
+        .copy(
+            "lemma-backend/sandbox-images/scripts/start-streamer.sh",
+            "/usr/local/bin/start-streamer",
             mode=0o755,
         )
         .copy(

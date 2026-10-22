@@ -29,8 +29,6 @@ from pydantic import BaseModel, Field
 from app.core.api.dependencies import CurrentUser
 from app.core.request_context import create_inherited_task
 
-from app.core.config import settings
-from app.core.cors import get_allowed_cors_origin_regex
 from app.core.log.log import get_logger
 from app.modules.workspace.services.browser_relay_client import (
     BrowserRelayNotServed,
@@ -38,6 +36,8 @@ from app.modules.workspace.services.browser_relay_client import (
 )
 from app.modules.workspace.api.controllers.browser_view_session import (
     UserIdResolver,
+    allowed_origin_pattern,
+    allowed_origins,
     user_id_resolver,
 )
 from app.modules.workspace.api.controllers.browser_view_watchers import (
@@ -49,11 +49,19 @@ from app.modules.workspace.services.browser_view_service import (
     MODE_VIEW,
     BrowserViewService,
 )
+from app.modules.workspace.api.controllers.browser_view_stream import (
+    CLOSE_USE_VNC,
+    VIEWER_PATTERN,
+    PreparedRtc,
+    RtcUnavailable,
+    prepare_rtc,
+    serve_rtc_view,
+    viewer_name,
+)
 from app.modules.workspace.services.ws_bridge import (
     bridge,
     connect_upstream,
     origin_is_allowed,
-    origins_from,
     origin_refusal_hint,
 )
 from sandbox_runtime.errors import SandboxCapabilityUnsupported, SandboxError
@@ -111,55 +119,14 @@ class BrowserStatusResponse(BaseModel):
 
     state: str
     detail: str | None = None
-
-
-def allowed_origins() -> tuple[str, ...]:
-    """Where a browser may legitimately open this socket from.
-
-    **`cors_origins` is the list, and that is the fix.** This used to name
-    three settings of its own -- `frontend_url`, `api_url`,
-    `auth_frontend_url` -- and a deployment that serves the app on more than
-    one hostname then had a browser-view allowlist narrower than the
-    allowlist every other request in the process is checked against. Watched
-    in production: the app was served on an apex and a `www.` host, both in
-    `cors_origins`, while this permitted only the `frontend_url` host. A
-    person handed the wheel for a sign-in had their socket refused six times
-    and never saw a screen, and the agent reported that they had chosen not
-    to sign in.
-
-    The three settings stay in, because one of them can legitimately be
-    absent from `cors_origins` on a single-host deployment, and dropping a
-    door somebody is already coming through is not a fix. They go through
-    `_origin_of` now, so a configured URL that carries a path contributes
-    the origin it is on rather than a string no browser can match.
-
-    A dependency rather than a module function so a test can supply its own,
-    which is injection rather than reaching into the module under test and
-    replacing part of it.
-    """
-    return origins_from(
-        settings.cors_origins,
-        settings.frontend_url,
-        settings.api_url,
-        getattr(settings, "auth_frontend_url", None),
-    )
-
-
-def allowed_origin_pattern() -> str | None:
-    """The pattern HTTP CORS uses, for deployments whose frontends are
-    per-tenant.
-
-    `get_allowed_cors_origin_regex`, not `settings.cors_origin_regex`: the
-    helper combines the configured pattern with the generated app-subdomain
-    one, and taking only the configured half would recreate this whole
-    change one layer down -- HTTP accepting an origin while the browser-view
-    socket refuses it with 4403. Two allowlists that disagree is the fault
-    being fixed here, not a shape to repeat.
-
-    Kept a separate dependency so a test can supply one without also
-    supplying the list.
-    """
-    return get_allowed_cors_origin_regex()
+    #: The rest is present once a browser runs; see `browser_stream_status`.
+    transport: str | None = None
+    density: int | None = None
+    size: str | None = None
+    presets: dict[str, str] | None = None
+    lease: str | None = None
+    watching: list[dict[str, str]] = Field(default_factory=list)
+    agent_driving: bool = False
 
 
 def _engine_error() -> type[Exception]:
@@ -188,9 +155,7 @@ async def browser_status(
         found = await service.status(user.id)
     finally:
         await service.close()
-    return BrowserStatusResponse(
-        state=found.get("state", "unavailable"), detail=found.get("detail")
-    )
+    return BrowserStatusResponse.model_validate({"state": "unavailable", **found})
 
 
 class CurrentPageUrlResponse(BaseModel):
@@ -234,12 +199,17 @@ class DisplaySizeRequest(BaseModel):
 
     width: int = Field(ge=320, le=4096)
     height: int = Field(ge=240, le=4096)
+    #: The pane asking, as named on its view socket (the resize lease).
+    viewer: str | None = Field(default=None, pattern=VIEWER_PATTERN)
 
 
 class DisplaySizeResponse(BaseModel):
     #: What the display ended up as. Not always what was asked for, and the
     #: pane is told so rather than left to assume.
     size: str | None = None
+    #: Why it did not change, in a sentence for the pane: somebody else
+    #: holds the size, the screen is being recorded.
+    reason: str | None = None
 
 
 @router.post(
@@ -272,7 +242,10 @@ async def resize_display(
     # trace anywhere of why. A degraded path still has to say it degraded.
     try:
         size = await service.resize_display(
-            user.id, width=request.width, height=request.height
+            user.id,
+            width=request.width,
+            height=request.height,
+            viewer=viewer_name(user.id, request.viewer),
         )
     except SandboxCapabilityUnsupported:
         logger.warning(
@@ -288,7 +261,7 @@ async def resize_display(
             height=request.height,
             error_type=type(exc).__name__,
         )
-        return DisplaySizeResponse()
+        return DisplaySizeResponse(reason=str(exc) or None)
     except (OSError, httpx.HTTPError, _engine_error()) as exc:
         logger.warning(
             "workspace.browser_view.resize_failed.degraded",
@@ -436,6 +409,8 @@ async def browser_view(
     mode: str = Query(default=MODE_VIEW),
     origin: str | None = Query(default=None),
     conversation: UUID | None = Query(default=None),
+    transport: str = Query(default="vnc", pattern="^(vnc|rtc)$"),
+    viewer: str | None = Query(default=None, pattern=VIEWER_PATTERN),
 ) -> None:
     """One person, watching or driving their own browser, over VNC.
 
@@ -489,8 +464,13 @@ async def browser_view(
         return
 
     try:
-        upstream_url, headers = await service.open_vnc_session(
-            UUID(user_id), mode=mode, origin=origin, conversation_id=conversation
+        target = await service.open_vnc_session(
+            UUID(user_id),
+            mode=mode,
+            origin=origin,
+            conversation_id=conversation,
+            viewer=viewer_name(UUID(user_id), viewer),
+            transport=transport,
         )
     except SandboxCapabilityUnsupported:
         logger.warning("workspace.browser_view.unsupported.denied")
@@ -557,6 +537,21 @@ async def browser_view(
         await service.close()
         return
 
+    rtc: PreparedRtc | None = None
+    if transport == "rtc":
+        try:
+            rtc = await prepare_rtc(
+                target, user_id=UUID(user_id), mode=mode, viewer=viewer
+            )
+        except RtcUnavailable as exc:
+            # Not a fault: the pane switches to VNC on this code, silently.
+            logger.warning(
+                "workspace.browser_view.rtc_unavailable.degraded", reason=str(exc)
+            )
+            await _refuse(websocket, CLOSE_USE_VNC)
+            await service.close()
+            return
+
     await websocket.accept()
     # Held awake for as long as somebody is looking. The idle sweep measures
     # from the last time a caller asked for the sandbox, and watching is not a
@@ -570,14 +565,20 @@ async def browser_view(
         _keep_awake(service, watcher), name="workspace.browser_view.keep_awake"
     )
     try:
-        async with await connect_upstream(upstream_url, headers=headers) as upstream:
-            await bridge(websocket, upstream, name="workspace.browser_view")
+        if rtc is not None:
+            code = await serve_rtc_view(websocket, rtc)
+        else:
+            async with await connect_upstream(
+                target.url, headers=target.headers
+            ) as upstream:
+                await bridge(websocket, upstream, name="workspace.browser_view")
+            code = getattr(upstream, "close_code", None)
         # The relay refuses with these same 44xx codes, and they mean the same
         # things on both sides of the sandbox wall -- so pass the reason on
         # rather than replacing it with 1011. Told 1011, the pane says "the
         # connection dropped" and reconnects for ever; told 4409 it says the
         # browser is not running, which is the truth and is not a failure.
-        if (code := getattr(upstream, "close_code", None)) and 4400 <= code <= 4499:
+        if code and 4400 <= code <= 4499:
             with contextlib.suppress(RuntimeError):
                 await websocket.close(code=code)
             return

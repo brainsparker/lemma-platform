@@ -18,6 +18,10 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 
 from fastapi import WebSocket
+
+from app.core.config import settings
+from app.core.cors import get_allowed_cors_origin_regex
+from app.modules.workspace.services.ws_bridge import origins_from
 from supertokens_python.recipe.session.asyncio import (
     get_session_without_request_response,
 )
@@ -58,9 +62,64 @@ async def resolve_user_id(websocket: WebSocket) -> str:
     return session.get_user_id()
 
 
+def allowed_origins() -> tuple[str, ...]:
+    """Where a browser may legitimately open this socket from.
+
+    **`cors_origins` is the list, and that is the fix.** This used to name
+    three settings of its own -- `frontend_url`, `api_url`,
+    `auth_frontend_url` -- and a deployment that serves the app on more than
+    one hostname then had a browser-view allowlist narrower than the
+    allowlist every other request in the process is checked against. Watched
+    in production: the app was served on an apex and a `www.` host, both in
+    `cors_origins`, while this permitted only the `frontend_url` host. A
+    person handed the wheel for a sign-in had their socket refused six times
+    and never saw a screen, and the agent reported that they had chosen not
+    to sign in.
+
+    The three settings stay in, because one of them can legitimately be
+    absent from `cors_origins` on a single-host deployment, and dropping a
+    door somebody is already coming through is not a fix. They go through
+    `_origin_of` now, so a configured URL that carries a path contributes
+    the origin it is on rather than a string no browser can match.
+
+    A dependency rather than a module function so a test can supply its own,
+    which is injection rather than reaching into the module under test and
+    replacing part of it.
+    """
+    return origins_from(
+        settings.cors_origins,
+        settings.frontend_url,
+        settings.api_url,
+        getattr(settings, "auth_frontend_url", None),
+    )
+
+
+def allowed_origin_pattern() -> str | None:
+    """The pattern HTTP CORS uses, for deployments whose frontends are
+    per-tenant.
+
+    `get_allowed_cors_origin_regex`, not `settings.cors_origin_regex`: the
+    helper combines the configured pattern with the generated app-subdomain
+    one, and taking only the configured half would recreate this whole
+    change one layer down -- HTTP accepting an origin while the browser-view
+    socket refuses it with 4403. Two allowlists that disagree is the fault
+    being fixed here, not a shape to repeat.
+
+    Kept a separate dependency so a test can supply one without also
+    supplying the list.
+    """
+    return get_allowed_cors_origin_regex()
+
+
 def user_id_resolver() -> UserIdResolver:
     """The resolver the socket route uses, as something that can be supplied."""
     return resolve_user_id
 
 
-__all__ = ["UserIdResolver", "resolve_user_id", "user_id_resolver"]
+__all__ = [
+    "UserIdResolver",
+    "allowed_origin_pattern",
+    "allowed_origins",
+    "resolve_user_id",
+    "user_id_resolver",
+]

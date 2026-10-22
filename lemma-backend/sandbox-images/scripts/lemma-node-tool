@@ -69,6 +69,13 @@ case "$tool" in
   agent-browser)
     pattern='*/node_modules/agent-browser/bin/agent-browser.js'
     ensure_browser_started "${1:-}"
+    # Somebody watching is told the agent is driving while its commands keep
+    # coming (`browser_relay/app.py`, `agent_active_seconds`). The relay runs
+    # this wrapper too -- for its keepalive and the toolbar -- and says so, so
+    # a person's own click is never shown as the agent's.
+    if [ -z "${LEMMA_BROWSER_ACTOR:-}" ]; then
+      mkdir -p /tmp/lemma-browser 2>/dev/null && : > /tmp/lemma-browser/agent-active 2>/dev/null || true
+    fi
     ;;
   lit|liteparse)
     pattern='*/node_modules/@llamaindex/liteparse/dist/cli.js'

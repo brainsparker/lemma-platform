@@ -244,6 +244,8 @@ def test_the_relay_serves_only_what_it_means_to() -> None:
         "/profile:forget",
         "/profile:signed-in",
         "/vnc",
+        "/rtc",
+        "/browser:command",
     } <= served
     # Asserted as an equality, not a subset: `/state:clear` was once here and
     # nothing ever called it, all the way down through the client and the
@@ -261,8 +263,16 @@ def test_the_relay_serves_only_what_it_means_to() -> None:
     # file while it claimed to assert the served surface, so a display route
     # could have come or gone without anything noticing.
     assert {p for p in served if p.startswith("/display")} == {
+        "/display",
         "/display:resize",
         "/display:reset",
+    }
+    # One toolbar route, whose body is a closed set (`commands.py`). Asserted
+    # as the only `/browser` route besides ensure, so a second door into
+    # navigation cannot appear beside it unnoticed.
+    assert {p for p in served if p.startswith("/browser")} == {
+        "/browser:ensure",
+        "/browser:command",
     }
     assert not {p for p in served if p.startswith("/state")}
     assert not {p for p in served if p.startswith("/cdp")}
@@ -307,10 +317,19 @@ def test_health_needs_no_token_and_says_when_chrome_is_down(
     not running", which was the same answer for a browser that was down, a
     display that never came up, and a websockify that had died.
     """
+    from sandbox_runtime.browser_relay import display
+
     client = _client(monkeypatch, tmp_path)
     response = client.get("/health")
     assert response.status_code == 200
-    assert response.json() == {"chrome": "stopped", "vnc": "down", "viewers": 0}
+    assert response.json() == {
+        "chrome": "stopped",
+        "vnc": "down",
+        "viewers": 0,
+        "watching": [],
+        "agent_active_seconds": None,
+        "cpus": display.machine_cpus(),
+    }
 
 
 def test_a_guarded_route_without_a_token_is_refused_as_unauthorised(
@@ -1002,7 +1021,7 @@ def test_a_viewer_cannot_push_the_display_past_its_starting_size(
     sandbox at 1920x1200 for the rest of its life.
 
     That was measured to lose an `agent-browser record` part-way through on a
-    loaded runner -- 1.67x the pixels for x11vnc to encode and for ffmpeg to
+    loaded runner -- 1.67x the pixels for the VNC server to encode and for ffmpeg to
     grab. The framebuffer ceiling is still reachable, but only by an agent
     asking for it on purpose with `set-display-size`.
     """
@@ -1013,9 +1032,9 @@ def test_a_viewer_cannot_push_the_display_past_its_starting_size(
         asked.append((width, height))
         return f"{width}x{height}"
 
-    from sandbox_runtime.browser_relay import app as relay_app
+    from sandbox_runtime.browser_relay import display
 
-    monkeypatch.setattr(relay_app, "set_display_size", fake_resize)
+    monkeypatch.setattr(display, "set_display_size", fake_resize)
     client = _client(monkeypatch, tmp_path)
 
     response = client.post(
@@ -1049,9 +1068,9 @@ def test_the_display_can_be_put_back(monkeypatch, tmp_path) -> None:
         asked.append((width, height))
         return f"{width}x{height}"
 
-    from sandbox_runtime.browser_relay import app as relay_app
+    from sandbox_runtime.browser_relay import display
 
-    monkeypatch.setattr(relay_app, "set_display_size", fake_resize)
+    monkeypatch.setattr(display, "set_display_size", fake_resize)
     client = _client(monkeypatch, tmp_path)
 
     response = client.post(
@@ -1071,22 +1090,22 @@ def test_resetting_the_display_is_behind_the_token(monkeypatch, tmp_path) -> Non
 def _refusing_resize(monkeypatch):
     """`set_display_size` as it behaves while a take is running.
 
-    Raises `relay_app.RecordingInProgress`, not the one importable from
+    Raises `display.RecordingInProgress`, not the one importable from
     `chrome`, and the difference is not pedantry: a test earlier in this
     file reloads `chrome` to re-read an environment variable, which makes a
-    *new* class object while `app` keeps the one it imported. Raise the
+    *new* class object while `display` keeps the one it imported. Raise the
     wrong one and the route's `except` does not match, the exception escapes
     as a 500, and the test fails only when run alongside its neighbours.
     """
-    from sandbox_runtime.browser_relay import app as relay_app
+    from sandbox_runtime.browser_relay import display
 
     async def refuse(width: int, height: int) -> str:
-        raise relay_app.RecordingInProgress(
+        raise display.RecordingInProgress(
             "the display is being recorded, so its size is held until the "
             "recording stops"
         )
 
-    monkeypatch.setattr(relay_app, "set_display_size", refuse)
+    monkeypatch.setattr(display, "set_display_size", refuse)
 
 
 def test_a_viewer_cannot_resize_the_display_out_from_under_a_recording(

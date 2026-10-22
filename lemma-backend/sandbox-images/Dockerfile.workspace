@@ -176,7 +176,7 @@ ENV PYTHONUNBUFFERED=1 \
     # ceiling and `WORKSPACE_XVFB_SCREEN` is only where the display begins.
     WORKSPACE_XVFB_MAX_SCREEN=1920x1200x24 \
     # Loopback-only ports for the VNC view of `:99`. `LEMMA_BROWSER_VNC_PORT`
-    # is x11vnc's own raw VNC socket; `LEMMA_BROWSER_VNC_WS_PORT` is
+    # is the VNC server's own raw socket; `LEMMA_BROWSER_VNC_WS_PORT` is
     # websockify's WebSocket front door onto it. The relay is the only thing
     # that ever dials either -- see the comment on the apt-get line above.
     LEMMA_BROWSER_VNC_PORT=5900 \
@@ -268,18 +268,24 @@ RUN apt-get update \
         # nothing happen. matchbox is the smallest window manager that fixes
         # it: one window at a time, filling the screen, no decoration.
         matchbox-window-manager \
-        # The human-facing view of the same Xvfb display. `x11vnc` shares
-        # `:99` with Chromium rather than opening a second one; `websockify`
-        # is what turns its raw VNC socket into something a browser can open
-        # a WebSocket to. Neither is ever published -- both stay loopback,
-        # reached only through the relay, the same treatment raw CDP gets and
-        # for the same reason (see `browser_relay/app.py`).
+        # The human-facing view of the same Xvfb display. TigerVNC's
+        # scraping server (`X0tigervnc`) shares `:99` with Chromium rather
+        # than opening a second one; `websockify` is what turns its raw VNC
+        # socket into something a browser can open a WebSocket to. Neither is
+        # ever published -- both stay loopback, reached only through the
+        # relay, the same treatment raw CDP gets and for the same reason (see
+        # `browser_relay/app.py`). TigerVNC rather than x11vnc: see
+        # `start-vnc-bridge.sh`.
+        tigervnc-scraping-server \
         websockify \
         # `xrandr`, for resizing the display to match the pane somebody is
         # watching it in. Xvfb carries the RandR extension either way; this is
         # the client that drives it.
         x11-xserver-utils \
-        x11vnc \
+        # The clipboard, both ways, for the WebRTC streamer: it reads what
+        # the page copied and sets what a person pastes. TigerVNC carries its
+        # own clipboard and does not need it.
+        xclip \
         xvfb \
     && rm -rf /var/lib/apt/lists/* /var/log/apt /var/log/dpkg.log /var/log/alternatives.log \
         /var/cache/ldconfig/aux-cache /var/cache/fontconfig/* /var/lib/dbus/machine-id \
@@ -411,6 +417,7 @@ COPY --chmod=0755 lemma-backend/sandbox-images/scripts/start-browser.sh /usr/loc
 COPY --chmod=0755 lemma-backend/sandbox-images/scripts/start-browser-relay.sh /usr/local/bin/start-browser-relay
 COPY --chmod=0755 lemma-backend/sandbox-images/scripts/browser-is-live.sh /usr/local/bin/browser-is-live
 COPY --chmod=0755 lemma-backend/sandbox-images/scripts/start-vnc-bridge.sh /usr/local/bin/start-vnc-bridge
+COPY --chmod=0755 lemma-backend/sandbox-images/scripts/start-streamer.sh /usr/local/bin/start-streamer
 COPY --chmod=0755 lemma-backend/sandbox-images/scripts/save-webpage.sh /usr/local/bin/save-webpage
 COPY --chmod=0755 lemma-backend/sandbox-images/scripts/webpage-to-markdown.mjs /opt/lemma-node/webpage-to-markdown.mjs
 

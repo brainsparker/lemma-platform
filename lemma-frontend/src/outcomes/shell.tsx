@@ -280,11 +280,19 @@ export function OutcomesShell() {
     }
 
     let page;
-    if ((orgs.isError && !org) || (pods.isError && !pods.data)) {
+    const orgsFailed = orgs.isError && !org;
+    const podsFailed = pods.isError && !pods.data;
+    if (orgsFailed || podsFailed) {
+        /* Asks again for whichever read put this here: an org list that
+           failed in the background with its data still cached is not one. */
+        const retry = () => {
+            if (orgsFailed) void orgs.refetch();
+            if (podsFailed) void pods.refetch();
+        };
         page = (
             <div className="ox-page">
                 <Empty title="Couldn’t load your workspace.">
-                    <button type="button" className="ox-btn" onClick={() => void (orgs.isError ? orgs.refetch() : pods.refetch())}>Try again</button>
+                    <button type="button" className="ox-btn" onClick={retry}>Try again</button>
                 </Empty>
             </div>
         );

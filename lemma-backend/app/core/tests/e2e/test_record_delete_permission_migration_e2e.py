@@ -1,4 +1,4 @@
-"""Migration 0062, its last three steps: record deletes become their own
+"""Migration 0063, its last three steps: record deletes become their own
 permission, Lemma-made Slack apps are marked as such on the surfaces bound
 before the flag existed, and the public links a named agent or function minted
 are deleted along with the column that recorded it (audit M22).
@@ -34,8 +34,8 @@ from app.core.test_utils import get_postgres_container, get_postgres_url
 pytestmark = [pytest.mark.e2e, pytest.mark.slow]
 
 BACKEND = Path(__file__).resolve().parents[4]
-BEFORE = "0061_answers_shared"
-REVISION = "0062_pod_connectors"
+BEFORE = "0062_usage_counter_basis"
+REVISION = "0063_pod_connectors"
 WRITE = "datastore.record.write"
 DELETE = "datastore.record.delete"
 GRANTEES = ("POD_MEMBER", "ROLE", "AGENT", "POD")

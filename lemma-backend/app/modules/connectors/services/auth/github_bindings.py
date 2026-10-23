@@ -27,7 +27,7 @@ everything that acts on one looks the binding up:
 - **webhooks** route a delivery only to schedules in the organization its
   installation is bound to (``bound_organization``), and drop an unbound one.
 
-There is no unbound path. Migration 0062 binds every existing installation
+There is no unbound path. Migration 0063 binds every existing installation
 whose organization can be derived and unbinds the accounts of the rest.
 """
 

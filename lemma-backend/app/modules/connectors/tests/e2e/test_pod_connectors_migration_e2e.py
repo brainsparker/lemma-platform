@@ -1,4 +1,4 @@
-"""Migration 0062 carries every pre-existing connector grant into pod rows.
+"""Migration 0063 carries every pre-existing connector grant into pod rows.
 
 Seeded before it, in one pod: a `connector.use` grant on the old uuid5 id, and
 three pins of a raw account onto an agent -- one its owner made (consented),
@@ -36,8 +36,8 @@ from app.core.test_utils import get_postgres_container, get_postgres_url
 pytestmark = [pytest.mark.e2e, pytest.mark.slow]
 
 BACKEND = Path(__file__).resolve().parents[5]
-BEFORE = "0061_answers_shared"
-REVISION = "0062_pod_connectors"
+BEFORE = "0062_usage_counter_basis"
+REVISION = "0063_pod_connectors"
 LEGACY_GMAIL = uuid5(uuid5(NAMESPACE_URL, "lemma.connector.resource"), "gmail")
 
 

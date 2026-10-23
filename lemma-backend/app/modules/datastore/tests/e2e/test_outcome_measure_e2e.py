@@ -194,7 +194,10 @@ class TestWhoMaySetAMeasure:
         assert "2 rows" in refused["message"]
 
 
+@pytest.mark.drives_work
 class TestTheWeeksBehindIt:
+    """Drives the reading items in-process, so the session worker is held."""
+
     @pytest.mark.asyncio
     async def test_setting_a_measure_reads_it_into_this_week(
         self, pod_api: DatastoreApi

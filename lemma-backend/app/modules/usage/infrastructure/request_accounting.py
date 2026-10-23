@@ -121,9 +121,9 @@ async def record(
     await session.flush()
     charged: dict[spend_counters.CounterKey, spend_counters.Counter] = {}
     if cost is not None:
+        charged = await spend_counters.charge(session, historical_windows, cost)
         for window in spend_counters.ordered(historical_windows):
-            counter = await spend_counters.charge(session, window, cost)
-            if counter is not None:
+            if (counter := charged.get(spend_counters.key(window))) is not None:
                 charged[spend_counters.key(window)] = await spend_counters.warn_once(
                     session, counter, window, events, warning_fraction
                 )

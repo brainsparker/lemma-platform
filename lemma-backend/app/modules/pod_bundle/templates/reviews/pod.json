@@ -1,0 +1,31 @@
+{
+  "format_version": 3,
+  "name": "Reviews",
+  "description": "Gets every pull request a review on the day it is opened.",
+  "lemma": {
+    "position": 3,
+    "face": "cube",
+    "place": "GitHub",
+    "every": "week",
+    "brings": [
+      "A table of open pull requests and their reviewers",
+      "A nudge for anything open four hours",
+      "The week's number in Pages, every Friday"
+    ]
+  },
+  "outcome": {
+    "sentence": "Every pull request is reviewed the same day.",
+    "kind": "bar",
+    "measure": {
+      "table": "pull_requests",
+      "time_column": "opened_at",
+      "shape": "share",
+      "met_column": "reviewed_same_day",
+      "target": 0.9,
+      "label": "reviewed the same day",
+      "title_column": "title",
+      "owner_column": "reviewer"
+    }
+  },
+  "variables": {}
+}

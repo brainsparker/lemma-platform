@@ -1,0 +1,30 @@
+{
+  "format_version": 3,
+  "name": "Content",
+  "description": "Keeps two posts going out every week.",
+  "lemma": {
+    "position": 4,
+    "face": "wave",
+    "place": "Notion",
+    "every": "week",
+    "brings": [
+      "A table of every post, drafted and published",
+      "A draft every Tuesday and Thursday",
+      "The week's count in Pages, every Friday"
+    ]
+  },
+  "outcome": {
+    "sentence": "Two posts go out every week.",
+    "kind": "bar",
+    "measure": {
+      "table": "posts",
+      "time_column": "published_at",
+      "shape": "count",
+      "target": 2,
+      "label": "posts out",
+      "title_column": "title",
+      "owner_column": "author"
+    }
+  },
+  "variables": {}
+}

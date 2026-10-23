@@ -1,0 +1,31 @@
+{
+  "format_version": 3,
+  "name": "Follow-ups",
+  "description": "Makes sure every lead hears from you within two days.",
+  "lemma": {
+    "position": 2,
+    "face": "loop",
+    "place": "HubSpot",
+    "every": "week",
+    "brings": [
+      "A table of every lead and when they were followed up",
+      "Drafts for quiet leads, every weekday",
+      "The week's number in Pages, every Friday"
+    ]
+  },
+  "outcome": {
+    "sentence": "Every lead gets a follow-up within two days.",
+    "kind": "bar",
+    "measure": {
+      "table": "leads",
+      "time_column": "came_in_at",
+      "shape": "share",
+      "met_column": "followed_up_in_time",
+      "target": 0.95,
+      "label": "followed up within two days",
+      "title_column": "name",
+      "owner_column": "owner"
+    }
+  },
+  "variables": {}
+}

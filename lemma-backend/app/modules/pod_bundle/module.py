@@ -21,8 +21,12 @@ def _routers():
     from app.modules.pod_bundle.api.controllers.publish_controller import (
         router as publish_router,
     )
+    from app.modules.pod_bundle.api.controllers.template_controller import (
+        router as template_router,
+    )
 
-    return [import_router, export_router, publish_router]
+    # Templates first: `/pods/bundle/templates` must not be read as a pod id.
+    return [template_router, import_router, export_router, publish_router]
 
 
 def _register_work() -> None:

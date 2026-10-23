@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from enum import Enum
 from typing import Literal, Mapping, Optional
 from uuid import UUID
@@ -69,6 +69,101 @@ class PodContactSettings(BaseModel):
     )
 
 
+class OutcomeKind(str, Enum):
+    """The two shapes an outcome takes.
+
+    A bar is held every week and never finishes ("Every customer hears back
+    within a day"). A finish line is reached once, by a date ("20 design
+    partners signed by the date set"), and then the pod is done with it.
+    """
+
+    BAR = "bar"
+    FINISH = "finish"
+
+
+#: A table or column name as the datastore allows one.
+_COLUMN = r"^[A-Za-z0-9_]{1,63}$"
+
+
+class OutcomeMeasure(BaseModel):
+    """How a bar is counted, from rows of one of the pod's own tables.
+
+    Each row is one unit of the work -- a customer waiting, a lead, a post --
+    and belongs to the week its ``time_column`` falls in. A ``share`` counts
+    the week's rows whose ``met_column`` is set (true, or not null) out of all
+    of them; a ``count`` counts the week's rows, met or not. The rows not met
+    yet are the ones the pod shows behind its number.
+    """
+
+    table: str = Field(min_length=1, max_length=63, pattern=_COLUMN)
+    time_column: str = Field(min_length=1, max_length=63, pattern=_COLUMN)
+    shape: Literal["share", "count"] = "share"
+    met_column: str | None = Field(default=None, max_length=63, pattern=_COLUMN)
+    target: float = Field(gt=0)
+    label: str = Field(min_length=1, max_length=120)
+    title_column: str | None = Field(default=None, max_length=63, pattern=_COLUMN)
+    owner_column: str | None = Field(default=None, max_length=63, pattern=_COLUMN)
+
+    @model_validator(mode="after")
+    def share_needs_a_bar(self) -> "OutcomeMeasure":
+        if self.shape == "share":
+            if not self.met_column:
+                raise ValueError("a share needs met_column: which rows meet the bar")
+            if self.target > 1:
+                raise ValueError("a share's target is a fraction, at most 1")
+        return self
+
+
+class OutcomeChecklist(BaseModel):
+    """The steps to a finish line: rows of one of the pod's own tables, done
+    when ``done_column`` is set, and behind when ``due_column`` has passed."""
+
+    table: str = Field(min_length=1, max_length=63, pattern=_COLUMN)
+    done_column: str = Field(min_length=1, max_length=63, pattern=_COLUMN)
+    title_column: str | None = Field(default=None, max_length=63, pattern=_COLUMN)
+    owner_column: str | None = Field(default=None, max_length=63, pattern=_COLUMN)
+    due_column: str | None = Field(default=None, max_length=63, pattern=_COLUMN)
+    #: How many steps must be done to reach the line, when that is fewer than
+    #: every row -- "20 design partners signed" over a list of 41 companies.
+    target: int | None = Field(default=None, ge=1)
+
+
+class PodOutcome(BaseModel):
+    """What the pod owns: one sentence a person can check, and how it is counted.
+
+    The sentence is the pod's headline everywhere it is shown. A bar is
+    counted by ``measure``; a finish line by ``checklist`` against ``due_on``.
+    Either may be missing while the pod is still working out how to count it,
+    and then the pod says so instead of showing a number.
+    """
+
+    sentence: str = Field(min_length=3, max_length=200)
+    kind: OutcomeKind
+    due_on: date | None = None
+    measure: OutcomeMeasure | None = None
+    checklist: OutcomeChecklist | None = None
+    #: When the pod set this outcome; a finish line counts its days from here.
+    since: date | None = None
+    #: When a finish line was reached, or let go. The pod stops its work then.
+    finished_on: date | None = None
+
+    @model_validator(mode="after")
+    def shape_fits_kind(self) -> "PodOutcome":
+        if self.kind == OutcomeKind.FINISH:
+            if self.due_on is None:
+                raise ValueError("a finish line needs due_on")
+            if self.measure is not None:
+                raise ValueError(
+                    "a finish line is counted by its checklist, not a measure"
+                )
+        else:
+            if self.checklist is not None or self.due_on is not None:
+                raise ValueError(
+                    "a bar has no checklist or due date; it holds every week"
+                )
+        return self
+
+
 class PodConfig(BaseModel):
     """Typed pod-level configuration."""
 
@@ -84,6 +179,8 @@ class PodConfig(BaseModel):
     recipes: list[PodRecipe] = Field(default_factory=list)
     triggers: PodTriggerSettings | None = None
     contacts: PodContactSettings | None = None
+    #: What the pod owns. Omitted until somebody sets one.
+    outcome: PodOutcome | None = None
 
     @field_validator("default_profile_id")
     @classmethod
@@ -131,6 +228,8 @@ class PodConfig(BaseModel):
             data.pop("triggers", None)
         if data.get("contacts") is None:
             data.pop("contacts", None)
+        if data.get("outcome") is None:
+            data.pop("outcome", None)
         return data
 
 

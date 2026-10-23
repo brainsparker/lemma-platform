@@ -1,0 +1,28 @@
+{
+  "format_version": 3,
+  "name": "Launch",
+  "description": "Gets the launch out on its date, and chases every step on the way.",
+  "lemma": {
+    "position": 5,
+    "face": "spark",
+    "place": "Linear",
+    "every": "date",
+    "brings": [
+      "A checklist of every step, with owners and dates",
+      "The week's plan, every Monday",
+      "A chase for anything due within three days"
+    ]
+  },
+  "outcome": {
+    "sentence": "The launch ships on {due}.",
+    "kind": "finish",
+    "checklist": {
+      "table": "steps",
+      "done_column": "done",
+      "title_column": "step",
+      "owner_column": "owner",
+      "due_column": "due_on"
+    }
+  },
+  "variables": {}
+}

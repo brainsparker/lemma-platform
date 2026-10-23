@@ -1,0 +1,28 @@
+{
+  "format_version": 3,
+  "name": "Audit",
+  "description": "Gets every control ready with its evidence before the audit date.",
+  "lemma": {
+    "position": 7,
+    "face": "ring",
+    "place": "Notion",
+    "every": "date",
+    "brings": [
+      "A table of every control and its evidence",
+      "A check that evidence is still fresh, every Monday",
+      "A chase for controls with no owner"
+    ]
+  },
+  "outcome": {
+    "sentence": "The SOC 2 audit passes by {due}.",
+    "kind": "finish",
+    "checklist": {
+      "table": "controls",
+      "done_column": "ready",
+      "title_column": "control",
+      "owner_column": "owner",
+      "due_column": "due_on"
+    }
+  },
+  "variables": {}
+}

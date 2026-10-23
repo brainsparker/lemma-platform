@@ -142,6 +142,44 @@ class PodProfile:
     name: str | None = None
     description: str | None = None
     created_at: datetime | None = None
+    #: What the pod owns, said the way its agent should hold itself to it:
+    #: the sentence, and how it is counted. ``None`` when it owns nothing yet.
+    owns: str | None = None
+
+
+def _owns(config: object) -> str | None:
+    """The outcome as one line for the agent's brief."""
+    from app.modules.pod.domain.pod_entities import PodConfig
+
+    outcome = PodConfig.from_raw(config).outcome
+    if outcome is None or outcome.finished_on is not None:
+        return None
+    said = outcome.sentence.strip()
+    if outcome.measure is not None:
+        measure = outcome.measure
+        target = (
+            f"{round(measure.target * 100)}% of the week's rows"
+            if measure.shape == "share"
+            else f"{measure.target:g} rows a week"
+        )
+        how = (
+            f"counted from the `{measure.table}` table: rows dated by `{measure.time_column}`"
+            + (
+                f", met when `{measure.met_column}` is set"
+                if measure.met_column
+                else ""
+            )
+            + f"; the target is {target}"
+        )
+        return f"{said} It is {how}. Keep that table true."
+    if outcome.checklist is not None and outcome.due_on is not None:
+        checklist = outcome.checklist
+        return (
+            f"{said} Due {outcome.due_on.isoformat()}, counted from the "
+            f"`{checklist.table}` table: a step is done when `{checklist.done_column}` is set. "
+            "Keep it true and chase what is behind."
+        )
+    return f"{said} How it is counted is not set yet: propose a table and a measure."
 
 
 async def pod_profile(session, pod_id: UUID) -> PodProfile:
@@ -152,13 +190,17 @@ async def pod_profile(session, pod_id: UUID) -> PodProfile:
     """
     row = (
         await session.execute(
-            select(Pod.name, Pod.description, Pod.created_at).where(Pod.id == pod_id)
+            select(Pod.name, Pod.description, Pod.created_at, Pod.config).where(
+                Pod.id == pod_id
+            )
         )
     ).first()
     if row is None:
         return PodProfile()
-    name, description, created_at = row
-    return PodProfile(name=name, description=description, created_at=created_at)
+    name, description, created_at, config = row
+    return PodProfile(
+        name=name, description=description, created_at=created_at, owns=_owns(config)
+    )
 
 
 async def pod_organization_id(uow, pod_id: UUID) -> UUID | None:

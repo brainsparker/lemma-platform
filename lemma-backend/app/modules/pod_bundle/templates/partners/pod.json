@@ -1,0 +1,29 @@
+{
+  "format_version": 3,
+  "name": "Partners",
+  "description": "Signs design partners by a date, and chases every conversation that goes quiet.",
+  "lemma": {
+    "position": 6,
+    "face": "peak",
+    "place": "HubSpot",
+    "every": "date",
+    "brings": [
+      "A table of every company you are talking to",
+      "A chase for anything quiet five days",
+      "Who signed, and who is close, every Friday"
+    ]
+  },
+  "outcome": {
+    "sentence": "20 design partners signed by {due}.",
+    "kind": "finish",
+    "checklist": {
+      "table": "partners",
+      "done_column": "signed",
+      "title_column": "company",
+      "owner_column": "owner",
+      "due_column": "next_step_due",
+      "target": 20
+    }
+  },
+  "variables": {}
+}

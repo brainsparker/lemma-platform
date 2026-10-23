@@ -202,6 +202,9 @@ def _routers():
     from app.modules.datastore.api.controllers.processing_controller import (
         router as processing,
     )
+    from app.modules.datastore.api.controllers.outcome_controller import (
+        router as outcome,
+    )
 
     # `signed_link` before `file`, and the order is load-bearing: routes match
     # in registration order, and `file` owns `/files/{file_id}` — which happily
@@ -217,6 +220,7 @@ def _routers():
         public_file,
         signed_file,
         changes,
+        outcome,
     ]
 
 

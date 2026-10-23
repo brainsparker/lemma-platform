@@ -1,0 +1,31 @@
+{
+  "format_version": 3,
+  "name": "Support",
+  "description": "Answers customers, and makes sure nobody waits more than a day for an answer.",
+  "lemma": {
+    "position": 1,
+    "face": "bloom",
+    "place": "Intercom",
+    "every": "week",
+    "brings": [
+      "A table of every customer waiting",
+      "Drafts for the oldest, every weekday morning",
+      "The week's number in Pages, every Friday"
+    ]
+  },
+  "outcome": {
+    "sentence": "Every customer hears back within a day.",
+    "kind": "bar",
+    "measure": {
+      "table": "conversations",
+      "time_column": "opened_at",
+      "shape": "share",
+      "met_column": "answered_in_time",
+      "target": 0.9,
+      "label": "heard back within a day",
+      "title_column": "customer",
+      "owner_column": "with_person"
+    }
+  },
+  "variables": {}
+}

@@ -24,6 +24,7 @@ from app.modules.pod.domain.pod_entities import (
     PodEntity,
     PodJoinPolicy,
     PodMemberEntity,
+    PodOutcome,
     PodRole,
     PodUpdateEntity,
 )
@@ -223,6 +224,35 @@ class PodService:
             organization_id=organization_id,
             user_id=user_id,
         )
+
+    async def set_outcome(
+        self,
+        pod_id: UUID,
+        outcome: PodOutcome | None,
+        ctx: Context,
+    ) -> PodEntity:
+        """Set what the pod owns, or clear it with ``None``.
+
+        Its own path rather than ``update_pod``'s config merge, because that
+        merge cannot remove a field: a cleared outcome serialises as absent and
+        the merge keeps the old one. A finish line with no ``since`` counts its
+        days from today.
+        """
+        pod_entity = await self.pod_repository.get(pod_id)
+        if not pod_entity:
+            raise PodNotFoundError()
+        await ctx.require(
+            Permissions.POD_UPDATE, ResourceRef.pod(pod_id, pod_entity.organization_id)
+        )
+        if outcome is not None and outcome.since is None:
+            from datetime import datetime, timezone
+
+            outcome = outcome.model_copy(
+                update={"since": datetime.now(timezone.utc).date()}
+            )
+        config = pod_entity.config.model_copy(update={"outcome": outcome})
+        updated = pod_entity.model_copy(update={"config": config})
+        return await self.pod_repository.update(updated)
 
     async def update_pod(
         self,

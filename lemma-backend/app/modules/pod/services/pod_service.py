@@ -24,7 +24,6 @@ from app.modules.pod.domain.pod_entities import (
     PodEntity,
     PodJoinPolicy,
     PodMemberEntity,
-    PodOutcome,
     PodRole,
     PodUpdateEntity,
 )
@@ -78,6 +77,10 @@ class PodService:
             )
 
         entity.name = self._normalize_name(entity.name)
+        # What a pod owns is set after it exists, through `PodOutcomeService`,
+        # which checks a measure before keeping it; a config arriving with one
+        # would skip that check.
+        entity.config = entity.config.model_copy(update={"outcome": None})
         await self._refuse_past_pod_allowance(
             owner_user_id=entity.user_id, organization_id=entity.organization_id
         )
@@ -225,35 +228,6 @@ class PodService:
             user_id=user_id,
         )
 
-    async def set_outcome(
-        self,
-        pod_id: UUID,
-        outcome: PodOutcome | None,
-        ctx: Context,
-    ) -> PodEntity:
-        """Set what the pod owns, or clear it with ``None``.
-
-        Its own path rather than ``update_pod``'s config merge, because that
-        merge cannot remove a field: a cleared outcome serialises as absent and
-        the merge keeps the old one. A finish line with no ``since`` counts its
-        days from today.
-        """
-        pod_entity = await self.pod_repository.get(pod_id)
-        if not pod_entity:
-            raise PodNotFoundError()
-        await ctx.require(
-            Permissions.POD_UPDATE, ResourceRef.pod(pod_id, pod_entity.organization_id)
-        )
-        if outcome is not None and outcome.since is None:
-            from datetime import datetime, timezone
-
-            outcome = outcome.model_copy(
-                update={"since": datetime.now(timezone.utc).date()}
-            )
-        config = pod_entity.config.model_copy(update={"outcome": outcome})
-        updated = pod_entity.model_copy(update={"config": config})
-        return await self.pod_repository.update(updated)
-
     async def update_pod(
         self,
         pod_id: UUID,
@@ -261,6 +235,9 @@ class PodService:
         requester_user_id: UUID,
         ctx: Context | None = None,
     ) -> PodEntity:
+        # The config is written back whole; locked, so a change to what the pod
+        # owns made meanwhile is neither undone nor resurrected.
+        await self.pod_repository.lock(pod_id)
         pod_entity = await self.pod_repository.get(pod_id)
         if not pod_entity:
             raise PodNotFoundError()
@@ -281,7 +258,13 @@ class PodService:
         # the other fields instead of resetting them to their defaults.
         if update_data.get("config") is not None:
             merged_config = merged_dict.get("config") or {}
+            stored_outcome = merged_config.get("outcome")
             merged_config.update(update_data["config"])
+            # Kept as stored: what a pod owns changes only through
+            # `PodOutcomeService`, which checks a measure first. A client that
+            # reads the config and writes it back sends the outcome along, so
+            # this is ignored rather than refused.
+            merged_config["outcome"] = stored_outcome
             # Keep the legacy provider-only key in sync with the full runtime so
             # any code still reading ``default_profile_id`` stays correct.
             default_runtime = merged_config.get("default_runtime")

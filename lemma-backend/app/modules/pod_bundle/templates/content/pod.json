@@ -6,25 +6,27 @@
     "position": 4,
     "face": "wave",
     "place": "Notion",
-    "every": "week",
     "brings": [
       "A table of every post, drafted and published",
       "A draft every Tuesday and Thursday",
       "The week's count in Pages, every Friday"
-    ]
+    ],
+    "plan": {
+      "how": [
+        "Every post is a row in posts, from its draft to where it went out",
+        "A draft every Tuesday and Thursday, for its author to approve"
+      ],
+      "never": [
+        "Publish anything yourself"
+      ]
+    }
   },
   "outcome": {
     "sentence": "Two posts go out every week.",
-    "kind": "bar",
-    "measure": {
-      "table": "posts",
-      "time_column": "published_at",
-      "shape": "count",
-      "target": 2,
-      "label": "posts out",
-      "title_column": "title",
-      "owner_column": "author"
-    }
+    "kind": "week",
+    "target": 2,
+    "unit": "posts",
+    "measure": "SELECT count(*) FROM posts WHERE published_at >= date_trunc('week', now())"
   },
   "variables": {}
 }

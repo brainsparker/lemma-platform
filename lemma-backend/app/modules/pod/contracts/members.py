@@ -143,43 +143,45 @@ class PodProfile:
     description: str | None = None
     created_at: datetime | None = None
     #: What the pod owns, said the way its agent should hold itself to it:
-    #: the sentence, and how it is counted. ``None`` when it owns nothing yet.
+    #: the sentence, how it is counted, and where the plan is. ``None`` when it
+    #: owns nothing yet.
     owns: str | None = None
 
 
-def _owns(config: object) -> str | None:
-    """The outcome as one line for the agent's brief."""
-    from app.modules.pod.domain.pod_entities import PodConfig
+def _target(value: float, unit: str | None) -> str:
+    number = f"{value:g}"
+    if unit == "%":
+        return f"{number}%"
+    return f"{number} {unit}" if unit else number
+
+
+def say_what_it_owns(config: object) -> str | None:
+    """What the pod owns, as one line of its agent's brief."""
+    from app.modules.pod.domain.pod_entities import PLAN_PATH, OutcomeKind, PodConfig
 
     outcome = PodConfig.from_raw(config).outcome
-    if outcome is None or outcome.finished_on is not None:
+    if outcome is None:
         return None
-    said = outcome.sentence.strip()
-    if outcome.measure is not None:
-        measure = outcome.measure
-        target = (
-            f"{round(measure.target * 100)}% of the week's rows"
-            if measure.shape == "share"
-            else f"{measure.target:g} rows a week"
-        )
-        how = (
-            f"counted from the `{measure.table}` table: rows dated by `{measure.time_column}`"
-            + (
-                f", met when `{measure.met_column}` is set"
-                if measure.met_column
-                else ""
-            )
-            + f"; the target is {target}"
-        )
-        return f"{said} It is {how}. Keep that table true."
-    if outcome.checklist is not None and outcome.due_on is not None:
-        checklist = outcome.checklist
-        return (
-            f"{said} Due {outcome.due_on.isoformat()}, counted from the "
-            f"`{checklist.table}` table: a step is done when `{checklist.done_column}` is set. "
-            "Keep it true and chase what is behind."
-        )
-    return f"{said} How it is counted is not set yet: propose a table and a measure."
+    if outcome.kind is OutcomeKind.DATE and outcome.due is not None:
+        shape = f"a finish line due {outcome.due.isoformat()}"
+    else:
+        shape = "a bar held every week"
+    held = (
+        f", held to {_target(outcome.target, outcome.unit)}"
+        if outcome.target is not None
+        else ""
+    )
+    counted = (
+        "counted by its measure, one query read for the whole pod"
+        if outcome.measure
+        else "with no measure yet: when what it counts exists, set one with "
+        "`set_what_you_own`"
+    )
+    return (
+        f"{outcome.sentence} It is {shape}{held}, {counted}. How the work gets "
+        f"there is in {PLAN_PATH}: read it before changing how you work, and "
+        "keep it true."
+    )
 
 
 async def pod_profile(session, pod_id: UUID) -> PodProfile:
@@ -199,7 +201,10 @@ async def pod_profile(session, pod_id: UUID) -> PodProfile:
         return PodProfile()
     name, description, created_at, config = row
     return PodProfile(
-        name=name, description=description, created_at=created_at, owns=_owns(config)
+        name=name,
+        description=description,
+        created_at=created_at,
+        owns=say_what_it_owns(config),
     )
 
 

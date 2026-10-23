@@ -50,8 +50,8 @@ account its connector still resolves to (nothing, where the upgrade stopped
 it), puts grants back on the shapes they had, restores the deleted permissions
 to their roles, and drops the tables.
 
-Revision ID: 0062_pod_connectors
-Revises: 0061_answers_shared
+Revision ID: 0063_pod_connectors
+Revises: 0062_usage_counter_basis
 """
 
 from __future__ import annotations
@@ -63,8 +63,8 @@ from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0062_pod_connectors"
-down_revision = "0061_answers_shared"
+revision = "0063_pod_connectors"
+down_revision = "0062_usage_counter_basis"
 branch_labels = None
 depends_on = None
 
@@ -173,7 +173,7 @@ _SLUG_COLUMNS = (
     "ALTER TABLE schedules ADD COLUMN pod_connector_slug VARCHAR(63)",
     "CREATE INDEX ix_schedules_pod_connector ON schedules (pod_id, pod_connector_slug)",
 )
-#: The pre-0062 shape exactly: the indexes the baseline made, the FKs as 0027
+#: The pre-0063 shape exactly: the indexes the baseline made, the FKs as 0027
 #: left them (SET NULL on both).
 _ACCOUNT_COLUMNS = (
     "ALTER TABLE agent_surfaces ADD COLUMN account_id UUID",
@@ -784,7 +784,7 @@ def _upgrade_github_installation_org(conn) -> None:
         )
     for installation_id in contested:
         log.warning(
-            "0062: GitHub installation %s is carried by accounts in %d "
+            "0063: GitHub installation %s is carried by accounts in %d "
             "organizations (%s); its owner cannot be derived, so it is left "
             "unbound and those accounts must connect again.",
             installation_id,
@@ -800,7 +800,7 @@ def _upgrade_github_installation_org(conn) -> None:
             {"contested": contested},
         )
     log.info(
-        "0062: bound %d GitHub installations; %d contested and left unbound.",
+        "0063: bound %d GitHub installations; %d contested and left unbound.",
         len(owners) - len(contested),
         len(contested),
     )
@@ -961,7 +961,7 @@ def _upgrade_drop_workload_minted_links(conn) -> None:
         )
     ).rowcount
     logging.getLogger("alembic.runtime.migration").info(
-        "0062: deleted %d public links a named agent or function had minted.",
+        "0063: deleted %d public links a named agent or function had minted.",
         deleted,
     )
     conn.execute(

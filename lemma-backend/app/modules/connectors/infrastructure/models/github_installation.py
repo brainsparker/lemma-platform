@@ -9,7 +9,7 @@ tokens on every repository there, and the installation's webhooks (audit H4).
 A row here is the installation's owner on the Lemma side: the first
 organization to bind it through a verified path, and nobody else after. The
 unique ``installation_id`` is the rule; the binding code is only its messenger.
-DDL matches migration 0062 exactly.
+DDL matches migration 0063 exactly.
 """
 
 from __future__ import annotations

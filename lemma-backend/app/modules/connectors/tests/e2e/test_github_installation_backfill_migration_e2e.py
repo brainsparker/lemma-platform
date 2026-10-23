@@ -1,4 +1,4 @@
-"""Migration 0062 binds every GitHub installation whose owner it can derive.
+"""Migration 0063 binds every GitHub installation whose owner it can derive.
 
 Audit H4. Seeded before it: installation `solo` carried by two accounts in org
 A; installation `contested` carried by accounts in org A and org B. After it:
@@ -23,8 +23,8 @@ from app.core.test_utils import get_postgres_container, get_postgres_url
 pytestmark = [pytest.mark.e2e, pytest.mark.slow]
 
 BACKEND = Path(__file__).resolve().parents[5]
-BEFORE = "0061_answers_shared"
-REVISION = "0062_pod_connectors"
+BEFORE = "0062_usage_counter_basis"
+REVISION = "0063_pod_connectors"
 SOLO = "100000001"
 CONTESTED = "100000002"
 

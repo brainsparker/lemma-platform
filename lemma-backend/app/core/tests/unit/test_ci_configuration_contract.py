@@ -192,12 +192,20 @@ def test_every_gated_job_runs_in_the_merge_queue() -> None:
 
 def test_expensive_security_jobs_are_change_scoped() -> None:
     workflow = _read(".github/workflows/security.yml")
+    jobs = yaml.safe_load(workflow)["jobs"]
 
-    assert "name: Detect security-relevant changes" in workflow
-    assert "needs.changes.outputs.python == 'true'" in workflow
-    assert "needs.changes.outputs.javascript == 'true'" in workflow
-    assert "if: needs.changes.outputs.python_dependencies == 'true'" in workflow
-    assert "if: needs.changes.outputs.backend_image == 'true'" in workflow
+    def condition(job: str) -> str:
+        return str(jobs[job].get("if", ""))
+
+    assert jobs["changes"]["name"] == "Detect security-relevant changes"
+    assert "needs.changes.outputs.python == 'true'" in condition("codeql-python")
+    assert "needs.changes.outputs.javascript == 'true'" in condition(
+        "codeql-javascript"
+    )
+    assert "needs.changes.outputs.python_dependencies == 'true'" in condition(
+        "python-audit"
+    )
+    assert "needs.changes.outputs.backend_image == 'true'" in condition("container")
 
 
 def test_every_job_that_installs_a_browser_restores_it_from_cache() -> None:

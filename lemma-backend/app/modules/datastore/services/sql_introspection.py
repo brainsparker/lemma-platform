@@ -57,7 +57,45 @@ def _forbidden_nodes() -> tuple[type[exp.Expression], ...]:
 # reads every user's rows. Revoking the parameters at the database level does
 # not help -- PostgreSQL keeps no ACL for customized options, so
 # ``REVOKE SET ON PARAMETER app.foo`` silently leaves the placeholder settable.
-_FORBIDDEN_FUNCTIONS = frozenset({"set_config"})
+#
+# The rest run SQL handed to them as a string, or read a relation named by a
+# string, so the tables they reach never appear in the parse tree and escape the
+# per-table read check below. The query role can use every pod's schema, so
+# ``table_to_xml('pod_<other>.t', ...)`` read another pod's rows -- another
+# organization's -- and ``query_to_xml('select nspname from pg_namespace', ...)``
+# listed the schemas to aim at. ``ts_stat`` takes a query as text too. The others reach the server's files, large objects, other sessions
+# or the app's notification channels, none of which a pod query has any use for.
+_FORBIDDEN_FUNCTIONS = frozenset(
+    {
+        "set_config",
+        "query_to_xml",
+        "query_to_xmlschema",
+        "query_to_xml_and_xmlschema",
+        "cursor_to_xml",
+        "cursor_to_xmlschema",
+        "table_to_xml",
+        "table_to_xmlschema",
+        "table_to_xml_and_xmlschema",
+        "schema_to_xml",
+        "schema_to_xmlschema",
+        "schema_to_xml_and_xmlschema",
+        "database_to_xml",
+        "database_to_xmlschema",
+        "database_to_xml_and_xmlschema",
+        "ts_stat",
+        "pg_stat_file",
+        "pg_notify",
+        "pg_cancel_backend",
+        "pg_terminate_backend",
+    }
+)
+# Whole families, so a member added to one in a later PostgreSQL (or reachable
+# once the role is granted more, e.g. pg_ls_logdir under pg_monitor) is covered.
+_FORBIDDEN_FUNCTION_PREFIXES = ("dblink", "lo_", "pg_advisory", "pg_ls_", "pg_read_")
+# Overloaded: only the forms with this many arguments run a query given as text.
+# ``ts_rewrite(query, select)`` does; ``ts_rewrite(query, target, substitute)``
+# only rewrites a tsquery, and stays allowed.
+_FORBIDDEN_FUNCTION_ARITIES = {"ts_rewrite": 2}
 
 
 # Read-only statement roots permitted as the top-level expression.
@@ -144,7 +182,12 @@ def analyze_query(sql: str) -> QueryAnalysis:
             if isinstance(function, exp.Anonymous)
             else function.sql_name()
         )
-        if name.lower() in _FORBIDDEN_FUNCTIONS:
+        lowered = name.lower()
+        if (
+            lowered in _FORBIDDEN_FUNCTIONS
+            or lowered.startswith(_FORBIDDEN_FUNCTION_PREFIXES)
+            or _FORBIDDEN_FUNCTION_ARITIES.get(lowered) == len(function.expressions)
+        ):
             raise DatastoreQueryError(f"{name}() is not allowed in datastore queries")
 
     cte_aliases = {

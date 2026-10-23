@@ -1211,7 +1211,7 @@ async def test_default_pod_agent_cannot_delete_account(
         headers=agent_headers,
     )
     assert response.status_code == status.HTTP_403_FORBIDDEN, response.text
-    assert response.json()["code"] == "DESTRUCTIVE_ACTION_REQUIRES_APPROVAL"
+    assert response.json()["code"] == "WORKLOAD_NOT_ALLOWED"
 
     # Control: the account is untouched and the human can still delete it.
     still_there = await authenticated_client.get(
@@ -1276,7 +1276,7 @@ async def test_default_pod_agent_cannot_delete_auth_config(
         headers=agent_headers,
     )
     assert response.status_code == status.HTTP_403_FORBIDDEN, response.text
-    assert response.json()["code"] == "DESTRUCTIVE_ACTION_REQUIRES_APPROVAL"
+    assert response.json()["code"] == "WORKLOAD_NOT_ALLOWED"
 
     # Control: the auth config is untouched and the human can still delete it.
     still_there = await authenticated_client.get(

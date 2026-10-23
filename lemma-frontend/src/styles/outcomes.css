@@ -9,12 +9,23 @@
 .ox {
     display: grid;
     grid-template-columns: 272px minmax(0, 1fr);
-    min-height: 100dvh;
+    height: 100dvh;
     background: var(--paper);
     color: var(--ink);
     font-family: var(--font-outcomes), var(--ui);
     font-size: 14px;
     line-height: 1.45;
+}
+
+/* Scrollbars are thin and one quiet grey on every scroller in the frame,
+   the workspace's own panes included. Zero specificity, so a pane that hides
+   its scrollbar on purpose still hides it. */
+:where(.ox) {
+    scrollbar-color: var(--line-2) transparent;
+}
+
+:where(.ox) :where(*) {
+    scrollbar-width: thin;
 }
 
 /* Zero specificity, so a link styled as a button keeps the button's ink. */
@@ -217,6 +228,13 @@
     min-height: 0;
     overflow-y: auto;
     padding: 4px 8px 12px;
+    /* Out of sight until the pointer is in the sidebar. Only the colour
+       changes, so nothing moves when it appears. */
+    scrollbar-color: transparent transparent;
+}
+
+.ox-side:hover .ox-side__chats {
+    scrollbar-color: var(--line-2) transparent;
 }
 
 /* An outcome: its face and name, the one weight-500 line in the list, with
@@ -480,10 +498,13 @@
     display: none;
 }
 
+/* The sidebar and the main side scroll apart, each inside itself, and the
+   page never does: one scrollbar per thing that moves. */
 .ox-body {
     display: flex;
     flex-direction: column;
     min-width: 0;
+    height: 100dvh;
 }
 
 /* ── pages ───────────────────────────────────────────────────────────── */
@@ -491,6 +512,8 @@
 .ox-main {
     flex: 1;
     min-width: 0;
+    min-height: 0;
+    overflow-y: auto;
     padding-bottom: 48px;
 }
 
@@ -1937,12 +1960,13 @@ a.ox-row:hover .ox-row__t {
 /* ── views that fill the main side ───────────────────────────────────── */
 
 /* A chat, a run, a workflow, an app: each fills the height beside the
-   sidebar and scrolls inside itself, so a composer stays put. */
+   sidebar and scrolls inside itself, so a composer stays put. Its height is
+   what the column leaves it, so a strip above it (reconnect, the phone's
+   bar) never pushes the composer off the bottom. */
 
 .ox-main--fill {
     display: flex;
     flex-direction: column;
-    height: 100dvh;
     padding-bottom: 0;
     overflow: hidden;
 }
@@ -2523,6 +2547,9 @@ a.ox-row:hover .ox-row__t {
 .ox-stagepage {
     display: flex;
     flex-direction: column;
+    /* At least as tall as the main side, so the stage's paper reaches the
+       bottom of a short page without making it scroll. */
+    min-height: 100%;
 }
 
 .ox-stagebar {
@@ -2559,10 +2586,6 @@ a.ox-row:hover .ox-row__t {
     flex: 1;
     min-height: 0;
     background: var(--paper);
-}
-
-.ox-stagepage:not(.ox-stagepage--fill) .ox-stage {
-    min-height: calc(100dvh - 48px);
 }
 
 .ox-stage > .ox-loading,
@@ -2676,14 +2699,6 @@ a.ox-row:hover .ox-row__t {
         font-weight: 500;
         text-overflow: ellipsis;
         white-space: nowrap;
-    }
-
-    .ox-main--fill {
-        height: calc(100dvh - 48px);
-    }
-
-    .ox-stagepage:not(.ox-stagepage--fill) .ox-stage {
-        min-height: calc(100dvh - 96px);
     }
 
     .ox-page {

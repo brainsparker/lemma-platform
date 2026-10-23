@@ -15,7 +15,6 @@ unqualified name on the ``search_path``, it says the table does not exist.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import secrets
 from uuid import uuid4
@@ -33,6 +32,7 @@ from app.modules.datastore.infrastructure.query_role import (
 )
 from app.modules.datastore.infrastructure.schema_manager import SchemaManager
 from app.modules.datastore.tests.e2e.harness import DatastoreApi
+from app.modules.test_support.e2e.waiters import eventually
 
 pytestmark = pytest.mark.e2e
 
@@ -89,20 +89,25 @@ async def _make_legacy(schema_manager: SchemaManager, schema: str) -> None:
         ),
         f'DROP ROLE "{role}"',
     )
-    # The same retry the product's own grants take: a REVOKE racing another
-    # session's GRANT on the schema's tables fails with "tuple concurrently
-    # updated", which is contention, not a refusal.
-    for attempt in range(1, 6):
+
+    async def revoked() -> bool:
+        # A REVOKE racing another session's GRANT on the schema's tables
+        # fails with "tuple concurrently updated": contention, not a refusal,
+        # which the product's own grants retry too. Anything else is real.
         try:
             async with schema_manager.session_factory() as session:
                 for statement in statements:
                     await session.execute(text(statement))
                 await session.commit()
-            break
         except Exception as exc:
-            if attempt == 5 or not _is_transient_conflict(exc):
+            if not _is_transient_conflict(exc):
                 raise
-            await asyncio.sleep(0.05 * 2**attempt)
+            return False
+        return True
+
+    await eventually(
+        label="the legacy schema's grants revoked", probe=revoked, done=bool
+    )
     pod_schema_memo.forget(schema)
 
 

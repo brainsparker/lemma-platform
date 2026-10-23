@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
@@ -11,10 +11,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.usage.domain.accounting import OUTSIDE_AUDIENCE_SOURCES, money
-from app.modules.usage.domain.budget_windows import contacts_window
 from app.modules.usage.domain.contacts_cap import StoredContactsCap
-from app.modules.usage.domain.ports import UsageLimitValues
-from app.modules.usage.infrastructure import spend_counters
 from app.modules.usage.infrastructure.cost_expressions import recorded_cost
 from app.modules.usage.infrastructure.models import UsageContactsCap, UsageRecord
 
@@ -53,9 +50,9 @@ class UsageContactsCapRepository:
         """Set the cap. ``None`` in a half the owner set is no limit, recorded
         as their choice; a half they did not set follows the default.
 
-        The month's running total is marked to be recounted before it is next
-        trusted: a cap removed and set back to what it was would leave it
-        short of what was spent in between, when no request was charged to it.
+        The month's running total needs no mark: settlement charges the
+        ``contacts_month`` counter whether or not a cap applies, so a cap
+        removed and set back to what it was finds it exact.
         """
         statement = insert(UsageContactsCap).values(
             organization_id=organization_id,
@@ -77,12 +74,6 @@ class UsageContactsCapRepository:
                     "updated_at": statement.excluded.updated_at,
                 },
             )
-        )
-        await spend_counters.uncount(
-            self.session,
-            contacts_window(
-                organization_id, UsageLimitValues(), datetime.now(timezone.utc)
-            ),
         )
 
     async def spend(

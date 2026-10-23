@@ -232,9 +232,8 @@ async def test_a_cap_set_again_after_a_spell_without_one_is_counted_again(
     fixed_test_user: dict[str, str],
     db_manager: DatabaseManager,
 ) -> None:
-    """No request is charged to a window while it has no limit, so a cap set
-    back to the value it had would find the month's total short of what was
-    spent in between. Setting it has the total counted again first."""
+    """A request is charged to the month's counter while no cap applies, so a
+    cap set back to the value it had finds the total exact, with no recount."""
     organization_id = UUID(str(fixed_test_org["id"]))
     user_id = UUID(fixed_test_user["id"])
     await _cap(authenticated_client, organization_id, 5)

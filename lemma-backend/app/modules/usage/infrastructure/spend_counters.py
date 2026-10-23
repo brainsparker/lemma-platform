@@ -24,19 +24,22 @@ write past this one, which is why the old code recomputed every time:
   ``BudgetWindow.basis`` it was last counted under, and a window asking with a
   different one -- or with a different limit -- recounts it first.
 
-Anything else -- a raw SQL edit of the ledger, a limit lifted and restored
-unchanged inside one window -- is caught by recounting any counter not counted
-for ``usage_counter_refresh_seconds``. That bound, not every request, is now
-how stale a total can be for a write nothing announced. The contacts cap is
-the one limit usage sets itself, and setting it marks the month's counter
-(``uncount``), so lifting and restoring it is announced.
+A lifted limit is not a third: settlement charges every window a request
+fell in that has a counter, limited or not, so a counter whose limit is lifted
+keeps counting and is exact again the moment the same limit is restored.
+
+Anything else -- a raw SQL edit of the ledger -- is caught by recounting any
+counter not counted for ``usage_counter_refresh_seconds``. That bound, not
+every request, is now how stale a total can be for a write nothing announced.
 
 A recount never holds a settlement up for the length of its sum. It reads the
 counter and the ledger in one snapshot and adds the difference,
 ``used += sum - used_then``, so a receipt settled meanwhile keeps its charge.
 Recounters exclude one another with a transaction-scoped advisory lock; an
 admission that finds somebody else already refreshing a current-but-old total
-uses it rather than queueing. Settlement itself never recounts.
+uses it rather than queueing. An ORM insert that marks a counter takes the
+same lock, so the mark cannot land between a recount's sum and its write.
+Settlement itself never recounts.
 """
 
 from dataclasses import dataclass, replace
@@ -57,7 +60,13 @@ from app.modules.usage.config import usage_settings
 from app.modules.usage.domain.accounting import BudgetWindow, money
 from app.modules.usage.domain.events import UsageLimitWarningEvent
 from app.modules.usage.infrastructure.cost_expressions import recorded_cost
-from app.modules.usage.infrastructure.models import UsageLimitCounter, UsageRecord
+from app.modules.usage.infrastructure.models import (
+    COUNTER_LOCK_ORDER,
+    COUNTER_RECOUNT_LOCK,
+    UsageLimitCounter,
+    UsageRecord,
+    counter_recount_lock_key,
+)
 
 logger = get_logger(__name__)
 
@@ -139,17 +148,28 @@ def _counter_key(counter: Counter) -> CounterKey:
     )
 
 
-def lock_order(window: BudgetWindow) -> tuple[str, datetime, bool, int, bool, int]:
+type LockOrder = tuple[str, datetime, bool, int, bool, int]
+
+
+def counter_lock_order(
+    kind: str, start: datetime, organization_id: UUID | None, user_id: UUID | None
+) -> LockOrder:
     """The order every writer takes counter rows in, so none waits on another
     in a cycle. ``models.COUNTER_LOCK_ORDER`` is the same order in SQL: kind,
     start, then organization and member with an absent one first."""
     return (
-        window.kind,
-        window.start,
-        window.organization_id is not None,
-        window.organization_id.int if window.organization_id is not None else 0,
-        window.user_id is not None,
-        window.user_id.int if window.user_id is not None else 0,
+        kind,
+        start,
+        organization_id is not None,
+        organization_id.int if organization_id is not None else 0,
+        user_id is not None,
+        user_id.int if user_id is not None else 0,
+    )
+
+
+def lock_order(window: BudgetWindow) -> LockOrder:
+    return counter_lock_order(
+        window.kind, window.start, window.organization_id, window.user_id
     )
 
 
@@ -259,12 +279,7 @@ def _due_for_refresh(counter: Counter) -> bool:
     )
 
 
-_RECOUNT_LOCK = text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))")
 _TRY_RECOUNT_LOCK = text("SELECT pg_try_advisory_xact_lock(hashtextextended(:key, 0))")
-
-
-def _recount_lock_key(counter: Counter) -> dict[str, str]:
-    return {"key": f"usage-counter-recount:{counter.id}"}
 
 
 async def _recount(
@@ -316,11 +331,15 @@ async def _trusted(
         # Current but old. Somebody already refreshing it will finish without
         # this request waiting; the total in hand is good until then.
         mark_transaction_scoped_lock(session)
-        if not await session.scalar(_TRY_RECOUNT_LOCK, _recount_lock_key(counter)):
+        if not await session.scalar(
+            _TRY_RECOUNT_LOCK, counter_recount_lock_key(counter.id)
+        ):
             return counter
     else:
         mark_transaction_scoped_lock(session)
-        await session.execute(_RECOUNT_LOCK, _recount_lock_key(counter))
+        await session.execute(
+            COUNTER_RECOUNT_LOCK, counter_recount_lock_key(counter.id)
+        )
     current = (await read(session, [window]))[key(window)]
     trusted = _counts_for(current, window)
     if trusted and not _due_for_refresh(current):
@@ -362,9 +381,14 @@ def exhausted(counters: dict[CounterKey, Counter], windows: list[BudgetWindow]) 
 
 
 async def charge(
-    session: AsyncSession, window: BudgetWindow, cost: Decimal
-) -> Counter | None:
-    """Add one receipt's cost to its window's running total.
+    session: AsyncSession, windows: list[BudgetWindow], cost: Decimal
+) -> dict[CounterKey, Counter]:
+    """Add one receipt's cost to the running total of each window it fell in.
+
+    ``windows`` is every window the request fell in, limited or not. A lifted
+    limit leaves its counter in place, and the same limit restored later
+    trusts that counter again -- so it has to have kept counting meanwhile. A
+    window that was never limited has no counter and costs nothing here.
 
     Settlement never recounts. The sum is still the window's total only if the
     counter was counted under the basis this receipt was admitted under; policy
@@ -372,41 +396,41 @@ async def charge(
     new rules, or marked for it, is left for the next admission to recount
     rather than trusted with a charge made under other ones.
 
-    ``None`` when the window has no counter. Admission makes one for every
+    One statement for every window, its rows locked in lock order. A window
+    with no counter is absent from the result: admission makes one for every
     window it admits under, so that is a window it will count, this row
     included, when next asked.
     """
-    row = (
-        await session.execute(
-            update(UsageLimitCounter)
-            .where(_row_of(window))
-            .values(
-                used_usd=UsageLimitCounter.used_usd + cost,
-                basis=case(
-                    (UsageLimitCounter.basis == window.basis, UsageLimitCounter.basis),
-                    else_=None,
-                ),
-            )
-            .returning(*_COUNTER_COLUMNS)
-        )
-    ).one_or_none()
-    return None if row is None else _counter(row)
-
-
-async def uncount(session: AsyncSession, window: BudgetWindow) -> None:
-    """Have ``window``'s counter recounted from the ledger before it is next trusted.
-
-    For a change that leaves the counter's basis and limit as they were and
-    its total short: a limit removed and set again to the value it had. No
-    request is charged to a window while it has no limit, so its counter
-    missed what was spent meanwhile, and nothing else would say so. The
-    counter is found by its key; ``window``'s limit plays no part.
-    """
-    await session.execute(
+    windows = ordered(windows)
+    if not windows:
+        return {}
+    rows = await session.execute(
         update(UsageLimitCounter)
-        .where(_row_of(window), UsageLimitCounter.basis.is_not(None))
-        .values(basis=None)
+        .where(
+            UsageLimitCounter.id.in_(
+                select(UsageLimitCounter.id)
+                .where(or_(*(_row_of(w) for w in windows)))
+                .order_by(*COUNTER_LOCK_ORDER)
+                .with_for_update()
+            )
+        )
+        .values(
+            used_usd=UsageLimitCounter.used_usd + cost,
+            basis=case(
+                *(
+                    (
+                        and_(_row_of(w), UsageLimitCounter.basis == w.basis),
+                        UsageLimitCounter.basis,
+                    )
+                    for w in windows
+                ),
+                else_=None,
+            ),
+        )
+        .returning(*_COUNTER_COLUMNS)
+        .execution_options(synchronize_session=False)
     )
+    return {_counter_key(counter): counter for counter in map(_counter, rows)}
 
 
 async def warn_once(
@@ -421,6 +445,10 @@ async def warn_once(
         # A total waiting for a recount is not one to warn on; the first
         # receipt after the recount is.
         counter.basis != window.basis
+        # Nor is a window whose limit was lifted, or changed since its counter
+        # was last counted: the next admission takes up the new one.
+        or window.limit is None
+        or counter.limit != window.limit
         or counter.warning_emitted
         or counter.limit is None
         or counter.limit <= 0

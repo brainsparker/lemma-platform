@@ -117,7 +117,7 @@ async def apply_grants(
     The importer may only hand a workload what they could use themselves, as
     on the permissions routes (`assert_can_confer_grants`): a bundle is not a
     way round that, whoever wrote it."""
-    from app.core.authorization.conferral import assert_can_confer_grants
+    from app.core.authorization.conferral import assert_can_confer_replacement
     from app.core.authorization.grants import (
         normalize_pod_resource_grants,
         replace_grantee_resource_grants,
@@ -128,10 +128,13 @@ async def apply_grants(
     normalized = await normalize_pod_resource_grants(
         session, pod_id=pod_id, grants=grants
     )
-    await assert_can_confer_grants(
+    await assert_can_confer_replacement(
         ctx,
+        session,
         normalized,
         pod_id=pod_id,
+        grantee_type=grantee_type,
+        grantee_id=grantee_id,
         action=f"grant a bundled {grantee_type.lower()} what you could not use",
     )
     await replace_grantee_resource_grants(

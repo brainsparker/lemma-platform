@@ -45,7 +45,7 @@
 .podconn__bring label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--ink-3); min-width: 0; }
 .podconn__as input,
 .podconn__bring select {
-    font: inherit; font-size: 13px; color: var(--field-ink); background: var(--field);
+    font: inherit; font-size: 13px; color: var(--ink); background: var(--paper);
     border: 1px solid var(--line-2); border-radius: var(--r-sm); padding: 8px 10px; min-height: 40px; max-width: 100%;
 }
 .podconn__as input { font-family: var(--mono); }
@@ -79,7 +79,7 @@
 .agentconn code { font-family: var(--mono); font-size: 12px; color: var(--ink); }
 .agentconn__add { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 .agentconn__add select {
-    font: inherit; font-size: 13px; color: var(--field-ink); background: var(--field);
+    font: inherit; font-size: 13px; color: var(--ink); background: var(--paper);
     border: 1px solid var(--line-2); border-radius: var(--r-sm); padding: 6px 8px; min-height: 36px; max-width: 100%;
 }
 
@@ -88,7 +88,7 @@
 .sconn__trouble { display: inline-flex; align-items: center; gap: 6px; color: var(--wait); }
 .sconn__move { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .sconn__move select {
-    font: inherit; font-size: 13px; color: var(--field-ink); background: var(--field);
+    font: inherit; font-size: 13px; color: var(--ink); background: var(--paper);
     border: 1px solid var(--line-2); border-radius: var(--r-sm); padding: 6px 8px; min-height: 36px; max-width: 100%;
 }
 
@@ -96,3 +96,6 @@
     .podconn__row .acct__acts { margin-left: 16px; width: 100%; }
     .connectbanner { margin: 0 10px 8px; }
 }
+
+/* A button that cannot act yet looks it, as in every other view. */
+.podconn__form .btn:disabled, .podconn__bring .btn:disabled, .podconn__as .btn:disabled { opacity: .45; cursor: default; }

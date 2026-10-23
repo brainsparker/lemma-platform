@@ -27,7 +27,10 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.authorization.conferral import assert_can_confer_grants
+from app.core.authorization.conferral import (
+    assert_can_confer_grants,
+    assert_can_confer_replacement,
+)
 from app.core.authorization.context import Context, ResourceType
 from app.core.authorization.grants import (
     NormalizedResourceGrant,
@@ -135,10 +138,13 @@ async def replace_app_grants(
     normalized = await normalize_pod_resource_grants(
         session, pod_id=pod_id, grants=grants
     )
-    await assert_can_confer_grants(
+    await assert_can_confer_replacement(
         ctx,
+        session,
         normalized,
         pod_id=pod_id,
+        grantee_type="APP",
+        grantee_id=app_id,
         action="grant an app permissions you could not use",
     )
     await replace_grantee_resource_grants(

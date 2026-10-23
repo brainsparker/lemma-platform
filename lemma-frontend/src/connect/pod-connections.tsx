@@ -227,8 +227,9 @@ function ConnectorForm({ pod, editing, connectors, installs, accounts, titleOf, 
     const [required, setRequired] = useState(editing?.required ?? false);
     const [shared, setShared] = useState(editing?.sharedPodAccountId ?? "");
     const taken = connectors.filter((one) => one.slug !== editing?.slug).map((one) => one.slug);
-    /* Named for its app until somebody names it. */
-    const shownSlug = slugTouched ? slug : freshSlug(install?.connector_id ?? "", taken);
+    /* Named for its app until somebody names it -- and nothing to suggest
+       until there is an app to name it for. */
+    const shownSlug = slugTouched ? slug : install ? freshSlug(install.connector_id, taken) : "";
     const choices = shareableFor(accounts, installId);
     const problem = editing ? "" : slugProblem(shownSlug, taken);
 

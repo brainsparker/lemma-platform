@@ -40,6 +40,8 @@ from app.core.authorization.permissions import (
 from app.core.domain.errors import DomainError
 
 if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
     from app.core.authorization.grants import NormalizedResourceGrant
 
 #: The refusal code every conferral denial carries, so a client can tell
@@ -168,3 +170,66 @@ async def assert_can_confer_grants(
             status_code=403,
             details={"permission_ids": sorted({m.split(" on ")[0] for m in missing})},
         )
+
+
+#: A grantee's grants are read whole to tell what a replace adds. Past this
+#: many rows the rest count as new and are checked: the bound only tightens.
+_MAX_HELD_GRANT_ROWS = 5000
+
+
+async def assert_can_confer_replacement(
+    ctx: Context,
+    session: AsyncSession,
+    grants: Sequence[NormalizedResourceGrant],
+    *,
+    pod_id: UUID,
+    grantee_type: str,
+    grantee_id: UUID,
+    action: str,
+) -> None:
+    """Conferral for a write that replaces a grantee's whole grant set.
+
+    Only what the write *adds* is conferred. A grant the grantee already holds
+    is not being handed out again -- someone who could did that -- so it is not
+    held against the person saving. Checking the whole set made every grantee
+    with one grant beyond an editor's reach uneditable by them: they could not
+    even remove a grant, since saving the rest re-sent the one they lacked.
+    Removing a grant confers nothing, so it is never refused here.
+    """
+    from sqlalchemy import select
+
+    from app.core.authorization.grants import NormalizedResourceGrant
+    from app.core.authorization.models import ResourcePermissionGrantModel
+
+    rows = await session.execute(
+        select(
+            ResourcePermissionGrantModel.resource_type,
+            ResourcePermissionGrantModel.resource_id,
+            ResourcePermissionGrantModel.permission_id,
+        )
+        .where(
+            ResourcePermissionGrantModel.pod_id == pod_id,
+            ResourcePermissionGrantModel.grantee_type == grantee_type,
+            ResourcePermissionGrantModel.grantee_id == grantee_id,
+        )
+        .limit(_MAX_HELD_GRANT_ROWS)
+    )
+    held = {
+        (str(kind), resource_id, permission) for kind, resource_id, permission in rows
+    }
+    added: list[NormalizedResourceGrant] = []
+    for grant in grants:
+        new = [
+            permission_id
+            for permission_id in grant.permission_ids
+            if (grant.resource_type.value, grant.resource_id, permission_id) not in held
+        ]
+        if new:
+            added.append(
+                NormalizedResourceGrant(
+                    resource_type=grant.resource_type,
+                    resource_id=grant.resource_id,
+                    permission_ids=new,
+                )
+            )
+    await assert_can_confer_grants(ctx, added, pod_id=pod_id, action=action)

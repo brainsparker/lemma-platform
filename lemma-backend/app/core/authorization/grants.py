@@ -571,12 +571,15 @@ async def apply_inline_workload_grants(
     )
     # Conferral like the permissions-replace route: an inline block used to
     # skip it, so an editor could arm an agent with deletes they could not do.
-    from app.core.authorization.conferral import assert_can_confer_grants
+    from app.core.authorization.conferral import assert_can_confer_replacement
 
-    await assert_can_confer_grants(
+    await assert_can_confer_replacement(
         ctx,
+        session,
         grants,
         pod_id=pod_id,
+        grantee_type=grantee_type,
+        grantee_id=grantee_id,
         action=f"grant {grantee_type.lower()} permissions you could not use",
     )
     await replace_grantee_resource_grants(

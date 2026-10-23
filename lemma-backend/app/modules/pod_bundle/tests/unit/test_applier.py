@@ -332,11 +332,13 @@ def _patch_grant_layer(monkeypatch) -> dict:
 
     # The importer may hand a workload only what they hold: the bundle asks the
     # same conferral check the permissions routes do, as the importer.
-    async def _confer(ctx, grants, *, pod_id, action):
+    async def _confer(
+        ctx, session, grants, *, pod_id, grantee_type, grantee_id, action
+    ):
         calls.setdefault("conferred", []).append({"ctx": ctx, "grants": list(grants)})
 
     monkeypatch.setattr(
-        "app.core.authorization.conferral.assert_can_confer_grants", _confer
+        "app.core.authorization.conferral.assert_can_confer_replacement", _confer
     )
 
     # The `/memory` folder and grant the MEMORY toolset implies. A separate

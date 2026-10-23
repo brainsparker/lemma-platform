@@ -9,7 +9,7 @@ from fastapi import APIRouter, Query, status
 
 from app.core.api.dependencies import CurrentUser, UoWDep
 from app.core.authorization.dependencies import PodContextDep
-from app.core.authorization.conferral import assert_can_confer_grants
+from app.core.authorization.conferral import assert_can_confer_replacement
 from app.core.authorization.grants import (
     apply_inline_workload_grants,
     list_grantee_resource_grants,
@@ -315,10 +315,13 @@ async def replace_agent_permissions(
         pod_id=pod_id,
         grants=data.grants,
     )
-    await assert_can_confer_grants(
+    await assert_can_confer_replacement(
         ctx,
+        uow.session,
         grants,
         pod_id=pod_id,
+        grantee_type="AGENT",
+        grantee_id=agent.id,
         action="grant an agent permissions you could not use",
     )
     await replace_grantee_resource_grants(

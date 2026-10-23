@@ -361,13 +361,14 @@
 .appgrants__fields label { display: flex; flex-direction: column; gap: 4px; flex: 1 1 160px; }
 .appgrants__fields span, .appgrants__perms legend { font-size: 12px; color: var(--ink-3); }
 .appgrants__fields select, .appgrants__fields input {
-    font: inherit; font-size: 13px; color: var(--field-ink); background: var(--field);
+    font: inherit; font-size: 13px; color: var(--ink); background: var(--paper);
     border: 1px solid var(--line-2); border-radius: var(--r-sm); padding: 6px 8px; min-height: 36px; width: 100%;
 }
 .appgrants__perms { margin: 0; padding: 0; border: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 6px 12px; }
 .appgrants__perms label { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; min-height: 28px; cursor: pointer; }
 .appgrants__add .btn { align-self: flex-start; }
 .appgrants__actions { display: flex; justify-content: flex-end; gap: 8px; }
+.appgrants .btn:disabled { opacity: .45; cursor: default; }
 
 .appgrant-notice {
     position: absolute; z-index: 3; top: 12px; left: 12px; right: 12px;

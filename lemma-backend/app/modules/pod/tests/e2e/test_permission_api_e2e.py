@@ -1447,6 +1447,105 @@ async def test_a_pod_account_named_by_a_non_uuid_is_unknown_not_a_500_e2e(
     assert access.status_code == status.HTTP_404_NOT_FOUND, access.text
 
 
+async def test_an_editor_can_change_grants_beside_one_they_could_not_give_e2e(
+    authenticated_client,
+    async_client,
+    fixed_test_org,
+):
+    """A save replaces a grantee's whole set, so only what it adds is conferred.
+
+    Checked whole, one grant beyond an editor's reach made the agent's grants
+    uneditable by them: they could not even remove a grant, since saving the
+    rest re-sent the one they lacked. What they add is still bounded."""
+    pod_id = await _create_pod(
+        authenticated_client, fixed_test_org, "Partial Rewire Pod"
+    )
+    agent = await authenticated_client.post(
+        f"/pods/{pod_id}/agents",
+        json={"name": "mixed_agent", "instruction": "Use granted resources."},
+    )
+    assert agent.status_code == status.HTTP_201_CREATED, agent.text
+    tables = {}
+    for name, visibility in (("open_notes", "POD"), ("sealed_ledger", "RESTRICTED")):
+        made = await authenticated_client.post(
+            f"/pods/{pod_id}/datastore/tables",
+            json={
+                "name": name,
+                "visibility": visibility,
+                "columns": [{"name": "title", "type": "TEXT"}],
+            },
+        )
+        assert made.status_code == status.HTTP_201_CREATED, made.text
+        tables[name] = made.json()["name"]
+
+    def grant(table: str, *permissions: str) -> dict:
+        return {
+            "resource_type": "datastore_table",
+            "resource_name": tables[table],
+            "permission_ids": list(permissions),
+        }
+
+    # The admin lends the agent the sealed ledger, which an editor cannot read.
+    owner_set = await authenticated_client.put(
+        f"/pods/{pod_id}/agents/mixed_agent/permissions",
+        json={
+            "grants": [
+                grant("open_notes", "datastore.table.read"),
+                grant("sealed_ledger", "datastore.table.read"),
+            ]
+        },
+    )
+    assert owner_set.status_code == status.HTTP_200_OK, owner_set.text
+
+    editor = await signup_user(async_client, "partial-editor")
+    editor_org = await invite_org_member(
+        authenticated_client, async_client, org_id=fixed_test_org["id"], user=editor
+    )
+    await add_pod_member(
+        authenticated_client,
+        pod_id=pod_id,
+        organization_member_id=editor_org["id"],
+        role="POD_EDITOR",
+        roles=["POD_EDITOR"],
+    )
+    editor_headers = auth_headers(editor)
+
+    # Widening the open notes, and keeping the ledger grant as it was: allowed.
+    widened = await async_client.put(
+        f"/pods/{pod_id}/agents/mixed_agent/permissions",
+        json={
+            "grants": [
+                grant("open_notes", "datastore.table.read", "datastore.record.read"),
+                grant("sealed_ledger", "datastore.table.read"),
+            ]
+        },
+        headers=editor_headers,
+    )
+    assert widened.status_code == status.HTTP_200_OK, widened.text
+
+    # Removing the ledger grant confers nothing: allowed.
+    removed = await async_client.put(
+        f"/pods/{pod_id}/agents/mixed_agent/permissions",
+        json={"grants": [grant("open_notes", "datastore.table.read")]},
+        headers=editor_headers,
+    )
+    assert removed.status_code == status.HTTP_200_OK, removed.text
+
+    # Putting it back is handing it out again: refused.
+    readded = await async_client.put(
+        f"/pods/{pod_id}/agents/mixed_agent/permissions",
+        json={
+            "grants": [
+                grant("open_notes", "datastore.table.read"),
+                grant("sealed_ledger", "datastore.table.read"),
+            ]
+        },
+        headers=editor_headers,
+    )
+    assert readded.status_code == status.HTTP_403_FORBIDDEN, readded.text
+    assert readded.json()["code"] == "CONFERRAL_EXCEEDS_HOLDER"
+
+
 async def test_pod_editor_can_rewire_the_resources_they_author_e2e(
     authenticated_client,
     async_client,

@@ -51,11 +51,24 @@ from app.core.authorization.context import (
     Person,
     ResourceRef,
     ResourceVisibility,
+    WorkloadKind,
 )
 from app.core.authorization.permissions import equivalent_permission_ids
 
 if TYPE_CHECKING:  # type-only — ``service`` imports this module, so at runtime
     from app.core.authorization.authorizer import Authorizer  # this would cycle
+
+
+#: A pod app asked for something outside its own grants. Distinct from an
+#: agent's ``MISSING_WORKLOAD_RESOURCE_GRANT``: nobody can approve it for a
+#: session, and the fix is a grant on the app, which an editor adds.
+APP_NOT_GRANTED = "APP_NOT_GRANTED"
+
+
+def is_app(ctx: Context) -> bool:
+    """A pod app's page acting for its viewer."""
+    workload = ctx.workload
+    return workload is not None and workload.kind is WorkloadKind.APP
 
 
 async def authorize_delegated_workload(
@@ -134,6 +147,17 @@ async def authorize_delegated_workload(
         resource,
         (ctx.workload_principal_refs,),
     )
+    if not workload_grant_ids and is_app(ctx):
+        # An app has no conversation to be approved in, and no fallback to its
+        # viewer: what it was not granted, it is refused, naming the grant an
+        # editor adds (H20).
+        return AuthorizationDecision(
+            False,
+            APP_NOT_GRANTED,
+            permission_id,
+            resource,
+            resource_name=await authorizer._describe_resource(resource),  # noqa: SLF001
+        )
     if not workload_grant_ids:
         # A session approval (APPROVE_FOR_SESSION) stands in as an ephemeral
         # grant for anything the person chose to approve for the session.

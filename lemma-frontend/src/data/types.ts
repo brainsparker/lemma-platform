@@ -3,8 +3,10 @@ import type { Contact, ContactReach, ContactsCap, NewWebWidget, OutreachSent, We
 import type { Audience, TableOpening } from "./public-rows";
 import type { Connectable } from "./connectable";
 import type { Connector, ConnectorAccount } from "./accounts";
-import type { PodConnector } from "./pod-connectors";
-import type { AgentDetail, AgentDraft, AgentRow } from "./agents";
+import type { AskOutcome, PodConnector, PodConnectorDraft, PodConnectorPatch } from "./pod-connectors";
+import type { AccountUsage, Grantee, InstallationImpact, PodAccount, PodAccountPatch, PodAccountVisibility, ShareRole } from "./pod-accounts";
+import type { Install } from "@/connect/install";
+import type { AgentDetail, AgentDraft, AgentGrant, AgentRow } from "./agents";
 import type { Choice, Computer, Runtime, RuntimeTest } from "./runtimes";
 import type { JoinPolicy, JoinRequest, OrgJoin } from "./joining";
 import type { ScheduleDraft, ScheduleRun, ServerEvent, StandingJob, TargetChoice } from "@/schedule/schedules";
@@ -758,6 +760,48 @@ export interface PodSource {
      *  typed in for it: shared into the pod as a SHARED connector (theirs to
      *  share, and connecting it here is the asking), then bound by that slug. */
     connectOwnAccount(podId: string, platform: string, accountId: string): Promise<Surface>;
+    /** Declare a connector in this pod. `pod.connector.manage`. */
+    addPodConnector(podId: string, draft: PodConnectorDraft): Promise<PodConnector>;
+    /** Change one: its mode, the shared account it runs as, whether members
+     *  are asked to connect, its purpose. */
+    changePodConnector(podId: string, slug: string, patch: PodConnectorPatch): Promise<PodConnector>;
+    removePodConnector(podId: string, slug: string): Promise<void>;
+    /** Ask the members a per-member connector is waiting on to connect: a
+     *  line each in their own channel, once a day at most. `userIds` asks only
+     *  those. `pod.connector.manage`. */
+    askMembersToConnect(podId: string, slug: string, userIds?: string[]): Promise<AskOutcome>;
+    /** The pod's roles an owner may share a RESTRICTED account with. */
+    listShareRoles(podId: string): Promise<ShareRole[]>;
+    /** The accounts in use here that I may see: mine, and everyone's shared
+     *  ones. */
+    listPodAccounts(podId: string): Promise<PodAccount[]>;
+    /** Put one of my own accounts in this pod, for my calls alone unless I
+     *  share it. */
+    addPodAccount(podId: string, accountId: string, visibility?: PodAccountVisibility, shareWith?: Grantee[]): Promise<PodAccount>;
+    /** Share, withdraw, or pin as my default here — the owner's acts. */
+    changePodAccount(podId: string, podAccountId: string, patch: PodAccountPatch): Promise<PodAccount>;
+    /** Take an account out of the pod: its owner, or an editor. */
+    removePodAccount(podId: string, podAccountId: string): Promise<void>;
+    /** "Share as <slug>": widen my account to the pod, then point the SHARED
+     *  connector of that name at it, or declare one. Returns the slug. */
+    shareAccountAs(podId: string, podAccountId: string, slug: string, purpose?: string): Promise<string>;
+    /** Every pod one of my accounts is in, and what runs as it there. */
+    accountUsage(accountId: string): Promise<AccountUsage[]>;
+    /** What removing an installation would stop. Installation managers only. */
+    installationImpact(orgId: string, authConfigId: string): Promise<InstallationImpact>;
+    /** The organization's installations, which a pod connector is declared on. */
+    listInstallations(orgId: string): Promise<Install[]>;
+    /** The org-level permissions I hold in this organization. */
+    orgActions(orgId: string): Promise<string[]>;
+    /** The pod-level permissions I hold in this pod. */
+    podActions(podId: string): Promise<string[]>;
+    /** Replace an agent's grants, returning them as saved. */
+    setAgentGrants(podId: string, name: string, grants: AgentGrant[]): Promise<AgentGrant[]>;
+    /** What a pod app may do for its viewer: its grants, by resource. */
+    appGrants(podId: string, appName: string): Promise<AgentGrant[]>;
+    /** Replace an app's grants, returning them as saved. Each must be one the
+     *  saver holds (`CONFERRAL_EXCEEDS_HOLDER` otherwise). */
+    setAppGrants(podId: string, appName: string, grants: AgentGrant[]): Promise<AgentGrant[]>;
     /** Begin the guided path. Finishing happens in Telegram. */
     startGuided(podId: string, platform: string): Promise<GuidedSetup>;
     /** Has the guided setup finished? */

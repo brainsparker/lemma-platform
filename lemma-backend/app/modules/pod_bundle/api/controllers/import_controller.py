@@ -198,6 +198,7 @@ async def apply_import(
         user_id=user.id,
         variables=data.variables,
         confirm_destructive=data.confirm_destructive,
+        connectors=data.connectors,
     )
     return ImportStatusResponse.from_state(state)
 

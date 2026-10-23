@@ -18,7 +18,7 @@ from app.core.authorization.grant_generation import (
 )
 from app.core.domain.errors import BadRequestError
 from app.core.authorization.models import ResourcePermissionGrantModel
-from app.core.authorization.permissions import PERMISSION_BY_ID
+from app.core.authorization.permissions import PERMISSION_BY_ID, Permissions
 from app.core.authorization.resource_actions import RESOURCE_ACTIONS
 from app.core.authorization.resource_names import (
     resolve_resource_ids_by_names,
@@ -137,10 +137,37 @@ def validate_pod_resource_grant_permissions(
         )
 
 
+#: What a grant on the pod itself (named ``pod``) may carry: the checks asked of
+#: the pod that a workload -- an agent, a function, a pod app -- needs to read
+#: and use it. Reading the pod, listing its tables, talking to its agents,
+#: running its functions and workflows. Never administering it, creating in
+#: it, or deleting from it: those stay a person's, held by role.
+POD_GRANTABLE_PERMISSIONS: frozenset[str] = frozenset(
+    {
+        Permissions.POD_READ,
+        Permissions.DATASTORE_TABLE_READ,
+        Permissions.CONVERSATION_READ,
+        Permissions.CONVERSATION_WRITE,
+        Permissions.AGENT_READ,
+        Permissions.AGENT_EXECUTE,
+        Permissions.FUNCTION_READ,
+        Permissions.FUNCTION_EXECUTE,
+        Permissions.WORKFLOW_READ,
+        Permissions.WORKFLOW_EXECUTE,
+        Permissions.APP_READ,
+        Permissions.CHANNEL_READ,
+        Permissions.CHANNEL_WRITE,
+        Permissions.CONTACT_READ,
+    }
+)
+
+
 def _applicable_permission_ids(resource_type: ResourceType) -> frozenset[str]:
     # The resource's role-grantable actions and nothing else. Owner-only
     # actions -- sharing a pod account -- are absent by construction, so no
     # grant can hand one out.
+    if resource_type is ResourceType.POD:
+        return POD_GRANTABLE_PERMISSIONS
     return frozenset(RESOURCE_ACTIONS.get(resource_type, ()))
 
 

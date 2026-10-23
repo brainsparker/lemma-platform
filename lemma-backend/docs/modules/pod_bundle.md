@@ -66,8 +66,36 @@ flowchart LR
 Every non-app apply step opens its own authorization/UoW scope and commits
 before the Redis `DONE` checkpoint. App steps self-scope around a sandbox
 build. A crash between commit and checkpoint replays an idempotent upsert. The
-format handles tables/data, files, functions, agents/grants/toolsets, workflows,
-schedules, apps/source, surfaces/account variables, and pod metadata.
+format handles pod connectors, tables/data, files, functions,
+agents/grants/toolsets, workflows, schedules, apps/source, surfaces, and pod
+metadata.
+
+**Pod connectors** (`connectors/<slug>/<slug>.json`) carry the catalog
+connector, mode, `required` and `purpose` -- never the installation or the
+account a SHARED one runs as, which the exporter refuses to write. The plan
+(`infrastructure/connector_planning.py`, over the connectors module's
+`contracts/bundles.py`) maps each to the importing org's installations (default
+first), says whether the importer may install Lemma's app for a missing one, and
+lists the importer's own accounts a SHARED one could share; it never shares one
+by default. `ApplyImportRequest.connectors` makes those choices, and
+`domain/connector_plan.resolve_connector_choices` checks them before anything is
+queued: no installation (`NEEDS_INSTALLATION`, unless creating one was chosen)
+or a slug the pod already uses for another connector (`CONFLICT`) refuses the
+apply with 422; a SHARED connector with no account imports `NEEDS_ACCOUNT`
+with a warning. CONNECTOR steps run first, so every schedule, surface and grant
+naming a slug finds it declared.
+
+**Grants** travel in the manifest of whatever holds them -- an agent, a
+function, or an app (`permissions.grants`, by resource name). A grant on the pod
+itself is `resource_type: pod`, `resource_name: pod`, the one name every pod
+answers to. Each holder's grants are a deferred `*_GRANTS` step, after every
+resource they could name exists. An app's grants are conferral: the plan
+(`infrastructure/grant_planning.py`) asks the conferral bound, as the importer,
+about every grant whose resource already exists, and keeps what fails on its
+`APP_GRANTS` step (`detail.refused`) and in the plan's warnings; applying such a
+plan is refused `403 CONFERRAL_EXCEEDS_HOLDER` with the pod untouched. The step
+itself sets them through the apps module's `replace_app_grants`, which asks
+again of everything.
 
 ## Security and limits
 

@@ -57,7 +57,18 @@ def _list_all_from_tree(files):
     return list_all
 
 
+class _NoPodConnectors:
+    """A pod that declares no connectors, for fakes that predate them."""
+
+    @staticmethod
+    def pod_connectors(*_args, **_kwargs):
+        return {"items": []}
+
+
 class FakeClient(SimpleNamespace):
+    #: Export reads the pod's connectors; a fake that names none has none.
+    connectors = _NoPodConnectors()
+
     def pod(self, pod_id):
         files = getattr(self, "files", None)
         if (
@@ -640,6 +651,10 @@ def test_import_pod_bundle_accepts_resource_collection_dir(tmp_path: Path):
                 "tree": {"path": "/", "name": "/", "kind": "FOLDER", "children": []}
             }
         ),
+        # The grant names `slack`, which this pod already declares.
+        connectors=SimpleNamespace(
+            pod_connectors=lambda pod_id: {"items": [{"slug": "slack"}]}
+        ),
     )
 
     result = import_pod_bundle(client, pod_id="pod_123", source_dir=agents_root)
@@ -721,6 +736,10 @@ def test_import_pod_bundle_agent_update_strips_name_and_clears_absent_schemas(
             tree=lambda pod_id, root_path="/", files_per_directory=20: {
                 "tree": {"path": "/", "name": "/", "kind": "FOLDER", "children": []}
             }
+        ),
+        # The grant names `slack`, which this pod already declares.
+        connectors=SimpleNamespace(
+            pod_connectors=lambda pod_id: {"items": [{"slug": "slack"}]}
         ),
     )
 
@@ -1155,6 +1174,10 @@ def test_an_older_bundle_carrying_kind_still_imports(tmp_path: Path):
             tree=lambda pod_id, root_path="/", files_per_directory=20: {
                 "tree": {"path": "/", "name": "/", "kind": "FOLDER", "children": []}
             }
+        ),
+        # The grant names `slack`, which this pod already declares.
+        connectors=SimpleNamespace(
+            pod_connectors=lambda pod_id: {"items": [{"slug": "slack"}]}
         ),
     )
 
@@ -3425,8 +3448,15 @@ def test_plan_does_not_block_when_the_connector_check_cannot_run(tmp_path: Path)
         },
     )
 
+    client = _bare_pod_client()
+
+    def _unreachable(*_args, **_kwargs):
+        raise RuntimeError("connection reset")
+
+    client.connectors = SimpleNamespace(pod_connectors=_unreachable)
+
     result = import_pod_bundle(
-        _bare_pod_client(), pod_id="pod_1", source_dir=tmp_path, dry_run=True
+        client, pod_id="pod_1", source_dir=tmp_path, dry_run=True
     )
 
     assert result["errors"] == []
@@ -3916,6 +3946,10 @@ def test_exported_no_build_app_re_imports(tmp_path: Path):
             },
             download_source_archive=lambda pod_id, app_name: source_zip.getvalue(),
             download_dist_archive=lambda pod_id, app_name: b"",
+            get_permissions=lambda pod_id, app_name: {
+                "app_name": app_name,
+                "grants": [_POD_TABLE_READ],
+            },
         ),
     )
 
@@ -3936,6 +3970,11 @@ def test_exported_no_build_app_re_imports(tmp_path: Path):
 
     bundle_root = tmp_path / "demo-pod"
     assert (bundle_root / "apps" / "support_app" / "html.html").exists()
+    # The app's grants travel with it, the pod grant among them.
+    manifest = json.loads(
+        (bundle_root / "apps" / "support_app" / "support_app.json").read_text()
+    )
+    assert manifest["permissions"] == {"grants": [_POD_TABLE_READ]}
 
     result = import_pod_bundle(
         _bare_pod_client(), pod_id="pod_456", source_dir=bundle_root, dry_run=True
@@ -3944,3 +3983,83 @@ def test_exported_no_build_app_re_imports(tmp_path: Path):
     assert result["errors"] == []
     assert result["ok"] is True
     assert result["summary"]["apps"] == ["created:support_app"]
+
+
+_POD_TABLE_READ = {
+    "resource_type": "pod",
+    "resource_name": "pod",
+    "permission_ids": ["datastore.table.read"],
+}
+
+
+def _app_bundle(tmp_path: Path, grants: list[dict]) -> Path:
+    root = tmp_path / "bundle"
+    app_dir = root / "apps" / "board"
+    app_dir.mkdir(parents=True)
+    (root / "pod.json").write_text(json.dumps({"name": "demo"}), encoding="utf-8")
+    (app_dir / "board.json").write_text(
+        json.dumps({"name": "board", "permissions": {"grants": grants}}),
+        encoding="utf-8",
+    )
+    (app_dir / "html.html").write_text("<h1>board</h1>", encoding="utf-8")
+    return root
+
+
+def test_an_apps_grants_are_set_after_it_is_created_and_never_inline(
+    tmp_path: Path,
+):
+    """An app's grants are split out of its create request and set in the last
+    pass, through the app's permissions route -- where the conferral check
+    runs -- once everything they might name exists."""
+    created: list[dict] = []
+    replaced: list[tuple[str, dict]] = []
+    client = _bare_pod_client()
+    client.apps = SimpleNamespace(
+        list=lambda pod_id, limit=1000: {"items": []},
+        create=lambda pod_id, payload: (
+            created.append(_plain(payload)) or {"name": _plain(payload)["name"]}
+        ),
+        upload_bundle=lambda pod_id, app_name, **_: {"ok": True},
+        replace_permissions=lambda pod_id, app_name, payload: (
+            replaced.append((app_name, _plain(payload))) or {"app_name": app_name}
+        ),
+    )
+
+    result = import_pod_bundle(
+        client, pod_id="pod_1", source_dir=_app_bundle(tmp_path, [_POD_TABLE_READ])
+    )
+
+    assert result["ok"] is True
+    assert created and "permissions" not in created[0]
+    assert replaced == [("board", {"grants": [_POD_TABLE_READ]})]
+    assert "permissions:board:1" in result["summary"]["apps"]
+
+
+def test_a_pod_grant_must_name_the_pod(tmp_path: Path):
+    misnamed = {**_POD_TABLE_READ, "resource_name": "acme"}
+    result = import_pod_bundle(
+        _bare_pod_client(),
+        pod_id="pod_1",
+        source_dir=_app_bundle(tmp_path, [misnamed]),
+        dry_run=True,
+    )
+    assert result["ok"] is False
+    assert any("named `pod`" in error["message"] for error in result["errors"])
+
+
+def test_an_apps_grant_on_a_table_nobody_has_fails_the_plan(tmp_path: Path):
+    """Validated like an agent's: a grant naming what neither the bundle nor the
+    pod has would fail the import at its very last step."""
+    ghost = {
+        "resource_type": "datastore_table",
+        "resource_name": "ghost",
+        "permission_ids": ["datastore.record.read"],
+    }
+    result = import_pod_bundle(
+        _bare_pod_client(),
+        pod_id="pod_1",
+        source_dir=_app_bundle(tmp_path, [ghost]),
+        dry_run=True,
+    )
+    assert result["ok"] is False
+    assert any("ghost" in error["message"] for error in result["errors"])

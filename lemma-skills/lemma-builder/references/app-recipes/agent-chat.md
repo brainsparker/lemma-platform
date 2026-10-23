@@ -3,6 +3,15 @@
 Put a pod agent in front of users without hand-rolling the chat/working-output UI.
 Three options, smallest first. (← back to `apps.md`)
 
+## Grants it needs
+
+Talking to an agent is asked of the pod: grant `pod:pod:chat`
+and `agent:<name>:read,execute` for a named agent. Prefer a named agent with
+narrow grants of its own. Granting `agent.execute` on `pod:pod` lets the app drive
+the pod's assistant, which acts with the viewer's whole access -- so the app
+could ask it for anything the viewer can do. Outside its grants a call is
+`403 APP_NOT_GRANTED`.
+
 ## HTML / no framework — web components
 
 Load the opt-in UI bundle *after* the client; pod context comes from the injected

@@ -950,7 +950,7 @@ class AuthorizationDataService:
         org/pod member snapshots are cached under the human ``user_id``.
         """
         normalized = principal_type.upper()
-        if normalized in ("AGENT", "FUNCTION"):
+        if normalized in ("AGENT", "FUNCTION", "APP"):
             return principal_id
         if normalized == "ORG_MEMBER":
             return (

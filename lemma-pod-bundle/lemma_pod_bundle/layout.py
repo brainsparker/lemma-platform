@@ -22,7 +22,11 @@ JSON_FILE_REF_KEY = "$json_file"
 # Some app scaffolds write the manifest as `lemma.app.json` rather than
 # `<name>.json`. Accept it as an alias so those bundles import without a rename.
 APP_MANIFEST_ALIAS = "lemma.app.json"
+# `connectors` comes first: every other resource may name a pod connector by
+# its slug (a schedule or surface runs through one, a grant is on one), so an
+# importer declares them before anything that refers to them.
 RESOURCE_DIRS = (
+    "connectors",
     "tables",
     "functions",
     "agents",
@@ -34,6 +38,10 @@ RESOURCE_DIRS = (
 )
 EXPORTABLE_RESOURCE_DIRS = frozenset(RESOURCE_DIRS)
 RESOURCE_DIR_ALIASES = {
+    "connector": "connectors",
+    "connectors": "connectors",
+    "pod_connector": "connectors",
+    "pod_connectors": "connectors",
     "table": "tables",
     "tables": "tables",
     "function": "functions",

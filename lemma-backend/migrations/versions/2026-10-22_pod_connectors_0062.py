@@ -978,6 +978,118 @@ def _downgrade_drop_workload_minted_links(conn) -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# A shared pod account goes inside a sandbox only if its owner says so
+# ---------------------------------------------------------------------------
+#
+# The sandbox's git credential bridge writes a GitHub token into a workspace,
+# where every later command can read it. An account shared with a pod was
+# shared for operations run through Lemma, not for a shell to hold, so the
+# bridge refuses one that is not the acting person's own -- unless its owner
+# ticked "allow use inside sandboxes": `pod_accounts.allow_sandbox_use`, set
+# only through the owner's own PATCH and cleared when they withdraw it. Every
+# existing row starts false, which is the behaviour before the column existed.
+# The downgrade drops it.
+
+
+def _upgrade_sandbox_use_opt_in(conn) -> None:
+    conn.execute(
+        sa.text(
+            "ALTER TABLE pod_accounts "
+            "ADD COLUMN allow_sandbox_use BOOLEAN DEFAULT false NOT NULL"
+        )
+    )
+
+
+def _downgrade_sandbox_use_opt_in(conn) -> None:
+    conn.execute(sa.text("ALTER TABLE pod_accounts DROP COLUMN allow_sandbox_use"))
+
+
+# ---------------------------------------------------------------------------
+# A pod app is its own principal, and starts with reads of the pod (audit H20)
+# ---------------------------------------------------------------------------
+#
+# An app's page was its viewer: same-site with the API, the viewer's session
+# cookie, their full authority and every account they had connected. From here
+# a request from an app's host is the app, acting for its viewer, with the
+# viewer's access intersected with the app's own grants (grantee `APP`) -- and
+# outside them a typed `APP_NOT_GRANTED` naming the grant an editor adds.
+#
+# The design asked for each app's grants to be generated from what it called
+# in the last 90 days. Nothing in the database records that: request logs and
+# product analytics (`app.session_started`, which names no call) live outside
+# it, `usage_records` is model calls, and an app's bundle is in object storage,
+# beyond a migration's reach for a static scan. So every existing app gets the
+# reads any member of its pod has, and nothing else:
+#
+# - `datastore.table.read` + `datastore.record.read` on each POD or PUBLIC
+#   table of its pod;
+# - `folder.read` on each POD or PUBLIC top-level folder or file of its pod
+#   (a folder's grant reaches what is under it);
+# - `pod.read` and `datastore.table.read` on the pod itself (grant name
+#   `pod`): reading the pod and listing the tables it may read.
+#
+# Not writes, deletes, connectors, agents, functions or workflows -- what
+# reading the viewer's mail or changing their data takes -- and not RESTRICTED
+# or PERSONAL rows, which were limited on purpose. Reads are still the
+# viewer's at most. The first call outside these is refused with the grant to
+# add, so an app that writes needs one editor's click. Attributed to the app's
+# owner, who last published it. The downgrade removes every grant to an app.
+
+_APP_TABLE_READS = (
+    "INSERT INTO resource_permission_grants (id, pod_id, resource_type, "
+    "resource_id, grantee_type, grantee_id, permission_id, created_by_user_id, "
+    "created_at) SELECT gen_random_uuid(), a.pod_id, 'datastore_table', t.id, "
+    "'APP', a.id, p.id, a.user_id, now() FROM apps a "
+    "JOIN datastore_tables t ON t.pod_id = a.pod_id "
+    "AND t.visibility IN ('POD', 'PUBLIC') "
+    "JOIN auth_permissions p ON p.id IN "
+    "('datastore.table.read', 'datastore.record.read') "
+    "ON CONFLICT ON CONSTRAINT uq_resource_permission_grants_scope DO NOTHING"
+)
+_APP_FILE_READS = (
+    "INSERT INTO resource_permission_grants (id, pod_id, resource_type, "
+    "resource_id, grantee_type, grantee_id, permission_id, created_by_user_id, "
+    "created_at) SELECT gen_random_uuid(), a.pod_id, CASE WHEN f.kind = "
+    "'FOLDER' THEN 'folder' ELSE 'document' END, f.id, 'APP', a.id, p.id, "
+    "a.user_id, now() FROM apps a "
+    "JOIN datastore_files f ON f.pod_id = a.pod_id "
+    "AND f.visibility IN ('POD', 'PUBLIC') AND f.path ~ '^/[^/]+$' "
+    "JOIN auth_permissions p ON p.id = 'folder.read' "
+    "ON CONFLICT ON CONSTRAINT uq_resource_permission_grants_scope DO NOTHING"
+)
+
+
+_APP_POD_READS = (
+    "INSERT INTO resource_permission_grants (id, pod_id, resource_type, "
+    "resource_id, grantee_type, grantee_id, permission_id, created_by_user_id, "
+    "created_at) SELECT gen_random_uuid(), a.pod_id, 'pod', a.pod_id, 'APP', "
+    "a.id, p.id, a.user_id, now() FROM apps a "
+    "JOIN auth_permissions p ON p.id IN ('pod.read', 'datastore.table.read') "
+    "ON CONFLICT ON CONSTRAINT uq_resource_permission_grants_scope DO NOTHING"
+)
+
+
+def _upgrade_app_principal(conn) -> None:
+    import logging
+
+    tables = conn.execute(sa.text(_APP_TABLE_READS)).rowcount
+    files = conn.execute(sa.text(_APP_FILE_READS)).rowcount
+    pods = conn.execute(sa.text(_APP_POD_READS)).rowcount
+    logging.getLogger("alembic.runtime.migration").info(
+        "0062: granted apps %d table, %d file and %d pod reads of their pods.",
+        tables,
+        files,
+        pods,
+    )
+
+
+def _downgrade_app_principal(conn) -> None:
+    conn.execute(
+        sa.text("DELETE FROM resource_permission_grants WHERE grantee_type = 'APP'")
+    )
+
+
 def upgrade() -> None:
     for statement in _NEW_TABLES.split(";"):
         if statement.strip():
@@ -997,6 +1109,8 @@ def upgrade() -> None:
     _upgrade_record_delete_permission(conn)
     _upgrade_slack_app_made_by_lemma(conn)
     _upgrade_drop_workload_minted_links(conn)
+    _upgrade_sandbox_use_opt_in(conn)
+    _upgrade_app_principal(conn)
 
 
 def _copy_grants(conn, *, from_type: str, to_type: str, rows) -> None:
@@ -1026,6 +1140,8 @@ def _copy_grants(conn, *, from_type: str, to_type: str, rows) -> None:
 
 def downgrade() -> None:
     conn = op.get_bind()
+    _downgrade_app_principal(conn)
+    _downgrade_sandbox_use_opt_in(conn)
     _downgrade_drop_workload_minted_links(conn)
     _downgrade_slack_app_made_by_lemma(conn)
     _downgrade_record_delete_permission(conn)

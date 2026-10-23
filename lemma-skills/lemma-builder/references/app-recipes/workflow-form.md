@@ -3,6 +3,25 @@
 Show the human half of a workflow: FORM nodes parked waiting on the signed-in
 member, rendered as forms they submit to advance the run. (← `apps.md`)
 
+## Grants it needs
+
+`workflow:<name>:read,execute` for the workflow whose forms it shows,
+`pod:pod:workflow.read` to list the pod's runs, and whatever the form's own step
+reads or writes. Outside its grants a call is
+`403 APP_NOT_GRANTED`, naming the grant to add.
+
+```ts
+import { AppNotGrantedError } from "lemma-sdk"; // no-build: window.LemmaClient.AppNotGrantedError
+
+catch (error) {
+  if (error instanceof AppNotGrantedError) {
+    // The app, not the viewer: say what it needs, not "you don't have access".
+    return showSetupNeeded(`This app isn't set up to ${error.permissionIds.join(", ")} on ${error.resourceType} ${error.resourceName ?? ""}`);
+  }
+  throw error; // DELEGATION_EXCEEDS_INVOKER and the rest: the viewer's own access
+}
+```
+
 ## The model
 
 A workflow `FORM` node creates a **wait** assigned to a pod member. Until they

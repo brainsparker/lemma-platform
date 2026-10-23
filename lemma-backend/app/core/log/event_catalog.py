@@ -717,6 +717,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'connectors.composio_auth_provider.fetch_token_info_google_api.diagnostic': EventSpec('debug', frozenset({'status'})),
     'connectors.composio_auth_provider.google_token_expiration_lookup.degraded': EventSpec('warning', frozenset()),
     'connectors.composio_auth_provider.set_token_expiration.observed': EventSpec('debug', frozenset()),
+    'connectors.connect_ask.ledger_unavailable.degraded': EventSpec('warning', frozenset()),
     'connectors.connect_request_controller.install_chained.diagnostic': EventSpec('info', frozenset()),
     'connectors.connect_request_controller.install_return.diagnostic': EventSpec('info', frozenset()),
     'connectors.connect_request_controller.state.observed': EventSpec('debug', frozenset()),

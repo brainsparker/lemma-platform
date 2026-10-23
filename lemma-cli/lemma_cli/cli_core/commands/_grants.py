@@ -31,9 +31,11 @@ from rich.markup import escape
 
 from ..state import console, err_console
 
-# Grantee kinds and the pod-SDK resource that serves each. Both expose the same
-# `permissions(name)` / `replace_permissions(name, request)` pair.
-GRANTEE_KINDS = ("agent", "function")
+# Grantee kinds and the pod-SDK resource that serves each. All expose the same
+# `permissions(name)` / `replace_permissions(name, request)` pair. An app's
+# grants are what its page may do for its viewer (`APP_NOT_GRANTED` outside).
+GRANTEE_KINDS = ("agent", "function", "app")
+_RESOURCE_FOLDERS = {"agent": "agents", "function": "functions", "app": "apps"}
 
 
 def split_inline_permissions(
@@ -52,10 +54,16 @@ def split_inline_permissions(
 def _resource_api(pod_sdk: Any, kind: str) -> Any:
     if kind not in GRANTEE_KINDS:
         raise ValueError(f"Unknown grantee kind: {kind}")
-    return pod_sdk.agents if kind == "agent" else pod_sdk.functions
+    return getattr(pod_sdk, _RESOURCE_FOLDERS[kind])
 
 
 def _replace_request_model(kind: str) -> Any:
+    if kind == "app":
+        from lemma_sdk.openapi_client.models.app_permissions_replace_request import (
+            AppPermissionsReplaceRequest,
+        )
+
+        return AppPermissionsReplaceRequest
     if kind == "agent":
         from lemma_sdk.openapi_client.models.agent_permissions_replace_request import (
             AgentPermissionsReplaceRequest,
@@ -213,7 +221,7 @@ def grants_from_options(
 
         from lemma_pod_bundle.layout import load_resource_payload
 
-        folder = "agents" if kind == "agent" else "functions"
+        folder = _RESOURCE_FOLDERS[kind]
         candidates = [
             Path(from_bundle) / folder / name,  # bundle root
             Path(from_bundle),  # the resource dir itself

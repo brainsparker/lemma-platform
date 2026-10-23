@@ -35,8 +35,16 @@ export {
   RateLimitError,
   ServerError,
   NetworkError,
+  ConnectionRequiredError,
+  CONNECTION_ERROR_CODES,
+  isConnectionRequiredError,
+  AppNotGrantedError,
+  APP_NOT_GRANTED_CODE,
+  LEMMA_APP_NOT_GRANTED_MESSAGE_TYPE,
+  isAppNotGrantedError,
   apiErrorFromStatus,
 } from "./http.js";
+export type { ConnectionErrorCode } from "./http.js";
 export * from "./types.js";
 export { readSSE, parseSSEJson } from "./streams.js";
 export type { SseRawEvent } from "./streams.js";

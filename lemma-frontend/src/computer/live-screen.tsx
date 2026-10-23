@@ -4,7 +4,7 @@ import { handleBrowserKeyDown } from "./keyboard";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type RFBClient from "@novnc/novnc";
 import { apiUrl, sessionToken } from "@/session/client";
-import { useBrowserResize } from "./queries";
+import { useBrowserResize, type WorkspaceScope } from "./queries";
 import { isSettled, retryDelay, socketUrl, stateFromClose, type LiveState } from "./live";
 import { copyText } from "@/desktop/clipboard";
 
@@ -62,8 +62,10 @@ const MAX_SIDE = 4096;
  *  change behind a sandbox round trip; only where somebody let go matters. */
 const RESIZE_SETTLE_MS = 250;
 
-export function LiveScreen({ mode, origin, conversationId, reopen = 0, autoResize = true, onState }: {
+export function LiveScreen({ mode, scope, origin, conversationId, reopen = 0, autoResize = true, onState }: {
     mode: "view" | "control";
+    /** Whose machine this is the screen of. */
+    scope: WorkspaceScope | null;
     /** A site to steer the browser to before attaching. Naming one means a
      *  sign-in, and the steer repeats on every connect. */
     origin?: string | null;
@@ -102,7 +104,7 @@ export function LiveScreen({ mode, origin, conversationId, reopen = 0, autoResiz
        them — see that effect for what a display forgets when it restarts. */
     const [connected, setConnected] = useState(false);
 
-    const resize = useBrowserResize();
+    const resize = useBrowserResize(scope);
     const askSize = useRef(resize.mutate);
     askSize.current = resize.mutate;
 
@@ -143,7 +145,7 @@ export function LiveScreen({ mode, origin, conversationId, reopen = 0, autoResiz
                `.onclose` on whatever channel it is given and would quietly
                replace an assignment made here. */
             const socket = new WebSocket(socketUrl(apiUrl(), {
-                mode, origin, conversationId, accessToken: sessionToken(),
+                mode, origin, conversationId, podId: scope?.podId, agentId: scope?.agentId, accessToken: sessionToken(),
             }));
             let closed = 1000;
             socket.addEventListener("close", (event) => { closed = event.code; });
@@ -226,7 +228,7 @@ export function LiveScreen({ mode, origin, conversationId, reopen = 0, autoResiz
             try { client.current?.disconnect(); } catch { /* already gone */ }
             client.current = null;
         };
-    }, [mode, origin, conversationId, reopen]);
+    }, [mode, origin, conversationId, reopen, scope?.podId, scope?.agentId]);
 
 
     useEffect(() => {

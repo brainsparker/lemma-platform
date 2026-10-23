@@ -28,7 +28,7 @@ a pooled database connection is not held during provider I/O.
 | `accounts` | User-owned encrypted provider credentials and connection status |
 | `connect_requests` | Short-lived OAuth state and authorization flow metadata |
 | `pod_connectors` | A pod's declaration of one org installation under a pod-local slug, with its mode: PER_MEMBER (each caller's own account) or SHARED (one pod account). The only thing an operation is run through, so the account is the connector's decision and never an argument |
-| `pod_accounts` | One org account in use in one pod, owned by the account's owner, with a visibility only that owner may widen (PERSONAL, POD, RESTRICTED). A row rather than an inference so a pod's use of an account is recorded, authorized like any pod resource, and removed with the member |
+| `pod_accounts` | One org account in use in one pod, owned by the account's owner, with a visibility only that owner may widen (PERSONAL, POD, RESTRICTED). A row rather than an inference so a pod's use of an account is recorded, authorized like any pod resource, and removed with the member. `allow_sandbox_use` is the owner's "allow use inside sandboxes": only with it may the sandbox git bridge write a shared account's token into another member's workspace; withdrawing the account clears it |
 | `github_installations` | Which organization a GitHub App installation belongs to, and who bound it. One org per installation: a first claim needs proof from GitHub that the claimant administers it, and token minting and webhook routing reach an installation only through its own org |
 
 ## API groups
@@ -41,11 +41,12 @@ a pooled database connection is not held during provider I/O.
 | `/.../accounts` | Create/list/get/delete user accounts and resolve account credentials |
 | `/.../connect-requests` + callback | Start OAuth and exchange callback state/code |
 | `/.../{auth_config}/operations` | Search and read an install's operations |
-| `/pods/{pod}/connectors[/{slug}]` | Declare, list, change and remove the pod's connectors (`pod.connector.manage`) |
+| `/pods/{pod}/connectors[/{slug}]` | Declare, list, change and remove the pod's connectors (`pod.connector.manage`). To a caller who may manage them, a required PER_MEMBER connector also carries `member_coverage`: how many of the members allowed to use it have a working account, and who it waits on (missing, or `REAUTH_REQUIRED`) -- names only, never their accounts |
+| `/pods/{pod}/connectors/{slug}/ask-members` | An editor asks the members a PER_MEMBER connector waits on to connect: one line each in their own channel, from the pod's agent for the editor (the path `channel_post` writes). Once per connector per member per day, held in Redis |
 | `/pods/{pod}/connectors/{slug}/operations[/{op}[/execute]]` | Discover and run operations through a pod connector |
 | `/pods/{pod}/connector-accounts[/{id}]` | The accounts in use in the pod; their owners add, share and withdraw them |
 | `/me/connectors/accounts/{id}/pods` | Where one of my accounts is used |
-| `/organizations/{org}/installations/{id}/impact` | What removing an installation would stop |
+| `/organizations/{org}/installations/{id}/impact` | What removing an installation would stop: accounts, pod accounts, pod connectors, and the surfaces, schedules and MCP event subscriptions running through them (via the `agent_surfaces` and `schedule` contracts). Counts are org-wide; pods are named only where the caller can open them |
 | `/.../{auth_config}/triggers` | Discover provider triggers |
 
 A trigger's `config_schema` is returned by the single-trigger endpoint, not by

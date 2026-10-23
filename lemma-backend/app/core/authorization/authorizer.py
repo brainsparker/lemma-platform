@@ -53,7 +53,10 @@ from app.core.authorization.permissions import (
     equivalent_permission_ids,
 )
 from app.core.authorization.resource_actions import owner_actions_for_resource
-from app.core.authorization.workload_authority import authorize_delegated_workload
+from app.core.authorization.workload_authority import (
+    authorize_delegated_workload,
+    is_app,
+)
 from app.core.authorization.resource_tables import (
     pod_is_unknowable,
 )
@@ -399,6 +402,10 @@ class Authorizer(ResourceHydrationMixin, GrantResolutionMixin):
         """
         if ctx.delegation is None or permission_id not in DESTRUCTIVE_ACTIONS:
             return None
+        if is_app(ctx):
+            # No conversation to approve it in: an app destroys only what it
+            # was granted, and the grant half below decides that.
+            return None
         if await _session_approval(
             ctx,
             session_id=ctx.delegation.session_id,
@@ -455,6 +462,15 @@ class Authorizer(ResourceHydrationMixin, GrantResolutionMixin):
             )
         return None
 
+    def _public_read(
+        self, ctx: Context, permission_id: str, resource: ResourceRef
+    ) -> bool:
+        return (
+            self._is_read_permission(permission_id)
+            and resource.pod_id == ctx.pod_id
+            and resource.visibility == ResourceVisibility.PUBLIC
+        )
+
     @staticmethod
     def _is_pod_scoped_permission(permission_id: str) -> bool:
         definition = PERMISSION_BY_ID.get(permission_id)
@@ -496,6 +512,11 @@ class Authorizer(ResourceHydrationMixin, GrantResolutionMixin):
                 False, RESOURCE_NOT_IN_POD, permission_id, resource
             )
         if ctx.belongs_to_its_pod():
+            return None
+        if is_app(ctx) and self._public_read(ctx, permission_id, resource):
+            # A Public app's viewer is often outside its pod. They read what is
+            # Public there, so their app may too -- if it was granted it, which
+            # the intersection decides next.
             return None
         visibility = self._visibility_read_decision(ctx, permission_id, resource)
         if visibility is not None and visibility.allowed:

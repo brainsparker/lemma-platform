@@ -3,6 +3,27 @@
 Read and mutate a table; a local write auto-refreshes the list, and a WebSocket keeps it
 live across *other* users' / workloads' changes — no polling. (← `apps.md`)
 
+## Grants it needs
+
+The app starts with no access (`apps.md` › Grants). For a table it reads and
+writes: `lemma apps permissions add <app> <table>:read,write` — add
+`datastore.record.delete` too if it deletes rows, and `pod:pod:datastore.table.read`
+if it lists the pod's tables. `useLiveRecords` / `watchChanges` reach only the
+tables granted. Outside its grants a call is `403 APP_NOT_GRANTED`, naming the
+grant to add.
+
+```ts
+import { AppNotGrantedError } from "lemma-sdk"; // no-build: window.LemmaClient.AppNotGrantedError
+
+catch (error) {
+  if (error instanceof AppNotGrantedError) {
+    // The app, not the viewer: say what it needs, not "you don't have access".
+    return showSetupNeeded(`This app isn't set up to ${error.permissionIds.join(", ")} on ${error.resourceType} ${error.resourceName ?? ""}`);
+  }
+  throw error; // DELEGATION_EXCEEDS_INVOKER and the rest: the viewer's own access
+}
+```
+
 ## What RLS does here
 
 The app runs as the signed-in user (see `pod-model.md`). On an **RLS-on** table the

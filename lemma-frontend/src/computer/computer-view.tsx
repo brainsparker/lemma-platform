@@ -16,7 +16,7 @@ import { screenSay } from "./machine";
 import { useWorkspaceStatus } from "./queries";
 import { startupProgress } from "./startup";
 import { WorkspaceStartup } from "./startup-view";
-import { useBrowser, useConversationDirectory, useFileBody, useFiles, useFileStat, useOpenBrowserTab, wholeFile } from "./queries";
+import { useBrowser, useConversationDirectory, useFileBody, useFiles, useFileStat, useOpenBrowserTab, useWorkspaceScope, wholeFile, type WorkspaceScope } from "./queries";
 import {
     crumbs, describe, isNoise, machineState, ordered, parentOf, readableSize, rootsOf,
     viewerFor, type Entry,
@@ -29,14 +29,14 @@ import {
  *  a hook that stayed mounted would keep the last file's blob alive for as
  *  long as the pane was open.
  */
-function FileBody({ path }: { path: string }) {
+function FileBody({ scope, path }: { scope: WorkspaceScope | null; path: string }) {
     const name = path.split("/").pop() ?? path;
     const viewer = viewerFor(name);
-    const body = useFileBody(path);
+    const body = useFileBody(scope, path);
     /* The file's real size. `body` holds at most the reading ceiling, so its
        blob cannot answer this — and when it was asked, every file past the
        ceiling reported as exactly the ceiling. */
-    const stat = useFileStat(path);
+    const stat = useFileStat(scope, path);
     const blob = body.data?.blob;
     const sizeBytes = stat.data?.size_bytes ?? body.data?.sizeBytes ?? 0;
 
@@ -55,7 +55,7 @@ function FileBody({ path }: { path: string }) {
         );
     }
 
-    const save = <Save path={path} name={name} sizeBytes={sizeBytes} />;
+    const save = <Save scope={scope} path={path} name={name} sizeBytes={sizeBytes} />;
 
     if (viewer === "image" && href && !body.data.tooLarge) {
         return (
@@ -83,9 +83,9 @@ function FileBody({ path }: { path: string }) {
     );
 }
 
-function Save({ path, name, sizeBytes }: { path: string; name: string; sizeBytes: number }) {
+function Save({ scope, path, name, sizeBytes }: { scope: WorkspaceScope | null; path: string; name: string; sizeBytes: number }) {
     const save = useMutation({
-        mutationFn: () => wholeFile(path, sizeBytes),
+        mutationFn: () => wholeFile(scope!, path, sizeBytes),
         onSuccess: (whole) => {
             const href = URL.createObjectURL(whole);
             const link = document.createElement("a");
@@ -143,6 +143,8 @@ export function ComputerView({ podId, conversationId, visible }: {
     visible: boolean;
 }) {
     const home = useConversationDirectory(podId, conversationId);
+    /* This pod's machine as the conversation's agent: each agent has its own. */
+    const scope = useWorkspaceScope(podId, conversationId);
     const [at, setAt] = useState<string | null>(null);
     const [openFile, setOpenFile] = useState<string | null>(null);
     const [wake, setWake] = useState(false);
@@ -160,9 +162,9 @@ export function ComputerView({ podId, conversationId, visible }: {
        it listed, so one request settles where this pane is and where it may
        go. */
     const asked = at ?? home.data ?? null;
-    const workspace = useWorkspaceStatus(visible);
+    const workspace = useWorkspaceStatus(scope, visible);
     const preparing = startupProgress(workspace.data) !== null;
-    const listing = useFiles(asked, wake, visible && !preparing);
+    const listing = useFiles(scope, asked, wake, visible && !preparing);
     const first = listing.data?.pages[0];
     const roots = rootsOf(first);
     /* The server's own word for where we are, because it resolved the path it
@@ -172,7 +174,7 @@ export function ComputerView({ podId, conversationId, visible }: {
        ambient and neither provisions anything, but asleep is the ordinary
        resting state and a second request to be told so again is one nobody
        needed. */
-    const browser = useBrowser(visible && first !== undefined && !first.sleeping);
+    const browser = useBrowser(scope, visible && first !== undefined && !first.sleeping);
     const state = machineState(first, browser.data, listing.isPending);
     const say = screenSay(state, browser.data);
 
@@ -181,7 +183,7 @@ export function ComputerView({ podId, conversationId, visible }: {
     const hiddenCount = all.length - shown.length;
     const up = parentOf(path, roots);
 
-    const tab = useOpenBrowserTab();
+    const tab = useOpenBrowserTab(scope);
 
     const goTo = (next: string) => { setAt(next); setOpenFile(null); };
 
@@ -225,6 +227,7 @@ export function ComputerView({ podId, conversationId, visible }: {
                 <Screen
                     state={state}
                     browser={browser.data}
+                    scope={scope}
                     conversationId={conversationId}
                     visible={visible}
                     busy={tab.busy}
@@ -233,7 +236,7 @@ export function ComputerView({ podId, conversationId, visible }: {
                     fill
                 />
             </div>
-            {drawer === "logins" && <aside className="cdrawer" aria-label="Signed-in sites"><Logins visible={visible} startOpen /></aside>}
+            {drawer === "logins" && <aside className="cdrawer" aria-label="Signed-in sites"><Logins scope={scope} visible={visible} startOpen /></aside>}
             {drawer === "files" && <aside className="cdrawer cdrawer--files" aria-label="Files">
 
             <nav className="computer-path" aria-label="Where you are">
@@ -281,7 +284,7 @@ export function ComputerView({ podId, conversationId, visible }: {
                 </p>
             )}
 
-            {openFile ? <FileBody path={openFile} /> : (
+            {openFile ? <FileBody scope={scope} path={openFile} /> : (
                 <>
                     {listing.isPending && <LoadingRows label="Loading files" />}
                     {listing.isError && (

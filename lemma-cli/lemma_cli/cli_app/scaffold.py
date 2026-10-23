@@ -662,6 +662,14 @@ PERMISSION_PRESETS: dict[str, dict[str, list[str]]] = {
         "write": ["schedule.update"],
         "delete": ["schedule.delete"],
     },
+    # The pod itself, always named `pod`: what is asked of the pod rather than
+    # of one resource in it -- reading it, listing its tables, talking to its
+    # agents. Raw permission ids work too (`pod:pod:workflow.read`).
+    "pod": {
+        "read": ["pod.read"],
+        "tables": ["datastore.table.read"],
+        "chat": ["conversation.read", "conversation.write"],
+    },
     # A Lemma app in this pod — NOT a connector. `app:` used to alias to
     # connector back when connectors were called apps; see parse_grant_spec.
     "app": {
@@ -684,6 +692,7 @@ _GRANT_TYPE_ALIASES = {
     "agent": "agent",
     "workflow": "workflow",
     "schedule": "schedule",
+    "pod": "pod",
 }
 GRANT_TYPE_TOKENS = tuple(sorted(_GRANT_TYPE_ALIASES))
 _ACCOUNT_TOKENS = frozenset({"account", "connector_account"})

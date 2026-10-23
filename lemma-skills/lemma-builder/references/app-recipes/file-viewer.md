@@ -9,6 +9,24 @@ Document uploads are **auto-indexed** and gain derived child artifacts:
 `…/pages/page_0001.jpg` (rendered page images). Search returns chunks **with page
 numbers**, scoped by folder. Data files (CSV/images/…) are stored but not indexed.
 
+## Grants it needs
+
+`lemma apps permissions add <app> /docs:read` for the folder it shows (a folder's
+grant reaches everything under it); `folder.write` on it to upload. Outside its
+grants a call is `403 APP_NOT_GRANTED`, naming the folder and permission.
+
+```ts
+import { AppNotGrantedError } from "lemma-sdk"; // no-build: window.LemmaClient.AppNotGrantedError
+
+catch (error) {
+  if (error instanceof AppNotGrantedError) {
+    // The app, not the viewer: say what it needs, not "you don't have access".
+    return showSetupNeeded(`This app isn't set up to ${error.permissionIds.join(", ")} on ${error.resourceType} ${error.resourceName ?? ""}`);
+  }
+  throw error; // DELEGATION_EXCEEDS_INVOKER and the rest: the viewer's own access
+}
+```
+
 ## Upload
 
 ```tsx

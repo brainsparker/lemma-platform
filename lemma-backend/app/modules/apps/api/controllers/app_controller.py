@@ -14,7 +14,7 @@ from fastapi import (
 )
 from fastapi.responses import Response, StreamingResponse
 
-from app.core.api.dependencies import CurrentUser
+from app.core.api.dependencies import CurrentUser, UoWDep
 from app.core.api.pagination import parse_uuid_page_token
 from app.core.api.streaming_multipart import (
     MultipartFileLimit,
@@ -25,6 +25,9 @@ from app.core.authorization.dependencies import PodContextDep, require_pod_membe
 from app.core.helpers.slug import normalize_resource_name
 from app.core.ports.widget_content import WidgetSourceUnavailable
 from app.modules.apps.api.asset_response import app_asset_response
+from app.modules.apps.api.controllers.app_grants_controller import (
+    apply_inline_app_grants,
+)
 from app.modules.apps.config import apps_settings
 from app.modules.apps.api.dependencies import (
     AppServiceDep,
@@ -114,6 +117,7 @@ async def create_app(
     data: CreateAppRequest,
     app_service: AppServiceDep,
     user: CurrentUser,
+    uow: UoWDep,
     ctx: PodContextDep,
 ) -> AppDetailResponse:
     entity_data = {
@@ -127,6 +131,9 @@ async def create_app(
         entity_data["visibility"] = data.visibility
     entity = AppEntity(**entity_data)
     app = await app_service.create_app_with_context(entity, user.id, ctx=ctx)
+    await apply_inline_app_grants(
+        uow, ctx=ctx, app=app, permissions=data.permissions, user_id=user.id
+    )
     return await _app_detail_response(ctx, app)
 
 
@@ -247,6 +254,7 @@ async def update_app(
     data: UpdateAppRequest,
     app_service: AppServiceDep,
     user: CurrentUser,
+    uow: UoWDep,
     ctx: PodContextDep,
 ) -> AppDetailResponse:
     app = await app_service.update_app(
@@ -259,6 +267,9 @@ async def update_app(
         ),
         user.id,
         ctx=ctx,
+    )
+    await apply_inline_app_grants(
+        uow, ctx=ctx, app=app, permissions=data.permissions, user_id=user.id
     )
     return await _app_detail_response(ctx, app)
 
@@ -454,7 +465,7 @@ async def get_app_root_asset(
         asset_path=None,
         request_etag=request.headers.get("if-none-match"),
     )
-    return app_asset_response(asset)
+    return app_asset_response(asset, sandboxed=True)
 
 
 @router.get(
@@ -480,7 +491,7 @@ async def get_app_asset(
         asset_path=asset_path,
         request_etag=request.headers.get("if-none-match"),
     )
-    return app_asset_response(asset)
+    return app_asset_response(asset, sandboxed=True)
 
 
 @router.get(

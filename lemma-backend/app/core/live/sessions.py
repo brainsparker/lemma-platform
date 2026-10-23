@@ -32,6 +32,7 @@ from uuid import UUID
 from redis.exceptions import RedisError
 from supertokens_python.exceptions import SuperTokensError
 
+from app.core.authorization.delegation import DelegationClaims
 from app.core.config import settings
 from app.core.domain.realtime import RealtimeSlowConsumerError
 from app.core.infrastructure.channels.channel_service import get_channel_service
@@ -58,6 +59,9 @@ class LiveSession:
     handle: str | None = None
     #: When the handshake's access token expires (epoch seconds), if known.
     access_expires_at: float | None = None
+    #: The pod app whose page opened the socket, acting for ``user_id``
+    #: (``authorization.app_principal``); ``None`` for the person themselves.
+    app: DelegationClaims | None = None
 
 
 #: Whether a session (by handle) still exists.

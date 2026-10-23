@@ -7,6 +7,8 @@ import type { AppBundleUploadResponse } from '../models/AppBundleUploadResponse.
 import type { AppDetailResponse } from '../models/AppDetailResponse.js';
 import type { AppListResponse } from '../models/AppListResponse.js';
 import type { AppMessageResponse } from '../models/AppMessageResponse.js';
+import type { AppPermissionsReplaceRequest } from '../models/AppPermissionsReplaceRequest.js';
+import type { AppPermissionsResponse } from '../models/AppPermissionsResponse.js';
 import type { AppReleaseListResponse } from '../models/AppReleaseListResponse.js';
 import type { CreateAppFromWidgetRequest } from '../models/CreateAppFromWidgetRequest.js';
 import type { CreateAppRequest } from '../models/CreateAppRequest.js';
@@ -263,6 +265,58 @@ export class AppsService {
                 'pod_id': podId,
                 'app_name': appName,
             },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Get App Grants
+     * An app's page acts for whoever views it, with that viewer's access intersected with these grants and never more. A call outside them is refused `403 APP_NOT_GRANTED`, naming the resource type, name and permission to grant here.
+     * @param podId
+     * @param appName
+     * @returns AppPermissionsResponse Successful Response
+     * @throws ApiError
+     */
+    public static appPermissionsGet(
+        podId: string,
+        appName: string,
+    ): CancelablePromise<AppPermissionsResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/apps/{app_name}/permissions',
+            path: {
+                'pod_id': podId,
+                'app_name': appName,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Replace App Grants
+     * An app's page acts for whoever views it, with that viewer's access intersected with these grants and never more. A call outside them is refused `403 APP_NOT_GRANTED`, naming the resource type, name and permission to grant here. Replacing them needs `app.update` on the app, and every grant must be one you could use yourself on that resource (`CONFERRAL_EXCEEDS_HOLDER` otherwise).
+     * @param podId
+     * @param appName
+     * @param requestBody
+     * @returns AppPermissionsResponse Successful Response
+     * @throws ApiError
+     */
+    public static appPermissionsReplace(
+        podId: string,
+        appName: string,
+        requestBody: AppPermissionsReplaceRequest,
+    ): CancelablePromise<AppPermissionsResponse> {
+        return __request(OpenAPI, {
+            method: 'PUT',
+            url: '/pods/{pod_id}/apps/{app_name}/permissions',
+            path: {
+                'pod_id': podId,
+                'app_name': appName,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
             errors: {
                 422: `Validation Error`,
             },

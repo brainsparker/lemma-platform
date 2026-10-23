@@ -68,16 +68,23 @@ class Assistant:
 class WorkloadKind(str, Enum):
     AGENT = "AGENT"
     FUNCTION = "FUNCTION"
+    #: A pod app's page, acting for the person viewing it
+    #: (``authorization.app_principal``).
+    APP = "APP"
 
     @classmethod
     def of(cls, principal_type: str) -> "WorkloadKind":
-        """``"agent"`` / ``"AGENT"`` -> AGENT; anything else is a function."""
-        return cls.AGENT if principal_type.upper() == "AGENT" else cls.FUNCTION
+        """``"agent"`` / ``"AGENT"`` -> AGENT, ``"app"`` -> APP; anything else is
+        a function."""
+        normalized = principal_type.upper()
+        if normalized in (cls.AGENT.value, cls.APP.value):
+            return cls(normalized)
+        return cls.FUNCTION
 
 
 @dataclass(frozen=True, slots=True)
 class Workload:
-    """A named agent or function.
+    """A named agent or function, or a pod app.
 
     With ``for_user_id`` it acts for that person and gets their access
     intersected with its own grants (PS-ACCESS-020). Without one it is a

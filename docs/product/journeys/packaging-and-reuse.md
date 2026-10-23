@@ -169,8 +169,18 @@ their credentials do not travel with it.
 - When an app is published, the system shall serve it at its own address and
   shall record `app.published`.
 - When someone opens an app, the system shall record `app.session_started`.
-- The system shall give an app's user exactly the pod access their own identity
-  carries, and shall not let the app widen it.
+- When an app's page calls the pod, the system shall treat the call as the app
+  acting for the person viewing it: that person's access intersected with the
+  app's own grants, and never more than either.
+- If an app calls for something outside its grants, then the system shall
+  refuse it with `APP_NOT_GRANTED`, naming the resource type, the resource and
+  the permission an editor would grant, even when the viewer could do it
+  themselves.
+- When a person sets an app's grants, or publishes or promotes a release of it,
+  the system shall refuse any grant that person could not use themselves on
+  that resource.
+- The system shall not let an app's page reach the viewer's connected
+  accounts, their organization's settings, or any pod but the app's own.
 - If someone without access to the pod opens an app, then the system shall
   refuse rather than serving pod data.
 - Where an app uses a hosted HTTPS address, the system shall open public builds
@@ -202,7 +212,7 @@ their credentials do not travel with it.
 - When an app acts on a person's behalf, the system shall allow only actions
   that person is permitted to perform.
 
-**Contracts:** `app.get`, `app.asset.get`, `app.published`, `app.session_started`
+**Contracts:** `app.get`, `app.asset.get`, `app.published`, `app.session_started`, `app.permissions.get`, `app.permissions.replace`
 
 ### PS-PACK-032 — A person can retrieve what an app was built from
 **Status:** covered

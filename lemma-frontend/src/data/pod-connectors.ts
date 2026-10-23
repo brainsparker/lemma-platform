@@ -14,17 +14,59 @@
 export type PodConnectorMode = "PER_MEMBER" | "SHARED";
 export type PodConnectorStatus = "READY" | "NEEDS_ACCOUNT" | "UNAVAILABLE";
 
+export type PodConnectorVisibility = "POD" | "RESTRICTED";
+
 export interface PodConnector {
+    /** The row's own id. Grants and bundles name a connector by slug; this is
+     *  for keys and nothing else. */
+    id: string;
     slug: string;
     /** The catalog connector behind it — `slack`, `github`. Empty when the
      *  caller may not read the installation. */
     connectorId: string;
+    /** The organization installation it runs through. */
+    authConfigId: string;
+    /** That installation's name, as the organization called it. */
+    installationName: string;
     mode: PodConnectorMode;
     status: PodConnectorStatus;
     /** What the pod uses it for, in its editor's words. */
     purpose: string;
+    /** PER_MEMBER: every member who has no account is asked to connect one. */
+    required: boolean;
     /** For a SHARED connector: whose account it runs as, by name or email. */
     sharedAccount: string;
+    /** For a SHARED connector: the pod account it runs as, and its owner. */
+    sharedPodAccountId: string;
+    sharedOwnerId: string;
+    visibility: PodConnectorVisibility;
+    /** A required per-member connector, read by someone who may manage the
+     *  pod's connectors: who of the members allowed to use it has connected.
+     *  Null for everyone else, and for every other connector. */
+    coverage: Coverage | null;
+}
+
+/** Why a member is still awaited: no account at all, or one that needs its
+ *  owner to sign in again. */
+export type MemberStanding = "MISSING" | "REAUTH_REQUIRED";
+
+/** A member a connector is waiting on — who, never which account. */
+export interface AwaitedMember {
+    userId: string;
+    podMemberId: string;
+    /** Their name, else their email: what the editor calls them. */
+    name: string;
+    standing: MemberStanding;
+}
+
+export interface Coverage {
+    /** Members of the pod who may use the connector. */
+    eligible: number;
+    /** Of those, how many have a working account. */
+    connected: number;
+    waitingOn: AwaitedMember[];
+    /** The pod has more members than the server counted. */
+    truncated: boolean;
 }
 
 const MODES: PodConnectorMode[] = ["PER_MEMBER", "SHARED"];
@@ -46,14 +88,108 @@ export function readPodConnector(raw: unknown): PodConnector | null {
     const status = text(row["status"]).toUpperCase() as PodConnectorStatus;
     const shared = record(row["shared_account"]);
     return {
+        id: text(row["id"]) || slug,
         slug,
         connectorId: text(row["connector_id"]),
+        authConfigId: text(row["auth_config_id"]),
+        installationName: text(row["installation_name"]),
         mode: MODES.includes(mode) ? mode : "PER_MEMBER",
         /* A status this client does not know is not one to offer as ready. */
         status: STATUSES.includes(status) ? status : "UNAVAILABLE",
         purpose: text(row["purpose"]),
+        required: row["required"] === true,
         sharedAccount: text(shared["display_name"]) || text(shared["email"]),
+        sharedPodAccountId: text(row["shared_pod_account_id"]) || text(shared["pod_account_id"]),
+        sharedOwnerId: text(shared["owner_user_id"]),
+        visibility: text(row["visibility"]).toUpperCase() === "RESTRICTED" ? "RESTRICTED" : "POD",
+        coverage: readCoverage(row["member_coverage"]),
     };
+}
+
+function count(value: unknown): number {
+    return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
+}
+
+function readAwaited(raw: unknown): AwaitedMember[] {
+    return (Array.isArray(raw) ? raw : []).map((entry) => {
+        const one = record(entry);
+        return {
+            userId: text(one["user_id"]),
+            podMemberId: text(one["pod_member_id"]),
+            name: text(one["name"]) || text(one["email"]) || "Someone",
+            standing: (text(one["standing"]).toUpperCase() === "REAUTH_REQUIRED" ? "REAUTH_REQUIRED" : "MISSING") as MemberStanding,
+        };
+    }).filter((one) => one.userId);
+}
+
+/** The server's `member_coverage`, or null when it sent none — which is what
+ *  it does for anybody who may not manage the pod's connectors. */
+export function readCoverage(raw: unknown): Coverage | null {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+    const row = record(raw);
+    return {
+        eligible: count(row["eligible"]),
+        connected: count(row["connected"]),
+        waitingOn: readAwaited(row["waiting_on"]),
+        truncated: row["truncated"] === true,
+    };
+}
+
+/** "5/7 connected", or "Everyone connected" once nobody is awaited. */
+export function coverageLine(coverage: Coverage): string {
+    if (coverage.eligible > 0 && coverage.connected >= coverage.eligible && !coverage.truncated) return "Everyone connected";
+    return coverage.connected + "/" + coverage.eligible + (coverage.truncated ? "+" : "") + " connected";
+}
+
+function names(members: AwaitedMember[], most = 5): string {
+    const said = members.slice(0, most).map((one) => one.name);
+    const rest = members.length - said.length;
+    return said.join(", ") + (rest > 0 ? " and " + rest + " more" : "");
+}
+
+/** Who it waits on: "Waiting on Bob, and carol@acme.com to reconnect".
+ *  Empty when it waits on nobody. */
+export function waitingLine(coverage: Coverage): string {
+    const missing = coverage.waitingOn.filter((one) => one.standing === "MISSING");
+    const again = coverage.waitingOn.filter((one) => one.standing === "REAUTH_REQUIRED");
+    const parts = [
+        ...(missing.length ? [names(missing)] : []),
+        ...(again.length ? [names(again) + " to reconnect"] : []),
+    ];
+    return parts.length ? "Waiting on " + parts.join(", and ") : "";
+}
+
+/** What "Ask members to connect" did. */
+export interface AskOutcome {
+    asked: AwaitedMember[];
+    /** Asked about this connector in the last day already, so not again. */
+    askedRecently: AwaitedMember[];
+    /** Not asked: whether they were asked today could not be checked. */
+    notAsked: AwaitedMember[];
+    connectUrl: string;
+}
+
+export function readAskOutcome(raw: unknown): AskOutcome {
+    const row = record(raw);
+    return {
+        asked: readAwaited(row["asked"]),
+        askedRecently: readAwaited(row["asked_recently"]),
+        notAsked: readAwaited(row["not_asked"]),
+        connectUrl: text(row["connect_url"]),
+    };
+}
+
+/** The sentence after asking: who was asked, and who was asked already. */
+export function askedLine(outcome: AskOutcome): string {
+    const lines: string[] = [];
+    if (outcome.asked.length) lines.push("Asked " + names(outcome.asked) + ".");
+    if (outcome.askedRecently.length) {
+        lines.push(names(outcome.askedRecently) + (outcome.askedRecently.length === 1 ? " was" : " were") + " asked in the last day.");
+    }
+    if (outcome.notAsked.length) {
+        lines.push("Couldn’t ask " + names(outcome.notAsked) + " just now — try again shortly.");
+    }
+    return lines.join(" ") || "Nobody to ask.";
 }
 
 export function readPodConnectors(raw: unknown): PodConnector[] {
@@ -75,6 +211,12 @@ export function connectorsFor(list: PodConnector[], connectorId: string, mode?: 
  *  address the server's own `connect_url` points at. */
 export function connectionsPath(podId: string, slug?: string): string {
     return "/pods/" + encodeURIComponent(podId) + "/connections" + (slug ? "?connector=" + encodeURIComponent(slug) : "");
+}
+
+/** The same place inside the workspace: a teammate's Connections part, for
+ *  a link that should stay in the app rather than load it again. */
+export function connectionsPlace(podId: string, slug?: string): string {
+    return "/t/" + encodeURIComponent(podId) + "/about/connections" + (slug ? "?connector=" + encodeURIComponent(slug) : "");
 }
 
 /** A slug for a new connector, free in this pod: `base` made to read the same
@@ -163,4 +305,161 @@ export function failureOf(error: unknown, fallback: string): { message: string; 
     if (typed) return { message: typed.message || fallback, connectUrl: typed.connectUrl, code: typed.code };
     const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
     return { message: message || fallback, connectUrl: "", code: "" };
+}
+
+/* ── a connector, said for the person reading ───────────────────────── */
+
+/** The pattern the server holds a slug to: what reads the same in a URL, a
+ *  YAML key and a tool argument. */
+export const SLUG_PATTERN = /^[a-z0-9][a-z0-9_-]{0,62}$/;
+
+/** Why a slug cannot be used here, or empty when it can. */
+export function slugProblem(slug: string, taken: string[]): string {
+    if (!slug) return "Give it a name apps and agents can call it by.";
+    if (!SLUG_PATTERN.test(slug)) return "Lowercase letters, digits, - and _ only, starting with a letter or digit.";
+    if (taken.includes(slug)) return "This teammate already has a connector called " + slug + ".";
+    return "";
+}
+
+/** The badge beside a connector: whose account a call through it runs as.
+ *  `owner` is the shared account's owner by name, when it is known. */
+export function modeBadge(connector: Pick<PodConnector, "mode" | "sharedAccount" | "status">, owner = ""): string {
+    if (connector.mode === "PER_MEMBER") return "Your account";
+    if (!connector.sharedAccount) return connector.status === "NEEDS_ACCOUNT" ? "Shared · no account yet" : "Shared";
+    return "Shared · " + connector.sharedAccount + (owner ? " · by " + owner : "");
+}
+
+/** One of my organization accounts, as far as this page needs it. The shape
+ *  `accounts.ts` reads; restated so this file stays free of it. */
+export interface MyAccount {
+    id: string;
+    authConfigId: string;
+    connectorId: string;
+    label: string;
+    status: string;
+    usable: boolean;
+    isDefault: boolean;
+}
+
+/** Where I stand with one connector.
+ *
+ *  - `connected`: a call runs, as my account or the shared one.
+ *  - `connect`: per-member, and I have no account on its installation.
+ *  - `reconnect`: the account a call would use is mine and needs signing in.
+ *  - `waiting`: shared, and somebody else has to share or reconnect one.
+ *  - `off`: the installation is turned off. */
+export type MyStanding = "connected" | "connect" | "reconnect" | "waiting" | "off";
+
+export interface MyStatus {
+    standing: MyStanding;
+    /** The account it runs as for me, when that is mine. */
+    account: MyAccount | null;
+    /** One line, for beside the badge. */
+    note: string;
+}
+
+/** My status with a connector, from my own accounts.
+ *
+ *  A per-member call uses my default account on the connector's installation,
+ *  and the server adds it to the pod the first time — so any usable account of
+ *  mine on that installation is "connected", whether or not it is in the pod
+ *  yet. `preferred` is the account my calls here are pinned to, when one is. */
+export function myStatus(connector: PodConnector, mine: MyAccount[], me: string, preferred = ""): MyStatus {
+    if (connector.status === "UNAVAILABLE") return { standing: "off", account: null, note: statusNote(connector) };
+    if (connector.mode === "SHARED") {
+        if (connector.status === "NEEDS_ACCOUNT") return { standing: "waiting", account: null, note: "Nobody has shared an account for it yet" };
+        const own = connector.sharedOwnerId !== "" && connector.sharedOwnerId === me;
+        const account = own ? mine.find((one) => one.authConfigId === connector.authConfigId && one.status.toUpperCase() === "REAUTH_REQUIRED") ?? null : null;
+        if (account) return { standing: "reconnect", account, note: "Your shared account needs signing in again" };
+        return { standing: "connected", account: null, note: own ? "Runs as your account, for everyone here" : "Runs as the shared account" };
+    }
+    const on = mine.filter((one) => one.authConfigId === connector.authConfigId);
+    const account = on.find((one) => one.id === preferred) ?? on.find((one) => one.isDefault) ?? on.find((one) => one.usable) ?? on[0] ?? null;
+    if (!account) return { standing: "connect", account: null, note: "You have not connected one" };
+    if (!account.usable) {
+        return account.status.toUpperCase() === "REAUTH_REQUIRED" || account.status.toUpperCase() === "DISCONNECTED"
+            ? { standing: "reconnect", account, note: "Needs signing in again" }
+            : { standing: "connect", account, note: "Not usable yet" };
+    }
+    return { standing: "connected", account, note: account.label ? "As " + account.label : "As your account" };
+}
+
+/** The required per-member connectors I have no working account for — what
+ *  the banner asks me to connect, in the pod's own order. */
+export function missingForMe(connectors: PodConnector[], mine: MyAccount[], me: string): { connector: PodConnector; status: MyStatus }[] {
+    return connectors
+        .filter((one) => one.required && one.mode === "PER_MEMBER" && one.status === "READY")
+        .map((connector) => ({ connector, status: myStatus(connector, mine, me) }))
+        .filter((one) => one.status.standing === "connect" || one.status.standing === "reconnect");
+}
+
+/** The banner's sentence: "This pod uses Gmail — connect yours". `names`
+ *  turns a catalog id into its title. */
+export function bannerLine(missing: { connector: PodConnector; status: MyStatus }[], names: (connectorId: string) => string, teammate: string): string {
+    if (missing.length === 0) return "";
+    const said = [...new Set(missing.map((one) => names(one.connector.connectorId) || one.connector.slug))];
+    const what = said.length === 1 ? said[0] : said.slice(0, -1).join(", ") + " and " + said[said.length - 1];
+    const again = missing.every((one) => one.status.standing === "reconnect");
+    return teammate + " uses " + what + " — " + (again ? "sign in again" : "connect yours");
+}
+
+/* ── writing one ────────────────────────────────────────────────────── */
+
+/** A connector to declare: an installation of the organization's, under a
+ *  slug, with whose account it runs as. */
+export interface PodConnectorDraft {
+    slug: string;
+    authConfigId: string;
+    mode: PodConnectorMode;
+    /** SHARED: the pod account it runs as — one its owner already shared.
+     *  Empty declares it with none, and it waits for one. */
+    sharedPodAccountId: string;
+    required: boolean;
+    purpose: string;
+}
+
+/** A change to one. Absent fields are left as they are; an empty
+ *  `sharedPodAccountId` takes the account off it. */
+export interface PodConnectorPatch {
+    mode?: PodConnectorMode;
+    sharedPodAccountId?: string;
+    required?: boolean;
+    purpose?: string;
+}
+
+export function connectorCreateBody(draft: PodConnectorDraft): Record<string, unknown> {
+    const shared = draft.mode === "SHARED" && draft.sharedPodAccountId;
+    return {
+        slug: draft.slug,
+        auth_config_id: draft.authConfigId,
+        mode: draft.mode,
+        ...(shared ? { shared_pod_account_id: draft.sharedPodAccountId } : {}),
+        /* Asking every member to connect means something only when each brings
+           their own. */
+        ...(draft.mode === "PER_MEMBER" && draft.required ? { required: true } : {}),
+        ...(draft.purpose.trim() ? { purpose: draft.purpose.trim() } : {}),
+    };
+}
+
+export function connectorPatchBody(patch: PodConnectorPatch): Record<string, unknown> {
+    const body: Record<string, unknown> = {};
+    if (patch.mode) body.mode = patch.mode;
+    if (patch.sharedPodAccountId !== undefined) body.shared_pod_account_id = patch.sharedPodAccountId || null;
+    if (patch.required !== undefined) body.required = patch.required;
+    if (patch.purpose !== undefined) body.purpose = patch.purpose.trim();
+    return body;
+}
+
+/** The change between a connector and the edits to it, field by field, so a
+ *  save never writes back what nobody touched. */
+export function connectorChanges(before: PodConnector, after: PodConnectorPatch): PodConnectorPatch {
+    const patch: PodConnectorPatch = {};
+    if (after.mode && after.mode !== before.mode) patch.mode = after.mode;
+    const mode = after.mode ?? before.mode;
+    if (after.sharedPodAccountId !== undefined && after.sharedPodAccountId !== before.sharedPodAccountId) patch.sharedPodAccountId = after.sharedPodAccountId;
+    /* Moving to per-member leaves no account to run as. */
+    if (mode === "PER_MEMBER" && before.sharedPodAccountId && patch.mode) patch.sharedPodAccountId = "";
+    if (after.required !== undefined && after.required !== before.required) patch.required = after.required;
+    if (after.purpose !== undefined && after.purpose.trim() !== before.purpose) patch.purpose = after.purpose;
+    return patch;
 }

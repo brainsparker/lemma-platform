@@ -2,7 +2,7 @@
 
 Grants are the last thing an import writes and the first thing that breaks a pod
 when they're wrong, so they get their own module rather than living inside the
-applier: both grantee types (AGENT and FUNCTION) run the same deferred step, and
+applier: every grantee type (AGENT, FUNCTION and APP) runs the same deferred step, and
 the reading half is shared with the step runners that execute outside the apply
 loop's unit of work.
 """
@@ -41,12 +41,22 @@ def grants_from_payload(payload: dict[str, Any]) -> list[GrantInput]:
     skipped with a warning rather than failing the whole import."""
     from app.core.authorization.context import ResourceType
 
+    from lemma_pod_bundle import read_bundle_grant
+
+    from app.modules.pod_bundle.domain.errors import BundleInvalidError
+
     perms = payload.get("permissions")
     raw = perms.get("grants") if isinstance(perms, dict) else payload.get("grants")
     grants: list[GrantInput] = []
     for entry in raw or []:
         if not isinstance(entry, dict):
             continue
+        # A grant on the pod is spelled `pod` and named `pod`; one that names
+        # anything else was written by hand and can never resolve.
+        try:
+            entry = read_bundle_grant(entry)
+        except ValueError as exc:
+            raise BundleInvalidError(str(exc)) from exc
         raw_type = entry.get("resource_type")
         try:
             resource_type = ResourceType(str(raw_type))
@@ -93,6 +103,7 @@ async def apply_grants(
     grantee_id: UUID,
     grants: list[GrantInput],
     created_by_user_id: UUID | None,
+    ctx: Any,
 ) -> None:
     """Validate + normalize (resource_name -> id) + replace a grantee's resource
     grants. Mirrors the function/agent controllers' inline-grants path so an
@@ -101,7 +112,12 @@ async def apply_grants(
 
     An empty ``grants`` is a real write — "this workload holds nothing" — and
     clears the grantee's existing grants; callers decide whether the manifest
-    said anything at all by asking :func:`has_grants` first."""
+    said anything at all by asking :func:`has_grants` first.
+
+    The importer may only hand a workload what they could use themselves, as
+    on the permissions routes (`assert_can_confer_grants`): a bundle is not a
+    way round that, whoever wrote it."""
+    from app.core.authorization.conferral import assert_can_confer_grants
     from app.core.authorization.grants import (
         normalize_pod_resource_grants,
         replace_grantee_resource_grants,
@@ -111,6 +127,12 @@ async def apply_grants(
     validate_pod_resource_grant_permissions(grants)
     normalized = await normalize_pod_resource_grants(
         session, pod_id=pod_id, grants=grants
+    )
+    await assert_can_confer_grants(
+        ctx,
+        normalized,
+        pod_id=pod_id,
+        action=f"grant a bundled {grantee_type.lower()} what you could not use",
     )
     await replace_grantee_resource_grants(
         session,

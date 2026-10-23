@@ -9,6 +9,7 @@ from fastapi import HTTPException
 from fastapi.security import HTTPBearer
 from starlette.requests import HTTPConnection
 from supertokens_python.recipe.session.asyncio import get_session
+from supertokens_python.recipe.session.interfaces import SessionContainer
 from supertokens_python.exceptions import SuperTokensError
 from supertokens_python.recipe.session.exceptions import (
     InvalidClaimsError,
@@ -18,14 +19,21 @@ from app.core.authorization.current import set_current_context
 from app.core.auth_exemptions import exemption_of, is_self_authenticated_websocket
 from app.core.config import settings
 from app.core.api.actor_policy import (
+    APP_HOST_DOORS,
     refuse_workload,
     route_template,
     workload_may_call,
+)
+from app.core.authorization.app_principal import (
+    APP_HOST_UNKNOWN,
+    UnknownAppHost,
+    app_principal_claims,
 )
 from app.core.authorization.delegation import (
     CLAIM_ACTOR_ID,
     DelegationClaims,
     DelegationClaimsError,
+    WorkloadPrincipalType,
     parse_delegation_claims,
 )
 from app.core.authorization.delegation_revocation import is_delegation_revoked
@@ -382,6 +390,10 @@ async def verify_auth(connection: HTTPConnection):
                     status_code=403,
                     detail={"code": refused.code, "message": refused.message},
                 ) from refused
+            if delegation_claims is None:
+                delegation_claims = await _app_on_its_host(
+                    connection, session, parsed_user_id
+                )
 
             connection.state.user = AuthenticatedPrincipal(id=parsed_user_id)
             connection.state.session = session
@@ -447,6 +459,33 @@ async def verify_auth(connection: HTTPConnection):
         _refuse_workload_off_its_routes(connection)
 
 
+async def _app_on_its_host(
+    connection: HTTPConnection, session: SessionContainer, user_id: UUID
+) -> DelegationClaims | None:
+    """The pod app a person's request comes from, acting for them (H20).
+
+    None for every request that is not from an app's host, and for the app
+    host's own doors (``APP_HOST_DOORS``), which name the app themselves.
+    """
+    template = route_template(connection)
+    method = str(connection.scope.get("method", "GET")).upper()
+    if (method, template) in APP_HOST_DOORS:
+        return None
+    try:
+        return await app_principal_claims(
+            connection, user_id=user_id, session_handle=session.get_handle()
+        )
+    except UnknownAppHost as unknown:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": APP_HOST_UNKNOWN,
+                "message": "This request comes from the host of an app that "
+                "does not exist.",
+            },
+        ) from unknown
+
+
 def _refuse_workload_off_its_routes(connection: HTTPConnection) -> None:
     """A workload's token reaches only the routes ``actor_policy`` opens to it.
 
@@ -455,7 +494,9 @@ def _refuse_workload_off_its_routes(connection: HTTPConnection) -> None:
     """
     template = route_template(connection)
     method = str(connection.scope.get("method", "GET"))
-    if template is None or not workload_may_call(method, template):
+    claims = getattr(connection.state, "delegation_claims", None)
+    app = claims is not None and claims.actor_type is WorkloadPrincipalType.APP
+    if template is None or not workload_may_call(method, template, app=app):
         raise refuse_workload("call this route")
 
 

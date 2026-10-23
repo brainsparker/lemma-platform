@@ -499,3 +499,26 @@ async def test_a_run_checks_the_browser_beside_its_own_sandbox() -> None:
     await _service(browser).already_signed_in(origin=SITE, auth_ctx=run)
 
     assert browser.browsers == [(pod_id, agent_id)]
+
+
+@pytest.mark.asyncio
+async def test_a_pending_sign_in_names_the_browser_it_is_for() -> None:
+    """A link opened on its own carries no pod: the page learns which
+    browser to show, and to ask about, from the pause -- the conversation's
+    pod and agent. Without them its page-url poll, its browser tab and its
+    view socket all went to the assistant's machine, which is not the one
+    the agent is waiting in."""
+    found = await _service(_Browser()).pending(conversation_id=uuid4(), user_id=OWNER)
+
+    assert found is not None
+    assert (found.pod_id, found.agent_id) == (POD, AGENT)
+
+
+@pytest.mark.asyncio
+async def test_the_pending_route_hands_the_page_its_pod_and_agent() -> None:
+    from app.modules.web_login.api.controllers.sign_in_controller import (
+        PendingSignInResponse,
+    )
+
+    fields = PendingSignInResponse.model_fields
+    assert {"pod_id", "agent_id"} <= set(fields)

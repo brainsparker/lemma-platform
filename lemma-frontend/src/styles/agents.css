@@ -339,3 +339,48 @@
 .agents-view--embedded { padding: 0; max-width: none; }
 .agents-view--embedded .agents-head { margin: 0 0 12px; justify-content: flex-end; }
 .agents-view--embedded .agents-head:empty { display: none; }
+
+/* ── An app's grants ────────────────────────────────────────────────────
+   What a pod app may do for whoever opens it, and the notice laid over the
+   app when one of its calls is refused for want of one. */
+.appgrants { display: flex; flex-direction: column; gap: 14px; font-size: 13px; color: var(--ink-2); }
+.appgrants__lede { margin: 0; line-height: 1.5; color: var(--ink-3); }
+.appgrants__quiet { margin: 0; color: var(--ink-3); }
+.appgrants__problem { margin: 0; padding: 10px 12px; border-radius: var(--r-md); background: var(--chrome); color: var(--ink); line-height: 1.5; }
+.appgrants__problem b { font-weight: 500; }
+.appgrants__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.appgrants__list li { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: var(--r-md); box-shadow: 0 0 0 1px var(--line); }
+.appgrants__list li[data-new] { box-shadow: 0 0 0 1px var(--accent); }
+.appgrants__what { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+.appgrants__what b { font-weight: 500; color: var(--ink); overflow-wrap: anywhere; }
+.appgrants__what code, .appgrants__perms code, .appgrant-notice code { font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); overflow-wrap: anywhere; }
+.appgrants__badge { font-size: 11px; padding: 2px 6px; border-radius: 999px; background: var(--chrome); color: var(--ink-2); }
+.appgrants__add { display: flex; flex-direction: column; gap: 10px; padding-top: 12px; border-top: 1px solid var(--line); }
+.appgrants__add h4 { margin: 0; font-size: 13px; font-weight: 500; color: var(--ink); }
+.appgrants__fields { display: flex; gap: 10px; flex-wrap: wrap; }
+.appgrants__fields label { display: flex; flex-direction: column; gap: 4px; flex: 1 1 160px; }
+.appgrants__fields span, .appgrants__perms legend { font-size: 12px; color: var(--ink-3); }
+.appgrants__fields select, .appgrants__fields input {
+    font: inherit; font-size: 13px; color: var(--field-ink); background: var(--field);
+    border: 1px solid var(--line-2); border-radius: var(--r-sm); padding: 6px 8px; min-height: 36px; width: 100%;
+}
+.appgrants__perms { margin: 0; padding: 0; border: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 6px 12px; }
+.appgrants__perms label { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; min-height: 28px; cursor: pointer; }
+.appgrants__add .btn { align-self: flex-start; }
+.appgrants__actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+.appgrant-notice {
+    position: absolute; z-index: 3; top: 12px; left: 12px; right: 12px;
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 12px 14px; border-radius: var(--r-lg);
+    background: var(--paper); color: var(--ink-2); border: 1px solid var(--line);
+    box-shadow: var(--depth-rest);
+}
+.appgrant-notice[hidden] { display: none; }
+.appgrant-notice p { margin: 0; flex: 1 1 260px; display: flex; flex-direction: column; gap: 2px; font-size: 13px; line-height: 1.45; }
+.appgrant-notice b { font-weight: 500; color: var(--ink); }
+.appgrant-notice small { color: var(--ink-3); }
+@media (max-width: 600px) {
+    .appgrant-notice { left: 8px; right: 8px; top: 8px; }
+    .appgrant-notice .btn, .appgrant-notice .linkish { min-height: 44px; }
+}

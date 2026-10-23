@@ -36,6 +36,20 @@ class PendingSignInResponse(BaseModel):
     tool_call_id: str
     origin: str
     reason: str
+    pod_id: UUID | None = Field(
+        default=None,
+        description=(
+            "The conversation's pod: whose browser the sign-in goes into. Pass "
+            "it, with `agent_id`, on every workspace browser call the page makes."
+        ),
+    )
+    agent_id: UUID | None = Field(
+        default=None,
+        description=(
+            "The conversation's agent when it is a named one; absent is the pod "
+            "assistant's browser."
+        ),
+    )
 
 
 class AnswerSignInRequest(BaseModel):
@@ -89,6 +103,8 @@ async def get_pending_sign_in(
         tool_call_id=found.tool_call_id,
         origin=found.origin,
         reason=found.reason,
+        pod_id=found.pod_id,
+        agent_id=found.agent_id,
     )
 
 

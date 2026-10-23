@@ -101,6 +101,7 @@ from ..openapi_client.api.connectors import (
     pod_connector_account_list,
     pod_connector_account_remove,
     pod_connector_account_update,
+    pod_connector_ask_members,
     pod_connector_create,
     pod_connector_delete,
     pod_connector_get,
@@ -113,6 +114,8 @@ from ..openapi_client.api.connectors import (
 from ..openapi_client.models.operation_execution_request import (
     OperationExecutionRequest,
 )
+from ..openapi_client.models.ask_members_request import AskMembersRequest
+from ..openapi_client.models.ask_members_response import AskMembersResponse
 from ..openapi_client.models.pod_account_create_request import PodAccountCreateRequest
 from ..openapi_client.models.pod_account_list_response import PodAccountListResponse
 from ..openapi_client.models.pod_account_response import PodAccountResponse
@@ -477,6 +480,24 @@ class BoundConnectors(BoundResource):
     def remove_pod_connector(self, connector: str) -> None:
         """Stop the pod using ``connector``; the org installation stays."""
         self._call(pod_connector_delete, self._pod_uuid(), connector)
+
+    def ask_members_to_connect(
+        self, connector: str, *, user_ids: list[str] | None = None
+    ) -> AskMembersResponse:
+        """Ask the members a PER_MEMBER ``connector`` is waiting on to connect.
+
+        One line each in their own channel with the pod. A member is asked
+        about one connector at most once a day; ``asked_recently`` names those
+        skipped. ``user_ids`` asks only those of them. Needs
+        ``pod.connector.manage``.
+        """
+        return self._call(
+            pod_connector_ask_members,
+            self._pod_uuid(),
+            connector,
+            body=compact({"user_ids": user_ids}),
+            body_model=AskMembersRequest,
+        )
 
     def pod_accounts(self) -> PodAccountListResponse:
         """The accounts in use in this pod that the caller can see."""

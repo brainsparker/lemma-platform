@@ -117,6 +117,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/apps/{app_name}/assets` | `app.asset.root.get` | Get App Root Asset |
 | GET | `/pods/{pod_id}/apps/{app_name}/assets/{asset_path}` | `app.asset.get` | Get App Asset |
 | GET | `/pods/{pod_id}/apps/{app_name}/dist/archive` | `app.dist.archive.get` | Download App Dist Archive |
+| GET | `/pods/{pod_id}/apps/{app_name}/permissions` | `app.permissions.get` | Get App Grants |
 | GET | `/pods/{pod_id}/apps/{app_name}/releases` | `app.release.list` | List App Releases |
 | GET | `/pods/{pod_id}/apps/{app_name}/source/archive` | `app.source.archive.get` | Download App Source Archive |
 | PATCH | `/pods/{pod_id}/apps/{app_name}` | `app.update` | Update App |
@@ -124,6 +125,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/pods/{pod_id}/apps/from-widget` | `app.create_from_widget` | Save Widget As App |
 | POST | `/pods/{pod_id}/apps/{app_name}/bundle` | `app.bundle.upload` | Upload App Bundle |
 | POST | `/pods/{pod_id}/apps/{app_name}/releases/{release_ref}/promote` | `app.release.promote` | Promote App Release |
+| PUT | `/pods/{pod_id}/apps/{app_name}/permissions` | `app.permissions.replace` | Replace App Grants |
 
 ## channels
 
@@ -201,6 +203,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/organizations/{organization_id}/connectors/{auth_config_name}/operations/details` | `connector.operation.details.batch` | Get Connector Operation Details In Batch |
 | POST | `/pods/{pod_id}/connector-accounts` | `pod.connector_account.add` | Add One Of Your Accounts To The Pod |
 | POST | `/pods/{pod_id}/connectors` | `pod.connector.create` | Declare A Pod Connector |
+| POST | `/pods/{pod_id}/connectors/{slug}/ask-members` | `pod.connector.ask_members` | Ask Members To Connect |
 | POST | `/pods/{pod_id}/connectors/{slug}/operations/{operation_name}/execute` | `pod.connector.operation.execute` | Execute Pod Connector Operation |
 
 ## contacts
@@ -306,6 +309,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/organizations/{organization_id}/home` | `org.home` | Get Organization Home |
 | GET | `/organizations/{organization_id}/invitations` | `org.invitation.list` | List Organization Invitations |
 | GET | `/organizations/{organization_id}/members` | `org.member.list` | List Organization Members |
+| GET | `/organizations/{organization_id}/permissions/me` | `org.permissions.me` | My Permissions In An Organization |
 | GET | `/users/me` | `user.current.get` | Get Current User |
 | GET | `/users/me/email-delivery` | `user.email_delivery.get` | Get Email Delivery Status |
 | GET | `/users/me/profile` | `user.profile.get` | Get User Profile |

@@ -330,11 +330,16 @@ def _delegated_allowed_actions_expr(
     # used to be the workload's grants alone, so search and listings returned
     # rows a direct read of the same row refused (an agent with a pod-wide
     # folder grant searched a RESTRICTED folder its person could not open).
-    from app.core.authorization.workload_authority import invoking_person_context
+    from app.core.authorization.workload_authority import (
+        invoking_person_context,
+        is_app,
+    )
 
-    if ctx.pod_id is not None and not ctx.belongs_to_its_pod():
+    if ctx.pod_id is not None and not ctx.belongs_to_its_pod() and not is_app(ctx):
         # The person it acts for left the pod: the ladder refuses the workload
-        # outright (``_outside_the_pod_decision``), Public rows included.
+        # outright (``_outside_the_pod_decision``), Public rows included. An
+        # app's viewer outside the pod keeps Public reads, which the person's
+        # half below already narrows them to.
         return empty_actions
     person = invoking_person_context(ctx.authorizer, ctx)
     person_actions = (

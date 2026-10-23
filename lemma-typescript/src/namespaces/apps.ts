@@ -4,6 +4,7 @@ import type { CreateAppRequest } from "../openapi_client/models/CreateAppRequest
 import type { AppBundleUploadRequest } from "../openapi_client/models/AppBundleUploadRequest.js";
 import type { UpdateAppRequest } from "../openapi_client/models/UpdateAppRequest.js";
 import type { AppReleaseResponse } from "../openapi_client/models/AppReleaseResponse.js";
+import type { AppPermissionsReplaceRequest } from "../openapi_client/models/AppPermissionsReplaceRequest.js";
 import { AppsService } from "../openapi_client/services/AppsService.js";
 
 export class AppsNamespace {
@@ -28,6 +29,20 @@ export class AppsNamespace {
   delete(name: string) {
     return this.client.request(() => AppsService.appDelete(this.podId(), name));
   }
+
+  /**
+   * The app's declared grants. Its page acts for whoever views it with that
+   * viewer's access intersected with these; a call outside them is refused
+   * `403 APP_NOT_GRANTED`, naming the resource and permission to add here.
+   */
+  readonly permissions = {
+    get: (name: string) =>
+      this.client.request(() => AppsService.appPermissionsGet(this.podId(), name)),
+
+    /** Replaces every grant; each must be one the caller could use themselves. */
+    replace: (name: string, payload: AppPermissionsReplaceRequest) =>
+      this.client.request(() => AppsService.appPermissionsReplace(this.podId(), name, payload)),
+  };
 
   /** Promote a conversation widget into a persisted app (save as app). */
   createFromWidget(payload: {

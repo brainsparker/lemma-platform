@@ -15,13 +15,15 @@ pooled DB connection is ever held across non-DB work.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 from collections.abc import Callable
 from uuid import UUID
 
 from fastapi import Request
 
-from app.core.authorization.context import ResourceRef
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.authorization.context import Context, ResourceRef
 from app.core.authorization.permissions import Permissions
 from app.core.authorization.factory import create_authorization_data_service
 from app.core.authorization.scope import pod_context_scope, uow_scope
@@ -37,12 +39,24 @@ from app.modules.apps.services.app_access import (
 )
 from app.modules.identity.contracts.app_sessions import session_is_live_for
 from app.modules.mcp_access.contracts import grant_is_live
+from app.modules.apps.services.app_grants import (
+    assert_publisher_holds_app_grants,
+    delete_app_grants,
+)
 from app.modules.apps.services.app_service import AppService
 from app.modules.apps.services.archive_validation import inspect_app_archive
 from app.core.concurrency.offload import run_blocking
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
+
+
+class PublisherCheck(Protocol):
+    """Refuses to publish code behind grants the publisher could not use."""
+
+    async def __call__(
+        self, ctx: Context, session: AsyncSession, *, pod_id: UUID, app_id: UUID
+    ) -> None: ...
 
 
 if TYPE_CHECKING:
@@ -63,10 +77,14 @@ class AppUseCases:
         service_builder: Callable[[SqlAlchemyUnitOfWork], AppService],
         release_service_builder: Callable[[SqlAlchemyUnitOfWork], AppReleaseService]
         | None = None,
+        publisher_check: PublisherCheck = assert_publisher_holds_app_grants,
     ):
         self._uow_factory = uow_factory
         self._build = service_builder
         self._release_builder = release_service_builder
+        # Publishing puts the publisher's code behind the app's grants
+        # (``services/app_grants.py``).
+        self._publisher_check = publisher_check
 
     def _build_releases(self, uow: SqlAlchemyUnitOfWork) -> AppReleaseService:
         if self._release_builder is not None:
@@ -86,6 +104,9 @@ class AppUseCases:
             service = self._build(scope.uow)
             cleanup = await service.resolve_delete_app(
                 pod_id, app_name, user_id, ctx=scope.ctx
+            )
+            await delete_app_grants(
+                scope.uow.session, pod_id=pod_id, app_id=cleanup.app_id
             )
         await service.cleanup_app_storage(cleanup)
 
@@ -118,6 +139,10 @@ class AppUseCases:
                 has_source=source_archive_bytes is not None,
                 dist_archive_bytes=dist_archive_bytes,
                 ctx=scope.ctx,
+            )
+            # Publishing puts the uploader's code behind the app's grants.
+            await self._publisher_check(
+                scope.ctx, scope.uow.session, pod_id=pod_id, app_id=plan.app_id
             )
         written = await service.write_bundle_storage(
             plan, source_archive_bytes, dist_archive_bytes
@@ -370,9 +395,14 @@ class AppUseCases:
         async with pod_context_scope(
             self._uow_factory, request=request, user_id=user_id, pod_id=pod_id
         ) as scope:
-            return await self._build_releases(scope.uow).promote_release(
+            release = await self._build_releases(scope.uow).promote_release(
                 pod_id, app_name, release_ref, ctx=scope.ctx
             )
+            # A release is code put behind the app's grants, as an upload is.
+            await self._publisher_check(
+                scope.ctx, scope.uow.session, pod_id=pod_id, app_id=release.app_id
+            )
+            return release
 
     async def download_source_archive(
         self, *, pod_id: UUID, app_name: str, request: Request, user_id: UUID

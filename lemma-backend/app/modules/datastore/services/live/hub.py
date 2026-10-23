@@ -24,6 +24,7 @@ from uuid import UUID
 from opentelemetry import metrics
 from redis.exceptions import RedisError
 
+from app.core.authorization.delegation import DelegationClaims
 from app.core.domain.realtime import RealtimeChannel, RealtimeSlowConsumerError
 from app.core.live.access_clock import AccessClock
 from app.core.live.config import LiveSettings
@@ -173,7 +174,7 @@ class PodHub:
     async def _subscribe(
         self, connection: LiveConnection, request: SubscribeRequest, *, legacy: bool
     ) -> None:
-        tables = await self._tables_for(connection.user_id, request.table)
+        tables = await self._tables_for(connection, request.table)
         await self.ensure_started()
         async with self._lock:
             if connection.closed:
@@ -201,11 +202,12 @@ class PodHub:
                 self._index(subscription)
 
     async def _tables_for(
-        self, user_id: UUID, table_name: str | None
+        self, connection: LiveConnection, table_name: str | None
     ) -> list[LiveTable]:
+        user_id, app = connection.user_id, connection.app
         if table_name is not None:
-            return [await self._access.table(user_id, self.pod_id, table_name)]
-        return await self._access.readable_tables(user_id, self.pod_id)
+            return [await self._access.table(user_id, self.pod_id, table_name, app=app)]
+        return await self._access.readable_tables(user_id, self.pod_id, app=app)
 
     async def _join(self, subscription: LiveSubscription, since: str | None) -> None:
         """Bring a new subscription level with the hub. Runs under the lock."""
@@ -516,17 +518,27 @@ class PodHub:
         subscriptions = {
             subscription for subs in self._by_table.values() for subscription in subs
         }
-        by_user: dict[UUID, list[LiveSubscription]] = {}
+        # Per person, and per app acting for them: an app's page is held to
+        # its own grants, so it is never decided with its viewer's verdicts.
+        by_principal: dict[tuple[UUID, UUID | None], list[LiveSubscription]] = {}
         for subscription in subscriptions:
-            by_user.setdefault(subscription.user_id, []).append(subscription)
-        for user_id, subs in by_user.items():
-            await self._recheck_user(user_id, subs)
+            app = subscription.connection.app
+            key = (subscription.user_id, app.actor_id if app else None)
+            by_principal.setdefault(key, []).append(subscription)
+        for (user_id, _app_id), subs in by_principal.items():
+            await self._recheck_user(user_id, subs, app=subs[0].connection.app)
 
-    async def _recheck_user(self, user_id: UUID, subs: list[LiveSubscription]) -> None:
+    async def _recheck_user(
+        self,
+        user_id: UUID,
+        subs: list[LiveSubscription],
+        *,
+        app: DelegationClaims | None = None,
+    ) -> None:
         table_ids = sorted({table_id for sub in subs for table_id in sub.tables})
         try:
             verdicts = await self._access.still_readable(
-                user_id, self.pod_id, table_ids
+                user_id, self.pod_id, table_ids, app=app
             )
         except LiveAccessDenied:
             verdicts = dict.fromkeys(table_ids, UnsubscribedReason.ACCESS_REVOKED.value)
@@ -543,7 +555,7 @@ class PodHub:
                     if refreshed is None:
                         try:
                             refreshed = await self._access.readable_tables(
-                                user_id, self.pod_id
+                                user_id, self.pod_id, app=app
                             )
                         except LiveAccessDenied:
                             refreshed = []

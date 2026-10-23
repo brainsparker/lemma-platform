@@ -22,15 +22,19 @@ and `contracts/__init__` is imported by anything that wants any contract at all.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 from uuid import UUID
 
-from app.core.authorization.context import Context
+from app.core.authorization.context import Context, ResourceRef
+from app.core.authorization.grants import ResourceGrantInputProtocol
+from app.core.authorization.permissions import Permissions
 from app.modules.apps.api.dependencies import (
     _get_app_storage_factory,
     build_app_service,
 )
 from app.modules.apps.domain.entities import AppEntity
+from app.modules.apps.services.app_grants import replace_app_grants as _replace_grants
 from app.modules.apps.services.app_storage_phase import (
     AppStoragePhase,
     _UploadPlan,
@@ -155,12 +159,41 @@ async def finalize_app_bundle_upload(
     return await build_app_service(uow).finalize_upload_bundle(plan, written, user_id)
 
 
+async def replace_app_grants(
+    uow,
+    *,
+    ctx: Context,
+    pod_id: UUID,
+    app_name: str,
+    grants: Sequence[ResourceGrantInputProtocol],
+    user_id: UUID,
+) -> None:
+    """Replace the named app's grants, as its permissions route does.
+
+    ``app.update`` on the app, and every grant one the caller could use on that
+    resource themselves (``CONFERRAL_EXCEEDS_HOLDER``). An empty ``grants``
+    revokes them all.
+    """
+    app = await require_app(uow, pod_id=pod_id, name=app_name, user_id=user_id, ctx=ctx)
+    assert app.id is not None
+    await ctx.require(Permissions.APP_UPDATE, ResourceRef.app(pod_id, app.id))
+    await _replace_grants(
+        uow.session,
+        ctx=ctx,
+        pod_id=pod_id,
+        app_id=app.id,
+        grants=grants,
+        created_by_user_id=user_id,
+    )
+
+
 __all__ = [
     "create_app",
     "finalize_app_bundle_upload",
     "find_app_by_name",
     "list_app_names",
     "read_app_archive",
+    "replace_app_grants",
     "require_app",
     "resolve_app_bundle_upload",
     "resolve_app_dist_archive",

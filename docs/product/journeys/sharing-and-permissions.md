@@ -101,12 +101,14 @@ rights than the person who asked.
 
 ## Capability: Give software exactly what it needs
 
-### PS-ACCESS-020 — An agent or function never exceeds the person it acts for
+### PS-ACCESS-020 — An agent, function or app never exceeds the person it acts for
 **Status:** covered
 
 - While an agent or function acts on a person's behalf, the system shall grant
   it the intersection of that person's access and its own grants, and never the
   union.
+- While a pod app's page acts for the person viewing it, the system shall hold
+  it to the same intersection with the app's own grants.
 - If a workload holds a grant on a resource the invoking person cannot reach,
   then the system shall refuse the access.
 - The system shall apply this on every request the workload makes, not only on
@@ -121,7 +123,7 @@ rights than the person who asked.
   shared account for an agent would be the act that stopped the pod's members
   running it.
 
-**Contracts:** `agent.permissions.get`, `function.permissions.get`, `record.list`, `query.execute`
+**Contracts:** `agent.permissions.get`, `function.permissions.get`, `app.permissions.get`, `record.list`, `query.execute`
 
 ### PS-ACCESS-021 — No software does anything destructive by default
 **Status:** covered
@@ -312,7 +314,8 @@ rights than the person who asked.
 - Where the tool cannot show interactive views, when the person opens an app,
   the system shall give the tool the app's address.
 - While an app is open in the tool, the system shall let it read and change
-  only what the person may read and change in that pod.
+  only what the person may read and change in that pod, and of that only what
+  the app was granted.
 - While an app is open in the tool, the system shall refuse it anything in
   another pod.
 - When the person opens a private app in the tool, the system shall open it

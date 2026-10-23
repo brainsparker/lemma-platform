@@ -27,6 +27,7 @@ from app.core.authorization.grants import (
 )
 from app.core.authorization.permissions import Permissions
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.pod.contracts.grantees import require_pod_grantee
 from app.modules.connectors.api.schemas.pod_connector_schemas import (
     AccountPodUsage,
     GranteeRef,
@@ -276,8 +277,12 @@ class PodConnectorService:
         account_id: UUID,
         visibility: PodAccountVisibility,
         share_with: list[GranteeRef],
+        source: PodAccountSource = PodAccountSource.MANUAL,
     ) -> PodAccountResponse:
-        """The owner puts one of their own accounts in the pod."""
+        """The owner puts one of their own accounts in the pod.
+
+        ``source`` records how: by hand, or by an import that shared the
+        importer's own account for a bundled SHARED connector."""
         await ctx.require(Permissions.POD_READ, ResourceRef.pod(pod_id))
         account = await self._own_account(ctx, account_id)
         pod_account = await self.pod_accounts.add(
@@ -287,7 +292,7 @@ class PodConnectorService:
                 auth_config_id=account.auth_config_id,
                 owner_user_id=account.user_id,
                 visibility=PodAccountVisibility.PERSONAL,
-                source=PodAccountSource.MANUAL,
+                source=source,
             )
         )
         if visibility is not PodAccountVisibility.PERSONAL:
@@ -303,6 +308,7 @@ class PodConnectorService:
         visibility: PodAccountVisibility | None,
         share_with: list[GranteeRef] | None,
         is_member_default: bool | None,
+        allow_sandbox_use: bool | None = None,
     ) -> PodAccountResponse:
         pod_account = await self._pod_account(pod_id, pod_account_id)
         ref = ResourceRef.connector_account(pod_id, pod_account.id)
@@ -316,6 +322,18 @@ class PodConnectorService:
         if is_member_default:
             await self.pod_accounts.make_member_default(pod_account)
             pod_account = pod_account.model_copy(update={"is_member_default": True})
+        if allow_sandbox_use is not None:
+            if allow_sandbox_use and not pod_account.is_shared:
+                # Your own account already reaches your own sandbox; the opt-in
+                # is about everyone else's, so it needs the account shared.
+                raise PodConnectorValidationError(
+                    "Share the account with the pod before allowing it inside "
+                    "sandboxes.",
+                    reason="account_not_shared",
+                )
+            pod_account = await self.pod_accounts.set_sandbox_use(
+                pod_account.id, allow_sandbox_use
+            )
         return (await self._present_accounts([pod_account]))[0]
 
     async def remove_account(
@@ -349,10 +367,20 @@ class PodConnectorService:
                 resource_id=pod_account.id,
             )
         if visibility is PodAccountVisibility.PERSONAL:
-            # Withdrawn: SHARED connectors on it need another account, now.
+            # Withdrawn: SHARED connectors on it need another account, now, and
+            # the sandbox opt-in does not outlive the sharing it was given for.
             await self.pod_connectors.clear_shared_account([pod_account.id])
+            await self.pod_accounts.set_sandbox_use(pod_account.id, False)
         if visibility is PodAccountVisibility.RESTRICTED:
             for grantee in share_with or []:
+                # A role or member from another pod would be stored, match
+                # nobody, and stay behind as a dead grant.
+                await require_pod_grantee(
+                    self._session,
+                    pod_id=pod_account.pod_id,
+                    grantee_type=grantee.grantee_type,
+                    grantee_id=grantee.grantee_id,
+                )
                 await replace_resource_grantee_grant(
                     self._session,
                     pod_id=pod_account.pod_id,

@@ -39,6 +39,38 @@ class _Named:
 
 
 _DATASTORE = "app.modules.datastore.contracts.provisioning"
+_CONNECTORS = "app.modules.connectors.contracts.bundles"
+
+#: Ids the export must leave behind; their values are arbitrary.
+_INBOX_INSTALL, _CRM_INSTALL, _SHARED_POD_ACCOUNT = (str(uuid4()) for _ in range(3))
+
+#: The pod's connectors as `GET /pods/{pod}/connectors` returns them: one that
+#: runs as a colleague's shared account, one per member.
+_POD_CONNECTORS = [
+    {
+        "slug": "support-inbox",
+        "auth_config_id": _INBOX_INSTALL,
+        "installation_name": "gmail-acme",
+        "connector_id": "gmail",
+        "mode": "SHARED",
+        "shared_pod_account_id": _SHARED_POD_ACCOUNT,
+        "shared_account": {"email": "support@acme.example"},
+        "required": False,
+        "purpose": "The team mailbox.",
+        "visibility": "POD",
+        "status": "READY",
+    },
+    {
+        "slug": "crm",
+        "auth_config_id": _CRM_INSTALL,
+        "connector_id": "hubspot",
+        "mode": "PER_MEMBER",
+        "required": True,
+        "purpose": None,
+        "visibility": "POD",
+        "status": "READY",
+    },
+]
 _SURFACES = "app.modules.agent_surfaces.contracts.provisioning"
 
 
@@ -228,6 +260,11 @@ def patched_exporter(monkeypatch):
     monkeypatch.setattr(f"{_AGENTS}.list_agents", _listing(agents))
     monkeypatch.setattr(f"{_AGENTS}.require_agent", agent_ops.require)
 
+    async def _pod_connectors(uow, ctx, *, pod_id):
+        del uow, ctx, pod_id
+        return [dict(item) for item in _POD_CONNECTORS]
+
+    monkeypatch.setattr(f"{_CONNECTORS}.exported_pod_connectors", _pod_connectors)
     monkeypatch.setattr(f"{_WORKFLOWS}.list_workflow_names", _no_names)
     monkeypatch.setattr(f"{_SCHEDULES}.list_schedules", _no_schedules)
     _FakeAppOperations([]).patch(monkeypatch)
@@ -350,6 +387,35 @@ async def test_export_produces_expected_layout(patched_exporter, tmp_path):
     # Progress advanced to completion.
     assert progress[-1] == (progress[-1][1], progress[-1][1])
     assert progress[-1][1] >= 1
+
+
+async def test_each_pod_connector_exports_without_its_installation_or_account(
+    patched_exporter, tmp_path
+):
+    """A bundle names the catalog connector and the mode. The installation it
+    was mapped to and the colleague's account a SHARED one ran as belong to
+    the organization the bundle leaves, so neither is written."""
+    _filename, zip_bytes, _progress = await _run_export(patched_exporter)
+    root = extract_bundle(zip_bytes, tmp_path / "out")
+
+    shared = json.loads(
+        (root / "connectors" / "support-inbox" / "support-inbox.json").read_text()
+    )
+    assert shared == {
+        "connector": "gmail",
+        "mode": "SHARED",
+        "required": False,
+        "purpose": "The team mailbox.",
+    }
+    per_member = json.loads((root / "connectors" / "crm" / "crm.json").read_text())
+    assert per_member == {
+        "connector": "hubspot",
+        "mode": "PER_MEMBER",
+        "required": True,
+    }
+    raw = zip_bytes.decode("latin-1")
+    for org_id in ("0c3a1f8e", "6e1f2a3b", "gmail-acme", "support@acme"):
+        assert org_id not in raw
 
 
 async def test_with_data_writes_data_csv(patched_exporter, tmp_path):
@@ -896,3 +962,78 @@ async def test_one_unserializable_surface_warns_and_the_rest_still_export(
     assert not (tmp_path / "surfaces" / "sales_bot").exists()
     assert len(warnings) == 1
     assert "sales_bot" in warnings[0]
+
+
+async def test_an_app_exports_its_grants_with_a_pod_grant_among_them(
+    patched_exporter, tmp_path, monkeypatch
+):
+    """An app's page acts for its viewer within its own grants, so an app that
+    lands without them is refused everything it was built to do. They travel in
+    its manifest, by name, the pod itself as ``pod``."""
+    from app.core.authorization.context import ResourceType
+
+    # A real app's shape, so the exporter's own response adapter runs as it
+    # does in production rather than being stood in for.
+    app = SimpleNamespace(
+        id=uuid4(),
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        name="dashboard",
+        public_slug="dashboard",
+        description=None,
+        source_archive_path=None,
+        current_release_id=None,
+        status="READY",
+        visibility="POD",
+        created_at=None,
+        updated_at=None,
+    )
+    _FakeAppOperations([app], dist=_zip_bytes({"index.html": "<h1>hi</h1>"})).patch(
+        monkeypatch
+    )
+    asked: list[tuple[str, Any]] = []
+
+    async def _fake_list(session, *, pod_id, grantee_type, grantee_id):
+        asked.append((grantee_type, grantee_id))
+        if grantee_type != "APP":
+            return {}
+        return {
+            (ResourceType.POD, "pod"): ["datastore.table.read", "pod.read"],
+            (ResourceType.DATASTORE_TABLE, "leads"): ["datastore.record.read"],
+        }
+
+    monkeypatch.setattr(
+        "app.core.authorization.grants.list_grantee_resource_grants", _fake_list
+    )
+    filename, zip_bytes, _ = await patched_exporter.export(
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        data_tables=None,
+        file_folders=None,
+        include=["apps"],
+        ctx=object(),
+        uow=SimpleNamespace(session=object()),
+        on_progress=_ignore_progress,
+    )
+    root = extract_bundle(zip_bytes, tmp_path / "out")
+
+    manifest = json.loads((root / "apps" / "dashboard" / "dashboard.json").read_text())
+    assert ("APP", app.id) in asked
+    assert manifest["permissions"] == {
+        "grants": [
+            {
+                "resource_type": "pod",
+                "resource_name": "pod",
+                "permission_ids": ["datastore.table.read", "pod.read"],
+            },
+            {
+                "resource_type": "datastore_table",
+                "resource_name": "leads",
+                "permission_ids": ["datastore.record.read"],
+            },
+        ]
+    }
+
+
+async def _ignore_progress(done, total):
+    del done, total

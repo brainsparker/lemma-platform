@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import { usePictureInPicture } from "./use-picture-in-picture";
 import { CloseIcon, ExternalIcon } from "@/ui/icons";
 import { LiveScreen } from "./live-screen";
+import type { WorkspaceScope } from "./queries";
 import { type LiveState } from "./live";
 import { screenSay, type BrowserState, type MachineState } from "./machine";
 
@@ -54,7 +55,8 @@ function liveNote(state: LiveState): string {
  *  that connected on render would run a machine for anybody who left the tab
  *  open. It disconnects the moment this pane stops being the one on screen.
  */
-export function Screen({ state, browser, conversationId, visible, busy, onWake, onOpenTab, fill = false }: {
+export function Screen({ state, browser, scope, conversationId, visible, busy, onWake, onOpenTab, fill = false }: {
+    scope: WorkspaceScope | null;
     state: MachineState;
     browser: BrowserState | undefined;
     /** The screen is the whole view, not a card beside some text.
@@ -100,7 +102,7 @@ export function Screen({ state, browser, conversationId, visible, busy, onWake, 
                     <>
                         {pip.pipWindow ? (
                             <button className="screen-action" onClick={pip.close}>Bring it back</button>
-                        ) : <LiveScreen mode="control" conversationId={conversationId} onState={setLive} />}
+                        ) : <LiveScreen mode="control" scope={scope} conversationId={conversationId} onState={setLive} />}
                         {/* Full size, the panel's own close is the one close:
                             a second × on the picture was a control for the
                             same thing drawn twice. */}
@@ -141,7 +143,7 @@ export function Screen({ state, browser, conversationId, visible, busy, onWake, 
             )}
             {showing && pip.failed && <p className="computer-note" role="alert">Couldn’t open the floating window. You can keep using the browser here.</p>}
             {showing && pip.pipWindow && createPortal(
-                <LiveScreen mode="control" conversationId={conversationId} autoResize={false} onState={setLive} />,
+                <LiveScreen mode="control" scope={scope} conversationId={conversationId} autoResize={false} onState={setLive} />,
                 pip.pipWindow.document.body,
             )}
             {/* Full size, the bar above already says the state; the caption is

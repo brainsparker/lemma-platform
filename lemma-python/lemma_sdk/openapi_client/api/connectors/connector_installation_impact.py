@@ -66,6 +66,10 @@ def sync_detailed(
 ) -> Response[ErrorResponse | InstallationImpactResponse]:
     """What Removing An Installation Would Stop
 
+     Accounts, pod accounts and pod connectors on the installation, and the surfaces, schedules and MCP
+    event subscriptions that run through them: organization-wide counts, and per pod for the pods the
+    caller can open.
+
     Args:
         organization_id (UUID):
         auth_config_id (UUID):
@@ -98,6 +102,10 @@ def sync(
 ) -> ErrorResponse | InstallationImpactResponse | None:
     """What Removing An Installation Would Stop
 
+     Accounts, pod accounts and pod connectors on the installation, and the surfaces, schedules and MCP
+    event subscriptions that run through them: organization-wide counts, and per pod for the pods the
+    caller can open.
+
     Args:
         organization_id (UUID):
         auth_config_id (UUID):
@@ -124,6 +132,10 @@ async def asyncio_detailed(
     client: AuthenticatedClient | Client,
 ) -> Response[ErrorResponse | InstallationImpactResponse]:
     """What Removing An Installation Would Stop
+
+     Accounts, pod accounts and pod connectors on the installation, and the surfaces, schedules and MCP
+    event subscriptions that run through them: organization-wide counts, and per pod for the pods the
+    caller can open.
 
     Args:
         organization_id (UUID):
@@ -154,6 +166,10 @@ async def asyncio(
     client: AuthenticatedClient | Client,
 ) -> ErrorResponse | InstallationImpactResponse | None:
     """What Removing An Installation Would Stop
+
+     Accounts, pod accounts and pod connectors on the installation, and the surfaces, schedules and MCP
+    event subscriptions that run through them: organization-wide counts, and per pod for the pods the
+    caller can open.
 
     Args:
         organization_id (UUID):

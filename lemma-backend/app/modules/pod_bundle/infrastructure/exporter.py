@@ -38,7 +38,6 @@ from lemma_pod_bundle.layout import (
 )
 from lemma_pod_bundle.normalize import (
     _attach_permissions_payload,
-    _normalize_app_payload,
     _normalize_function_payload,
     _normalize_pod_payload,
     _normalize_schedule_payload,
@@ -48,6 +47,10 @@ from lemma_pod_bundle.normalize import (
 from lemma_pod_bundle.portability import _extract_portable_variables
 
 from app.modules.pod_bundle.infrastructure.exporter_agents import export_agents
+from app.modules.pod_bundle.infrastructure.exporter_apps import export_apps
+from app.modules.pod_bundle.infrastructure.exporter_connectors import (
+    export_connectors,
+)
 from app.modules.pod_bundle.infrastructure.exporter_surfaces import (
     export_surfaces,
 )
@@ -64,6 +67,7 @@ logger = get_logger(__name__)
 # out of scope for the export slice (the CLI's file/asset export is separate and
 # best-effort); we still create the empty dir for layout parity.
 _EXPORT_RESOURCE_TYPES = (
+    "connectors",
     "tables",
     "functions",
     "agents",
@@ -208,10 +212,6 @@ class BundleExporter:
         )
 
         # Lazy imports (avoid import cycles + keep the module import cheap).
-        from app.modules.apps.contracts.provisioning import (
-            list_app_names,
-            require_app,
-        )
         from app.modules.datastore.contracts.provisioning import (
             get_table,
             list_table_names,
@@ -249,6 +249,12 @@ class BundleExporter:
             total = 1 + sum(1 for rtype in _EXPORT_RESOURCE_TYPES if rtype in selected)
             done = 1
             await on_progress(done, total)
+
+            # --- connectors (named by slug by everything below) --------------
+            if "connectors" in selected:
+                await export_connectors(root, uow, ctx=ctx, pod_id=pod_id)
+                done += 1
+                await on_progress(done, total)
 
             # --- tables (+ optional data) -------------------------------------
             if "tables" in selected:
@@ -396,31 +402,16 @@ class BundleExporter:
 
             # --- apps ---------------------------------------------------------
             if "apps" in selected:
-                for app_name in sorted(
-                    await list_app_names(uow, pod_id=pod_id, user_id=user_id, ctx=ctx)
-                ):
-                    app = await require_app(
-                        uow, pod_id=pod_id, name=app_name, user_id=user_id, ctx=ctx
-                    )
-                    dir_ = root / "apps" / app_name
-                    dir_.mkdir(parents=True, exist_ok=True)
-                    _write_json(
-                        dir_ / f"{app_name}.json",
-                        _normalize_app_payload(_app_response_dict(app)),
-                    )
-                    # The app's source code is the critical payload: without it a
-                    # re-import gets an empty app. Download source (rebuildable) or,
-                    # for widget/no-source apps, the built dist — mirrors the CLI's
-                    # _download_app_assets so an API export carries app code too.
-                    await self._export_app_assets(
-                        uow=uow,
-                        pod_id=pod_id,
-                        app_name=app_name,
-                        user_id=user_id,
-                        dest=dir_,
-                        ctx=ctx,
-                        byte_budget=app_budget,
-                    )
+                await export_apps(
+                    uow,
+                    root=root,
+                    pod_id=pod_id,
+                    user_id=user_id,
+                    ctx=ctx,
+                    grants_payload=_resource_grants_payload,
+                    warnings=warnings,
+                    byte_budget=app_budget,
+                )
                 done += 1
                 await on_progress(done, total)
 
@@ -509,69 +500,6 @@ class BundleExporter:
         data_budget.consume(len(csv_text.encode("utf-8")))
         return kept, max(available, len(cleaned))
 
-    async def _export_app_assets(
-        self,
-        *,
-        uow: SqlAlchemyUnitOfWork,
-        pod_id: UUID,
-        app_name: str,
-        user_id: UUID,
-        dest: Path,
-        ctx: Context,
-        byte_budget: _ByteBudget,
-    ) -> None:
-        """Export source and dist, prioritizing source within the byte budget.
-
-        Source enables rebuilding for another pod; dist preserves the deployed
-        build and is the fallback when source is unavailable. Match the CLI's
-        ``_download_app_assets`` layout without claiming Vite build portability.
-        """
-        from app.modules.apps.contracts import AppNotFoundError
-        from app.modules.apps.contracts.provisioning import (
-            read_app_archive,
-            resolve_app_dist_archive,
-            resolve_app_source_archive,
-        )
-
-        source_bytes: bytes | None = None
-        try:
-            app_id, source_path = await resolve_app_source_archive(
-                uow, pod_id=pod_id, name=app_name, user_id=user_id, ctx=ctx
-            )
-            source_bytes = await read_app_archive(
-                uow, app_id=app_id, archive_path=source_path
-            )
-        except AppNotFoundError:
-            source_bytes = None
-
-        if source_bytes and byte_budget.allow(
-            name=f"apps/{app_name}/source", size=len(source_bytes)
-        ):
-            await run_blocking(
-                _extract_zip_bytes,
-                source_bytes,
-                dest / "source",
-                limiter="cpu_bound",
-            )
-
-        dist_bytes: bytes | None = None
-        try:
-            app_id, dist_path = await resolve_app_dist_archive(
-                uow, pod_id=pod_id, name=app_name, user_id=user_id, ctx=ctx
-            )
-            dist_bytes = await read_app_archive(
-                uow, app_id=app_id, archive_path=dist_path
-            )
-        except AppNotFoundError:
-            dist_bytes = None
-
-        if dist_bytes and byte_budget.allow(
-            name=f"apps/{app_name}/dist.zip", size=len(dist_bytes)
-        ):
-            await run_blocking(
-                (dest / "dist.zip").write_bytes, dist_bytes, limiter="cpu_bound"
-            )
-
     async def _export_pod_files(
         self,
         *,
@@ -610,7 +538,7 @@ async def _resource_grants_payload(
     warnings: list[str],
     grantee_name: str,
 ) -> dict[str, Any] | None:
-    """Serialize an agent's/function's resource grants into the bundle's portable
+    """Serialize an agent's, function's or app's grants into the bundle's portable
     ``{"grants": [...]}`` shape (keyed by ``resource_name``, never a source-org id).
 
     Mirrors the ``…/permissions`` GET endpoint the CLI exporter reads, so a pod

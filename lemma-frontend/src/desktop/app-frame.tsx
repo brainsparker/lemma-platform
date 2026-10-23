@@ -1,5 +1,8 @@
 "use client";
 
+import { useEffect, useRef, useState } from "react";
+import { readMissingGrantMessage, type MissingGrant } from "@/data/app-grants";
+import { AppNotGrantedNotice } from "@/stage/app-grants";
 import { AppWindowPanel } from "./app-window";
 import { useAppFrame } from "./pod-apps";
 
@@ -21,13 +24,32 @@ export function AppFrameView({
     hidden,
     frameRef,
     onFrameLoad,
+    owner,
 }: {
     url: string;
     hidden?: boolean;
     frameRef: (element: HTMLIFrameElement | null) => void;
     onFrameLoad: (view: Window | null) => void;
+    /** The pod and app name, for saying what the app was refused and
+     *  offering its grants. Absent, a refusal goes unsaid, as before. */
+    owner?: { podId: string; podName: string; appName: string };
 }) {
     const frame = useAppFrame(url);
+    const view = useRef<Window | null>(null);
+    const [missing, setMissing] = useState<MissingGrant | null>(null);
+    /* The SDK inside the app posts each refusal for want of a grant to the
+       page framing it. Only this frame's own window is heard: another frame,
+       or a page that framed us, does not get to put words over this app. */
+    useEffect(() => {
+        if (!owner) return;
+        const listen = (event: MessageEvent) => {
+            if (!view.current || event.source !== view.current) return;
+            const refused = readMissingGrantMessage(event.data);
+            if (refused) setMissing(refused);
+        };
+        window.addEventListener("message", listen);
+        return () => window.removeEventListener("message", listen);
+    }, [owner]);
     if (frame.kind === "window") return <AppWindowPanel url={url} hidden={hidden} reason={frame.reason} />;
     /* No frame yet: the shell answers in milliseconds, and a frame on the
        app's own address first would load it signed out and then swap. Said,
@@ -41,13 +63,25 @@ export function AppFrameView({
         );
     }
     return (
-        <iframe
-            ref={frameRef}
-            className="frame"
-            title="App"
-            src={frame.src}
-            hidden={hidden}
-            onLoad={event => onFrameLoad(event.currentTarget.contentWindow)}
-        />
+        <>
+            <iframe
+                ref={frameRef}
+                className="frame"
+                title="App"
+                src={frame.src}
+                hidden={hidden}
+                onLoad={event => {
+                    /* A reload is a fresh start: what the old page was
+                       refused is not this one's to say. */
+                    view.current = event.currentTarget.contentWindow;
+                    setMissing(null);
+                    onFrameLoad(event.currentTarget.contentWindow);
+                }}
+            />
+            {owner && missing && (
+                <AppNotGrantedNotice podId={owner.podId} podName={owner.podName} appName={owner.appName} appLabel={appLabel(url)}
+                    missing={missing} hidden={hidden} onDismiss={() => setMissing(null)} />
+            )}
+        </>
     );
 }

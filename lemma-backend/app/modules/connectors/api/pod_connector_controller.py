@@ -19,6 +19,7 @@ from app.core.authorization.dependencies import PodContextDep
 from app.modules.connectors.api.dependencies import (
     ConnectorOperationServiceDep,
     ConnectorOperationUseCasesDep,
+    PodConnectorCoverageServiceDep,
     PodConnectorServiceDep,
 )
 from app.modules.connectors.api.schemas.connector_operation_schemas import (
@@ -29,6 +30,8 @@ from app.modules.connectors.api.schemas.connector_operation_schemas import (
 )
 from app.modules.connectors.api.schemas.pod_connector_schemas import (
     AccountPodUsageResponse,
+    AskMembersRequest,
+    AskMembersResponse,
     InstallationImpactResponse,
     PodAccountCreateRequest,
     PodAccountListResponse,
@@ -57,9 +60,15 @@ _PERSON_ONLY = require_person("share or add a connected account")
     summary="List Pod Connectors",
 )
 async def list_pod_connectors(
-    pod_id: UUID, ctx: PodContextDep, service: PodConnectorServiceDep
+    pod_id: UUID,
+    ctx: PodContextDep,
+    service: PodConnectorServiceDep,
+    coverage: PodConnectorCoverageServiceDep,
 ) -> PodConnectorListResponse:
-    return PodConnectorListResponse(items=await service.list_connectors(ctx, pod_id))
+    items = await service.list_connectors(ctx, pod_id)
+    return PodConnectorListResponse(
+        items=await coverage.with_coverage(ctx, pod_id, items)
+    )
 
 
 @router.post(
@@ -85,9 +94,14 @@ async def create_pod_connector(
     summary="Get Pod Connector",
 )
 async def get_pod_connector(
-    pod_id: UUID, slug: str, ctx: PodContextDep, service: PodConnectorServiceDep
+    pod_id: UUID,
+    slug: str,
+    ctx: PodContextDep,
+    service: PodConnectorServiceDep,
+    coverage: PodConnectorCoverageServiceDep,
 ) -> PodConnectorResponse:
-    return await service.get_connector(ctx, pod_id, slug)
+    found = await service.get_connector(ctx, pod_id, slug)
+    return (await coverage.with_coverage(ctx, pod_id, [found]))[0]
 
 
 @router.patch(
@@ -116,6 +130,31 @@ async def delete_pod_connector(
     pod_id: UUID, slug: str, ctx: PodContextDep, service: PodConnectorServiceDep
 ) -> None:
     await service.delete_connector(ctx, pod_id, slug)
+
+
+@router.post(
+    "/connectors/{slug}/ask-members",
+    response_model=AskMembersResponse,
+    operation_id="pod.connector.ask_members",
+    summary="Ask Members To Connect",
+    description=(
+        'Post one line, "This pod uses <connector> — connect yours: '
+        '<connect_url>", in the own channel of each member a PER_MEMBER '
+        "connector is waiting on. A member is asked about one connector at "
+        "most once a day; those asked already are returned as `asked_recently`."
+    ),
+    dependencies=[require_person("ask members to connect")],
+)
+async def ask_members_to_connect(
+    pod_id: UUID,
+    slug: str,
+    ctx: PodContextDep,
+    coverage: PodConnectorCoverageServiceDep,
+    body: AskMembersRequest | None = None,
+) -> AskMembersResponse:
+    return await coverage.ask_members(
+        ctx, pod_id, slug, user_ids=body.user_ids if body else None
+    )
 
 
 @router.get(
@@ -246,6 +285,7 @@ async def update_pod_account(
         visibility=body.visibility,
         share_with=body.share_with,
         is_member_default=body.is_member_default,
+        allow_sandbox_use=body.allow_sandbox_use,
     )
 
 
@@ -284,6 +324,11 @@ async def account_pod_usage(
     response_model=InstallationImpactResponse,
     operation_id="connector.installation.impact",
     summary="What Removing An Installation Would Stop",
+    description=(
+        "Accounts, pod accounts and pod connectors on the installation, and the "
+        "surfaces, schedules and MCP event subscriptions that run through them: "
+        "organization-wide counts, and per pod for the pods the caller can open."
+    ),
 )
 async def installation_impact(
     organization_id: UUID,
@@ -291,8 +336,15 @@ async def installation_impact(
     user: CurrentUser,
     service: PodConnectorServiceDep,
 ) -> InstallationImpactResponse:
-    return await service.impact(
+    # Imported here: it reaches the surfaces, schedules and pods contracts,
+    # which nothing else on a connector route needs.
+    from app.modules.connectors.services.installation_impact import (
+        with_what_else_stops,
+    )
+
+    impact = await service.impact(
         user_id=user.id,
         organization_id=organization_id,
         auth_config_id=auth_config_id,
     )
+    return await with_what_else_stops(service.uow, impact, user_id=user.id)

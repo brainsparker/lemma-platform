@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from uuid import UUID
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +57,12 @@ class PendingSignIn:
     #: Verified instead of the origin root, both before asking and after
     #: answering -- see `SignInService.already_signed_in`.
     page_url: str | None = None
+    #: Whose browser: the conversation's pod, and its agent when it is a
+    #: named one (``None`` is the pod assistant's). A link opened on its own
+    #: knows neither, and every call the page makes about the browser -- the
+    #: page it is on, a tab onto it, the picture -- has to name it.
+    pod_id: UUID | None = None
+    agent_id: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -1,5 +1,5 @@
 import type { AuthManager } from "./auth.js";
-import { NetworkError, apiErrorFromStatus, isSessionRejection } from "./http.js";
+import { NetworkError, announceAppNotGranted, apiErrorFromStatus, isSessionRejection } from "./http.js";
 import { ApiError as GeneratedApiError } from "./openapi_client/core/ApiError.js";
 import { CancelablePromise } from "./openapi_client/core/CancelablePromise.js";
 import { OpenAPI } from "./openapi_client/core/OpenAPI.js";
@@ -101,13 +101,15 @@ export class GeneratedClientAdapter {
             continue;
           }
 
-          throw apiErrorFromStatus(
+          const refused = apiErrorFromStatus(
             error.status,
             extractMessage(error.body, error.message),
             extractCode(error.body),
             extractDetails(error.body),
             error.body,
           );
+          announceAppNotGranted(refused);
+          throw refused;
         }
 
         // Not an HTTP error (timeout/cancellation, programming error, raw

@@ -11,6 +11,14 @@ an operation **on the user's account** (delegated) — it never holds credential
 You address operations by the **auth-config name**, which you find with
 `lemma connectors overview`.
 
+## Grants it needs
+
+The app runs a connector only with `connector.use` on it among its own grants:
+`lemma apps permissions add <app> connector:<slug>:use`. Without it a call
+is `403 APP_NOT_GRANTED` naming the connector, even for
+a viewer who could run it themselves. The grant decides *whether* the app may
+use the connector; the connector still decides *whose account* it runs as.
+
 ## Discover, then execute
 
 Every `connectors.operations.*` call takes a **scope** first — `{ organizationId,
@@ -48,11 +56,37 @@ declares it, but cannot run anything.
   kind-specific (`package` and `composio` differ).
 - **Confirm side-effects.** An operation that sends/posts/charges is irreversible —
   gate it behind an explicit confirm and show what will happen.
-- **Handle the no-account case.** When the person has no account for a PER_MEMBER
-  connector, or the shared one is gone or expired, the call fails with a typed
-  error (`CONNECTION_REQUIRED`, `REAUTH_REQUIRED`, `CONNECTOR_NEEDS_ACCOUNT`)
-  whose body carries `connect_url`. Link them there; the app can't connect on
-  their behalf.
+- **Handle the not-connected case.** When the person has no account for a
+  PER_MEMBER connector, or the shared one is gone or expired, the call throws a
+  `ConnectionRequiredError` (`CONNECTION_REQUIRED`, `REAUTH_REQUIRED`,
+  `CONNECTOR_NEEDS_ACCOUNT`, `CONNECTOR_UNAVAILABLE`,
+  `CONNECTION_REQUIRES_PERSON`). The app can't connect on their behalf — show
+  the state and send them to `connectUrl`, the pod's Connections page, which
+  returns them once connected (see below).
+
+```ts
+import { ConnectionRequiredError } from "lemma-sdk";   // no-build: window.LemmaClient.ConnectionRequiredError
+
+try {
+  await client.connectors.pod.execute(slug, "gmail_send_email", payload);
+} catch (error) {
+  if (!(error instanceof ConnectionRequiredError)) throw error;
+  // error.code says which: REAUTH_REQUIRED is "sign in again" (error.isReauth),
+  // CONNECTOR_NEEDS_ACCOUNT is "someone has to share an account".
+  showNotConnected({
+    message: error.message,                        // the server's own sentence
+    action: error.connectUrl
+      ? (error.isReauth ? "Reconnect" : "Connect your account")
+      : null,                                      // nothing this person can do: say who can
+    onAction: () => error.connect(),               // opens connectUrl (a new tab from inside the app frame)
+  });
+}
+```
+
+  `connectUrl` is `null` when the person can't fix it themselves (a shared
+  account only its owner can reconnect, an installation an admin turned off) —
+  say so instead of offering a button that cannot work. Draw this state up
+  front, not only after a failed send.
 - For server-side calls (a function/agent acting for the user), the same operation
   runs through the in-function SDK with a granted connector — see `functions.md`.
 

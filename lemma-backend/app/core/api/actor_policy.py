@@ -107,16 +107,42 @@ WORKLOAD_ROUTES: frozenset[tuple[str, str]] = frozenset(
     }
 )
 
+#: Routes outside a pod that a pod app's page may call (H20). Far fewer than a
+#: named agent's: an app needs who is viewing it and nothing of their
+#: organization -- not its installations, not the accounts they connected, not
+#: a connect link, not the models an agent runs on.
+APP_ROUTES: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("GET", "/users/me"),
+        ("GET", "/users/me/profile"),
+        ("GET", "/connectors"),
+        ("GET", "/connectors/{connector_id}"),
+    }
+)
+
+#: Routes an app's host calls as its own door, answered as the person: they
+#: name the app by ``Origin`` themselves and hand out only that host's access
+#: cookie (``apps/api/controllers/app_access_controller.py``). Read as the app,
+#: a private app's sign-in page could never open it.
+APP_HOST_DOORS: frozenset[tuple[str, str]] = frozenset(
+    {("POST", "/apps/access/tickets")}
+)
+
 WORKLOAD_NOT_ALLOWED = "WORKLOAD_NOT_ALLOWED"
 
 
-def workload_may_call(method: str, path_template: str) -> bool:
-    """Whether a workload's token may call this route at all."""
+def workload_may_call(method: str, path_template: str, *, app: bool = False) -> bool:
+    """Whether a workload's token -- or, with ``app``, a pod app's page -- may
+    call this route at all."""
     if path_template == POD_SCOPED_PREFIX or path_template.startswith(
         POD_SCOPED_PREFIX + "/"
     ):
         return True
-    return (method.upper(), path_template) in WORKLOAD_ROUTES
+    route = (method.upper(), path_template)
+    if app:
+        # A door is reached from an app's host, though answered as its person.
+        return route in APP_ROUTES or route in APP_HOST_DOORS
+    return route in WORKLOAD_ROUTES
 
 
 def refuse_workload(action_label: str) -> DomainError:
@@ -168,6 +194,8 @@ def refuse_named_workloads(action_label: str):
 
 
 __all__ = [
+    "APP_HOST_DOORS",
+    "APP_ROUTES",
     "refuse_named_workloads",
     "POD_SCOPED_PREFIX",
     "WORKLOAD_NOT_ALLOWED",

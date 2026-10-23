@@ -136,6 +136,10 @@ DESTRUCTIVE_ACTIONS = {
 class WorkloadPrincipalType(str, Enum):
     AGENT = "AGENT"
     FUNCTION = "FUNCTION"
+    #: Never in a token: an app is recognised by the host its page is served
+    #: from (``authorization.app_principal``), so ``parse_delegation_claims``
+    #: refuses it.
+    APP = "APP"
 
     @classmethod
     def _missing_(cls, value: object) -> "WorkloadPrincipalType | None":
@@ -215,6 +219,9 @@ def parse_delegation_claims(payload: dict[str, Any]) -> DelegationClaims | None:
         parsed_actor_type = WorkloadPrincipalType(actor_type)
     except Exception as exc:
         raise DelegationClaimsError("Unsupported delegated actor type") from exc
+    if parsed_actor_type is WorkloadPrincipalType.APP:
+        # A token claiming to be an app would skip the host it must come from.
+        raise DelegationClaimsError("Unsupported delegated actor type")
 
     try:
         parsed_actor_id = UUID(str(actor_id))

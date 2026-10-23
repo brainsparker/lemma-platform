@@ -9093,7 +9093,10 @@ var LemmaClient = (() => {
   var browser_exports = {};
   __export(browser_exports, {
     ApiError: () => ApiError,
+    AppNotGrantedError: () => AppNotGrantedError,
     AuthManager: () => AuthManager,
+    ConnectionRequiredError: () => ConnectionRequiredError,
+    LEMMA_APP_NOT_GRANTED_MESSAGE_TYPE: () => LEMMA_APP_NOT_GRANTED_MESSAGE_TYPE,
     LEMMA_APP_THEME_MESSAGE_TYPE: () => LEMMA_APP_THEME_MESSAGE_TYPE,
     LEMMA_COMPOSE_MESSAGE_TYPE: () => LEMMA_COMPOSE_MESSAGE_TYPE,
     LEMMA_COMPOSE_RESULT_MESSAGE_TYPE: () => LEMMA_COMPOSE_RESULT_MESSAGE_TYPE,
@@ -9108,6 +9111,8 @@ var LemmaClient = (() => {
     composeInConversation: () => composeInConversation,
     getLemmaHostTheme: () => getLemmaHostTheme,
     getTestingToken: () => getTestingToken,
+    isAppNotGrantedError: () => isAppNotGrantedError,
+    isConnectionRequiredError: () => isConnectionRequiredError,
     isEmbeddedInHost: () => isEmbeddedInHost,
     resolveSafeRedirectUri: () => resolveSafeRedirectUri,
     setTestingToken: () => setTestingToken,
@@ -10365,7 +10370,115 @@ var LemmaClient = (() => {
       __publicField(this, "name", "NetworkError");
     }
   };
+  var CONNECTION_ERROR_CODES = [
+    "CONNECTION_REQUIRED",
+    "REAUTH_REQUIRED",
+    "CONNECTOR_NEEDS_ACCOUNT",
+    "CONNECTOR_UNAVAILABLE",
+    "CONNECTION_REQUIRES_PERSON"
+  ];
+  function detailString(details, key) {
+    if (!details || typeof details !== "object") return null;
+    const value = details[key];
+    return typeof value === "string" && value ? value : null;
+  }
+  var ConnectionRequiredError = class extends ApiError {
+    constructor(status, message, code, details, rawResponse) {
+      super(status, message, code, details, rawResponse);
+      __publicField(this, "name", "ConnectionRequiredError");
+      /** Where to connect or reconnect: the pod's Connections page, on this connector. */
+      __publicField(this, "connectUrl");
+      /** The pod connector's slug. */
+      __publicField(this, "podConnector");
+      /** The catalog connector behind it, e.g. `gmail`, when the server named it. */
+      __publicField(this, "connectorId");
+      this.connectUrl = detailString(details, "connect_url");
+      this.podConnector = detailString(details, "pod_connector");
+      this.connectorId = detailString(details, "connector_id");
+    }
+    /** Reconnecting an expired sign-in, as against connecting for the first time. */
+    get isReauth() {
+      return this.code === "REAUTH_REQUIRED";
+    }
+    /**
+     * Go and fix it: open `connectUrl`. Inside an embedded app the page leaves
+     * the frame for a new tab, since a pod app's frame may not navigate the
+     * window above it; elsewhere the current page goes there, and the
+     * Connections page returns the person once connected. Returns false when
+     * there is nowhere to go (no `connectUrl`, or no browser).
+     */
+    connect(options = {}) {
+      if (!this.connectUrl) return false;
+      const view = globalThis.window;
+      if (!view) return false;
+      let framed = false;
+      try {
+        framed = view.top !== view;
+      } catch {
+        framed = true;
+      }
+      if (options.newTab || framed) {
+        view.open(this.connectUrl, "_blank", "noopener");
+        return true;
+      }
+      view.location.assign(this.connectUrl);
+      return true;
+    }
+  };
+  function isConnectionRequiredError(error) {
+    return error instanceof ConnectionRequiredError;
+  }
+  var APP_NOT_GRANTED_CODE = "APP_NOT_GRANTED";
+  function detailStrings(details, key) {
+    if (!details || typeof details !== "object") return [];
+    const value = details[key];
+    return Array.isArray(value) ? value.filter((one) => typeof one === "string" && one.length > 0) : [];
+  }
+  var AppNotGrantedError = class extends ForbiddenError {
+    constructor(status, message, details, rawResponse) {
+      super(status, message, APP_NOT_GRANTED_CODE, details, rawResponse);
+      __publicField(this, "name", "AppNotGrantedError");
+      /** What the refused call was on: `datastore_table`, `folder`, `pod`, ... */
+      __publicField(this, "resourceType");
+      /** That resource's name -- a table's, a folder's path, `pod` for the pod. */
+      __publicField(this, "resourceName");
+      /** The permissions to grant the app, e.g. `["datastore.table.read"]`. */
+      __publicField(this, "permissionIds");
+      this.resourceType = detailString(details, "resource_type");
+      this.resourceName = detailString(details, "resource_name");
+      this.permissionIds = detailStrings(details, "permission_ids");
+    }
+  };
+  function isAppNotGrantedError(error) {
+    return error instanceof AppNotGrantedError;
+  }
+  var LEMMA_APP_NOT_GRANTED_MESSAGE_TYPE = "lemma-app-not-granted";
+  function announceAppNotGranted(error) {
+    if (!(error instanceof AppNotGrantedError)) return;
+    const view = globalThis.window;
+    if (!view) return;
+    try {
+      if (view.parent === view || !view.parent) return;
+      view.parent.postMessage(
+        {
+          type: LEMMA_APP_NOT_GRANTED_MESSAGE_TYPE,
+          resource_type: error.resourceType,
+          resource_name: error.resourceName,
+          permission_ids: error.permissionIds,
+          message: error.message
+        },
+        "*"
+      );
+    } catch {
+    }
+  }
   function apiErrorFromStatus(status, message, code, details, rawResponse, retryAfterMsValue) {
+    if (code && CONNECTION_ERROR_CODES.includes(code)) {
+      return new ConnectionRequiredError(status, message, code, details, rawResponse);
+    }
+    if (code === APP_NOT_GRANTED_CODE) {
+      return new AppNotGrantedError(status, message, details, rawResponse);
+    }
     switch (status) {
       case 401:
         return new UnauthorizedError(status, message, code, details, rawResponse);
@@ -10492,6 +10605,7 @@ var LemmaClient = (() => {
       if (isSessionRejection(error.statusCode, error.code)) {
         this.auth.markUnauthenticated();
       }
+      announceAppNotGranted(error);
       return error;
     }
     getRequestBody(options) {
@@ -10847,13 +10961,15 @@ var LemmaClient = (() => {
               await sleep(retryDelay);
               continue;
             }
-            throw apiErrorFromStatus(
+            const refused = apiErrorFromStatus(
               error.status,
               extractMessage(error.body, error.message),
               extractCode(error.body),
               extractDetails(error.body),
               error.body
             );
+            announceAppNotGranted(refused);
+            throw refused;
           }
           throw error;
         }
@@ -12289,6 +12405,51 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * Get App Grants
+     * An app's page acts for whoever views it, with that viewer's access intersected with these grants and never more. A call outside them is refused `403 APP_NOT_GRANTED`, naming the resource type, name and permission to grant here.
+     * @param podId
+     * @param appName
+     * @returns AppPermissionsResponse Successful Response
+     * @throws ApiError
+     */
+    static appPermissionsGet(podId, appName) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/apps/{app_name}/permissions",
+        path: {
+          "pod_id": podId,
+          "app_name": appName
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Replace App Grants
+     * An app's page acts for whoever views it, with that viewer's access intersected with these grants and never more. A call outside them is refused `403 APP_NOT_GRANTED`, naming the resource type, name and permission to grant here. Replacing them needs `app.update` on the app, and every grant must be one you could use yourself on that resource (`CONFERRAL_EXCEEDS_HOLDER` otherwise).
+     * @param podId
+     * @param appName
+     * @param requestBody
+     * @returns AppPermissionsResponse Successful Response
+     * @throws ApiError
+     */
+    static appPermissionsReplace(podId, appName, requestBody) {
+      return request(OpenAPI, {
+        method: "PUT",
+        url: "/pods/{pod_id}/apps/{app_name}/permissions",
+        path: {
+          "pod_id": podId,
+          "app_name": appName
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * List App Releases
      * @param podId
      * @param appName
@@ -12365,6 +12526,16 @@ var LemmaClient = (() => {
       __publicField(this, "client", client);
       __publicField(this, "http", http);
       __publicField(this, "podId", podId);
+      /**
+       * The app's declared grants. Its page acts for whoever views it with that
+       * viewer's access intersected with these; a call outside them is refused
+       * `403 APP_NOT_GRANTED`, naming the resource and permission to add here.
+       */
+      __publicField(this, "permissions", {
+        get: (name) => this.client.request(() => AppsService.appPermissionsGet(this.podId(), name)),
+        /** Replaces every grant; each must be one the caller could use themselves. */
+        replace: (name, payload) => this.client.request(() => AppsService.appPermissionsReplace(this.podId(), name, payload))
+      });
       __publicField(this, "assets", {
         get: (name, path) => this.http.request("GET", `/pods/${this.podId()}/apps/${name}/assets${path ? `/${path.replace(/^\/+/, "")}` : ""}`)
       });
@@ -14225,6 +14396,7 @@ var LemmaClient = (() => {
     }
     /**
      * What Removing An Installation Would Stop
+     * Accounts, pod accounts and pod connectors on the installation, and the surfaces, schedules and MCP event subscriptions that run through them: organization-wide counts, and per pod for the pods the caller can open.
      * @param organizationId
      * @param authConfigId
      * @returns InstallationImpactResponse Successful Response
@@ -14428,6 +14600,30 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * Ask Members To Connect
+     * Post one line, "This pod uses <connector> — connect yours: <connect_url>", in the own channel of each member a PER_MEMBER connector is waiting on. A member is asked about one connector at most once a day; those asked already are returned as `asked_recently`.
+     * @param podId
+     * @param slug
+     * @param requestBody
+     * @returns AskMembersResponse Successful Response
+     * @throws ApiError
+     */
+    static podConnectorAskMembers(podId, slug, requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/connectors/{slug}/ask-members",
+        path: {
+          "pod_id": podId,
+          "slug": slug
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * Discover Pod Connector Operations
      * @param podId
      * @param slug
@@ -14562,6 +14758,17 @@ var LemmaClient = (() => {
         create: (payload) => this.client.request(() => ConnectorsService.podConnectorCreate(this.podId(), payload)),
         update: (slug, payload) => this.client.request(() => ConnectorsService.podConnectorUpdate(this.podId(), slug, payload)),
         delete: (slug) => this.client.request(() => ConnectorsService.podConnectorDelete(this.podId(), slug)),
+        /**
+         * Ask the members a per-member connector is waiting on to connect: one
+         * line each in their own channel with the pod. Each member is asked about
+         * one connector at most once a day; `asked_recently` names the rest.
+         * Needs `pod.connector.manage`. `userIds` asks only those of them.
+         */
+        askMembers: (slug, options = {}) => this.client.request(() => ConnectorsService.podConnectorAskMembers(
+          this.podId(),
+          slug,
+          options.userIds ? { user_ids: options.userIds } : void 0
+        )),
         operations: async (slug, options = {}) => {
           var _a;
           const response = await this.client.request(() => {
@@ -14703,6 +14910,23 @@ var LemmaClient = (() => {
     }
     get(connectorId) {
       return this.client.request(() => ConnectorsService.connectorGet(connectorId));
+    }
+    /**
+     * Every pod one of my accounts is in: its visibility there, the SHARED pod
+     * connectors that run as it, and when it was last used.
+     */
+    accountPods(accountId) {
+      return this.client.request(() => ConnectorsService.connectorAccountPods(accountId));
+    }
+    /**
+     * What removing an installation would stop -- its accounts, every pod
+     * connector declared on it, and the surfaces, schedules and MCP event
+     * subscriptions running through those -- for the confirmation shown before
+     * it goes. Pods are named only where the caller can open them.
+     * Installation managers only.
+     */
+    installationImpact(organizationId, authConfigId) {
+      return this.client.request(() => ConnectorsService.connectorInstallationImpact(organizationId, authConfigId));
     }
     /**
      * Enable a connector for an organization, reusing an existing install only
@@ -15172,6 +15396,25 @@ var LemmaClient = (() => {
         }
       });
     }
+    /**
+     * My Permissions In An Organization
+     * The organization-level permission ids the caller holds here, such as `org.installation.manage`. Pod permissions are `/pods/{pod_id}/permissions/me`.
+     * @param organizationId
+     * @returns OrganizationEffectivePermissionsResponse Successful Response
+     * @throws ApiError
+     */
+    static orgPermissionsMe(organizationId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/organizations/{organization_id}/permissions/me",
+        path: {
+          "organization_id": organizationId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
   };
 
   // src/namespaces/organizations.ts
@@ -15265,6 +15508,14 @@ var LemmaClient = (() => {
      */
     navigation() {
       return this.client.request(() => OrganizationsService.orgNavigation());
+    }
+    /**
+     * The organization-level permission ids you hold in it, such as
+     * `org.installation.manage`. Ask for a permission, not a role: the server
+     * decides who holds what.
+     */
+    permissionsMe(orgId) {
+      return this.client.request(() => OrganizationsService.orgPermissionsMe(orgId));
     }
     /** One organization's pods, with their apps, agents and your roles. */
     home(orgId) {
@@ -21956,6 +22207,11 @@ var LemmaClient = (() => {
       resolveSafeRedirectUri,
       setTestingToken,
       ApiError,
+      ConnectionRequiredError,
+      isConnectionRequiredError,
+      AppNotGrantedError,
+      isAppNotGrantedError,
+      LEMMA_APP_NOT_GRANTED_MESSAGE_TYPE,
       POD_DEFAULT_AGENT_SELECTOR,
       LEMMA_APP_THEME_MESSAGE_TYPE,
       LEMMA_THEME_EVENT,

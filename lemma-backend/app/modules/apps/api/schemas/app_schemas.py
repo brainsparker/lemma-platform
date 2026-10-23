@@ -2,9 +2,44 @@ from datetime import datetime
 from typing import Any, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field, computed_field
+from pydantic import BaseModel, Field, computed_field, model_validator
 
+from app.core.authorization.context import ResourceType
+from app.core.authorization.grants import ensure_grant_uses_resource_name
 from app.modules.apps.domain.entities import AppStatus, public_app_url
+
+
+class AppResourcePermissionRequest(BaseModel):
+    """One thing the app may do for its viewer, e.g. ``datastore_table``
+    ``metrics`` ``[datastore.record.read]``."""
+
+    resource_type: ResourceType
+    resource_name: str
+    permission_ids: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _require_resource_name(cls, data: object) -> object:
+        return ensure_grant_uses_resource_name(data)
+
+
+class AppPermissionsReplaceRequest(BaseModel):
+    """The app's declared grants: what its page may do, at most, for whoever
+    views it. Replaces every grant it held; an empty list revokes them all."""
+
+    grants: list[AppResourcePermissionRequest] = Field(default_factory=list)
+
+
+class AppResourcePermissionResponse(BaseModel):
+    resource_type: ResourceType
+    resource_name: str
+    permission_ids: list[str] = Field(default_factory=list)
+
+
+class AppPermissionsResponse(BaseModel):
+    app_id: UUID
+    app_name: str
+    grants: list[AppResourcePermissionResponse] = Field(default_factory=list)
 
 
 class CreateAppRequest(BaseModel):
@@ -12,12 +47,24 @@ class CreateAppRequest(BaseModel):
     public_slug: str | None = None
     description: Optional[str] = None
     visibility: str | None = None
+    permissions: AppPermissionsReplaceRequest | None = Field(
+        default=None,
+        description=(
+            "The app's declared grants. Its page acts for its viewer with the "
+            "viewer's access intersected with these, and is refused "
+            "`APP_NOT_GRANTED` outside them."
+        ),
+    )
 
 
 class UpdateAppRequest(BaseModel):
     description: Optional[str] = None
     public_slug: Optional[str] = None
     visibility: str | None = None
+    permissions: AppPermissionsReplaceRequest | None = Field(
+        default=None,
+        description="Replaces the app's declared grants; absent leaves them.",
+    )
 
 
 class CreateAppFromWidgetRequest(BaseModel):

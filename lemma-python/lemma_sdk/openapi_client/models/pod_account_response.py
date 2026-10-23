@@ -29,6 +29,7 @@ class PodAccountResponse:
         pod_id (UUID):
         source (PodAccountSource):
         visibility (PodAccountVisibility):
+        allow_sandbox_use (bool | Unset):  Default: False.
         connector_id (None | str | Unset):
         display_name (None | str | Unset):
         email (None | str | Unset):
@@ -45,6 +46,7 @@ class PodAccountResponse:
     pod_id: UUID
     source: PodAccountSource
     visibility: PodAccountVisibility
+    allow_sandbox_use: bool | Unset = False
     connector_id: None | str | Unset = UNSET
     display_name: None | str | Unset = UNSET
     email: None | str | Unset = UNSET
@@ -70,6 +72,8 @@ class PodAccountResponse:
         source = self.source.value
 
         visibility = self.visibility.value
+
+        allow_sandbox_use = self.allow_sandbox_use
 
         connector_id: None | str | Unset
         if isinstance(self.connector_id, Unset):
@@ -116,6 +120,8 @@ class PodAccountResponse:
                 "visibility": visibility,
             }
         )
+        if allow_sandbox_use is not UNSET:
+            field_dict["allow_sandbox_use"] = allow_sandbox_use
         if connector_id is not UNSET:
             field_dict["connector_id"] = connector_id
         if display_name is not UNSET:
@@ -149,6 +155,8 @@ class PodAccountResponse:
         source = PodAccountSource(d.pop("source"))
 
         visibility = PodAccountVisibility(d.pop("visibility"))
+
+        allow_sandbox_use = d.pop("allow_sandbox_use", UNSET)
 
         def _parse_connector_id(data: object) -> None | str | Unset:
             if data is None:
@@ -206,6 +214,7 @@ class PodAccountResponse:
             pod_id=pod_id,
             source=source,
             visibility=visibility,
+            allow_sandbox_use=allow_sandbox_use,
             connector_id=connector_id,
             display_name=display_name,
             email=email,

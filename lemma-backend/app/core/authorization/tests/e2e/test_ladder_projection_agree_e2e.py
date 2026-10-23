@@ -11,6 +11,7 @@ case one of them handled and the other did not.
 So instead of naming cases, this builds random pods -- members with random
 roles, people who left, the assistant, named agents acting for any of them,
 resources of every visibility and owner, grants to members, roles and agents --
+and the pod apps a viewer opens, each an APP workload for that viewer (H20) --
 and asserts the two agree on every (actor, action, resource). Seeded, so a
 failure prints the seed that reproduces it.
 """
@@ -99,18 +100,21 @@ def _world(seed: int, pod_id: UUID, authorizer: Authorizer) -> World:
     user_id = uuid4()
     other_id = uuid4()
     person = _person_half(rng, user_id)
-    kind = rng.choice(["person", "assistant", "agent"])
+    kind = rng.choice(["person", "assistant", "agent", "app"])
     workload_refs: frozenset[PrincipalRef] = frozenset()
     if kind == "person":
         actor = Person(user_id=user_id)
     elif kind == "assistant":
         actor = Assistant(user_id=user_id)
     else:
-        agent_id = uuid4()
-        workload_refs = frozenset({PrincipalRef("AGENT", agent_id)})
+        # A named agent and a pod app are the same shape: a workload acting for
+        # a person, holding grants of its own.
+        workload_kind = WorkloadKind.AGENT if kind == "agent" else WorkloadKind.APP
+        workload_id = uuid4()
+        workload_refs = frozenset({PrincipalRef(workload_kind.value, workload_id)})
         actor = Workload(
-            kind=WorkloadKind.AGENT,
-            workload_id=agent_id,
+            kind=workload_kind,
+            workload_id=workload_id,
             for_user_id=user_id,
             principal_refs=workload_refs,
         )
@@ -123,9 +127,9 @@ def _world(seed: int, pod_id: UUID, authorizer: Authorizer) -> World:
         permission_ids=person["permissions"],
         principal_refs=person["refs"] | workload_refs,
         grant_principal_sets=(person["refs"],)
-        if kind != "agent"
+        if not workload_refs
         else (person["refs"], workload_refs),
-        invoker_principal_refs=person["refs"] if kind == "agent" else frozenset(),
+        invoker_principal_refs=person["refs"] if workload_refs else frozenset(),
     )
 
     resources: list[ResourceRef] = []

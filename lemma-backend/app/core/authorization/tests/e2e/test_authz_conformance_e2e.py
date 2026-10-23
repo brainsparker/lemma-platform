@@ -111,10 +111,12 @@ async def world(authenticated_client: AsyncClient, fixed_test_org, fixed_test_us
     }
 
 
-def _closed_routes(app, values: dict[str, str]) -> list[tuple[str, str, str]]:
+def _closed_routes(
+    app, values: dict[str, str], *, app_principal: bool = False
+) -> list[tuple[str, str, str]]:
     closed = []
     for method, template in _routes(app):
-        if workload_may_call(method, template):
+        if workload_may_call(method, template, app=app_principal):
             continue
         path = _concrete(template, values)
         if exemption_of(path, method) is not None:
@@ -818,3 +820,339 @@ async def test_H14_a_named_agent_deletes_records_only_when_granted_it(
 
     assert refused.status_code == status.HTTP_403_FORBIDDEN, refused.text
     assert allowed.status_code == status.HTTP_204_NO_CONTENT, allowed.text
+
+
+# --- H20: a pod app is its own principal, acting for its viewer ---
+#
+# An app's page calls the API from its own host with the viewer's session
+# cookie. The browser names that host in ``Origin`` and the page cannot change
+# it, so the request is the app (``core/authorization/app_principal``): the
+# viewer's access ∩ the app's own grants, and only the routes an app needs.
+
+APP_DOMAIN = "apps.conformance.test"
+
+
+@pytest.fixture
+def app_hosts(monkeypatch):
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "app_base_domain", APP_DOMAIN)
+
+
+async def _app(
+    client: AsyncClient,
+    pod_id: str,
+    *,
+    grants: list[dict] | None = None,
+    headers: dict[str, str] | None = None,
+) -> tuple[str, str]:
+    """An app in ``pod_id`` holding ``grants``, and the origin its page runs on."""
+    name = f"app_{uuid4().hex[:8]}"
+    created = await client.post(
+        f"/pods/{pod_id}/apps",
+        headers=headers,
+        json={"name": name, "public_slug": name.replace("_", "-")},
+    )
+    assert created.status_code == status.HTTP_201_CREATED, created.text
+    if grants is not None:
+        granted = await client.put(
+            f"/pods/{pod_id}/apps/{name}/permissions",
+            headers=headers,
+            json={"grants": grants},
+        )
+        assert granted.status_code == status.HTTP_200_OK, granted.text
+    return name, f"https://{created.json()['public_slug']}.{APP_DOMAIN}"
+
+
+def _from_app(origin: str, user: dict) -> dict[str, str]:
+    return {**_bearer(user), "Origin": origin}
+
+
+async def _app_viewer(authenticated_client, async_client, world, role: str) -> dict:
+    user, _ = await _member_of(
+        authenticated_client,
+        async_client,
+        org_id=world["org_id"],
+        pod_id=world["pod_id"],
+        role=role,
+    )
+    return user
+
+
+_READ_ROWS = ("datastore.table.read", "datastore.record.read")
+
+
+async def test_H20_an_app_reads_a_table_it_was_granted(
+    authenticated_client: AsyncClient, async_client: AsyncClient, world, app_hosts
+):
+    viewer = await _app_viewer(authenticated_client, async_client, world, "POD_USER")
+    table = await _table(authenticated_client, world["pod_id"], {})
+    _, origin = await _app(
+        authenticated_client,
+        world["pod_id"],
+        grants=[_grant("datastore_table", table, *_READ_ROWS)],
+    )
+
+    response = await async_client.get(
+        _records(world["pod_id"], table), headers=_from_app(origin, viewer)
+    )
+
+    assert response.status_code == status.HTTP_200_OK, response.text
+
+
+async def test_H20_an_app_is_refused_a_table_its_viewer_reads_but_it_was_not_granted(
+    authenticated_client: AsyncClient, async_client: AsyncClient, world, app_hosts
+):
+    """H20: app JavaScript was the viewer, so it read everything they could."""
+    viewer = await _app_viewer(authenticated_client, async_client, world, "POD_USER")
+    granted = await _table(authenticated_client, world["pod_id"], {})
+    other = await _table(authenticated_client, world["pod_id"], {})
+    _, origin = await _app(
+        authenticated_client,
+        world["pod_id"],
+        grants=[_grant("datastore_table", granted, *_READ_ROWS)],
+    )
+
+    as_viewer = await async_client.get(
+        _records(world["pod_id"], other), headers=_bearer(viewer)
+    )
+    as_app = await async_client.get(
+        _records(world["pod_id"], other), headers=_from_app(origin, viewer)
+    )
+
+    assert as_viewer.status_code == status.HTTP_200_OK, as_viewer.text
+    assert as_app.status_code == status.HTTP_403_FORBIDDEN, as_app.text
+    body = as_app.json()
+    assert body["code"] == "APP_NOT_GRANTED", body
+    assert body["details"]["resource_type"] == "datastore_table", body
+    assert body["details"]["resource_name"] == other, body
+    assert set(body["details"]["permission_ids"]) & set(_READ_ROWS), body
+
+
+async def test_H20_an_apps_table_listing_shows_only_what_it_was_granted(
+    authenticated_client: AsyncClient, async_client: AsyncClient, world, app_hosts
+):
+    """Listings agree with the check: the pod grant opens the listing, the
+    table grants decide what is in it."""
+    viewer = await _app_viewer(authenticated_client, async_client, world, "POD_USER")
+    granted = await _table(authenticated_client, world["pod_id"], {})
+    other = await _table(authenticated_client, world["pod_id"], {})
+    _, origin = await _app(
+        authenticated_client,
+        world["pod_id"],
+        grants=[
+            _grant("pod", "pod", "datastore.table.read"),
+            _grant("datastore_table", granted, *_READ_ROWS),
+        ],
+    )
+
+    response = await async_client.get(
+        f"/pods/{world['pod_id']}/datastore/tables", headers=_from_app(origin, viewer)
+    )
+
+    assert response.status_code == status.HTTP_200_OK, response.text
+    names = {item["name"] for item in response.json()["items"]}
+    assert granted in names and other not in names, names
+
+
+async def test_H20_an_app_never_exceeds_its_viewer(
+    authenticated_client: AsyncClient, async_client: AsyncClient, world, app_hosts
+):
+    viewer = await _app_viewer(authenticated_client, async_client, world, "POD_VIEWER")
+    table = await _table(authenticated_client, world["pod_id"], {})
+    _, origin = await _app(
+        authenticated_client,
+        world["pod_id"],
+        grants=[
+            _grant("datastore_table", table, *_READ_ROWS, "datastore.record.write")
+        ],
+    )
+
+    response = await async_client.post(
+        _records(world["pod_id"], table),
+        headers=_from_app(origin, viewer),
+        json={"data": {"note": "from the app"}},
+    )
+
+    assert response.status_code == status.HTTP_403_FORBIDDEN, response.text
+    assert response.json()["code"] == "DELEGATION_EXCEEDS_INVOKER", response.text
+
+
+async def test_H20_an_app_is_pinned_to_its_own_pod(
+    authenticated_client: AsyncClient, async_client: AsyncClient, world, app_hosts
+):
+    viewer = await _app_viewer(authenticated_client, async_client, world, "POD_USER")
+    _, origin = await _app(authenticated_client, world["pod_id"], grants=[])
+
+    response = await async_client.get(
+        f"/pods/{world['other_pod_id']}/datastore/tables",
+        headers=_from_app(origin, viewer),
+    )
+
+    assert response.status_code == status.HTTP_403_FORBIDDEN, response.text
+
+
+async def test_H20_an_app_reaches_no_account_or_org_route(
+    authenticated_client: AsyncClient,
+    async_client: AsyncClient,
+    test_app,
+    world,
+    app_hosts,
+):
+    """H20: the viewer's session let an app list, rotate and delete every
+    account they had connected, and act on their organization."""
+    viewer = await _app_viewer(authenticated_client, async_client, world, "POD_USER")
+    _, origin = await _app(authenticated_client, world["pod_id"], grants=[])
+    headers = _from_app(origin, viewer)
+    values = {"organization_id": world["org_id"], "pod_id": world["pod_id"]}
+    closed = [
+        (method, template, path)
+        for method, template, path in _closed_routes(
+            test_app, values, app_principal=True
+        )
+    ]
+    # The account and org routes a named agent may read stay closed to an app.
+    assert ("GET", "/organizations/{organization_id}/connectors/accounts") in {
+        (method, template) for method, template, _ in closed
+    }
+
+    wrong = []
+    for method, template, path in closed:
+        response = await async_client.request(
+            method, path, headers=headers, json={} if method != "GET" else None
+        )
+        code = (
+            response.json().get("code")
+            if response.headers.get("content-type", "").startswith("application/json")
+            and isinstance(response.json(), dict)
+            else None
+        )
+        if response.status_code != status.HTTP_403_FORBIDDEN or (
+            code != WORKLOAD_NOT_ALLOWED
+        ):
+            wrong.append(f"{method} {template} -> {response.status_code} {code}")
+    assert not wrong, "\n".join(wrong)
+
+
+async def _pod_connector(authenticated_client: AsyncClient, db_session, world) -> str:
+    from app.modules.connectors.infrastructure.models.auth_config import AuthConfig
+    from app.modules.connectors.infrastructure.models.connector import Connector
+    from app.modules.connectors.infrastructure.models.connector_operation import (
+        ConnectorOperation,
+    )
+
+    connector_id = f"telemetry-{uuid4().hex[:8]}"
+    db_session.add(
+        Connector(
+            id=connector_id,
+            title="Telemetry",
+            description="authz conformance",
+            kinds=[{"kind": "http", "auth_scheme": "API_KEY"}],
+            is_active=True,
+        )
+    )
+    await db_session.flush()
+    install = AuthConfig(
+        organization_id=UUID(world["org_id"]),
+        connector_id=connector_id,
+        kind="http",
+        config_source="SYSTEM_DEFAULT",
+        status="ACTIVE",
+        name=connector_id,
+    )
+    db_session.add(install)
+    db_session.add(
+        ConnectorOperation(
+            id=f"{connector_id}:echo",
+            connector_id=connector_id,
+            name="echo",
+            provider_operation_name="echo",
+            description="Echo",
+            input_schema={"type": "object"},
+            output_schema={"type": "object"},
+        )
+    )
+    await db_session.commit()
+    declared = await authenticated_client.post(
+        f"/pods/{world['pod_id']}/connectors",
+        json={
+            "slug": connector_id,
+            "auth_config_id": str(install.id),
+            "mode": "PER_MEMBER",
+        },
+    )
+    assert declared.status_code == status.HTTP_201_CREATED, declared.text
+    return declared.json()["slug"]
+
+
+async def test_H20_an_app_runs_a_pod_connector_only_when_granted_its_use(
+    authenticated_client: AsyncClient,
+    async_client: AsyncClient,
+    world,
+    app_hosts,
+    db_session,
+):
+    """H20: an app ran every connector its viewer could -- their mail included."""
+    viewer = await _app_viewer(authenticated_client, async_client, world, "POD_USER")
+    slug = await _pod_connector(authenticated_client, db_session, world)
+    _, granted_origin = await _app(
+        authenticated_client,
+        world["pod_id"],
+        grants=[_grant("connector", slug, "connector.use")],
+    )
+    _, ungranted_origin = await _app(authenticated_client, world["pod_id"], grants=[])
+    path = f"/pods/{world['pod_id']}/connectors/{slug}/operations/echo/execute"
+
+    refused = await async_client.post(
+        path, headers=_from_app(ungranted_origin, viewer), json={"payload": {}}
+    )
+    granted = await async_client.post(
+        path, headers=_from_app(granted_origin, viewer), json={"payload": {}}
+    )
+
+    assert refused.status_code == status.HTTP_403_FORBIDDEN, refused.text
+    assert refused.json()["code"] == "APP_NOT_GRANTED", refused.text
+    assert refused.json()["details"]["resource_name"] == slug, refused.text
+    # Past its grant, the connector decides: the viewer has no account in it.
+    assert granted.json().get("code") not in {
+        "APP_NOT_GRANTED",
+        WORKLOAD_NOT_ALLOWED,
+    }, granted.text
+
+
+async def test_H20_a_publisher_cannot_grant_an_app_what_they_do_not_hold(
+    authenticated_client: AsyncClient, async_client: AsyncClient, world, app_hosts
+):
+    """Conferral: an app's grants are handed out by whoever sets them, and by
+    whoever publishes code behind them -- each must hold what the app gets."""
+    from app.modules.apps.tests.e2e.test_app_e2e import build_dist_archive
+
+    editor = await _app_viewer(authenticated_client, async_client, world, "POD_EDITOR")
+    secret = await _table(
+        authenticated_client, world["pod_id"], {}, visibility="RESTRICTED"
+    )
+    name, _ = await _app(async_client, world["pod_id"], headers=_bearer(editor))
+
+    granting = await async_client.put(
+        f"/pods/{world['pod_id']}/apps/{name}/permissions",
+        headers=_bearer(editor),
+        json={"grants": [_grant("datastore_table", secret, *_READ_ROWS)]},
+    )
+    # The owner may grant it; the editor then may not publish code behind it.
+    armed = await authenticated_client.put(
+        f"/pods/{world['pod_id']}/apps/{name}/permissions",
+        json={"grants": [_grant("datastore_table", secret, *_READ_ROWS)]},
+    )
+    published = await async_client.post(
+        f"/pods/{world['pod_id']}/apps/{name}/bundle",
+        headers=_bearer(editor),
+        files={
+            "dist_archive": ("dist.zip", build_dist_archive("X"), "application/zip")
+        },
+    )
+
+    assert granting.status_code == status.HTTP_403_FORBIDDEN, granting.text
+    assert granting.json()["code"] == "CONFERRAL_EXCEEDS_HOLDER"
+    assert armed.status_code == status.HTTP_200_OK, armed.text
+    assert published.status_code == status.HTTP_403_FORBIDDEN, published.text
+    assert published.json()["code"] == "CONFERRAL_EXCEEDS_HOLDER"

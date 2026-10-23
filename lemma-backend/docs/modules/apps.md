@@ -26,6 +26,7 @@ during pod-bundle import use the sandbox runtime from the bundle module.
 | --- | --- |
 | `apps` | Pod/name, public slug, metadata, readiness/current release |
 | `app_releases` | Immutable source/dist object keys, hashes, sizes, and release state |
+| `resource_permission_grants` (grantee `APP`) | The app's declared grants: what its page may do for its viewer |
 | Object storage/local store | Source and distribution zip archives plus extracted assets |
 
 ## API groups
@@ -35,6 +36,7 @@ during pod-bundle import use the sandbox runtime from the bundle module.
 | `/pods/{pod_id}/apps` | Create/list/read/update/delete app records |
 | `/.../apps/from-widget` | Promote a conversation widget into an app definition |
 | `/.../apps/{name}/bundle` | Upload source and/or built distribution archives and finalize a release |
+| `/.../apps/{name}/permissions` | Read or replace the app's declared grants (also inline `permissions` on create/update) |
 | `/.../assets...` | Serve an authenticated pod app asset |
 | `/.../source/archive`, `/.../dist/archive` | Download stored release archives |
 | `/public/apps...` | Host-based public app entrypoint/assets |
@@ -124,11 +126,51 @@ page a localhost API and no credentials (`references/cover.md` in that skill).
 
 ## Authorization and security
 
-Pod management/download routes use the normal pod context. Public apps are
-intended to execute app-auth logic through the injected SDK; app origins are
-separated by host routing. Path normalization and archive extraction prevent
-asset traversal. Apps remain arbitrary user-authored HTML/JS, so isolation by
-origin and response headers is part of the security boundary.
+Pod management/download routes use the normal pod context. Path normalization
+and archive extraction prevent asset traversal. Apps remain arbitrary
+user-authored HTML/JS, so isolation by origin and response headers is part of
+the security boundary.
+
+**An app is its own principal (audit H20).** App hosts are same-site with the
+API and an app's page calls it with the viewer's session cookie, so that call
+used to *be* the viewer -- their full authority and every account they had
+connected. `core/authorization/app_principal.py` now reads the app from the
+host the browser says the request came from: `Origin` when the page calls the
+API's host, `Host` when it calls through its own `/_lemma` door. A script
+cannot set either; the `__Host-` access cookie never reaches the API host, and
+`X-Lemma-App` is the app's own word, so neither is used. The request becomes
+`Workload(APP, app_id, for_user_id=viewer)`:
+
+- **Authority** is the viewer's access intersected with the app's grants, on
+  the same path a named agent takes -- the ladder, the SQL projections and
+  listings, the pod pin. A viewer outside the pod of a Public app keeps the
+  Public reads the app was granted.
+- **Routes**: pod routes, plus `APP_ROUTES` outside a pod (who is viewing,
+  the connector catalogue) in `core/api/actor_policy.py`. Account, org and
+  every other route answer `WORKLOAD_NOT_ALLOWED`. The ticket route is the
+  host's door (`APP_HOST_DOORS`), answered as the person. On the live socket
+  an app watches the `records` topic only, each table decided with its grants;
+  the other topics and calls decide as the viewer and refuse it.
+- **Refusal**: outside its grants an app gets `403 APP_NOT_GRANTED` with
+  `details.resource_type`, `resource_name` and `permission_ids`. No session
+  approval and no fallback to the viewer. The TS SDK throws it as
+  `AppNotGrantedError` and posts it (`lemma-app-not-granted`) to the page
+  framing the app; the web app says it over the app and offers an editor
+  "Add this grant", which opens the app's Grants panel with it prefilled.
+- **Grants** (`services/app_grants.py`) are ordinary grant rows with grantee
+  `APP`. Setting them is conferral: the setter must be able to do each on that
+  resource (`CONFERRAL_EXCEEDS_HOLDER`). Uploading a bundle or promoting a
+  release confers them again -- the publisher must hold every grant the app
+  has, since their code runs behind it. They are deleted with the app. A
+  check asked of the pod itself (listing its tables, talking to its agents) is
+  met by a grant on the pod, named `pod`, which carries only read and use
+  capabilities (`POD_GRANTABLE_PERMISSIONS` in `core/authorization/grants.py`).
+- **Existing apps** got, in migration 0062, reads of their pod's POD and
+  PUBLIC tables and top-level folders and files, and nothing else: nothing in
+  the database records what an app called (see the migration's section).
+- The API host serves an app's files under `/pods/{pod_id}/apps/{name}/assets`
+  with `Content-Security-Policy: sandbox`, so they never run as the API's own
+  origin, where same-origin reads carry no `Origin`.
 
 ## Tests and operations
 

@@ -61,6 +61,12 @@ def declare_resource_names(
 _POD_WIDE_GRANT_NAME = "/"
 _PREFIX_GRANT_RESOURCE_TYPES = (ResourceType.FOLDER, ResourceType.DOCUMENT)
 
+#: The pod itself, as a grant target: a check asked of the pod (listing its
+#: tables, talking to its assistant) is met only by a grant on the pod, and a
+#: workload holds such a grant under this name. One name in every pod, so it
+#: survives export and import like every other name.
+POD_GRANT_NAME = "pod"
+
 
 def _queryable_names(entry: ResourceNameTable, names: Iterable[str]) -> set[str]:
     """The names that could be in the name column at all.
@@ -115,6 +121,8 @@ async def resolve_resource_id_by_name(
         and resource_name == _POD_WIDE_GRANT_NAME
     ):
         return pod_id
+    if resource_type is ResourceType.POD:
+        return pod_id if resource_name == POD_GRANT_NAME else None
     entry = _NAME_REGISTRY.get(resource_type)
     if entry is None or not _queryable_names(entry, [resource_name]):
         return None
@@ -146,6 +154,10 @@ async def resolve_resource_ids_by_names(
     resolved: dict[tuple[ResourceType, str], UUID] = {}
     unsupported: set[ResourceType] = set()
     for resource_type, names in names_by_type.items():
+        if resource_type is ResourceType.POD:
+            if POD_GRANT_NAME in names:
+                resolved[(resource_type, POD_GRANT_NAME)] = pod_id
+            continue
         entry = _NAME_REGISTRY.get(resource_type)
         if entry is None:
             unsupported.add(resource_type)
@@ -206,6 +218,10 @@ async def resolve_resource_names_by_ids(
 
     resolved: dict[tuple[ResourceType, UUID], str] = {}
     for resource_type, resource_ids in ids_by_type.items():
+        if resource_type is ResourceType.POD:
+            if pod_id in resource_ids:
+                resolved[(resource_type, pod_id)] = POD_GRANT_NAME
+            continue
         entry = _NAME_REGISTRY.get(resource_type)
         if entry is None:
             continue

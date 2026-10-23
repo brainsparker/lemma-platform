@@ -55,6 +55,8 @@ class _ResolvedConnector(Protocol):
     bridge is concerned: whose account it is, and the account."""
 
     owner_user_id: UUID
+    #: The owner's "allow use inside sandboxes" on the pod account.
+    allow_sandbox_use: bool
     account: object
 
 
@@ -378,11 +380,11 @@ async def _resolve_github_credential(
     resolver as every connector operation, so the pod connector's mode decides
     the account and its typed refusals come back as a `GithubRefusal`.
 
-    Only the acting person's own account is written into a sandbox. A token
-    there is readable by every later command, and a SHARED connector's account
-    belongs to somebody who shared it for operations run through Lemma, not
-    for a shell to hold (design §3.8); there is no owner opt-in for that yet,
-    so it is refused.
+    Only the acting person's own account is written into a sandbox, or a
+    shared one whose owner ticked "allow use inside sandboxes". A token there
+    is readable by every later command, and a SHARED connector's account
+    belongs to somebody who shared it for operations run through Lemma -- a
+    shell holding it is a further thing only they can allow (design §3.8).
 
     The unit of work and the connector collaborators are arguments so this can
     be exercised without a database.
@@ -404,15 +406,17 @@ async def _resolve_github_credential(
                 )
             except DomainError as refused:
                 return _refusal(refused)
-            if resolved.owner_user_id != acting_person(auth_ctx):
+            borrowed = resolved.owner_user_id != acting_person(auth_ctx)
+            if borrowed and not resolved.allow_sandbox_use:
                 return GithubRefusal(
                     code="SHARED_ACCOUNT_NOT_FOR_SANDBOX",
                     message=(
                         "this pod's 'github' connector runs as an account somebody "
                         "shared with the pod, and a shared account is not put "
-                        "inside a workspace. Use the GitHub connector operations "
-                        "instead, or ask a pod editor for a per-member 'github' "
-                        "connector."
+                        "inside a workspace unless its owner allows use inside "
+                        "sandboxes. Use the GitHub connector operations instead, "
+                        "ask the account's owner to allow it, or ask a pod "
+                        "editor for a per-member 'github' connector."
                     ),
                 )
             account = resolved.account

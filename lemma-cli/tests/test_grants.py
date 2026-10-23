@@ -152,6 +152,23 @@ def test_grant_presets_only_use_permissions_the_backend_accepts():
         },
         "schedule": {"schedule.read", "schedule.update", "schedule.delete"},
         "app": {"app.read", "app.update", "app.publish", "app.delete"},
+        # The pod itself: the backend's POD_GRANTABLE_PERMISSIONS.
+        "pod": {
+            "pod.read",
+            "datastore.table.read",
+            "conversation.read",
+            "conversation.write",
+            "agent.read",
+            "agent.execute",
+            "function.read",
+            "function.execute",
+            "workflow.read",
+            "workflow.execute",
+            "app.read",
+            "channel.read",
+            "channel.write",
+            "contact.read",
+        },
     }
     assert set(PERMISSION_PRESETS) == set(applicable)
     for resource_type, presets in PERMISSION_PRESETS.items():

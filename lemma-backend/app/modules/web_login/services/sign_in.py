@@ -245,6 +245,11 @@ class SignInService:
                 # would tell a stranger that the conversation exists.
                 return None
             paused = await self._read_pause(uow, conversation_id)
+            workspace = (
+                await self._workspace_of(uow, conversation_id)
+                if paused is not None
+                else None
+            )
         if paused is None:
             return None
         origin = str(paused.tool_args.get("origin") or "")
@@ -255,6 +260,8 @@ class SignInService:
             origin=normalize_origin(origin),
             reason=str(paused.tool_args.get("reason") or ""),
             page_url=str(paused.tool_args.get("page_url") or "") or None,
+            pod_id=workspace[0] if workspace else None,
+            agent_id=workspace[1] if workspace else None,
         )
 
     async def answer(

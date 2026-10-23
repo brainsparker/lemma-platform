@@ -37,6 +37,11 @@ class _FakeSession:
     def get_access_token_payload(self) -> dict:
         return self._payload
 
+    def get_handle(self) -> str:
+        # `verify_auth` asks whether the request is an app's on its host, and
+        # keys that on the session handle, as SuperTokens' container provides.
+        return "session-handle"
+
 
 def _connection() -> SimpleNamespace:
     return SimpleNamespace(

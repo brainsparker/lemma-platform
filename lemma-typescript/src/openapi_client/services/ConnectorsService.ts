@@ -10,6 +10,8 @@ import type { AccountPodUsageResponse } from '../models/AccountPodUsageResponse.
 import type { AccountResponseSchema } from '../models/AccountResponseSchema.js';
 import type { AppTriggerListResponseSchema } from '../models/AppTriggerListResponseSchema.js';
 import type { AppTriggerResponseSchema } from '../models/AppTriggerResponseSchema.js';
+import type { AskMembersRequest } from '../models/AskMembersRequest.js';
+import type { AskMembersResponse } from '../models/AskMembersResponse.js';
 import type { AuthConfigCreateSchema } from '../models/AuthConfigCreateSchema.js';
 import type { AuthConfigListResponseSchema } from '../models/AuthConfigListResponseSchema.js';
 import type { AuthConfigOperationsRefreshResponseSchema } from '../models/AuthConfigOperationsRefreshResponseSchema.js';
@@ -747,6 +749,7 @@ export class ConnectorsService {
     }
     /**
      * What Removing An Installation Would Stop
+     * Accounts, pod accounts and pod connectors on the installation, and the surfaces, schedules and MCP event subscriptions that run through them: organization-wide counts, and per pod for the pods the caller can open.
      * @param organizationId
      * @param authConfigId
      * @returns InstallationImpactResponse Successful Response
@@ -968,6 +971,34 @@ export class ConnectorsService {
         return __request(OpenAPI, {
             method: 'PATCH',
             url: '/pods/{pod_id}/connectors/{slug}',
+            path: {
+                'pod_id': podId,
+                'slug': slug,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Ask Members To Connect
+     * Post one line, "This pod uses <connector> — connect yours: <connect_url>", in the own channel of each member a PER_MEMBER connector is waiting on. A member is asked about one connector at most once a day; those asked already are returned as `asked_recently`.
+     * @param podId
+     * @param slug
+     * @param requestBody
+     * @returns AskMembersResponse Successful Response
+     * @throws ApiError
+     */
+    public static podConnectorAskMembers(
+        podId: string,
+        slug: string,
+        requestBody?: (AskMembersRequest | null),
+    ): CancelablePromise<AskMembersResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/pods/{pod_id}/connectors/{slug}/ask-members',
             path: {
                 'pod_id': podId,
                 'slug': slug,

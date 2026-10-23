@@ -434,3 +434,38 @@ def _make_async_noop():
         return None
 
     return _noop
+
+
+async def test_apply_is_refused_while_the_plan_holds_a_grant_the_importer_cannot_make():
+    """The plan said so; the apply must not go ahead and fail at its last step
+    with the pod half-imported. Nothing is queued."""
+    from app.modules.pod_bundle.domain.errors import BundleGrantsRefusedError
+    from app.modules.pod_bundle.domain.state import PlanStep, StepAction, StepKind
+
+    uc, store, _, queue = _use_cases()
+    pod_id, user_id = uuid4(), uuid4()
+    state = _awaiting_state(
+        pod_id,
+        user_id,
+        steps=[
+            PlanStep(
+                index=0, kind=StepKind.APP, name="board", action=StepAction.CREATE
+            ),
+            PlanStep(
+                index=1,
+                kind=StepKind.APP_GRANTS,
+                name="board",
+                action=StepAction.UPDATE,
+                detail={"refused": ["datastore.table.read on pod 'pod'"]},
+            ),
+        ],
+    )
+    await store.save_import(state)
+    with pytest.raises(BundleGrantsRefusedError) as raised:
+        await uc.apply_import(pod_id=pod_id, import_id=state.import_id, user_id=user_id)
+    assert raised.value.details == {
+        "refused": ["app 'board': datastore.table.read on pod 'pod'"]
+    }
+    assert queue.calls == []
+    stored = await store.get_import(state.import_id)
+    assert stored.status is ImportStatus.AWAITING_CONFIRMATION

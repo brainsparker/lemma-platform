@@ -66,6 +66,10 @@ def _stub_pod_context(monkeypatch):
     )
 
 
+async def _holds_no_grants(ctx, session, *, pod_id, app_id) -> None:
+    return None
+
+
 def _use_cases(factory, service):
     return AppUseCases(factory, lambda uow: service)
 
@@ -104,7 +108,7 @@ async def test_dist_archive_resolves_in_uow_then_reads_after_release():
 @pytest.mark.asyncio
 async def test_bundle_finalize_failure_cleans_storage_before_reraising():
     factory = _TrackingUowFactory()
-    plan = object()
+    plan = SimpleNamespace(app_id=uuid4())
     written = object()
 
     class _FailingFinalizeService:
@@ -121,8 +125,13 @@ async def test_bundle_finalize_failure_cleans_storage_before_reraising():
 
     service = _FailingFinalizeService()
 
+    # Publish-time conferral reads the app's grants; this test is about the
+    # storage saga, so the app holds none.
+    use_cases = AppUseCases(
+        factory, lambda uow: service, publisher_check=_holds_no_grants
+    )
     with pytest.raises(RuntimeError, match="database commit failed"):
-        await _use_cases(factory, service).upload_bundle(
+        await use_cases.upload_bundle(
             pod_id=uuid4(),
             app_name="dashboard",
             request=SimpleNamespace(),

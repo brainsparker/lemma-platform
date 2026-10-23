@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { ChevronDownIcon, ChevronRightIcon, GlobeIcon, LockIcon } from "@/ui/icons";
-import { useForgetWebLogin, useWebLogins, type WebLogin } from "./queries";
+import { useForgetWebLogin, useWebLogins, type WebLogin, type WorkspaceScope } from "./queries";
 import { groupSites, loginNote, saidSoFor } from "./logins";
 
 /** The sites your teammate's browser is signed in to.
@@ -18,7 +18,9 @@ import { groupSites, loginNote, saidSoFor } from "./logins";
  *  it. `wake` is off for the same reason one step further out: opening a panel
  *  should not be what starts somebody's computer.
  */
-export function Logins({ visible, startOpen = false }: {
+export function Logins({ scope, visible, startOpen = false }: {
+    /** Whose browser: logins are per machine, and each agent has its own. */
+    scope: WorkspaceScope | null;
     visible: boolean;
     /** Already opened: in a drawer, the drawer was the click that asked. */
     startOpen?: boolean;
@@ -26,8 +28,8 @@ export function Logins({ visible, startOpen = false }: {
     const [open, setOpen] = useState(startOpen);
     const [wake, setWake] = useState(false);
     const [forgetting, setForgetting] = useState<string | null>(null);
-    const logins = useWebLogins(wake, visible && open);
-    const forget = useForgetWebLogin();
+    const logins = useWebLogins(scope, wake, visible && open);
+    const forget = useForgetWebLogin(scope);
 
     const items = logins.data?.items ?? [];
     const sleeping = logins.data?.sleeping === true;

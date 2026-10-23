@@ -37,7 +37,17 @@ from lemma_pod_bundle.limits import (
 from app.modules.pod_bundle.domain.exportable import is_exportable_agent
 from app.core.log.log import get_logger
 from app.modules.pod_bundle.domain.errors import BundleInvalidError
+from app.modules.pod_bundle.infrastructure.connector_planning import (
+    ConnectorLookup,
+    NoConnectorLookup,
+    plan_connectors,
+)
 from app.modules.pod_bundle.infrastructure.grants import has_grants
+from app.modules.pod_bundle.infrastructure.grant_planning import (
+    GrantConferral,
+    NoGrantConferral,
+    plan_app_grants,
+)
 from app.modules.pod_bundle.domain.state import (
     ImportPlan,
     PlanStep,
@@ -207,16 +217,26 @@ def _names_with_grants(bundle_root: Path, resource_type: str) -> list[str]:
 
 
 class PlanBuilder:
-    def __init__(self, existing: ExistingResources):
+    def __init__(
+        self,
+        existing: ExistingResources,
+        connectors: ConnectorLookup | None = None,
+        *,
+        grants: GrantConferral | None = None,
+    ):
         self._existing = existing
+        self._connectors = connectors or NoConnectorLookup()
+        self._grants = grants or NoGrantConferral()
 
     async def build_plan(self, *, bundle_root: Path) -> ImportPlan:
         pod_manifest = self._read_pod_manifest(bundle_root)
         format_version = int(pod_manifest.get("format_version") or 0)
         bundle_name = pod_manifest.get("name")
 
-        steps: list[PlanStep] = []
-        warnings: list[str] = []
+        # --- connectors first: everything else may name one by slug --------
+        connectors, steps, warnings = await plan_connectors(
+            bundle_root, self._connectors
+        )
 
         # --- tables (FK-ordered) + table_data --------------------------------
         table_dirs = _order_table_dirs_by_dependency(
@@ -355,6 +375,9 @@ class PlanBuilder:
                     action=StepAction.UPDATE,
                 )
             )
+        app_grant_steps, refusals = await plan_app_grants(bundle_root, self._grants)
+        steps.extend(app_grant_steps)
+        warnings.extend(refusals)
 
         # --- table data (after tables exist) ---------------------------------
         for name, _ in data_steps:
@@ -380,6 +403,7 @@ class PlanBuilder:
             steps=steps,
             variables=variables,
             warnings=warnings,
+            connectors=connectors,
         )
 
     def _simple_step(self, kind: StepKind, name: str, existing: set[str]) -> PlanStep:

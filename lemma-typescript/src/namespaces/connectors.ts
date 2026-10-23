@@ -105,6 +105,18 @@ export class ConnectorsNamespace {
       this.client.request(() => ConnectorsService.podConnectorUpdate(this.podId(), slug, payload)),
     delete: (slug: string) =>
       this.client.request(() => ConnectorsService.podConnectorDelete(this.podId(), slug)),
+    /**
+     * Ask the members a per-member connector is waiting on to connect: one
+     * line each in their own channel with the pod. Each member is asked about
+     * one connector at most once a day; `asked_recently` names the rest.
+     * Needs `pod.connector.manage`. `userIds` asks only those of them.
+     */
+    askMembers: (slug: string, options: { userIds?: string[] } = {}) =>
+      this.client.request(() => ConnectorsService.podConnectorAskMembers(
+        this.podId(),
+        slug,
+        options.userIds ? { user_ids: options.userIds } : undefined,
+      )),
     operations: async (slug: string, options: { query?: string; limit?: number } = {}) => {
       const response = await this.client.request(() => ConnectorsService.podConnectorOperationList(
         this.podId(),
@@ -144,6 +156,25 @@ export class ConnectorsNamespace {
         this.client.request(() => ConnectorsService.podConnectorAccountRemove(this.podId(), podAccountId)),
     },
   };
+
+  /**
+   * Every pod one of my accounts is in: its visibility there, the SHARED pod
+   * connectors that run as it, and when it was last used.
+   */
+  accountPods(accountId: string) {
+    return this.client.request(() => ConnectorsService.connectorAccountPods(accountId));
+  }
+
+  /**
+   * What removing an installation would stop -- its accounts, every pod
+   * connector declared on it, and the surfaces, schedules and MCP event
+   * subscriptions running through those -- for the confirmation shown before
+   * it goes. Pods are named only where the caller can open them.
+   * Installation managers only.
+   */
+  installationImpact(organizationId: string, authConfigId: string) {
+    return this.client.request(() => ConnectorsService.connectorInstallationImpact(organizationId, authConfigId));
+  }
 
   readonly triggers = {
     list: (scope: OperationScope, options: { search?: string; limit?: number } = {}) =>

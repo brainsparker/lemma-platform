@@ -16,6 +16,11 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from app.core.authorization.delegation import (
+    DELEGATION_VERSION,
+    DelegationClaims,
+    WorkloadPrincipalType,
+)
 from app.core.live.config import LiveSettings
 from app.core.live.connection import LiveConnection
 from app.core.live.protocol import (
@@ -124,31 +129,51 @@ class MemoryAccess:
         #: user -> readable table names; absent user reads everything.
         self.readable: dict[UUID, set[str]] = {}
 
-    def _can(self, user_id: UUID, name: str) -> bool:
-        allowed = self.readable.get(user_id)
-        return allowed is None or name in allowed
+        #: An app's grants, by app id: what it may read for any viewer.
+        self.app_grants: dict[UUID, set[str]] = {}
 
-    async def table(self, user_id: UUID, pod_id: UUID, table_name: str) -> LiveTable:
+    def _can(self, user_id: UUID, name: str, app: DelegationClaims | None) -> bool:
+        allowed = self.readable.get(user_id)
+        person = allowed is None or name in allowed
+        if app is None:
+            return person
+        return person and name in self.app_grants.get(app.actor_id, set())
+
+    async def table(
+        self,
+        user_id: UUID,
+        pod_id: UUID,
+        table_name: str,
+        *,
+        app: DelegationClaims | None = None,
+    ) -> LiveTable:
         if table_name not in self.tables:
             raise LiveAccessDenied(LiveErrorCode.NOT_FOUND, "no such table")
-        if not self._can(user_id, table_name):
+        if not self._can(user_id, table_name, app):
             raise LiveAccessDenied(LiveErrorCode.FORBIDDEN, "no access")
         return LiveTable(self.tables[table_name], table_name)
 
-    async def readable_tables(self, user_id: UUID, pod_id: UUID) -> list[LiveTable]:
+    async def readable_tables(
+        self, user_id: UUID, pod_id: UUID, *, app: DelegationClaims | None = None
+    ) -> list[LiveTable]:
         return [
             LiveTable(tid, name)
             for name, tid in self.tables.items()
-            if self._can(user_id, name)
+            if self._can(user_id, name, app)
         ]
 
     async def still_readable(
-        self, user_id: UUID, pod_id: UUID, table_ids: Sequence[UUID]
+        self,
+        user_id: UUID,
+        pod_id: UUID,
+        table_ids: Sequence[UUID],
+        *,
+        app: DelegationClaims | None = None,
     ) -> dict[UUID, str | None]:
         names = {tid: name for name, tid in self.tables.items()}
         return {
             tid: None
-            if tid in names and self._can(user_id, names[tid])
+            if tid in names and self._can(user_id, names[tid], app)
             else UnsubscribedReason.ACCESS_REVOKED.value
             for tid in table_ids
         }
@@ -237,6 +262,7 @@ class Rig:
         *,
         stall: bool = False,
         queue_bytes: int = 1 << 20,
+        app: DelegationClaims | None = None,
     ) -> tuple[LiveConnection, Socket]:
         socket = Socket(stall=stall)
         connection = LiveConnection(
@@ -244,6 +270,7 @@ class Rig:
             user_id=user_id or uuid4(),
             send_text=socket.send_text,
             queue_bytes=queue_bytes,
+            app=app,
         )
         self.senders.append(asyncio.create_task(connection.run_sender()))
         return connection, socket
@@ -462,6 +489,79 @@ async def test_subscribe_refusals_keep_the_socket_open(rig: Rig) -> None:
     codes = {f["id"]: f["code"] for f in socket.of("error")}
     assert codes == {"a": "forbidden", "b": "not_found", "c": "invalid", "f": "limit"}
     assert set(connection.subscriptions) == {"c", "d", "e"}
+
+
+def _app(rig: Rig, viewer: UUID) -> DelegationClaims:
+    return DelegationClaims(
+        actor_type=WorkloadPrincipalType.APP,
+        actor_id=uuid4(),
+        actor_name="board",
+        pod_id=rig.pod_id,
+        session_id="app:handle",
+        invoked_by_user_id=viewer,
+        delegation_version=DELEGATION_VERSION,
+    )
+
+
+async def test_an_app_watches_only_the_tables_it_was_granted(rig: Rig) -> None:
+    """H20: an app's page is the app, not its viewer, on the socket too."""
+    viewer = uuid4()
+    app = _app(rig, viewer)
+    rig.access.app_grants[app.actor_id] = {"tickets"}
+    connection, socket = await rig.connect(viewer, app=app)
+    await rig.subscribe(connection, id="t", table="tickets")
+    await rig.subscribe(connection, id="o", table="orders")
+    await rig.subscribe(connection, id="all")
+    rig.log.write(rig.access.tables["tickets"], "insert", "granted")
+    rig.log.write(rig.access.tables["orders"], "insert", "viewer-only")
+    await rig.publish()
+    await rig.settle()
+
+    assert {f["id"]: f["code"] for f in socket.of("error")} == {"o": "forbidden"}
+    seen = {c["record_id"] for f in socket.of("changes") for c in f["changes"]}
+    assert seen == {"granted"}
+
+
+async def test_an_app_loses_a_table_when_its_grant_goes(rig: Rig) -> None:
+    viewer = uuid4()
+    app = _app(rig, viewer)
+    rig.access.app_grants[app.actor_id] = {"tickets"}
+    connection, socket = await rig.connect(viewer, app=app)
+    await rig.subscribe(connection, id="t", table="tickets")
+
+    rig.access.app_grants[app.actor_id] = set()
+    rig.epoch[0] = "2"
+    await rig.settle()
+
+    assert socket.of("unsubscribed", "t") == [
+        {"type": "unsubscribed", "id": "t", "reason": "access_revoked"}
+    ]
+
+
+async def test_an_app_watches_records_and_nothing_else(rig: Rig) -> None:
+    """The other topics -- messages, an inbox -- decide as the viewer."""
+
+    class Messages:
+        name = "messages"
+
+        async def subscribe(self, connection, request) -> None:  # noqa: ANN001
+            raise AssertionError("an app reached a topic that decides as its viewer")
+
+    viewer = uuid4()
+    connection, socket = await rig.connect(viewer, app=_app(rig, viewer))
+    topics = LiveRegistry()
+    topics.install(LiveContribution(topics=(Messages(),)))
+    dispatcher = LiveDispatcher(max_subscriptions=3, registry=topics)
+    await dispatcher.handle(
+        connection, json.dumps({"op": "subscribe", "id": "m", "topic": "messages"})
+    )
+    await dispatcher.handle(
+        connection, json.dumps({"op": "call", "id": "p", "method": "presence"})
+    )
+    await rig.settle()
+
+    codes = {f["id"]: f["code"] for f in socket.of("error")}
+    assert codes == {"m": "forbidden", "p": "forbidden"}
 
 
 async def test_one_record_appears_once_per_batch_at_its_latest_state(rig: Rig) -> None:

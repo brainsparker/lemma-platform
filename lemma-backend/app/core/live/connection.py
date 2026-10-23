@@ -23,6 +23,7 @@ from uuid import UUID, uuid4
 
 from pydantic import JsonValue
 
+from app.core.authorization.delegation import DelegationClaims
 from app.core.live.protocol import (
     CLOSE_FORBIDDEN,
     CLOSE_NOT_FOUND,
@@ -133,6 +134,9 @@ class LiveConnection:
     send_text: SendText
     queue_bytes: int
     frames: FrameEncoder = field(default_factory=LiveFrames)
+    #: The pod app whose page holds this socket, acting for ``user_id`` (H20).
+    #: It watches records only, held to its own grants.
+    app: DelegationClaims | None = None
     id: str = field(default_factory=lambda: uuid4().hex)
     subscriptions: dict[str, LiveSubscription] = field(default_factory=dict)
     closed: bool = False

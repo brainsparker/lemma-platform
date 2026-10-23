@@ -116,6 +116,8 @@ async def datastore_changes_ws(
         send_text=websocket.send_text,
         queue_bytes=live_settings.live_socket_queue_bytes,
         frames=LegacyFrames(),
+        # A pod app's page watches with its own grants: the hub decides.
+        app=session.app,
         # Its client has no frame for "unsubscribed": losing access to what it
         # watches closes the socket (4403), which that client stops on.
         ends_with_subscription=True,

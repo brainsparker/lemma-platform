@@ -27,6 +27,7 @@ from supertokens_python.recipe.session.asyncio import (
 from supertokens_python.recipe.session.exceptions import TryRefreshTokenError
 from supertokens_python.recipe.session.interfaces import SessionContainer
 
+from app.core.authorization.delegation import DelegationClaims
 from app.core.live.connection import LiveConnection
 from app.core.live.limits import SLOT_REFRESH_SECONDS
 from app.core.live.pod_access import close_code_for
@@ -52,6 +53,10 @@ from app.core.log.log import get_logger
 from app.core.request_context import create_inherited_task
 
 logger = get_logger(__name__)
+
+#: What a pod app's page may watch: the records topic, which decides each table
+#: with the app's own grants (``LiveConnection.app``).
+APP_TOPICS = frozenset({"records"})
 meter = metrics.get_meter(__name__)
 subscribes = meter.create_counter("lemma.live.subscribes")
 calls_made = meter.create_counter("lemma.live.calls")
@@ -88,12 +93,15 @@ async def _resolve_session(websocket: WebSocket) -> SessionContainer:
     return session
 
 
-def _session_of(session: SessionContainer) -> LiveSession:
+def _session_of(
+    session: SessionContainer, app: DelegationClaims | None = None
+) -> LiveSession:
     expires = session.get_access_token_payload().get("exp")
     return LiveSession(
         user_id=UUID(session.get_user_id()),
         handle=session.get_handle(),
         access_expires_at=float(expires) if isinstance(expires, int | float) else None,
+        app=app,
     )
 
 
@@ -125,7 +133,39 @@ async def accept_and_authenticate(websocket: WebSocket) -> LiveSession | None:
     if refusal is not None:
         await websocket.close(code=CLOSE_FORBIDDEN, reason=refusal)
         return None
-    return _session_of(session)
+    app, refusal = await _app_of(websocket, session)
+    if refusal is not None:
+        await websocket.close(code=CLOSE_FORBIDDEN, reason=refusal)
+        return None
+    return _session_of(session, app)
+
+
+async def _app_of(
+    websocket: WebSocket, session: SessionContainer
+) -> tuple[DelegationClaims | None, str | None]:
+    """The pod app whose page opens this socket, or why it may not.
+
+    The page is the app acting for its viewer, not the viewer (H20). It keeps
+    the socket for what an app may watch -- records, held to its grants
+    (``LiveDispatcher``) -- and only in its own pod.
+    """
+    from app.core.authorization.app_principal import (
+        UnknownAppHost,
+        app_principal_claims,
+    )
+
+    try:
+        app = await app_principal_claims(
+            websocket,
+            user_id=UUID(session.get_user_id()),
+            session_handle=session.get_handle(),
+        )
+    except UnknownAppHost:
+        return None, "This socket comes from the host of an app that does not exist."
+    raw_pod_id = websocket.path_params.get("pod_id")
+    if app is not None and str(app.pod_id) != str(raw_pod_id):
+        return None, "A pod app may open a live socket in its own pod only."
+    return app, None
 
 
 async def _workload_refusal(
@@ -224,6 +264,15 @@ class LiveDispatcher:
                 f"topic: no topic named {request.topic!r}.",
             )
             return
+        if connection.app is not None and topic.name not in APP_TOPICS:
+            # The other topics decide as the viewer: their messages, their
+            # inbox. An app watches what its grants reach, and only records do.
+            connection.offer_error(
+                request.id,
+                LiveErrorCode.FORBIDDEN,
+                f"A pod app may not watch {topic.name!r}; it may watch records.",
+            )
+            return
         subscribes.add(1, {"topic": request.topic})
         try:
             await topic.subscribe(connection, request)
@@ -255,6 +304,11 @@ class LiveDispatcher:
             subscription.release()
 
     async def _call(self, connection: LiveConnection, request: CallRequest) -> None:
+        if connection.app is not None:
+            connection.offer_error(
+                request.id, LiveErrorCode.FORBIDDEN, "A pod app makes no live calls."
+            )
+            return
         call = self._registry.calls.get(request.method)
         if call is None:
             connection.offer_error(

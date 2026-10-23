@@ -18,6 +18,7 @@ from typing import (
 from uuid import UUID
 
 from app.core.authorization.context import Context
+from app.core.authorization.delegation import DelegationClaims
 from app.modules.datastore.domain.datastore_entities import (
     ColumnSchema,
     DatastoreTableEntity,
@@ -498,15 +499,33 @@ class LiveChangeFeedPort(Protocol):
 
 
 class LiveAccessPort(Protocol):
-    """Who may watch which table, asked at subscribe and on an authz epoch bump."""
+    """Who may watch which table, asked at subscribe and on an authz epoch bump.
 
-    async def table(self, user_id: UUID, pod_id: UUID, table_name: str) -> "LiveTable":
+    ``app`` is the pod app whose page holds the socket, acting for ``user_id``:
+    then the question is asked of the app, held to its own grants (H20).
+    """
+
+    async def table(
+        self,
+        user_id: UUID,
+        pod_id: UUID,
+        table_name: str,
+        *,
+        app: DelegationClaims | None = None,
+    ) -> "LiveTable":
         """The table if the user may read it; raises ``LiveAccessDenied``."""
 
-    async def readable_tables(self, user_id: UUID, pod_id: UUID) -> "list[LiveTable]":
+    async def readable_tables(
+        self, user_id: UUID, pod_id: UUID, *, app: DelegationClaims | None = None
+    ) -> "list[LiveTable]":
         """Every table the user may read; raises ``LiveAccessDenied`` for the pod."""
 
     async def still_readable(
-        self, user_id: UUID, pod_id: UUID, table_ids: Sequence[UUID]
+        self,
+        user_id: UUID,
+        pod_id: UUID,
+        table_ids: Sequence[UUID],
+        *,
+        app: DelegationClaims | None = None,
     ) -> "dict[UUID, str | None]":
         """Per table: ``None`` while readable, else an ``UnsubscribedReason``."""

@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { source, type Tab } from "@/data";
-import { ExternalIcon, RefreshIcon, CopyIcon, DownloadIcon, MoreIcon, ComputerIcon } from "@/ui/icons";
+import { ExternalIcon, RefreshIcon, CopyIcon, DownloadIcon, MoreIcon, ComputerIcon, LockIcon } from "@/ui/icons";
+import { AppGrantsDialog } from "@/stage/app-grants";
 import { ShareDialog } from "@/thread/share-dialog";
 import { useFileAppUrl } from "@/library/file-app-url";
 import { saveFile } from "@/thread/save-file";
@@ -17,8 +18,8 @@ function AppReload({ url, onReload }: { url: string; onReload: () => void }) {
     return <button onClick={onReload} title="Reload app"><RefreshIcon size={17}/><span>Reload</span></button>;
 }
 
-export function ViewActions({ tab, podId, onNew, onHistory, onComputer, onReload }: {
-    tab?: Tab; podId: string; onNew: () => void; onHistory: () => void; onComputer: () => void; onReload: () => void;
+export function ViewActions({ tab, podId, podName = "this space", onNew, onHistory, onComputer, onReload }: {
+    tab?: Tab; podId: string; podName?: string; onNew: () => void; onHistory: () => void; onComputer: () => void; onReload: () => void;
 }) {
     const cache = useQueryClient();
     const sample = source.label === "sample";
@@ -27,6 +28,7 @@ export function ViewActions({ tab, podId, onNew, onHistory, onComputer, onReload
     const link = useFileAppUrl(podId, path, file.data?.appUrl, Boolean(file.data));
     const [feedback, setFeedback] = useState("");
     const [sharing, setSharing] = useState(false);
+    const [granting, setGranting] = useState(false);
     const [downloading, setDownloading] = useState(false);
     const download = async () => {
         if (!file.data || downloading) return;
@@ -45,7 +47,9 @@ export function ViewActions({ tab, podId, onNew, onHistory, onComputer, onReload
         /* In the desktop app a new window for a published app is routed to
            an app window of its own, not a browser tab — so it says that. */
         primary = <a href={tab.url} target="_blank" rel="noreferrer" title={isDesktop() ? "Open in its own window" : "Open app in new tab"}><ExternalIcon size={17}/><span>Open</span></a>;
-        secondary = <AppReload url={tab.url} onReload={onReload} />;
+        /* What the app may do for whoever opens it. Everyone may read it;
+           the panel offers changes only to an editor. */
+        secondary = <><AppReload url={tab.url} onReload={onReload} /><button onClick={() => setGranting(true)} title="What this app may do"><LockIcon size={17}/><span>Grants</span></button></>;
     } else if (tab?.kind === "file") {
         const downloadButton = (className: string) => <button className={className} disabled={!file.data || downloading} onClick={() => void download()} title="Download document"><DownloadIcon size={17}/><span>{downloading ? "Downloading…" : "Download"}</span></button>;
         /* On a phone the row has no width for it, so Download moves into More. */
@@ -80,6 +84,7 @@ export function ViewActions({ tab, podId, onNew, onHistory, onComputer, onReload
         {primary}<div className="view-actions__secondary">{secondary}</div>
         {secondary && <details className="view-actions__more"><summary aria-label="More view actions" title="More view actions"><MoreIcon size={19}/></summary><div>{secondary}</div></details>}
         {feedback && <button className="view-actions__feedback" role="status" onClick={() => setFeedback("")}>{feedback}</button>}
+        {granting && tab?.kind === "app" && <AppGrantsDialog podId={podId} podName={podName} appName={tab.id.replace(/^app:/, "")} appLabel={tab.label} onClose={() => setGranting(false)} />}
         {sharing && file.data && <ShareDialog podId={podId} path={path} name={file.data.name} appUrl={link} onClose={() => setSharing(false)} />}
     </div>;
 }

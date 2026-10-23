@@ -10,21 +10,68 @@ the thing people live in, not an afterthought bolted on last.
 
 ## The pod model, from inside an app
 
-An app is **pod-authenticated**: it runs as the signed-in user and sees exactly
-what the pod model allows them to see — nothing special, nothing extra.
+An app is **its own principal, acting for whoever views it**. Its page's calls
+get the viewer's access *intersected with the app's own grants* — never more
+than either. The API knows the call is the app from the host the page runs on,
+so this needs nothing from your code.
 
-- **Identity & RLS.** The SDK calls run as the current user. An **RLS-on** table
+- **Identity & RLS.** The SDK calls act for the current user. An **RLS-on** table
   returns only their rows; a **shared** table returns the team's rows. You never
   manage `user_id` — the backend scopes reads/writes. (To show cross-user data you
   need an admin path; most apps don't.) When an *agent* opens the app it acts as
   the delegated user, with that user's grants.
+- **Grants.** An app starts with **no** access. Declare every table, folder and
+  connector it touches, like an agent's or function's grants (`agents.md`):
+
+  ```bash
+  lemma apps permissions add board metrics:read /reports:read connector:telemetry:use
+  lemma apps permissions get board     # what it holds, with permission ids
+  ```
+
+  What is asked of the pod itself -- listing its tables, talking to its
+  agents -- takes a grant on `pod:pod` (`pod:pod:tables`, `pod:pod:chat`). Or
+  inline on create/update (`"permissions": {"grants": [{"resource_type":
+  "datastore_table", "resource_name": "metrics", "permission_ids":
+  ["datastore.table.read", "datastore.record.read"]}]}`). Grant only what the
+  app uses: reads for a dashboard, `datastore.record.write` for a form,
+  `connector.use` for the connector it runs. You can grant only what you could
+  do yourself, and publishing a bundle or promoting a release re-checks that
+  against the app's grants (`CONFERRAL_EXCEEDS_HOLDER` otherwise).
+- **`APP_NOT_GRANTED`.** A call outside the grants is a 403 with code
+  `APP_NOT_GRANTED` and `details.resource_type`, `resource_name`,
+  `permission_ids` — even when the viewer could do it themselves. It is not the
+  viewer's problem and not a sign-in problem: add that grant and reload. Show
+  it as "this app isn't set up to …", not as "you don't have access". A viewer
+  who lacks the access themselves gets `DELEGATION_EXCEEDS_INVOKER` instead,
+  and no grant fixes that. The SDK throws it as `AppNotGrantedError`
+  (`.resourceType`, `.resourceName`, `.permissionIds`; a `ForbiddenError`
+  subclass), and tells the Lemma page framing the app, which shows editors an
+  "Add this grant" button that opens the app's Grants panel prefilled:
+
+  ```ts
+  import { AppNotGrantedError } from "lemma-sdk"; // no-build: window.LemmaClient.AppNotGrantedError
+
+  try {
+    rows = await client.records.list("deals");
+  } catch (error) {
+    if (!(error instanceof AppNotGrantedError)) throw error;
+    // "This app isn't set up to datastore.table.read on datastore_table deals"
+    showSetupNeeded(`This app isn't set up to ${error.permissionIds.join(", ")} on ${error.resourceType} ${error.resourceName ?? ""}`);
+  }
+  ```
+- **Reach.** An app reaches its own pod only, and no account or organization
+  routes: it cannot list the viewer's connected accounts or read org settings
+  (`WORKLOAD_NOT_ALLOWED`). Outside a pod it may call `users.me` and the
+  connector catalogue. On the live socket (`watchChanges`) it watches records
+  of tables it was granted, nothing else.
 - **Files & search.** `client.files` reads the same `/` (shared) and `/me`
   (personal) tree, the same auto-indexed documents, the same scoped search, and
   the same derived `…/document.md` / `…/pages/*.jpg` artifacts — render a PDF page
   as an `<img>`, search a folder, show converted markdown.
 - **Connectors.** `client.connectors.pod.execute(slug, operation, payload)` runs an
   operation through one of the pod's connectors, as the account it resolves to
-  for the signed-in person — the app never holds credentials.
+  for the signed-in person — the app never holds credentials. It needs
+  `connector:<slug>:use` among the app's grants.
 - **Runtime context.** The host injects `window.__LEMMA_CONFIG__` (`podId`,
   `apiUrl`, `authUrl`) at serve time, so the same app runs unchanged against
   local / staging / cloud. Auth is one bearer (`localStorage["lemma_token"]`) or a
@@ -313,6 +360,9 @@ adopt any one design system.
   (`load_skill(name="lemma-app-design", resource_path="references/cover.md")`).
   Without one the host serves a plain lettered cover.
 - Deploy, then `lemma apps open <slug>` and repeat the core scenario served.
+  `npm run dev` calls the API as you, not as the app, so this served run is the
+  first that meets the app's grants: any `403 APP_NOT_GRANTED` in the network
+  panel names the grant to add (`lemma apps permissions add <app> …`).
 - **Confirm the deploy landed** — don't trust CLI "success": note the release
   id/timestamp, re-`lemma apps get <name>`, hard-refresh with cache-busting, and
   check the live DOM for a unique string from this revision. If stale, redeploy.

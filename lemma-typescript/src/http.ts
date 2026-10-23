@@ -80,6 +80,186 @@ export class NetworkError extends Error {
   }
 }
 
+/**
+ * The codes a pod connector refuses with when it cannot run for this caller.
+ * Each names the pod connector in `details.pod_connector`; the two a person
+ * can fix themselves carry `details.connect_url`.
+ */
+export const CONNECTION_ERROR_CODES = [
+  "CONNECTION_REQUIRED",
+  "REAUTH_REQUIRED",
+  "CONNECTOR_NEEDS_ACCOUNT",
+  "CONNECTOR_UNAVAILABLE",
+  "CONNECTION_REQUIRES_PERSON",
+] as const;
+
+export type ConnectionErrorCode = (typeof CONNECTION_ERROR_CODES)[number];
+
+function detailString(details: unknown, key: string): string | null {
+  if (!details || typeof details !== "object") return null;
+  const value = (details as Record<string, unknown>)[key];
+  return typeof value === "string" && value ? value : null;
+}
+
+/**
+ * A pod connector that cannot run for the caller, and where to fix it.
+ *
+ * Thrown for every code in `CONNECTION_ERROR_CODES`, whatever the status, so
+ * an app catches one class rather than reading codes:
+ *
+ * ```ts
+ * try { await client.connectors.pod.execute("gmail", "gmail_send_email", payload); }
+ * catch (error) {
+ *   if (error instanceof ConnectionRequiredError && error.connectUrl) error.connect();
+ *   else throw error;
+ * }
+ * ```
+ *
+ * `connectUrl` is null when the person reading cannot fix it themselves --
+ * a shared account only its owner can reconnect, an installation an admin
+ * turned off, a call with no member behind it.
+ */
+export class ConnectionRequiredError extends ApiError {
+  override name = "ConnectionRequiredError";
+  declare readonly code: ConnectionErrorCode;
+  /** Where to connect or reconnect: the pod's Connections page, on this connector. */
+  readonly connectUrl: string | null;
+  /** The pod connector's slug. */
+  readonly podConnector: string | null;
+  /** The catalog connector behind it, e.g. `gmail`, when the server named it. */
+  readonly connectorId: string | null;
+
+  constructor(status: number, message: string, code: ConnectionErrorCode, details?: unknown, rawResponse?: unknown) {
+    super(status, message, code, details, rawResponse);
+    this.connectUrl = detailString(details, "connect_url");
+    this.podConnector = detailString(details, "pod_connector");
+    this.connectorId = detailString(details, "connector_id");
+  }
+
+  /** Reconnecting an expired sign-in, as against connecting for the first time. */
+  get isReauth(): boolean {
+    return this.code === "REAUTH_REQUIRED";
+  }
+
+  /**
+   * Go and fix it: open `connectUrl`. Inside an embedded app the page leaves
+   * the frame for a new tab, since a pod app's frame may not navigate the
+   * window above it; elsewhere the current page goes there, and the
+   * Connections page returns the person once connected. Returns false when
+   * there is nowhere to go (no `connectUrl`, or no browser).
+   */
+  connect(options: { newTab?: boolean } = {}): boolean {
+    if (!this.connectUrl) return false;
+    const view = (globalThis as { window?: Window }).window;
+    if (!view) return false;
+    let framed = false;
+    try {
+      framed = view.top !== view;
+    } catch {
+      framed = true;
+    }
+    if (options.newTab || framed) {
+      view.open(this.connectUrl, "_blank", "noopener");
+      return true;
+    }
+    view.location.assign(this.connectUrl);
+    return true;
+  }
+}
+
+/** Whether a failure is a pod connector asking to be connected. */
+export function isConnectionRequiredError(error: unknown): error is ConnectionRequiredError {
+  return error instanceof ConnectionRequiredError;
+}
+
+/** The code an app's call is refused with when the app was not granted it. */
+export const APP_NOT_GRANTED_CODE = "APP_NOT_GRANTED";
+
+function detailStrings(details: unknown, key: string): string[] {
+  if (!details || typeof details !== "object") return [];
+  const value = (details as Record<string, unknown>)[key];
+  return Array.isArray(value) ? value.filter((one): one is string => typeof one === "string" && one.length > 0) : [];
+}
+
+/**
+ * A pod app asked for something its grants do not cover.
+ *
+ * An app's page acts for whoever views it, with the viewer's access
+ * intersected with the app's own grants. This is the second half refusing:
+ * the viewer may well hold the permission, the app was never given it. No
+ * approval or reconnect fixes it -- an editor of the pod adds the grant on
+ * the app (`app.permissions.replace`, or the app's Grants panel), naming
+ * exactly what is here:
+ *
+ * ```ts
+ * try { await client.records.list("deals"); }
+ * catch (error) {
+ *   if (error instanceof AppNotGrantedError) {
+ *     show(`This app isn't set up to ${error.permissionIds.join(", ")} on ${error.resourceType} ${error.resourceName ?? ""}`);
+ *   } else throw error;
+ * }
+ * ```
+ *
+ * Distinct from a refusal coded `DELEGATION_EXCEEDS_INVOKER`, which is the
+ * viewer themselves lacking access -- that stays a plain `ForbiddenError`,
+ * because no grant on the app can fix it.
+ */
+export class AppNotGrantedError extends ForbiddenError {
+  override name = "AppNotGrantedError";
+  declare readonly code: typeof APP_NOT_GRANTED_CODE;
+  /** What the refused call was on: `datastore_table`, `folder`, `pod`, ... */
+  readonly resourceType: string | null;
+  /** That resource's name -- a table's, a folder's path, `pod` for the pod. */
+  readonly resourceName: string | null;
+  /** The permissions to grant the app, e.g. `["datastore.table.read"]`. */
+  readonly permissionIds: string[];
+
+  constructor(status: number, message: string, details?: unknown, rawResponse?: unknown) {
+    super(status, message, APP_NOT_GRANTED_CODE, details, rawResponse);
+    this.resourceType = detailString(details, "resource_type");
+    this.resourceName = detailString(details, "resource_name");
+    this.permissionIds = detailStrings(details, "permission_ids");
+  }
+}
+
+/** Whether a failure is an app's call outside its grants. */
+export function isAppNotGrantedError(error: unknown): error is AppNotGrantedError {
+  return error instanceof AppNotGrantedError;
+}
+
+/** What the SDK posts to the page framing an app when one of the app's calls
+ *  is refused for want of a grant, so the host can say so and offer the fix. */
+export const LEMMA_APP_NOT_GRANTED_MESSAGE_TYPE = "lemma-app-not-granted";
+
+/**
+ * Tell the host framing this page that a call was refused for want of a
+ * grant. Nothing when the page is not framed, or the error is anything else.
+ *
+ * Posted to `"*"` because a frame does not know its host's origin; it carries
+ * what the refusal already said -- a resource type and name, and permission
+ * ids -- never data. The Lemma host listens only to frames it put on screen.
+ */
+export function announceAppNotGranted(error: unknown): void {
+  if (!(error instanceof AppNotGrantedError)) return;
+  const view = (globalThis as { window?: Window }).window;
+  if (!view) return;
+  try {
+    if (view.parent === view || !view.parent) return;
+    view.parent.postMessage(
+      {
+        type: LEMMA_APP_NOT_GRANTED_MESSAGE_TYPE,
+        resource_type: error.resourceType,
+        resource_name: error.resourceName,
+        permission_ids: error.permissionIds,
+        message: error.message,
+      },
+      "*",
+    );
+  } catch {
+    // A host that cannot be reached is a host that will not say it.
+  }
+}
+
 /** Map an HTTP status to the most specific ApiError subclass. */
 export function apiErrorFromStatus(
   status: number,
@@ -89,6 +269,12 @@ export function apiErrorFromStatus(
   rawResponse?: unknown,
   retryAfterMsValue?: number,
 ): ApiError {
+  if (code && (CONNECTION_ERROR_CODES as readonly string[]).includes(code)) {
+    return new ConnectionRequiredError(status, message, code as ConnectionErrorCode, details, rawResponse);
+  }
+  if (code === APP_NOT_GRANTED_CODE) {
+    return new AppNotGrantedError(status, message, details, rawResponse);
+  }
   switch (status) {
     case 401: return new UnauthorizedError(status, message, code, details, rawResponse);
     case 403: return new ForbiddenError(status, message, code, details, rawResponse);
@@ -244,6 +430,7 @@ export class HttpClient {
     if (isSessionRejection(error.statusCode, error.code)) {
       this.auth.markUnauthenticated();
     }
+    announceAppNotGranted(error);
     return error;
   }
 

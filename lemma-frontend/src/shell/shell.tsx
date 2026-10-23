@@ -77,6 +77,7 @@ import { History } from "@/thread/history";
 import { AllConversations } from "@/thread/all-conversations";
 import { refreshConversationLists } from "@/thread/conversation-list";
 import { ComputerView } from "@/computer/computer-view";
+import { ConnectBanner } from "@/connect/pod-connect";
 import { FileView } from "@/thread/file-view";
 import { acknowledge, readComposeRequest, registerFrame } from "@/thread/compose-bridge";
 import { identityGenes } from "@/identity/seeded-identity";
@@ -113,6 +114,22 @@ const useBeforePaint = typeof window === "undefined" ? useEffect : useLayoutEffe
 const ORG_KEY = key("org");
 const TAB_KEY = key("tabs");
 const LAST_POD_KEY = key("last-pod");
+
+/** Whose app a remembered frame is (`<pod>|app:<name>`), for the notice that
+ *  says what it was refused. Memoised per key so the frame's listener is not
+ *  re-attached on every render of the shell. */
+const owners = new Map<string, { podId: string; podName: string; appName: string }>();
+function appOwner(key: string, pod: { id: string; name: string }) {
+    const [podId, tabId = ""] = key.split("|");
+    const podName = podId === pod.id ? pod.name : "this space";
+    const cacheKey = key + "\u0000" + podName;
+    let owner = owners.get(cacheKey);
+    if (!owner) {
+        owner = { podId, podName, appName: tabId.replace(/^app:/, "") };
+        owners.set(cacheKey, owner);
+    }
+    return owner;
+}
 
 /** The list a thing lives in, for a breadcrumb that has no history to go on. */
 function homeListOf(tab: Tab): string | null {
@@ -1793,7 +1810,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                 </>}
                             </>}
                         </div>
-                            {activeTab?.kind !== "space" && <ViewActions key={activeTab?.id} tab={activeTab} podId={pod.id}
+                            {activeTab?.kind !== "space" && <ViewActions key={activeTab?.id} tab={activeTab} podId={pod.id} podName={pod.name}
                                 onNew={() => { setConversationId(NEW_CONVERSATION); pickTab("conversation"); }}
                                 onHistory={openHistory}
                                 onComputer={openComputer}
@@ -1815,6 +1832,9 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                             {!preview && <WaitingInbox pods={pods.data ?? []} />}
                         </div>
 
+                        {/* Over the pod and every app in it: a connector this pod
+                            asks everyone to connect that I have not. */}
+                        {!preview && !stranger && <ConnectBanner key={pod.id} pod={pod} />}
                         <div ref={bodyRef} className={"body" + (rightTab ? " body--dual" : "") + (sheetLowered ? " body--peek" : "") + (chat.open && chatResource ? " body--chat" : "")} style={{ ["--split-position" as string]: paneWidth + "%" }}>
                             {rightTab && <PaneDivider value={paneWidth} onChange={setPaneWidth} />}
                             {/* Not over a channel: it has a box of its own, and its
@@ -1859,6 +1879,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                 <Pane className="pane app-pane" key={key} {...paneProps(key.startsWith(pod.id + "|") ? key.slice(pod.id.length + 1) : "")}>
                                 <AppFrameView
                                     url={url}
+                                    owner={appOwner(key, pod)}
                                     hidden={key !== activeKey && key !== pod.id + "|" + rightTab?.id}
                                     frameRef={element => { appFrames.current[key] = element; }}
                                     /* Registered on load, not on mount: an app
@@ -2064,7 +2085,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                             ))}
                             {allTabs.filter((tab): tab is Extract<Tab, {kind: "signin"}> => tab.kind === "signin").map(tab => (
                                 <Pane className="pane signin-pane" key={pod.id + tab.id} {...paneProps(tab.id)}>
-                                    <SignInPane compact conversationId={tab.conversationId} toolCallId={tab.toolCallId} onDone={() => closeTab(tab.id)} />
+                                    <SignInPane compact podId={pod.id} conversationId={tab.conversationId} toolCallId={tab.toolCallId} onDone={() => closeTab(tab.id)} />
                                 </Pane>
                             ))}
                             {allTabs.filter((tab): tab is Extract<Tab, {kind: "file"}> => tab.kind === "file").map(tab => (

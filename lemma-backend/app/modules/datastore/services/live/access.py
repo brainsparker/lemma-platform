@@ -10,7 +10,11 @@ from __future__ import annotations
 from collections.abc import Sequence
 from uuid import UUID
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.core.authorization.context import Context, ResourceRef
+from app.core.authorization.delegation import DelegationClaims
+from app.core.authorization.workload_authority import is_app
 from app.core.authorization.permissions import Permissions
 from app.core.authorization.service import AuthorizationDataService
 from app.core.domain.errors import DomainError
@@ -52,18 +56,42 @@ async def _visible(
             return tables
 
 
+async def _context(
+    session: AsyncSession, user_id: UUID, pod_id: UUID, app: DelegationClaims | None
+) -> Context:
+    """The person -- or the pod app whose page holds the socket, acting for them."""
+    service = AuthorizationDataService(session)
+    if app is not None:
+        return await service.build_context_from_delegation_claims(
+            user_id=user_id, claims=app
+        )
+    return await service.build_user_context(user_id=user_id, pod_id=pod_id)
+
+
+async def _require_pod_tables(ctx: Context, pod_id: UUID) -> None:
+    """Watching every table needs the pod's table read. An app holds grants
+    on tables, never on the pod: its listing alone narrows what it watches."""
+    if not is_app(ctx):
+        await ctx.require(Permissions.DATASTORE_TABLE_READ, ResourceRef.pod(pod_id))
+
+
 class TableLiveAccess:
     """``LiveAccessPort`` over the datastore's own table service."""
 
     def __init__(self) -> None:
         self._uow_factory = SessionUnitOfWorkFactory(async_session_maker)
 
-    async def table(self, user_id: UUID, pod_id: UUID, table_name: str) -> LiveTable:
+    async def table(
+        self,
+        user_id: UUID,
+        pod_id: UUID,
+        table_name: str,
+        *,
+        app: DelegationClaims | None = None,
+    ) -> LiveTable:
         try:
             async with self._uow_factory() as uow:
-                ctx = await AuthorizationDataService(uow.session).build_user_context(
-                    user_id=user_id, pod_id=pod_id
-                )
+                ctx = await _context(uow.session, user_id, pod_id, app)
                 entity = await build_table_service(uow).get_table(
                     pod_id, table_name, ctx
                 )
@@ -75,31 +103,30 @@ class TableLiveAccess:
             raise _denied(exc) from exc
         return LiveTable(id=entity.id, name=entity.table_name)
 
-    async def readable_tables(self, user_id: UUID, pod_id: UUID) -> list[LiveTable]:
+    async def readable_tables(
+        self, user_id: UUID, pod_id: UUID, *, app: DelegationClaims | None = None
+    ) -> list[LiveTable]:
         try:
             async with self._uow_factory() as uow:
-                ctx = await AuthorizationDataService(uow.session).build_user_context(
-                    user_id=user_id, pod_id=pod_id
-                )
-                await ctx.require(
-                    Permissions.DATASTORE_TABLE_READ, ResourceRef.pod(pod_id)
-                )
+                ctx = await _context(uow.session, user_id, pod_id, app)
+                await _require_pod_tables(ctx, pod_id)
                 return await _visible(build_table_service(uow), pod_id, ctx)
         except DomainError as exc:
             raise _denied(exc) from exc
 
     async def still_readable(
-        self, user_id: UUID, pod_id: UUID, table_ids: Sequence[UUID]
+        self,
+        user_id: UUID,
+        pod_id: UUID,
+        table_ids: Sequence[UUID],
+        *,
+        app: DelegationClaims | None = None,
     ) -> dict[UUID, str | None]:
         async with self._uow_factory() as uow:
             service = build_table_service(uow)
-            ctx = await AuthorizationDataService(uow.session).build_user_context(
-                user_id=user_id, pod_id=pod_id
-            )
+            ctx = await _context(uow.session, user_id, pod_id, app)
             try:
-                await ctx.require(
-                    Permissions.DATASTORE_TABLE_READ, ResourceRef.pod(pod_id)
-                )
+                await _require_pod_tables(ctx, pod_id)
                 readable = {table.id for table in await _visible(service, pod_id, ctx)}
             except DomainError:
                 readable = set()

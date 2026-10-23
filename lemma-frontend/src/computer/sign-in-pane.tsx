@@ -6,8 +6,8 @@ import { useState } from "react";
 import { ExternalIcon, LockIcon, WarningIcon } from "@/ui/icons";
 import { live } from "@/usage/queries";
 import { LiveScreen } from "./live-screen";
-import { outcomeSay, whereabouts } from "./sign-in";
-import { useAnswerSignIn, useCurrentPage, useOpenBrowserTab, usePendingSignIn } from "./queries";
+import { outcomeSay, signInScope, whereabouts } from "./sign-in";
+import { useAnswerSignIn, useCurrentPage, useOpenBrowserTab, usePendingSignIn, useWorkspaceScope } from "./queries";
 import { type LiveState } from "./live";
 import { usePaneVisible } from "@/shell/pane-visible";
 
@@ -30,7 +30,12 @@ import { usePaneVisible } from "@/shell/pane-visible";
  *  retry, and a retry is cheaper than a person staring at a password field that
  *  will not take their keystrokes.
  */
-export function SignInPane({ conversationId, toolCallId, onDone, compact = false }: {
+export function SignInPane({ podId, conversationId, toolCallId, onDone, compact = false }: {
+    /** The pod the paused conversation is in, when the host knows it: the
+     *  browser to sign in is that pod's machine, as the conversation's agent.
+     *  A sign-in link opened on its own carries no pod: the pending sign-in
+     *  names it, and its agent, from the conversation. */
+    podId?: string | null;
     conversationId: string;
     toolCallId: string;
     /** Opened beside the thread as the browser itself. One thin bar
@@ -54,7 +59,12 @@ export function SignInPane({ conversationId, toolCallId, onDone, compact = false
        the ordinary one — somebody answers hours later, from a notification,
        and the browser the steer was aimed at has been retired since. */
     const [reopen, setReopen] = useState(0);
-    const tab = useOpenBrowserTab();
+    /* The pause names the browser it is for. A link opened on its own has no
+       pod of its own, and without these the page poll, the tab and the
+       picture all went to the assistant's machine instead of the agent's. */
+    const host = useWorkspaceScope(podId ?? null, conversationId);
+    const scope = signInScope(host, request.data ?? null);
+    const tab = useOpenBrowserTab(scope);
 
     const origin = request.data?.origin ?? null;
     /* Only while the picture is up, the pause is open and this pane is in
@@ -62,7 +72,7 @@ export function SignInPane({ conversationId, toolCallId, onDone, compact = false
        is looking at is a round trip spent on nothing — a sign-in tab stays
        mounted when another is opened over it. */
     const visible = usePaneVisible();
-    const page = useCurrentPage(origin, picture === "live" && !answer.data && visible);
+    const page = useCurrentPage(scope, origin, picture === "live" && !answer.data && visible);
 
     if (sample) {
         return (
@@ -105,7 +115,7 @@ export function SignInPane({ conversationId, toolCallId, onDone, compact = false
     if (compact) {
         const glass = (
             <div className="signin__glass">
-                <LiveScreen mode="control" origin={request.data.origin} reopen={reopen} onState={setPicture} />
+                <LiveScreen mode="control" scope={scope} origin={request.data.origin} reopen={reopen} onState={setPicture} />
                 {picture === "live" && !where.arrived && (
                     <div className="signin__waiting">
                         <LoadingIndicator label={"Connecting to " + whereabouts(request.data.origin, null).host} />
@@ -177,6 +187,7 @@ export function SignInPane({ conversationId, toolCallId, onDone, compact = false
             <div className="signin__glass">
                 <LiveScreen
                     mode="control"
+                    scope={scope}
                     origin={request.data.origin}
                     reopen={reopen}
                     onState={setPicture}

@@ -2,6 +2,7 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { PodConnectorCoverage } from './PodConnectorCoverage.js';
 import type { PodConnectorMode } from './PodConnectorMode.js';
 import type { PodConnectorStatus } from './PodConnectorStatus.js';
 import type { PodConnectorVisibility } from './PodConnectorVisibility.js';
@@ -13,6 +14,10 @@ export type PodConnectorResponse = {
     created_by_user_id?: (string | null);
     id: string;
     installation_name?: (string | null);
+    /**
+     * A required PER_MEMBER connector, read by someone who may manage the pod's connectors: who of the members allowed to use it has connected an account. Absent otherwise.
+     */
+    member_coverage?: (PodConnectorCoverage | null);
     mode: PodConnectorMode;
     pod_id: string;
     purpose?: (string | null);

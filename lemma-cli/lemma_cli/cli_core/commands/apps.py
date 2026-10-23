@@ -25,6 +25,7 @@ from ..app_scaffold import (
     title_from_name,
 )
 from ..confirm import confirm_destructive
+from .app_permissions import permissions_app
 from ..io import emit, to_plain
 from ..payload import build_request, read_json
 from ..sdk import pod_client
@@ -37,6 +38,7 @@ from ...cli_app.app_bundle import (
 )
 
 app = typer.Typer(help="App commands.")
+app.add_typer(permissions_app, name="permissions")
 
 
 def _bundle_root(directory: Path) -> Path:

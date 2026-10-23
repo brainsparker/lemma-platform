@@ -60,6 +60,11 @@ export function socketUrl(
         mode: "view" | "control";
         origin?: string | null;
         conversationId?: string | null;
+        /** Whose machine: the pod, and a named agent's own — absent is the
+         *  pod assistant's. Sent beside a sign-in's origin or a conversation:
+         *  those name a session on the machine, these name the machine. */
+        podId?: string | null;
+        agentId?: string | null;
         /** The bearer token, where this browser has one. Absent on a cookie
          *  session, which is the case that needs no credential in a URL. */
         accessToken?: string | null;
@@ -72,6 +77,8 @@ export function socketUrl(
        it would be a second answer to a question with one. */
     if (options.origin) query.set("origin", options.origin);
     else if (options.conversationId) query.set("conversation", options.conversationId);
+    if (options.podId) query.set("pod_id", options.podId);
+    if (options.podId && options.agentId) query.set("agent", options.agentId);
     if (options.accessToken) query.set("access_token", options.accessToken);
     return `${base}/workspace/browser/view?${query.toString()}`;
 }

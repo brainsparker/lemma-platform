@@ -6,6 +6,7 @@ import type { PodAccountSource } from './PodAccountSource.js';
 import type { PodAccountVisibility } from './PodAccountVisibility.js';
 export type PodAccountResponse = {
     account_id: string;
+    allow_sandbox_use?: boolean;
     auth_config_id: string;
     connector_id?: (string | null);
     created_at: string;

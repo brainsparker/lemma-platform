@@ -41,6 +41,11 @@ describe("browser bundle globals", () => {
     expect(g.LemmaClient.LEMMA_COMPOSE_MESSAGE_TYPE).toBe("lemma-compose");
     expect(typeof g.LemmaClient.composeInConversation).toBe("function");
     expect(typeof g.LemmaClient.canComposeInConversation).toBe("function");
+    // What an app catches when its call is outside its grants, and what the
+    // host is told about it.
+    expect(typeof g.LemmaClient.AppNotGrantedError).toBe("function");
+    expect(typeof g.LemmaClient.isAppNotGrantedError).toBe("function");
+    expect(g.LemmaClient.LEMMA_APP_NOT_GRANTED_MESSAGE_TYPE).toBe("lemma-app-not-granted");
     // Back-compat alias for widgets authored against `new Lemma.LemmaClient()`.
     expect(g.Lemma).toBeDefined();
     expect(g.Lemma.LemmaClient).toBe(g.LemmaClient.LemmaClient);

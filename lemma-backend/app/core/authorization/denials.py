@@ -61,6 +61,15 @@ def denial_message(permission_id: str, decision: "AuthorizationDecision") -> str
             f"workload never exceeds its invoker. Give that person the "
             f"permission, or run this as someone who already has it."
         )
+    if decision.reason_code == "APP_NOT_GRANTED":
+        # Nobody approves an app's call for a session: the fix is a grant on
+        # the app, and the person who can make it is an editor of the pod.
+        return (
+            f"{message} — this app was not granted it. An editor can add "
+            f"`{permission_id}` on {resource_type}"
+            + (f" '{decision.resource_name}'" if decision.resource_name else "")
+            + " to the app's grants."
+        )
     if decision.reason_code == "MISSING_WORKLOAD_RESOURCE_GRANT":
         spec = _GRANT_COMMAND_BY_TYPE.get(resource_type)
         if spec and decision.resource_name:

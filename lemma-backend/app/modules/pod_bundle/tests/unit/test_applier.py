@@ -330,6 +330,15 @@ def _patch_grant_layer(monkeypatch) -> dict:
         "app.core.authorization.grants.replace_grantee_resource_grants", _replace
     )
 
+    # The importer may hand a workload only what they hold: the bundle asks the
+    # same conferral check the permissions routes do, as the importer.
+    async def _confer(ctx, grants, *, pod_id, action):
+        calls.setdefault("conferred", []).append({"ctx": ctx, "grants": list(grants)})
+
+    monkeypatch.setattr(
+        "app.core.authorization.conferral.assert_can_confer_grants", _confer
+    )
+
     # The `/memory` folder and grant the MEMORY toolset implies. A separate
     # collaborator with its own datastore call, recorded here rather than run:
     # the stubs above hand back sentinel strings, and the real one reads
@@ -440,6 +449,10 @@ async def test_agent_grants_step_applies_grants(tmp_path, monkeypatch):
     assert calls["replace"]["grantee_type"] == "AGENT"
     assert calls["replace"]["grantee_id"] == _AGENT_ID
     assert calls["replace"]["grants"] == ["NORMALIZED"]
+    # Checked as the importer, before anything was written.
+    [conferred] = calls["conferred"]
+    assert conferred["grants"] == ["NORMALIZED"]
+    assert conferred["ctx"] is not None
 
 
 _FUNCTION_ID = uuid4()
@@ -1239,3 +1252,81 @@ async def test_a_bundle_with_no_files_manifest_warns_about_nothing(
 
     assert fake.created_files == [("guide.md", b"hi", "/", "POD", True)]
     assert warnings == []
+
+
+def test_a_pod_grant_is_read_whichever_case_the_bundle_spells_it():
+    from app.core.authorization.context import ResourceType
+
+    grants = _grants_from_payload(
+        {
+            "permissions": {
+                "grants": [
+                    {
+                        "resource_type": "POD",
+                        "resource_name": "pod",
+                        "permission_ids": ["datastore.table.read"],
+                    }
+                ]
+            }
+        }
+    )
+    assert [(g.resource_type, g.resource_name) for g in grants] == [
+        (ResourceType.POD, "pod")
+    ]
+
+
+def test_a_pod_grant_naming_anything_but_the_pod_is_an_invalid_bundle():
+    with pytest.raises(BundleInvalidError, match="named `pod`"):
+        _grants_from_payload(
+            {"grants": [{"resource_type": "pod", "resource_name": "acme"}]}
+        )
+
+
+async def test_app_grants_step_sets_them_through_the_apps_module(tmp_path, monkeypatch):
+    """The app's grants are set the way the permissions route sets them --
+    the apps module's `replace_app_grants`, conferral check and all -- with
+    the importer as the one setting them."""
+    from app.core.authorization.context import ResourceType
+
+    root = tmp_path / "bundle"
+    _write(
+        root / "apps" / "board" / "board.json",
+        {
+            "name": "board",
+            "permissions": {
+                "grants": [
+                    {
+                        "resource_type": "pod",
+                        "resource_name": "pod",
+                        "permission_ids": ["datastore.table.read"],
+                    }
+                ]
+            },
+        },
+    )
+    seen: dict = {}
+
+    async def _replace(uow, *, ctx, pod_id, app_name, grants, user_id):
+        seen.update(
+            app_name=app_name,
+            pod_id=pod_id,
+            user_id=user_id,
+            grants=[
+                (g.resource_type, g.resource_name, g.permission_ids) for g in grants
+            ],
+        )
+
+    monkeypatch.setattr(
+        "app.modules.apps.contracts.provisioning.replace_app_grants", _replace
+    )
+
+    await _grant_applier(root).apply_step(
+        _step(StepKind.APP_GRANTS, "board", action=StepAction.UPDATE)
+    )
+
+    assert seen == {
+        "app_name": "board",
+        "pod_id": _UUID,
+        "user_id": _UUID,
+        "grants": [(ResourceType.POD, "pod", ["datastore.table.read"])],
+    }

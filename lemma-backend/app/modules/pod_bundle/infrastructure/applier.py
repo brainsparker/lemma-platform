@@ -23,6 +23,9 @@ from lemma_pod_bundle.layout import TABLE_DATA_FILE
 from app.core.concurrency.offload import run_blocking
 from app.core.log.log import get_logger
 from app.modules.pod_bundle.domain.errors import PodBundleDomainError
+from app.modules.pod_bundle.domain.connector_plan import ConnectorChoice
+from app.modules.pod_bundle.infrastructure.app_grants_apply import apply_app_grants
+from app.modules.pod_bundle.infrastructure.connector_apply import apply_connector
 from app.modules.pod_bundle.infrastructure.schedule_apply import apply_schedule
 from app.modules.pod_bundle.infrastructure.surface_apply import apply_surface
 from app.modules.pod_bundle.domain.state import PlanStep, StepKind
@@ -55,8 +58,10 @@ class BundleApplier:
         bundle_root: Path,
         replacements: dict[str, str] | None = None,
         warnings: list[str] | None = None,
+        connector_choices: dict[str, ConnectorChoice] | None = None,
     ):
         self._uow = uow
+        self._connector_choices = connector_choices or {}
         self._ctx = ctx
         self._pod_id = pod_id
         self._user_id = user_id
@@ -69,11 +74,13 @@ class BundleApplier:
 
     async def apply_step(self, step: PlanStep) -> None:
         handler = {
+            StepKind.CONNECTOR: self._connector_step,
             StepKind.TABLE: self._apply_table,
             StepKind.TABLE_DATA: self._apply_table_data,
             StepKind.AGENT: self._apply_agent,
             StepKind.AGENT_GRANTS: self._apply_agent_grants,
             StepKind.FUNCTION_GRANTS: self._apply_function_grants,
+            StepKind.APP_GRANTS: self._app_grants_step,
             StepKind.SCHEDULE: self._apply_schedule,
             StepKind.WORKFLOW: self._apply_workflow,
             StepKind.SURFACE: self._surface_step,
@@ -289,6 +296,19 @@ class BundleApplier:
                 **common,
             )
 
+    async def _connector_step(self, step: PlanStep) -> None:
+        """The dispatch table's uniform shape over `connector_apply`."""
+        await apply_connector(
+            step,
+            uow=self._uow,
+            ctx=self._ctx,
+            pod_id=self._pod_id,
+            user_id=self._user_id,
+            bundle_root=self._root,
+            choices=self._connector_choices,
+            warnings=self._warnings,
+        )
+
     async def _surface_step(self, step: PlanStep) -> None:
         """The dispatch table's uniform shape over `surface_apply.apply_surface`."""
         await apply_surface(
@@ -297,6 +317,12 @@ class BundleApplier:
             ctx=self._ctx,
             pod_id=self._pod_id,
             load=self._load,
+        )
+
+    async def _app_grants_step(self, step: PlanStep) -> None:
+        """The dispatch table's uniform shape over `apply_app_grants`."""
+        await apply_app_grants(
+            step, self._uow, self._ctx, self._pod_id, self._user_id, self._load
         )
 
     async def _apply_function_grants(self, step: PlanStep) -> None:
@@ -395,6 +421,7 @@ class BundleApplier:
             grantee_id=grantee_id,
             grants=grants,
             created_by_user_id=self._user_id,
+            ctx=self._ctx,
         )
 
     # --- schedules -------------------------------------------------------

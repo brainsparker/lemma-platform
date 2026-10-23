@@ -9,6 +9,8 @@ from ..openapi_client.api.apps import (
     app_dist_archive_get,
     app_get,
     app_list,
+    app_permissions_get,
+    app_permissions_replace,
     app_release_list,
     app_release_promote,
     app_source_archive_get,
@@ -18,6 +20,10 @@ from ..openapi_client.models.create_app_request import CreateAppRequest
 from ..openapi_client.models.app_detail_response import AppDetailResponse
 from ..openapi_client.models.app_bundle_upload_response import AppBundleUploadResponse
 from ..openapi_client.models.app_list_response import AppListResponse
+from ..openapi_client.models.app_permissions_replace_request import (
+    AppPermissionsReplaceRequest,
+)
+from ..openapi_client.models.app_permissions_response import AppPermissionsResponse
 from ..openapi_client.models.app_release_list_response import AppReleaseListResponse
 from ..openapi_client.models.update_app_request import UpdateAppRequest
 from .base import BoundResource
@@ -38,6 +44,19 @@ class PodApps(BoundResource):
 
     def delete(self, name: str) -> None:
         self._call(app_delete, self._pod_uuid(), name)
+
+    def permissions(self, name: str) -> AppPermissionsResponse:
+        """The app's declared grants: what its page may do for whoever views
+        it, intersected with that viewer's own access. A call outside them is
+        refused ``APP_NOT_GRANTED``, naming the grant to add here."""
+        return self._call(app_permissions_get, self._pod_uuid(), name)
+
+    def replace_permissions(
+        self, name: str, request: AppPermissionsReplaceRequest
+    ) -> AppPermissionsResponse:
+        """Replace the app's declared grants. Each must be one the caller could
+        use on that resource themselves (``CONFERRAL_EXCEEDS_HOLDER``)."""
+        return self._call(app_permissions_replace, self._pod_uuid(), name, body=request)
 
     def upload_bundle(
         self,

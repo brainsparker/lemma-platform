@@ -57,6 +57,7 @@ async def pod_live_ws(websocket: WebSocket, pod_id: UUID) -> None:
         user_id=user_id,
         send_text=websocket.send_text,
         queue_bytes=live_settings.live_socket_queue_bytes,
+        app=session.app,
     )
     if not await claim_socket_slot(
         pod_id, user_id, connection.id, limits.sockets_per_user

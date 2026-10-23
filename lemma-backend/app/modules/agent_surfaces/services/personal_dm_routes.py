@@ -10,11 +10,11 @@ from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.contracts.provisioning import pod_default_agent_exists
 from app.modules.agent_surfaces.domain.entities import (
-    AgentSurfaceConversationLink,
     AgentSurfaceEntity,
     ParsedInboundSurfaceEvent,
     ResolvedSurfaceUser,
 )
+from app.modules.agent_surfaces.domain.personal_route import PersonalRouteUnavailable
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 from app.modules.agent_surfaces.domain.models import SurfaceMessageMetadata
 from app.modules.agent_surfaces.infrastructure.adapters.routing_resolution_adapter import (
@@ -26,6 +26,7 @@ from app.modules.agent_surfaces.infrastructure.onboarding_models import (
 from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
     SurfaceRepository,
 )
+from app.modules.agent_surfaces.services.conversation_binder import BoundThread
 from app.modules.agent_surfaces.services.onboarding_transport import (
     platform_binding_key,
 )
@@ -33,10 +34,6 @@ from app.modules.agent_surfaces.services.surface_route_types import ResolvedSurf
 from app.modules.connectors.contracts.surfaces import account
 from app.modules.identity.contracts.onboarding import active_chat_user
 from app.modules.pod.contracts.agent_access import live_pod_organization_id
-
-
-class PersonalRouteUnavailable(ValueError):
-    pass
 
 
 async def validate_personal_dm_route(
@@ -141,7 +138,7 @@ class ConversationLinker(Protocol):
         parsed: ParsedInboundSurfaceEvent,
         resolved_user: ResolvedSurfaceUser,
         route: ResolvedSurfaceRoute,
-    ) -> tuple[AgentSurfaceConversationLink, str | None]: ...
+    ) -> BoundThread: ...
 
 
 async def prepare_personal_dm_context(
@@ -179,7 +176,7 @@ async def prepare_personal_dm_context(
         conversation_kind="DM",
         route_key=f"personal:{route.id}",
     )
-    link, title = await linker.bind_conversation(
+    bound = await linker.bind_conversation(
         surface=installation, parsed=event, resolved_user=resolved, route=assistant
     )
     return SurfaceChatContext(
@@ -192,7 +189,8 @@ async def prepare_personal_dm_context(
         pod_id=route.pod_id,
         agent_name=DEFAULT_POD_AGENT_NAME,
         agent_display_name="Assistant",
-        conversation_id=link.conversation_id,
+        conversation_id=bound.conversation_id,
+        source_id=bound.source_id,
         user_id=user.id,
         message_text=event.message_text,
         message_user_id=user.id,
@@ -205,7 +203,7 @@ async def prepare_personal_dm_context(
             event_metadata=event.metadata,
         ),
         event=event,
-        created_conversation_title=title,
+        created_conversation_title=bound.created_title,
     )
 
 

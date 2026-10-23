@@ -158,6 +158,24 @@ class DelegationClaims(BaseModel):
     delegation_version: int
 
 
+def is_default_pod_agent_claims(claims: DelegationClaims | None) -> bool:
+    """Whether this token was minted for the pod's own assistant.
+
+    The one place the answer comes from a token rather than a row: this runs on
+    every delegated request, and ``is_pod_default_agent`` is deliberately free
+    of I/O so it need not become a query.
+
+    Both claims have to agree. The id arm alone would promote any workload
+    whose id happened to equal its pod's, and what turns on this is whether a
+    token acts with its user's permissions or only its own grants.
+    """
+    return (
+        claims is not None
+        and is_pod_default_agent(claims.actor_id, pod_id=claims.pod_id)
+        and claims.actor_name in {None, DEFAULT_POD_AGENT_NAME}
+    )
+
+
 class DelegationClaimsError(ValueError):
     """Raised when delegated auth claims are invalid."""
 

@@ -23,8 +23,10 @@ from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.core.text.thinking_tags import has_thinking_tokens, split_thinking_segments
 from app.modules.agent.domain.entities import Message
+from app.modules.agent.domain.pausing_tools import USER_PAUSING_TOOL_NAMES
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
+    AgentEventType,
     ConversationStatus,
     JsonObject,
     JsonValue,
@@ -33,6 +35,10 @@ from app.modules.agent.domain.value_objects import (
     MessageRole,
 )
 from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.repositories.run_last_words import (
+    last_text,
+    tool_result_after,
+)
 
 logger = get_logger(__name__)
 
@@ -148,11 +154,75 @@ class RunMessageWriter:
             )
             if existing is not None:
                 return existing
+            draft = await self._unique_pause_id(
+                repository,
+                conversation_id=conversation_id,
+                agent_run_id=agent_run_id,
+                draft=draft,
+            )
             return await repository.append_message(
                 conversation_id=conversation_id,
                 agent_run_id=agent_run_id,
                 draft=draft,
             )
+
+    async def notice(
+        self, *, conversation_id: UUID, text: str, metadata: JsonObject
+    ) -> Message:
+        """A line for the person reading the conversation, in no run.
+
+        Run-less on purpose: the turn writing it does not carry it to its own
+        model (history takes only the run-less notifications older than the
+        turn's first message), and later turns read it as context.
+        """
+        async with self.uow_factory() as uow:
+            return await ConversationRepository(uow).append_message(
+                conversation_id=conversation_id,
+                agent_run_id=None,
+                draft=MessageDraft.of_notification(text, metadata=metadata),
+            )
+
+    @staticmethod
+    async def _unique_pause_id(
+        repository: ConversationRepository,
+        *,
+        conversation_id: UUID,
+        agent_run_id: UUID,
+        draft: MessageDraft,
+    ) -> MessageDraft:
+        """A pausing call whose id an earlier run already used, renamed.
+
+        A pause is addressed by its tool call id for as long as it is open --
+        the card, the decision row, the return -- and those lookups are per
+        conversation. The model's provider picks the id, and one that numbers
+        its calls (``call_0``) hands a later run the id of a question already
+        answered: the new card vanished behind the old return, and a decision
+        adopted the old one. So a clash is renamed here, once, the way calls
+        recorded over MCP already get an id of Lemma's own. The pause is
+        resolved and replayed under the stored id; only this run's in-memory
+        state knew the provider's, and the pump translates its WAITING event.
+
+        Not ``wait_for``: its wait row keeps the id the tool was called with,
+        and the wake writes the return under that.
+        """
+        if (
+            draft.kind is not MessageKind.TOOL_CALL
+            or draft.tool_name not in USER_PAUSING_TOOL_NAMES
+            or not draft.tool_call_id
+        ):
+            return draft
+        earlier = await repository.get_tool_call(
+            conversation_id=conversation_id, tool_call_id=draft.tool_call_id
+        )
+        if earlier is None or earlier.agent_run_id == agent_run_id:
+            return draft
+        renamed = f"{draft.tool_call_id}-{agent_run_id.hex[-12:]}"
+        logger.info(
+            "agent.run_message_writer.pause_id_renamed.observed",
+            conversation_id=str(conversation_id),
+            agent_run_id=str(agent_run_id),
+        )
+        return draft.model_copy(update={"tool_call_id": renamed})
 
     @staticmethod
     async def _answered_already(
@@ -176,6 +246,45 @@ class RunMessageWriter:
         return await repository.get_tool_return(
             conversation_id=conversation_id,
             tool_call_id=draft.tool_call_id,
+        )
+
+    async def last_words(self, agent_run_id: UUID) -> Message | None:
+        """The answer this run left on the record without naming it, if any.
+
+        Its last assistant text, unless a tool result follows it. A result
+        means the agent went on working once it had spoken, so the text was
+        leading up to that work and the run ended with no answer. Nothing else
+        after it is work: a call announced after the agent's closing words --
+        an Agent Host releases one its adapter opened and never settled only
+        once the turn is over -- never ran, and the return made up for it as
+        the run ended says exactly that; a thought is not speech, and a
+        person's message is not the agent's doing.
+
+        Read from the record rather than the events this process saw, so a run
+        resumed on another worker after its closing words still finds them.
+        """
+        async with self.uow_factory() as uow:
+            words = await last_text(uow.session, agent_run_id=agent_run_id)
+            if words is None or not (words.text or "").strip():
+                return None
+            if await tool_result_after(
+                uow.session, agent_run_id=agent_run_id, sequence=words.sequence
+            ):
+                return None
+        return words
+
+    def answer_output(self, answer: Message) -> JsonValue | None:
+        """What a run answered by ``answer`` hands back, by the rule for any answer."""
+        draft = MessageDraft.of_text(
+            answer.text or "",
+            metadata={**(answer.metadata or {}), "is_final_answer": True},
+        )
+        return self.output_data_from_event(
+            AgentEvent(
+                type=AgentEventType.MESSAGE,
+                data=draft,
+                agent_run_id=answer.agent_run_id,
+            )
         )
 
     def output_data_from_event(self, event: AgentEvent) -> JsonValue | None:

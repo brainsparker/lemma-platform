@@ -1,6 +1,8 @@
 """Schedule API schemas."""
 
 from datetime import datetime
+from enum import StrEnum
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, computed_field, model_validator
@@ -8,10 +10,24 @@ from pydantic import BaseModel, Field, computed_field, model_validator
 from app.modules.schedule.config import schedule_settings
 from app.core.authorization.delegation import POD_DEFAULT_AGENT_SELECTOR
 from app.modules.schedule.domain.schedule import (
+    MCP_EVENT_SOURCE,
     ScheduleRunStatus,
     ScheduleFireStatus,
     ScheduleType,
     normalize_datastore_schedule_config,
+    schedule_run_cap,
+)
+
+_CONFIG = (
+    "Settings for the schedule's type: `cron`/`scheduled_at`/`timezone` for "
+    "TIME, `source` for WEBHOOK, `table_name`/`operations`/`when` for "
+    "DATASTORE. Any type may set `max_concurrent_runs`: at most that many of "
+    "the schedule's runs in flight at once, from 1 to 1000; a fire that finds "
+    "it full is skipped and recorded as skipped, not queued. DATASTORE may set "
+    "`bulk_writes` and `import_writes` to `skip`, `each` or `batch`: what a bulk "
+    "write or an import does to the trigger. Both default to `skip` (the "
+    "changes are recorded as skipped, aggregated); the pod setting "
+    "`triggers.bulk_writes_default` changes the default for `bulk_writes`."
 )
 
 _INCLUDE_OUTSIDE_ROWS = (
@@ -40,7 +56,7 @@ class CreateScheduleRequest(BaseModel):
         ),
     )
     workflow_name: str | None = None
-    config: dict = Field(default_factory=dict)
+    config: dict = Field(default_factory=dict, description=_CONFIG)
     instruction: str | None = Field(
         default=None,
         max_length=8000,
@@ -94,8 +110,12 @@ class CreateScheduleRequest(BaseModel):
             self.agent_name
             and self.schedule_type == ScheduleType.WEBHOOK
             and not self.connector_trigger_id
+            and self.config.get("source") != MCP_EVENT_SOURCE
         ):
-            raise ValueError("Agent webhook schedules require connector_trigger_id")
+            raise ValueError(
+                "Agent webhook schedules require connector_trigger_id, or a "
+                "connected MCP server's event (config.source 'mcp')"
+            )
         # "A target with no standing instruction must be told what to do" is
         # enforced in the service, not here: it is a question about the resolved
         # agent, and a validator cannot look one up. The cost is that it comes
@@ -105,6 +125,7 @@ class CreateScheduleRequest(BaseModel):
                 "connector_trigger_id is only valid for agent webhook schedules; "
                 "workflow schedules derive it from the workflow start config"
             )
+        schedule_run_cap(self.config)
         if self.schedule_type == ScheduleType.DATASTORE:
             self.config = normalize_datastore_schedule_config(self.config)
         return self
@@ -114,7 +135,9 @@ class UpdateScheduleRequest(BaseModel):
     """Request to update a schedule."""
 
     name: str | None = Field(default=None, min_length=1, max_length=255)
-    config: dict | None = None
+    config: dict | None = Field(
+        default=None, description=f"Replaces the whole config. {_CONFIG}"
+    )
     agent_name: str | None = None
     workflow_name: str | None = None
     instruction: str | None = Field(default=None, max_length=8000)
@@ -133,9 +156,29 @@ class UpdateScheduleRequest(BaseModel):
         # schedule_type is unknown here; the service enforces the DATASTORE
         # rules. Normalize eagerly when the config is recognizably datastore
         # so users get a field-scoped 422 instead of a service-level 400.
+        if self.config is not None:
+            schedule_run_cap(self.config)
         if self.config is not None and "operations" in self.config:
             self.config = normalize_datastore_schedule_config(self.config)
         return self
+
+
+class ListeningResponse(BaseModel):
+    """How a schedule on a connected MCP server's event is hearing from it."""
+
+    state: Literal["listening", "retrying", "lapsed", "pending"] = Field(
+        description=(
+            "listening: the server holds the subscription. retrying: renewing "
+            "it failed and is being retried. lapsed: the server no longer tells "
+            "us anything. pending: the server has not answered yet."
+        )
+    )
+    last_error: str | None = None
+    last_event_at: datetime | None = None
+    refresh_before: datetime | None = None
+    server: str | None = Field(
+        default=None, description="The connected server it listens to, by name."
+    )
 
 
 class ScheduleResponse(BaseModel):
@@ -168,8 +211,23 @@ class ScheduleResponse(BaseModel):
     last_fire_status: ScheduleFireStatus | None = None
     last_error: str | None = None
     consecutive_failures: int = 0
+    paused_reason: str | None = Field(
+        default=None,
+        description=(
+            "Why the platform paused this schedule: `fire_cap` (it fired more "
+            "than its daily ceiling), `consecutive_failures`, `fire_failed` "
+            "(a scheduled run could not be started), or another system "
+            "reason. Absent while it runs, or when a person paused it. "
+            "Reactivating clears it."
+        ),
+    )
     created_at: datetime
     updated_at: datetime
+    listening: ListeningResponse | None = Field(
+        default=None,
+        description="For a schedule on an MCP server's event: whether it is "
+        "still hearing from the server. Absent for every other schedule.",
+    )
 
     model_config = {"from_attributes": True}
 
@@ -239,6 +297,44 @@ class ScheduleRunResponse(BaseModel):
 class ScheduleRunListResponse(BaseModel):
     items: list[ScheduleRunResponse]
     limit: int
+
+
+class TriggerSkipReason(StrEnum):
+    BULK_WRITE = "bulk_write"
+    IMPORT_WRITE = "import_write"
+    FIRE_CAP = "fire_cap"
+    LAG_EXCEEDED = "lag_exceeded"
+    CONDITION_NOT_MET = "condition_not_met"
+    OUTSIDE_ROW = "outside_row"
+
+
+class TriggerSkipResponse(BaseModel):
+    """Changes or fires the trigger let pass without firing, aggregated.
+
+    One row stands for every change of one delivered page skipped for one
+    reason: a bulk write of thousands of rows is a handful of rows here.
+    """
+
+    id: UUID
+    reason: TriggerSkipReason = Field(
+        description=(
+            "`bulk_write` / `import_write`: the trigger's write mode for that "
+            "intent is `skip`. `fire_cap`: the trigger reached its daily fire "
+            "ceiling and paused. `lag_exceeded`: the trigger fell further "
+            "behind its table than the change log waits for a subscriber "
+            "(24 hours by default), and these changes were passed over."
+        )
+    )
+    first: str = Field(description="Position of the first skipped change or fire.")
+    last: str = Field(description="Position of the last skipped change or fire.")
+    count: int = Field(description="How many changes or fires this row stands for.")
+    at: datetime
+
+
+class TriggerSkipListResponse(BaseModel):
+    items: list[TriggerSkipResponse]
+    limit: int
+    next_page_token: str | None = None
 
 
 class MessageResponse(BaseModel):

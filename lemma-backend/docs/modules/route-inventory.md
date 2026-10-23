@@ -12,6 +12,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | DELETE | `/organizations/{organization_id}/agent-runtime/profiles/{profile_id}` | `agent.runtime.profiles.archive` | Archive Agent Runtime Profile |
 | DELETE | `/pods/{pod_id}/agents/{agent_name}` | `agent.delete` | Delete Agent |
 | DELETE | `/pods/{pod_id}/conversations/{conversation_id}/messages/{message_id}` | `agent.conversation.message.withdraw` | Withdraw Queued Conversation Message |
+| DELETE | `/pods/{pod_id}/pod-links/{asking_pod_id}` | `agent.pod_link.disconnect` | Disconnect A Pod From This One |
 | GET | `/me/runtime/agent-hosts` | `agent.host.list` | List Agent Hosts |
 | GET | `/me/runtime/agent-hosts/{host_id}/harnesses` | `agent.host.harnesses.list` | List Agent Host Harnesses |
 | GET | `/organizations/{organization_id}/agent-runtime/profiles` | `agent.runtime.profiles.list` | List Available Agent Runtime Profiles |
@@ -19,11 +20,14 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/agents` | `agent.list` | List Agents |
 | GET | `/pods/{pod_id}/agents/{agent_name}` | `agent.get` | Get Agent |
 | GET | `/pods/{pod_id}/agents/{agent_name}/permissions` | `agent.permissions.get` | Get Agent Resource Permissions |
+| GET | `/pods/{pod_id}/askable-pods` | `agent.askable_pod.list` | List Pods This Pod Can Ask |
 | GET | `/pods/{pod_id}/conversations` | `agent.conversation.list` | List Pod Agent Conversations |
+| GET | `/pods/{pod_id}/conversations/pending-interactions` | `agent.conversation.pending_interaction.list` | List Interactions Waiting On You |
 | GET | `/pods/{pod_id}/conversations/{conversation_id}` | `agent.conversation.get` | Get Pod Conversation |
 | GET | `/pods/{pod_id}/conversations/{conversation_id}/approvals` | `agent.conversation.approval.list` | List Agent Run Approvals |
 | GET | `/pods/{pod_id}/conversations/{conversation_id}/messages` | `agent.conversation.message.list` | List Pod Conversation Messages |
 | GET | `/pods/{pod_id}/conversations/{conversation_id}/stream` | `agent.conversation.stream` | Stream Pod Conversation |
+| GET | `/pods/{pod_id}/pod-links` | `agent.pod_link.list` | List Pods That Can Ask This Pod |
 | PATCH | `/organizations/{organization_id}/agent-runtime/profiles/{profile_id}` | `agent.runtime.profiles.update` | Update Agent Runtime Profile |
 | PATCH | `/pods/{pod_id}/agents/{agent_name}` | `agent.update` | Update Agent |
 | PATCH | `/pods/{pod_id}/conversations/{conversation_id}` | `agent.conversation.update` | Update Pod Conversation |
@@ -43,19 +47,19 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/tools/web-search` | `agent.tool.web_search` | Agent Web Search |
 | PUT | `/organizations/{organization_id}/agent-runtime/default` | `agent.runtime.default.set` | Set the Organization's Default Model |
 | PUT | `/pods/{pod_id}/agents/{agent_name}/permissions` | `agent.permissions.replace` | Replace Agent Resource Permissions |
+| PUT | `/pods/{pod_id}/pod-links/{asking_pod_id}` | `agent.pod_link.connect` | Connect A Pod To This One |
 
 ## agent_surfaces
 
 | Method | Path | Operation ID | Summary |
 | --- | --- | --- | --- |
+| DELETE | `/pods/{pod_id}/surface-setup/slack/app-creation/{team_id}` | `agent.surface.slack_app_creation.forget` | Forget Slack Configuration Token |
 | DELETE | `/pods/{pod_id}/surfaces/{surface_name}` | `agent.surface.delete` | Delete Surface |
 | DELETE | `/pods/{pod_id}/web-widgets/{widget_id}` | `agent.web_widget.delete` | Delete Widget |
 | GET | `/pods/{pod_id}/available-surfaces` | `agent.surface.available` | List Available Surfaces |
-| GET | `/pods/{pod_id}/groups` | `agent.group.list` | List Groups |
-| GET | `/pods/{pod_id}/groups/{group_id}` | `agent.group.get` | Get Group |
-| GET | `/pods/{pod_id}/groups/{group_id}/timeline` | `agent.group.timeline` | Group Timeline |
-| GET | `/pods/{pod_id}/notifications` | `notification.list` | List My Notifications |
-| GET | `/pods/{pod_id}/notifications/unread-count` | `notification.unread_count` | Count My Unread Notifications |
+| GET | `/pods/{pod_id}/channels/{channel_id}/sources/{source_id}` | `channel.source.get` | Get Source |
+| GET | `/pods/{pod_id}/surface-setup/slack/app-creation` | `agent.surface.slack_app_creation.list` | List Slack App Workspaces |
+| GET | `/pods/{pod_id}/surface-setup/slack/manager` | `agent.surface.slack_manager.list` | List Slack Managed Workspaces |
 | GET | `/pods/{pod_id}/surface-setup/{platform}` | `agent.surface.setup_guide` | Get Surface Setup Guide |
 | GET | `/pods/{pod_id}/surfaces` | `agent.surface.list` | List Surfaces |
 | GET | `/pods/{pod_id}/surfaces/{surface_name}` | `agent.surface.get` | Get Surface |
@@ -65,24 +69,24 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/web-widgets` | `agent.web_widget.list` | List Widgets |
 | GET | `/public/web/{public_key}/challenge` | `public.web.challenge.read` | Web Challenge |
 | GET | `/public/web/{public_key}/history` | `public.web.history.read` | Web Read History |
+| GET | `/public/web/{public_key}/rows` | `public.web.rows.read` | Web Read Rows |
 | GET | `/public/web/{public_key}/stream` | `public.web.stream.read` | Web Stream Answers |
 | GET | `/public/web/{public_key}/table` | `public.web.table.read` | Web Read Table |
+| GET | `/surface-setup/slack/install` | `agent.surface.slack_install.availability` | Slack Install Availability |
 | GET | `/surface-setup/slack/manifest` | `agent.surface.slack_manifest` | Get Slack App Manifest |
 | GET | `/surfaces/me` | `agent.surface.list_mine` | List My Surfaces |
 | GET | `/surfaces/teams/admin-consent/callback` | `agent.surface.teams_admin_consent_callback` | Teams Admin Consent Callback |
 | GET | `/surfaces/webhooks/whatsapp/numbers/{phone_number_id}` | `surface.webhook.verify_whatsapp_number` | Verify a pooled WhatsApp number's own callback URL |
 | GET | `/surfaces/webhooks/{platform}` | `surface.webhook.verify` | Verify surface webhook using the platform callback URL |
 | GET | `/surfaces/{surface_id}/webhook` | `surface.webhook.verify_surface` | Verify surface webhook using a surface-level callback URL |
-| PATCH | `/pods/{pod_id}/groups/{group_id}` | `agent.group.update` | Update Group |
+| PATCH | `/pods/{pod_id}/channels/{channel_id}/sources/{source_id}` | `channel.source.update` | Update Source |
 | PATCH | `/pods/{pod_id}/surfaces/{surface_name}` | `agent.surface.update` | Update Surface |
 | PATCH | `/pods/{pod_id}/web-widgets/{widget_id}` | `agent.web_widget.update` | Update Widget |
-| POST | `/pods/{pod_id}/groups` | `agent.group.start` | Start Group |
-| POST | `/pods/{pod_id}/groups/links` | `agent.group.link` | Group Link |
-| POST | `/pods/{pod_id}/notifications` | `notification.send` | Notify A Pod Member |
-| POST | `/pods/{pod_id}/notifications/read-all` | `notification.mark_all_read` | Mark All My Notifications Read |
-| POST | `/pods/{pod_id}/notifications/{notification_id}/acknowledge` | `notification.acknowledge` | Acknowledge A Notification |
-| POST | `/pods/{pod_id}/notifications/{notification_id}/read` | `notification.mark_read` | Mark Notification Read |
-| POST | `/pods/{pod_id}/notifications/{notification_id}/respond` | `notification.respond` | Respond To A Notification |
+| POST | `/pods/{pod_id}/channels/telegram-links` | `channel.telegram_link.create` | Telegram Link |
+| POST | `/pods/{pod_id}/channels/whatsapp-groups` | `channel.whatsapp_group.start` | Start Whatsapp Group |
+| POST | `/pods/{pod_id}/contacts/{contact_id}/outreach` | `contact.outreach.send` | Send Outreach |
+| POST | `/pods/{pod_id}/members/{member}/notices` | `agent.notice.send` | Send Notice |
+| POST | `/pods/{pod_id}/surface-setup/slack/apps` | `agent.surface.slack_app.create` | Create Slack App |
 | POST | `/pods/{pod_id}/surfaces` | `agent.surface.create` | Create Surface |
 | POST | `/pods/{pod_id}/surfaces/{surface_name}/send` | `agent.surface.send` | Send Surface Message |
 | POST | `/pods/{pod_id}/telegram-bot-setups` | `agent.surface.telegram_managed.start` | Start Telegram Managed Bot Setup |
@@ -93,10 +97,14 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/public/web/{public_key}/messages` | `public.web.message.send` | Web Send Message |
 | POST | `/public/web/{public_key}/rows` | `public.web.row.add` | Web Add Row |
 | POST | `/public/web/{public_key}/session` | `public.web.session.start` | Web Start Session |
+| POST | `/surface-setup/slack/install` | `agent.surface.slack_install.start` | Start Slack Install Flow |
+| POST | `/surface-setup/slack/people/sign-in` | `agent.surface.slack_person.sign_in` | Start Slack Sign In |
 | POST | `/surfaces/webhooks/telegram-manager` | `surface.webhook.handle_telegram_manager` | Handle Telegram manager-bot webhook |
 | POST | `/surfaces/webhooks/whatsapp/numbers/{phone_number_id}` | `surface.webhook.handle_whatsapp_number` | Handle a webhook delivered to one pooled WhatsApp number |
 | POST | `/surfaces/webhooks/{platform}` | `surface.webhook.handle_platform` | Handle platform-level surface webhook |
 | POST | `/surfaces/{surface_id}/webhook` | `surface.webhook.handle_surface` | Handle surface-level webhook |
+| PUT | `/pods/{pod_id}/surface-setup/slack/app-creation` | `agent.surface.slack_app_creation.save` | Save Slack Configuration Token |
+| PUT | `/pods/{pod_id}/surface-setup/slack/manager` | `agent.surface.slack_manager.bind` | Bind Slack Manager |
 | PUT | `/surfaces/me/default` | `agent.surface.set_my_default` | Set My Default Surface |
 
 ## apps
@@ -116,6 +124,39 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/pods/{pod_id}/apps/from-widget` | `app.create_from_widget` | Save Widget As App |
 | POST | `/pods/{pod_id}/apps/{app_name}/bundle` | `app.bundle.upload` | Upload App Bundle |
 | POST | `/pods/{pod_id}/apps/{app_name}/releases/{release_ref}/promote` | `app.release.promote` | Promote App Release |
+
+## channels
+
+| Method | Path | Operation ID | Summary |
+| --- | --- | --- | --- |
+| DELETE | `/pods/{pod_id}/channels/{channel_id}` | `channel.delete` | Delete Channel |
+| DELETE | `/pods/{pod_id}/channels/{channel_id}/members/me` | `channel.member.leave` | Leave Channel |
+| DELETE | `/pods/{pod_id}/channels/{channel_id}/members/{kind}:{member_id}` | `channel.member.remove` | Remove Member |
+| DELETE | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}` | `channel.message.delete` | Delete Message |
+| GET | `/pods/{pod_id}/channels` | `channel.list` | List Channels |
+| GET | `/pods/{pod_id}/channels/me` | `channel.me.get` | Get My Channel |
+| GET | `/pods/{pod_id}/channels/{channel_id}` | `channel.get` | Get Channel |
+| GET | `/pods/{pod_id}/channels/{channel_id}/cases` | `channel.case.list` | List Cases |
+| GET | `/pods/{pod_id}/channels/{channel_id}/members` | `channel.member.list` | List Members |
+| GET | `/pods/{pod_id}/channels/{channel_id}/messages` | `channel.message.list` | List Messages |
+| GET | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/deliveries` | `channel.delivery.list` | List Deliveries |
+| GET | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/files/{file_id}` | `channel.message.file` | Line File |
+| GET | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/thread` | `channel.message.thread` | List Thread |
+| GET | `/pods/{pod_id}/inbox` | `channel.inbox.get` | Get Inbox |
+| GET | `/pods/{pod_id}/search` | `channel.search` | Search |
+| PATCH | `/pods/{pod_id}/channels/{channel_id}` | `channel.update` | Update Channel |
+| PATCH | `/pods/{pod_id}/channels/{channel_id}/members/me` | `channel.member.me_update` | Update My Membership |
+| PATCH | `/pods/{pod_id}/channels/{channel_id}/members/{kind}:{member_id}` | `channel.member.update` | Update Member |
+| PATCH | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}` | `channel.message.update` | Edit Message |
+| POST | `/pods/{pod_id}/channels` | `channel.create` | Create Channel |
+| POST | `/pods/{pod_id}/channels/me` | `channel.me.create` | Create My Channel |
+| POST | `/pods/{pod_id}/channels/{channel_id}/members` | `channel.member.add` | Add Members |
+| POST | `/pods/{pod_id}/channels/{channel_id}/members/me` | `channel.member.join` | Join Channel |
+| POST | `/pods/{pod_id}/channels/{channel_id}/messages` | `channel.message.post` | Post Message |
+| POST | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/answer` | `channel.message.answer` | Answer Question |
+| POST | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/deliveries/{delivery_id}/retry` | `channel.delivery.retry` | Retry Delivery |
+| POST | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/share` | `channel.message.share` | Share Message |
+| POST | `/pods/{pod_id}/channels/{channel_id}/read` | `channel.read` | Mark Read |
 
 ## connectors
 
@@ -158,7 +199,6 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/contacts/{contact_id}` | `contact.get` | Get Contact |
 | GET | `/pods/{pod_id}/contacts/{contact_id}/export` | `contact.export` | Export Contact |
 | PATCH | `/pods/{pod_id}/contacts/{contact_id}` | `contact.update` | Update Contact |
-| POST | `/pods/{pod_id}/contacts/{contact_id}/messages` | `contact.follow_up` | Follow Up Contact |
 
 ## datastore
 
@@ -271,8 +311,10 @@ run `uv run python scripts/generate_route_inventory.py`.
 | Method | Path | Operation ID | Summary |
 | --- | --- | --- | --- |
 | DELETE | `/oauth/grants/{grant_id}` | `mcp_access.grants.revoke` | Disconnect an MCP client |
+| DELETE | `/oauth/grants/{grant_id}/subscriptions/{subscription_id}` | `mcp_access.grants.subscription.delete` | Stop telling a connected app about an event |
 | GET | `/oauth/grants` | `mcp_access.grants.list` | MCP clients you have connected |
 | GET | `/oauth/mcp-endpoint/{pod_id}` | `mcp_access.endpoint.get` | The MCP URL for a pod |
+| POST | `/oauth/grants/{grant_id}/subscriptions/{subscription_id}/resume` | `mcp_access.grants.subscription.resume` | Let a connected app be told about an event again |
 
 ## pod
 
@@ -331,9 +373,11 @@ run `uv run python scripts/generate_route_inventory.py`.
 | Method | Path | Operation ID | Summary |
 | --- | --- | --- | --- |
 | DELETE | `/pods/{pod_id}/schedules/{schedule_id}` | `schedule.delete` | Delete Schedule |
+| GET | `/pods/{pod_id}/events` | `schedule.event.list` | List Events |
 | GET | `/pods/{pod_id}/schedules` | `schedule.list` | List Schedules |
 | GET | `/pods/{pod_id}/schedules/{schedule_id}` | `schedule.get` | Get Schedule |
 | GET | `/pods/{pod_id}/schedules/{schedule_id}/runs` | `schedule.run.list` | List Schedule Runs |
+| GET | `/pods/{pod_id}/schedules/{schedule_id}/skips` | `schedule.skip.list` | List Schedule Skips |
 | PATCH | `/pods/{pod_id}/schedules/{schedule_id}` | `schedule.update` | Update Schedule |
 | POST | `/pods/{pod_id}/schedules` | `schedule.create` | Create Schedule |
 | POST | `/pods/{pod_id}/schedules/{schedule_id}/runs/{run_id}/retry` | `schedule.run.retry` | Retry Schedule Run |
@@ -380,6 +424,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | PATCH | `/pods/{pod_id}/workflows/{workflow_name}` | `workflow.update` | Update Workflow Metadata |
 | POST | `/pods/{pod_id}/workflow-runs/{run_id}/cancel` | `workflow.run.cancel` | Cancel Workflow Run |
 | POST | `/pods/{pod_id}/workflow-runs/{run_id}/form` | `workflow.run.form.submit` | Submit Workflow Run Form |
+| POST | `/pods/{pod_id}/workflow-runs/{run_id}/retry` | `workflow.run.retry` | Retry Workflow Run |
 | POST | `/pods/{pod_id}/workflows` | `workflow.create` | Create Workflow |
 | POST | `/pods/{pod_id}/workflows/{workflow_name}/runs` | `workflow.run.create` | Create Workflow Run |
 | PUT | `/pods/{pod_id}/workflows/{workflow_name}/graph` | `workflow.graph.update` | Update Workflow Graph |

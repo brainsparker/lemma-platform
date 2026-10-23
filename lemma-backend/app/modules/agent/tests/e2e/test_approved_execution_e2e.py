@@ -31,6 +31,9 @@ from app.modules.agent.tools.approval.executor import ApprovalExecutor
 from app.modules.agent.tools.context import ConversationContext
 from app.modules.agent.tools.dispatcher import AgentToolDispatcher
 from app.modules.test_support.e2e.function_helpers import create_table
+from app.modules.workspace.services.workspace_sandbox_service import (
+    WorkspaceSandboxService,
+)
 
 pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
 
@@ -212,6 +215,7 @@ async def test_a_session_approval_lets_the_agent_repeat_it_in_that_conversation_
         await record_session_approvals(
             conversation_id=pod.conversation_id,
             agent_id=UUID(pod.agent["id"]),
+            pod_id=UUID(pod.pod_id),
             tool_args={
                 "tool_name": approval["tool_name"],
                 "args": approval["args"],
@@ -232,3 +236,57 @@ async def test_a_session_approval_lets_the_agent_repeat_it_in_that_conversation_
     )
     assert elsewhere["needs_approval"] is True
     assert "third" in await pod.rows()
+
+
+async def test_a_session_approval_reaches_the_pod_assistants_own_cli(scenario) -> None:
+    """The pod's assistant deletes with ``lemma``, on the token its workspace was
+    minted -- in the VM sandbox, or on the person's Mac through the Agent Host.
+
+    Refused until the person approves; after "allow for this conversation" the
+    same token's delete goes through. Neither half of the key used to match:
+    the approval was written for ``DEFAULT_POD_AGENT_ID``, which no run carries,
+    and the token named the shell (or, on the Mac, the run) as its session. So
+    the person approved, the agent retried, and was refused again, every time.
+    """
+    await scenario.create_org_with_pod(name_prefix="Assistant approvals")
+    pod_id = UUID(scenario.pod_id)
+    owner_id = UUID(scenario.owner_user["id"])
+    await create_table(scenario.owner_client, scenario.pod_id, _TABLE, enable_rls=False)
+    opened = await scenario.owner_client.post(
+        f"/pods/{pod_id}/conversations", json={"title": "Reset", "type": "CHAT"}
+    )
+    assert opened.status_code == status.HTTP_201_CREATED, opened.text
+    conversation_id = UUID(opened.json()["id"])
+
+    service = WorkspaceSandboxService()
+    try:
+        workspace_env = await service.get_env_vars(
+            owner_id,
+            pod_id,
+            organization_id=UUID(scenario.org_id),
+            workload_type="agent",
+            # The assistant's id is its pod's.
+            workload_id=pod_id,
+            workload_name="pod_default",
+            session_id=f"shell-{conversation_id}",
+            conversation_id=conversation_id,
+        )
+    finally:
+        await service.close()
+    as_the_assistant = {"Authorization": f"Bearer {workspace_env['LEMMA_TOKEN']}"}
+    delete_table = f"/pods/{pod_id}/datastore/tables/{_TABLE}"
+
+    refused = await scenario.owner_client.delete(delete_table, headers=as_the_assistant)
+    assert refused.status_code == status.HTTP_403_FORBIDDEN, refused.text
+    assert "DESTRUCTIVE_ACTION_REQUIRES_APPROVAL" in refused.text
+
+    await record_session_approvals(
+        conversation_id=conversation_id,
+        agent_id=None,
+        pod_id=pod_id,
+        tool_args={"permission_ids": ["datastore.table.delete"]},
+        user_id=owner_id,
+    )
+
+    deleted = await scenario.owner_client.delete(delete_table, headers=as_the_assistant)
+    assert deleted.status_code == status.HTTP_204_NO_CONTENT, deleted.text

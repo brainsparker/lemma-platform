@@ -7,7 +7,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict
 
 from app.modules.agent.domain.outsiders import Audience
-from app.modules.agent.domain.value_objects import JsonObject
+from app.modules.agent.domain.value_objects import AgentToolset, JsonObject
 
 
 class ApprovedExecution(BaseModel):
@@ -71,18 +71,36 @@ class AgentContext(BaseModel):
     # `memory_is_active`, which the run-context builder resolves once here so
     # the capability assembler and the brief builder cannot disagree about it.
     memory_enabled: bool = False
+    # Whether this run is told to write memory only when asked, its memory
+    # being kept by a pass after it ends (`memory_kept_after_turn`). Resolved
+    # with `memory_enabled`; the prompt reads it, and the run's terminal write
+    # queues the pass from the same value, so the two cannot disagree.
+    memory_after_turn: bool = False
     # This agent's grant summary, loaded once for the run. Toolset selection
     # derives POD and CONNECTORS from it, and the tool assembler reuses it
     # rather than reading the same rows a second time. Typed loosely here to
     # keep this domain model free of a tools-layer import.
     grant_summary: object | None = None
-    # Rendered runtime brief (pod/user/granted resources) appended to the system
-    # prompt. Built once per run by the runner; harness-neutral so it just rides
-    # along on the context.
+    # The toolsets this run actually has -- declared, always-on and
+    # grant-derived -- resolved once by the run-context builder. The prompt
+    # reads its toolset guidance from this, so it describes the tools the run
+    # was given rather than the ones the agent row lists.
+    run_toolsets: list[AgentToolset] | None = None
+    # The part of the runtime brief that holds for the whole conversation (pod,
+    # user, this agent, what it can reach), appended to the system prompt.
+    # Built once per run by the runner; harness-neutral so it just rides along.
     context_brief: str | None = None
     # The text of the doc this conversation is attached to, rendered as a prompt
     # section; read fresh each run because the doc changes between turns.
     attached_document: str | None = None
+    # What this person still owes somebody an answer to, rendered; None when
+    # nothing is open. Its tools are offered only when it is set.
+    open_questions: str | None = None
+    # Everything that changes from one run of the conversation to the next,
+    # rendered once per run (`domain/run_context_prompt`). Sent next to the
+    # current turn and never stored, so the system prompt and the replayed
+    # history stay byte-identical between runs.
+    run_context: str | None = None
     # Whom this run answers (see `domain/outsiders`). On a run answering
     # somebody outside the pod, tools authorize as nobody -- Public reads only,
     # plus a contact's own rows -- rather than as `user_id`, which on such a run
@@ -97,7 +115,7 @@ class AgentContext(BaseModel):
     # On a run answering outsiders: the member who looks after the conversation
     # started it, typing in Lemma (`domain/private_notes.keeper_started`). Still
     # a stranger's run in what it may reach, but nobody outside is asking, so
-    # `message_user` -- which only reaches that member -- has nothing to do.
+    # `channel_post` -- which only reaches that member -- has nothing to do.
     keeper_asking: bool = False
 
     model_config = ConfigDict(arbitrary_types_allowed=True)

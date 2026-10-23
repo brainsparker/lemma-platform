@@ -46,7 +46,9 @@ contact (the agent's `contact_records` tool). Not combinable with `enable_rls`.
 `{"contacts_invoke": true}` (SDK `functions.set_contacts_invoke(name, True)`). A contact's run
 calls it with `contact_function`; it runs as its owner's runs do, held to its own
 grants, and receives the asking contact as `contact_id` in its input — never from the
-model. Use it for "look up my order", "book me in".
+model. Declare `contact` too and it is told their **proved** emails, phones and
+host ids (`functions.md`), so "where's my order?" matches by the address the order
+was placed under. Use it for "look up my order", "book me in".
 
 **Web chat** — a web widget (`/pods/{pod}/web-widgets`, SDK `pod.web_widgets`). Its
 `embed` script puts the pod's chat on any site; its `page_url` is a page Lemma hosts.
@@ -65,6 +67,14 @@ anybody unless the deployment has `PUBLIC_WEB_ENABLED` on.
 its rows through a widget's key: the hosted `{page_url}?table=t`, the embed script
 with `data-lemma-table`, a `<form data-lemma-table>`, or `Lemma.addRow(t, values)`.
 Rows are added as the member who opened the table, with only the open columns.
+
+**Showing a table on a page** — a page reads a table the pod marked **Public**
+with `Lemma.readRows(t, {orderBy})` (`GET /public/web/{key}/rows?table=t`), as the
+same outsider the chat answers: Public reads and nothing else, every column, at most
+500 rows. Use it for what a page must show strangers -- free slots, a menu, a price
+list -- and keep only those columns in that table. Per-member tables never read this
+way, and a Public table open to outside rows would show everyone's answers, so don't
+make a form's table Public.
 The chat beside the form can fill it in (`fill_form`); it never sends it. Build forms
 with the **`lemma-form`** skill.
 

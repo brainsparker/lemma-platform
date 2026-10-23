@@ -17,9 +17,8 @@ from app.core.authorization.pod_liveness import (
 from app.core.authorization.context import ActorType, Context, ResourceRef, ResourceType
 from app.core.authorization.current import set_current_context
 from app.core.authorization.delegation import (
-    DEFAULT_POD_AGENT_NAME,
     DESTRUCTIVE_ACTIONS,
-    is_pod_default_agent,
+    is_default_pod_agent_claims as _is_default_pod_agent_claims,
 )
 from app.core.authorization.function_run import (
     FunctionRunClaims,
@@ -27,24 +26,6 @@ from app.core.authorization.function_run import (
 )
 from app.core.authorization.service import AuthorizationDataService
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-
-
-def _is_default_pod_agent_claims(claims) -> bool:
-    """Whether this token was minted for the pod's own assistant.
-
-    The one place the answer comes from a token rather than a row: this runs on
-    every delegated request, and ``is_pod_default_agent`` is deliberately free
-    of I/O so it need not become a query.
-
-    Both claims have to agree. The id arm alone would promote any workload
-    whose id happened to equal its pod's, and what turns on this is whether a
-    token acts with its user's permissions or only its own grants.
-    """
-    return (
-        claims is not None
-        and is_pod_default_agent(claims.actor_id, pod_id=claims.pod_id)
-        and claims.actor_name in {None, DEFAULT_POD_AGENT_NAME}
-    )
 
 
 async def resolve_current_context(
@@ -288,6 +269,13 @@ OrgContextDep = Annotated[Context, Depends(get_org_context)]
 PodContextDep = Annotated[Context, Depends(get_pod_context)]
 
 
+#: What the three ``reject_delegated_workload*`` guards answer. Terminal: they
+#: turn a workload away whatever it was granted or approved, so the code must not
+#: be the approval gate's, which tells an agent to ask for an approval that would
+#: change nothing here.
+WORKLOAD_NOT_ALLOWED = "WORKLOAD_NOT_ALLOWED"
+
+
 def reject_delegated_workload(action_label: str):
     """Deny a delegated workload outright for an org-scoped destructive action.
 
@@ -303,7 +291,7 @@ def reject_delegated_workload(action_label: str):
 
             raise DomainError(
                 f"Delegated workloads may not {action_label}.",
-                code="DESTRUCTIVE_ACTION_REQUIRES_APPROVAL",
+                code=WORKLOAD_NOT_ALLOWED,
                 status_code=403,
             )
 
@@ -331,7 +319,7 @@ def reject_delegated_workload_anywhere(action_label: str):
 
         raise DomainError(
             f"Delegated workloads may not {action_label}.",
-            code="DESTRUCTIVE_ACTION_REQUIRES_APPROVAL",
+            code=WORKLOAD_NOT_ALLOWED,
             status_code=403,
         )
 
@@ -353,7 +341,7 @@ def reject_delegated_workload_pod(action_label: str):
 
             raise DomainError(
                 f"Delegated workloads may not {action_label}.",
-                code="DESTRUCTIVE_ACTION_REQUIRES_APPROVAL",
+                code=WORKLOAD_NOT_ALLOWED,
                 status_code=403,
             )
 

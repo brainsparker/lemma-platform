@@ -26,7 +26,7 @@ async def test_pod_workload_gate_denies_delegated_workload():
         await dependency(_ctx(ActorType.DELEGATED_USER_WORKLOAD))
 
     assert exc.value.status_code == 403
-    assert exc.value.code == "DESTRUCTIVE_ACTION_REQUIRES_APPROVAL"
+    assert exc.value.code == "WORKLOAD_NOT_ALLOWED"
 
 
 @pytest.mark.asyncio

@@ -104,7 +104,9 @@ async def test_older_runs_come_back_as_first_and_last_with_a_true_count(
     db_session, scenario
 ):
     await scenario.create_org_with_pod(name_prefix="History")
-    run_ids = await _seed(db_session, scenario, runs=9, messages_per_run=7)
+    # Older runs are elided a whole block at a time; ten is the fewest that
+    # elides one.
+    run_ids = await _seed(db_session, scenario, runs=10, messages_per_run=7)
 
     runs = await _load(db_session, run_ids[-1])
 
@@ -129,7 +131,8 @@ async def test_the_load_does_not_grow_with_conversation_length(db_session, scena
 
     # 60 runs x 40 messages is 2400 rows; the old loader returned every one.
     assert sum(len(run.messages) for run in long) == (_FULL_RUNS * 40) + (55 * 2)
-    assert sum(len(run.messages) for run in short) == (_FULL_RUNS * 4) + (1 * 2)
+    # Six runs is short of a whole elided block, so all six come back whole.
+    assert sum(len(run.messages) for run in short) == 6 * 4
 
 
 async def test_runs_at_the_elision_boundary_survive_intact(db_session, scenario):

@@ -1,6 +1,7 @@
 import type { Tab } from "@/data";
 import { docTitle } from "@/library/doc-title";
 import { readableName } from "@/library/reading";
+import { isAboutSection, type AboutSection } from "@/space/about-sections";
 
 /** The one segment every workspace URL hangs off. */
 export const ROOT = "/t";
@@ -29,6 +30,11 @@ export interface Address {
      *  scrolling page and will want `#skills`, which cannot collide with this
      *  precisely because one is a fragment and the other is a segment. */
     agentName: string | null;
+    /** Which part of About is open: `/t/{pod}/about/people`. Absent on the
+     *  overview and everywhere else, like `team`, so every other address reads
+     *  as it always did. A segment rather than a fragment because each part is
+     *  a page of its own now, and Back should step out of it to the overview. */
+    section?: AboutSection;
     /** Set on the organization's own page, where no teammate is chosen:
      *  `/t/teammates`. Absent everywhere else, rather than false, so an
      *  address about a teammate reads exactly as it always did. */
@@ -101,11 +107,25 @@ export function readAddress(pathname: string): Address {
         case "tables":
         case "files":
         case "workflows":
-        case "groups":
+        case "channels":
         case "contacts":
-        case "settings":
-        case "about":
             return rest.length > 1 ? here(null) : here("space:" + rest[0]);
+        /* Groups became channels. A link to the old list opens the new one,
+           and so does a link to one group: its id named a source, not a
+           channel, and the list is where every source's channel is. The
+           shell writes the new address back. */
+        case "groups":
+            return rest.length > 1 ? here(null) : here("space:channels");
+        /* A part of About is a page under it. One this build does not know —
+           a section that moved to Settings, say — still opens About. */
+        case "about":
+            if (rest.length > 2) return here(null);
+            return isAboutSection(rest[1]) ? here("space:about", { section: rest[1] }) : here("space:about");
+        /* The space's settings are sections of the teammate's page now. A link
+           that still names the page they had opens the one that carries them
+           rather than nothing, and the shell rewrites the address. */
+        case "settings":
+            return rest.length > 1 ? here(null) : here("space:about");
         case "library":
         case "history":
         case "computer":
@@ -121,7 +141,9 @@ export function readAddress(pathname: string): Address {
         case "workflow":
             return rest.length === 2 && rest[1] ? here("workflow:" + rest[1]) : here(null);
         case "group":
-            return rest.length === 2 && rest[1] ? here("group:" + rest[1]) : here(null);
+            return rest.length === 2 && rest[1] ? here("space:channels") : here(null);
+        case "channel":
+            return rest.length === 2 && rest[1] ? here("channel:" + rest[1]) : here(null);
         case "app":
             return rest.length === 2 && rest[1] ? here("app:" + rest[1]) : here(null);
         case "record":
@@ -161,6 +183,7 @@ function tailOf(address: Address): string[] {
         case "profile":
             return address.agentName ? ["profile", encodeURIComponent(address.agentName)] : ["profile"];
         case "space":
+            if (rest === "about" && address.section) return ["about", address.section];
             return rest ? [rest] : [];
         case "library":
         case "history":
@@ -171,7 +194,7 @@ function tailOf(address: Address): string[] {
         case "bot":
         case "run":
         case "workflow":
-        case "group":
+        case "channel":
             return [kind, encodeURIComponent(rest)];
         case "record": {
             /* The row id may itself carry a colon, so the table name is taken
@@ -210,11 +233,11 @@ export function tabFromId(tabId: string): Tab | null {
         const name = tabId.slice("workflow:".length);
         return name ? { id: tabId, kind: "workflow", label: name, name } : null;
     }
-    if (tabId.startsWith("group:")) {
-        const groupId = tabId.slice("group:".length);
-        /* Named "Group" until the page has read the group and says what it
-           is called. */
-        return groupId ? { id: tabId, kind: "group", label: "Group", groupId } : null;
+    if (tabId.startsWith("channel:")) {
+        const channelId = tabId.slice("channel:".length);
+        /* Named "Channel" until the page has read it and says what it is
+           called. */
+        return channelId ? { id: tabId, kind: "channel", label: "Channel", channelId } : null;
     }
     if (tabId.startsWith("run:")) {
         const runId = tabId.slice("run:".length);
@@ -256,6 +279,8 @@ export function isNewPlace(from: Address, to: Address): boolean {
     if (!from.podId || !from.tabId) return false;
     if (from.podId !== to.podId) return true;
     if (from.tabId !== to.tabId) return true;
+    /* Into a part of About, out of it, or across to another. */
+    if ((from.section ?? null) !== (to.section ?? null)) return true;
     if (from.conversationId && to.conversationId && from.conversationId !== to.conversationId) return true;
     return Boolean(from.agentName && to.agentName && from.agentName !== to.agentName);
 }

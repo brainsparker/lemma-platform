@@ -22,7 +22,11 @@
  *
  * A page with its own design marks <form data-lemma-table="signups">, or calls
  * Lemma.addRow("signups", {...}). Either way the table decides which columns
- * may be written; the page only asks. Such a form is never submitted by the
+ * may be written; the page only asks. A table the pod marked Public is read
+ * with Lemma.readRows("open_slots", { orderBy: "starts_at" }): every row, the
+ * same reading the pod's chat does for this visitor.
+ * Lemma.sendCode(email) and Lemma.verifyCode(email, code) confirm the visitor's
+ * email, which a table open to contacts only asks for first. Such a form is never submitted by the
  * browser itself once this script runs; give it method="post" anyway, so a
  * submit before the script arrives keeps the answers out of the URL.
  * data-lemma-page is set by Lemma's hosted page.
@@ -660,6 +664,13 @@
       if (busy) showTyping();
     } else if (frame.type === "fill") {
       onFill(frame);
+    } else if (frame.type === "error") {
+      /* The run failed: what was written stays, and the visitor is told a
+         person will answer. "done" follows. */
+      hideTyping();
+      if (live) live.finish();
+      live = null;
+      if (frame.text) new Reply(false).finish(frame.text);
     } else if (frame.type === "done") {
       if (live) live.finish();
       live = null;
@@ -845,7 +856,7 @@
     }
     var card = el("div", "lw-card");
     codeCard = card;
-    var says = el("p", null, "We'll email you a code, so replies can reach you.");
+    var says = el("p", null, "We'll email you a code. Then this chat is yours on any device, and replies reach you by email.");
     var form = el("form");
     var field = el("input");
     field.type = "email";
@@ -952,7 +963,7 @@
     compose.appendChild(input);
     compose.appendChild(sendButton);
     var meta = el("div", "lw-meta");
-    verifyLink = el("button", "lw-link", "Get replies by email");
+    verifyLink = el("button", "lw-link", "Keep this chat");
     var brand = el("a", "lw-brand", "Powered by Lemma");
     brand.href = "https://lemma.work";
     brand.target = "_blank";
@@ -1095,6 +1106,33 @@
   function addRow(table, values) {
     return withSession(function () {
       return call("/rows", { body: { table: table, values: values } });
+    });
+  }
+
+  // A Public table, read as this visitor: with their session when there is
+  // one, so it is the same reading the chat does for them.
+  function readRows(table, options) {
+    options = options || {};
+    var path = "/rows?table=" + encodeURIComponent(table);
+    if (options.orderBy) path += "&order_by=" + encodeURIComponent(options.orderBy);
+    if (options.desc) path += "&desc=true";
+    return state.access ? withSession(function () { return call(path); }) : call(path, { auth: false });
+  }
+
+  function sendCode(email) {
+    return withSession(function () {
+      return proof("code").then(function (altcha) {
+        return call("/code", { body: { email: email, altcha: altcha } });
+      });
+    });
+  }
+
+  function verifyCode(email, code) {
+    return withSession(function () {
+      return call("/code/verify", { body: { email: email, code: code } });
+    }).then(function (data) {
+      adopt(data);
+      return { isContact: state.isContact };
     });
   }
 
@@ -1353,6 +1391,12 @@
   // What a page of its own can call: an app, or any website with the script.
   window.Lemma = window.LemmaChat = {
     addRow: addRow,
+    readRows: readRows,
+    sendCode: sendCode,
+    verifyCode: verifyCode,
+    isContact: function () {
+      return state.isContact;
+    },
     describeTable: describeTable,
     openChat: function () {
       launchOpen();

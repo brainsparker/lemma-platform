@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from collections.abc import Mapping
+from datetime import datetime, timezone
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.core.infrastructure.work import WorkWriter
 from app.modules.schedule.config import schedule_settings
-from app.modules.schedule.domain.events.schedule import (
-    ScheduleDeactivated,
-    ScheduleRunCompleted,
-)
+from app.modules.schedule.domain.events.schedule import ScheduleRunCompleted
 from app.modules.schedule.domain.schedule import (
     ScheduleEntity,
     ScheduleRunStatus,
@@ -20,6 +19,11 @@ from app.modules.schedule.repositories.schedule_run_repository import (
     ScheduleRunRepository,
 )
 from app.core.log.log import get_logger
+from app.core.observability.product_metrics import (
+    record_schedule_run,
+    record_schedule_run_duration,
+)
+from app.modules.schedule.services.paused_notice import stage_paused_notice
 
 logger = get_logger(__name__)
 
@@ -27,10 +31,14 @@ logger = get_logger(__name__)
 class ScheduleRunOutcomeService:
     """Own schedule-run terminal transitions and breaker accounting."""
 
-    def __init__(self, uow: SqlAlchemyUnitOfWork) -> None:
+    def __init__(
+        self, uow: SqlAlchemyUnitOfWork, *, work: WorkWriter | None = None
+    ) -> None:
         self.uow = uow
         self.run_repository = ScheduleRunRepository(uow)
         self.schedule_repository = ScheduleRepository(uow=uow)
+        # The breaker's pause writes its owner notice through this.
+        self.work = work or WorkWriter.of(uow)
 
     async def record_target_outcome(
         self,
@@ -76,8 +84,46 @@ class ScheduleRunOutcomeService:
             ]
         )
 
+        started_at = getattr(schedule_run, "started_at", None)
+        if started_at is not None:
+            finished = getattr(schedule_run, "completed_at", None) or datetime.now(
+                timezone.utc
+            )
+            record_schedule_run_duration(
+                schedule.schedule_type,
+                status.value,
+                (finished - started_at).total_seconds(),
+            )
         await self._apply_breaker(schedule)
         return True
+
+    async def record_filtered(
+        self,
+        schedule: ScheduleEntity,
+        *,
+        source_event_id: str,
+        user_id: UUID,
+        metadata: Mapping[str, object] | None,
+        llm_output: Mapping[str, object] | None,
+    ) -> bool:
+        """Record an event the schedule's filter skipped, with its answers.
+
+        A skip is an outcome the owner is owed (PS-SCHED-012): told apart from
+        an event that never arrived and from one that failed. It is not a
+        failure, so the breaker is left alone. Returns whether a row was
+        written; a redelivered event writes nothing the second time.
+        """
+        written = await self.run_repository.insert_filtered(
+            schedule_id=schedule.id,
+            user_id=user_id,
+            source_event_id=source_event_id,
+            target_kind=_target_kind_of(schedule),
+            metadata=metadata,
+            llm_output=llm_output,
+        )
+        if written:
+            record_schedule_run(schedule.schedule_type, "filtered")
+        return written
 
     async def record_pre_dispatch_failure(
         self,
@@ -85,6 +131,9 @@ class ScheduleRunOutcomeService:
         *,
         source_event_id: str,
         error_type: str,
+        user_id: UUID | None = None,
+        payload: Mapping[str, object] | None = None,
+        metadata: Mapping[str, object] | None = None,
     ) -> bool:
         """Record a fire that never reached a target, and count it on the breaker.
 
@@ -103,20 +152,27 @@ class ScheduleRunOutcomeService:
 
         Returns whether a new failure was recorded; a repeat of the same
         ``source_event_id`` is a no-op, so a redelivery cannot inflate the streak.
+
+        The event itself is kept when the caller has it: a person retrying the
+        run by hand starts the target from this row, and an empty payload made
+        that retry start the target with nothing.
         """
         run = await self.run_repository.claim(
             schedule_id=schedule.id,
-            user_id=schedule.user_id,
+            # A table change runs as the changed row's owner, and so does a
+            # retry of it by hand.
+            user_id=user_id or schedule.user_id,
             source_event_id=source_event_id,
-            target_kind="WORKFLOW" if schedule.workflow_id is not None else "AGENT",
-            payload={},
-            metadata=None,
+            target_kind=_target_kind_of(schedule),
+            payload=dict(payload or {}),
+            metadata=dict(metadata) if metadata else None,
             llm_output=None,
         )
         if run is None:
             return False
 
         await self.run_repository.dead_letter(run.id, error_type=error_type)
+        record_schedule_run(schedule.schedule_type, "failed")
         await self.recompute_breaker(schedule.id)
         return True
 
@@ -125,6 +181,7 @@ class ScheduleRunOutcomeService:
         locked = await self.schedule_repository.get_for_update(schedule.id)
         if locked is None:
             raise LookupError(f"Schedule {schedule.id} disappeared during dispatch")
+        record_schedule_run(schedule.schedule_type, "failed")
         await self._apply_breaker(locked)
 
     async def recompute_breaker(self, schedule_id: UUID) -> None:
@@ -174,19 +231,24 @@ class ScheduleRunOutcomeService:
         if not await self.schedule_repository.deactivate_if_active(schedule.id):
             return False
 
-        self.uow.collect_events(
-            [
-                ScheduleDeactivated(
-                    schedule_id=schedule.id,
-                    user_id=schedule.user_id,
-                    schedule_type=schedule.schedule_type,
-                    consecutive_failures=count,
-                )
-            ]
+        await stage_paused_notice(
+            self.uow,
+            schedule_id=schedule.id,
+            user_id=schedule.user_id,
+            pod_id=schedule.pod_id,
+            schedule_type=schedule.schedule_type,
+            reason="consecutive_failures",
+            consecutive_failures=count,
+            work=self.work,
         )
+        record_schedule_run(schedule.schedule_type, "breaker_tripped")
         logger.warning(
             "schedule.breaker.tripped",
             schedule_id=str(schedule.id),
             consecutive_failures=count,
         )
         return True
+
+
+def _target_kind_of(schedule: ScheduleEntity) -> str:
+    return "WORKFLOW" if schedule.workflow_id is not None else "AGENT"

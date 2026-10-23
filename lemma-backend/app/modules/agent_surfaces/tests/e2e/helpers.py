@@ -94,9 +94,16 @@ async def fake_slack(message_store, fixed_test_user):
 
 
 @pytest_asyncio.fixture
-async def fake_teams(message_store, fixed_test_user):
+async def fake_teams(message_store, fixed_test_user, monkeypatch):
+    from app.modules.agent_surfaces.config import surface_settings
+
     server = FakeTeamsServer(fixed_test_user["email"], message_store)
     await server.start()
+    # The bot token only goes to Bot Framework hosts; the double is local. The
+    # worker subprocess gets the same host through its environment.
+    monkeypatch.setattr(
+        surface_settings, "microsoft_bot_service_extra_host", "127.0.0.1"
+    )
     try:
         yield server
     finally:
@@ -354,7 +361,10 @@ async def _ensure_connector_account(
     email: str | None = None,
     provider: AuthProvider = AuthProvider.LEMMA,
     config_source: str = "SYSTEM_DEFAULT",
+    organization_id: str | None = None,
 ) -> Account:
+    """The user's account for a connector, in ``organization_id`` -- by default
+    the first organisation they belong to."""
     if connector_id == "slack":
         credentials = dict(credentials)
         raw_response = dict(credentials.get("raw_response") or {})
@@ -366,12 +376,14 @@ async def _ensure_connector_account(
         if provider == AuthProvider.COMPOSIO
         else ConnectorKind.HTTP.value
     )
-    organization_id = await db_session.scalar(
-        select(OrganizationMember.organization_id)
-        .where(OrganizationMember.user_id == UUID(user_id))
-        .limit(1)
-    )
+    if organization_id is None:
+        organization_id = await db_session.scalar(
+            select(OrganizationMember.organization_id)
+            .where(OrganizationMember.user_id == UUID(user_id))
+            .limit(1)
+        )
     assert organization_id is not None
+    organization_id = UUID(str(organization_id))
     auth_config = await db_session.scalar(
         select(AuthConfig).where(
             AuthConfig.organization_id == organization_id,
@@ -547,7 +559,6 @@ async def _set_user_mobile_number(
     *,
     user_id: str,
     mobile_number: str,
-    telegram_username: str | None = None,
     verified: bool = True,
 ) -> None:
     """Give the user a number the sender can be matched to.
@@ -559,8 +570,6 @@ async def _set_user_mobile_number(
     assert user is not None
     user.mobile_number = mobile_number
     user.mobile_verified_at = datetime.now(timezone.utc) if verified else None
-    if telegram_username is not None:
-        user.telegram_username = telegram_username
     await db_session.commit()
 
 
@@ -639,9 +648,13 @@ async def _conversation_by_external_thread(
     # -- a soft, negative-existence read is the intended contract for this
     # helper, not just an unhandled edge case. Only the terminus differs;
     # the poll shape is otherwise identical to `eventually()`.
+    #
+    # Always read at least once: a negative check made after the outcome is
+    # settled passes ``timeout_seconds=0`` and reads exactly once, instead of
+    # waiting out a window for something that cannot arrive.
     params = {"agent_name": agent_name} if agent_name else {}
     deadline = asyncio.get_running_loop().time() + timeout_seconds
-    while asyncio.get_running_loop().time() < deadline:
+    while True:
         response = await client.get(
             f"/pods/{pod_id}/conversations",
             params=params,
@@ -651,8 +664,9 @@ async def _conversation_by_external_thread(
             metadata = item.get("metadata") or {}
             if metadata.get("external_thread_id") == external_thread_id:
                 return item
+        if asyncio.get_running_loop().time() >= deadline:
+            return None
         await asyncio.sleep(0.1)
-    return None
 
 
 async def _messages_for_conversation(

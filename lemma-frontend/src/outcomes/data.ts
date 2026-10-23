@@ -64,7 +64,9 @@ export async function readPlan(podId: string): Promise<Plan | null> {
         if (isMissing(error)) return null;
         throw error;
     }
-    return typeof file.text === "string" ? { ...parsePlan(file.text), file: file.text } : null;
+    /* There, but not as text: a read that failed, not a pod with no plan. */
+    if (typeof file.text !== "string") throw new Error("plan.md could not be read as text");
+    return { ...parsePlan(file.text), file: file.text };
 }
 
 /** Thrown when plan.md changed between reading it and saving over it. */

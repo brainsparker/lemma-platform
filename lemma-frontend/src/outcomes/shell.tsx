@@ -160,11 +160,6 @@ export function OutcomesShell() {
         staleTime: 5 * 60_000,
     });
     const list = useMemo(() => pods.data ?? [], [pods.data]);
-    const details = usePodDetails(list);
-    const withPeople = useMemo(() => list.map((pod) => {
-        const detail = details.get(pod.id);
-        return detail ? { ...pod, ...detail } : pod;
-    }), [list, details]);
 
     const waits = useQuery({
         queryKey: ["workflow-waiting", list.map((one) => one.id).join(",")],
@@ -265,6 +260,20 @@ export function OutcomesShell() {
 
     const myName = nameOf(me.data);
     const scoped = podOfView(view);
+    /* Who is in a Lemma costs two reads apiece, so it is asked only for the
+       pods something on screen reads it for: every one on People and the
+       Lemmas board, which list rosters and owners; otherwise the one in view
+       and any whose sheet is open. */
+    const rostered = useMemo(() => {
+        if (view.name === "people" || view.name === "outcomes") return list;
+        const wanted = new Set([scoped, reaching, sharing, addingPeople].filter(Boolean));
+        return list.filter((one) => wanted.has(one.id));
+    }, [list, view.name, scoped, reaching, sharing, addingPeople]);
+    const details = usePodDetails(rostered);
+    const withPeople = useMemo(() => list.map((pod) => {
+        const detail = details.get(pod.id);
+        return detail ? { ...pod, ...detail } : pod;
+    }), [list, details]);
     const pod = scoped && view.name !== "chats" ? withPeople.find((one) => one.id === scoped) ?? null : null;
 
     /* Somebody who belongs nowhere yet: the workspace's own way in, with

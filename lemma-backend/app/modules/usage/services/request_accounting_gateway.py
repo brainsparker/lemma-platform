@@ -220,7 +220,8 @@ class PostgresRequestAccountingGateway:
     ) -> bool:
         now = now or datetime.now(timezone.utc)
         async with self.factory() as uow:
-            limits = self._admitted_under.pop(receipt.request_id, None)
+            # Kept until settlement commits, so a retry charges the same windows.
+            limits = self._admitted_under.get(receipt.request_id)
             if limits is None:
                 limits = await self._limits(uow)
             events: list[DomainEvent] = []
@@ -236,6 +237,7 @@ class PostgresRequestAccountingGateway:
                 Decimal(str(self.settings.usage_limit_warn_fraction)),
             )
             uow.collect_events(events)
+        self._admitted_under.pop(receipt.request_id, None)
         for event in events:
             if isinstance(event, ModelUsageEvent):
                 record_usage_metrics(

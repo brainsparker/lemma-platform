@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQueries } from "@tanstack/react-query";
 import { source, type ConversationRef, type Org, type Pod } from "@/data";
 import { readableName } from "@/library/reading";
@@ -65,13 +65,11 @@ export function Sidebar({ org, orgs, onPickOrg, pods, view, go, activity, needs,
     const [chosen, setChosen] = useState<Map<string, boolean>>(readChosen);
     const [now] = useState(() => Date.now());
     const choose = useCallback((podId: string, opened: boolean) => {
-        setChosen((was) => {
-            const next = new Map(was);
-            next.set(podId, opened);
-            try { localStorage.setItem(CHOSEN_KEY, JSON.stringify(Object.fromEntries(next))); } catch { /* kept for this visit only */ }
-            return next;
-        });
+        setChosen((was) => new Map(was).set(podId, opened));
     }, []);
+    useEffect(() => {
+        try { localStorage.setItem(CHOSEN_KEY, JSON.stringify(Object.fromEntries(chosen))); } catch { /* kept for this visit only */ }
+    }, [chosen]);
     const here = podOfView(view);
     /* Each Lemma's tables, under the key X-ray reads them by, for the ones
        changed this week. */

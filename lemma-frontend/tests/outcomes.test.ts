@@ -195,6 +195,93 @@ test("a plan survives being written and read back", () => {
     assert.deepEqual(parsePlan(serializePlan(plan)), plan);
 });
 
+test("saving an unchanged plan onto its file writes the file back as it was", () => {
+    assert.equal(serializePlan(parsePlan(WRITTEN), WRITTEN), WRITTEN);
+});
+
+test("editing a line keeps what the parser does not read, and changes only that line", () => {
+    const plan = parsePlan(WRITTEN);
+    const how = [...plan.sections.how];
+    how[1] = { ...how[1], text: "Replies are three lines at most" };
+    const saved = serializePlan({ ...plan, sections: { ...plan.sections, how } }, WRITTEN);
+    assert.equal(saved, WRITTEN.replace("- Replies are two lines", "- Replies are three lines at most"));
+});
+
+test("adding and removing lines leaves prose, other headings, nested bullets and extra keys in place", () => {
+    const file = `---
+outcome: "Two posts go out every week"
+owner: priya
+kind: week
+---
+
+# Content
+
+Some words about why this matters.
+
+## How we work
+- Drafts go to Priya first — Priya, Oct 2
+  - Unless it is a reshare
+- Posts go out on Tuesdays
+
+## Notes
+- not a plan line
+`;
+    const plan = parsePlan(file);
+    assert.equal(plan.sections.how.length, 3);
+    const how = plan.sections.how.filter((line) => line.text !== "Posts go out on Tuesdays");
+    how.push({ text: "Every post has an image", by: "Dev", on: "Oct 20" });
+    const saved = serializePlan({ ...plan, sections: { ...plan.sections, how, never: [{ text: "Never post on weekends" }] } }, file);
+    assert.equal(saved, `---
+outcome: "Two posts go out every week"
+owner: priya
+kind: week
+---
+
+# Content
+
+Some words about why this matters.
+
+## How we work
+- Drafts go to Priya first — Priya, Oct 2
+  - Unless it is a reshare
+- Every post has an image — Dev, Oct 20
+
+## Notes
+- not a plan line
+
+## Never
+- Never post on weekends
+`);
+});
+
+test("a line added to an empty section goes under its heading", () => {
+    const file = "## What must be true\n- One thing\n\n## Never\n\n## Later\nprose\n";
+    const plan = parsePlan(file);
+    const saved = serializePlan({ ...plan, sections: { ...plan.sections, never: [{ text: "Never two" }] } }, file);
+    assert.equal(saved, "## What must be true\n- One thing\n\n## Never\n- Never two\n\n## Later\nprose\n");
+});
+
+test("changing the measure rewrites only the plan's own front matter keys", () => {
+    const file = "---\noutcome: Ship it\nkind: date\ndue: 2026-10-30\nowner: priya\n---\n\n## Never\n- Never skip review\n";
+    const plan = parsePlan(file);
+    assert.equal(plan.due, "2026-10-30");
+    const saved = serializePlan({ ...plan, target: "22 steps", measure: "SELECT count(*) FROM steps" }, file);
+    const again = parsePlan(saved);
+    assert.equal(again.due, "2026-10-30");
+    assert.equal(again.target, "22 steps");
+    assert.equal(again.measure, "SELECT count(*) FROM steps");
+    assert.match(saved, /^owner: priya$/m);
+    assert.match(saved, /\n---\n\n## Never\n- Never skip review\n$/);
+});
+
+test("front matter that will not parse is kept on a line edit, and refuses a measure edit", () => {
+    const file = "---\noutcome: [unclosed\n---\n## Never\n- Never email anyone twice\n";
+    const plan = parsePlan(file);
+    const saved = serializePlan({ ...plan, sections: { ...plan.sections, never: [{ text: "Never email anyone three times" }] } }, file);
+    assert.equal(saved, "---\noutcome: [unclosed\n---\n## Never\n- Never email anyone three times\n");
+    assert.throws(() => serializePlan({ ...plan, target: "90%" }, file), /front matter/);
+});
+
 test("front matter that will not parse leaves the lines readable", () => {
     const plan = parsePlan("---\noutcome: [unclosed\n---\n## Never\n- Never email anyone twice\n");
     assert.equal(plan.outcome, "");

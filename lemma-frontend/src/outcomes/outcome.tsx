@@ -19,7 +19,7 @@ import {
     ageOf, chatItems, chatView, draftPlan, formatMeasure, inSidebar, outcomeView, sectionRows, standingOf, stampOf, viewOfItem, workRows,
     type Go, type OutcomeTab, type Plan, type PlanLine, type PlanSection, type QueueItem,
 } from "./model";
-import { classic, mcpUrl, planRequest, savePlan, useMeasure } from "./data";
+import { classic, mcpUrl, planRequest, PlanMovedOn, readPlan, savePlan, useMeasure } from "./data";
 import { Avatar, Empty, Icon, to, type IconName } from "./parts";
 import type { FrameActions } from "./actions";
 import { AskBox } from "./ask";
@@ -116,7 +116,7 @@ export function OutcomePage({ pod, tab, plan, activity, queue, me, go, onAsk, ac
                 ))}
             </nav>
             {tab === "home" && <HomeTab pod={pod} plan={plan} activity={activity} queue={queue} go={go} onAsk={onAsk} />}
-            {tab === "plan" && <PlanTab pod={pod} plan={plan} me={me} go={go} onAsk={onAsk} />}
+            {tab === "plan" && <PlanTab pod={pod} me={me} go={go} onAsk={onAsk} />}
             {tab === "apps" && <AppsTab pod={pod} go={go} />}
             {tab === "made" && (
                 <div className="ox-embed">
@@ -224,8 +224,12 @@ function HomeTab({ pod, plan, activity, queue, go, onAsk }: {
 /** The plan: what it owns and how, line by line, with who wrote each. With
  *  none yet, a draft read off what it already runs -- to save as it is, or
  *  to have the Lemma write properly in a chat. */
-function PlanTab({ pod, plan, me, go, onAsk }: { pod: Pod; plan: Plan | null | undefined; me: string; go: Go; onAsk: (podId: string, text: string) => void }) {
+function PlanTab({ pod, me, go, onAsk }: { pod: Pod; me: string; go: Go; onAsk: (podId: string, text: string) => void }) {
     const queryClient = useQueryClient();
+    /* The frame's own read of the plan, shared by key, asked here for its
+       failure: a plan that could not be read is not a pod with no plan. */
+    const read = useQuery({ queryKey: ["outcome-plan", pod.id], queryFn: () => readPlan(pod.id), staleTime: 5 * 60_000 });
+    const plan = read.data;
     const [busy, setBusy] = useState(false);
     const [note, setNote] = useState<string | null>(null);
 
@@ -233,10 +237,10 @@ function PlanTab({ pod, plan, me, go, onAsk }: { pod: Pod; plan: Plan | null | u
         setBusy(true);
         setNote(null);
         try {
-            await savePlan(pod.id, next, exists);
-            queryClient.setQueryData(["outcome-plan", pod.id], next);
+            queryClient.setQueryData(["outcome-plan", pod.id], await savePlan(pod.id, next, exists));
             setNote("Saved to plan.md");
         } catch (error) {
+            if (error instanceof PlanMovedOn) void queryClient.invalidateQueries({ queryKey: ["outcome-plan", pod.id] });
             setNote(error instanceof Error ? `Couldn’t save: ${error.message}` : "Couldn’t save the plan");
         } finally {
             setBusy(false);
@@ -245,11 +249,17 @@ function PlanTab({ pod, plan, me, go, onAsk }: { pod: Pod; plan: Plan | null | u
 
     return (
         <div className="ox-plantab">
-            {plan === undefined
-                ? <p className="ox-loading">Reading the plan…</p>
-                : plan === null
-                    ? <PlanDraft pod={pod} busy={busy} onSave={(draft) => save(draft, false)} onAsk={() => onAsk(pod.id, planRequest(pod.description ?? ""))} me={me} />
-                    : <PlanEditor plan={plan} busy={busy} me={me} onChange={(next) => save(next, true)} file={to({ name: "file", podId: pod.id, path: PLAN_PATH }, go)} />}
+            {plan === undefined && read.isError
+                ? (
+                    <Empty title="The plan couldn’t be read.">
+                        <button type="button" className="ox-btn" onClick={() => void read.refetch()} disabled={read.isFetching}>{read.isFetching ? "Reading…" : "Try again"}</button>
+                    </Empty>
+                )
+                : plan === undefined
+                    ? <p className="ox-loading">Reading the plan…</p>
+                    : plan === null
+                        ? <PlanDraft key={pod.id} pod={pod} busy={busy} onSave={(draft) => save(draft, false)} onAsk={() => onAsk(pod.id, planRequest(pod.description ?? ""))} me={me} />
+                        : <PlanEditor key={pod.id} plan={plan} busy={busy} me={me} onChange={(next) => save(next, true)} file={to({ name: "file", podId: pod.id, path: PLAN_PATH }, go)} />}
             {note && <p className="ox-note" role="status">{note}</p>}
         </div>
     );
@@ -309,9 +319,14 @@ function PlanEditor({ plan, busy, me, onChange, file }: { plan: Plan; busy: bool
     const [editing, setEditing] = useState<{ section: PlanSection; index: number; text: string } | null>(null);
     const [adding, setAdding] = useState<Record<PlanSection, string>>({ must: "", how: "", who: "", never: "" });
     const [measureOpen, setMeasureOpen] = useState(false);
-    const [meta, setMeta] = useState<{ outcome: string; kind: string; target: string; unit: string; due: string; measure: string }>({
-        outcome: plan.outcome, kind: plan.kind ?? "week", target: plan.target ?? "", unit: plan.unit ?? "", due: plan.due ?? "", measure: plan.measure ?? "",
-    });
+    const metaOf = (from: Plan) => ({ outcome: from.outcome, kind: from.kind ?? "week", target: from.target ?? "", unit: from.unit ?? "", due: from.due ?? "", measure: from.measure ?? "" });
+    const [meta, setMeta] = useState<{ outcome: string; kind: string; target: string; unit: string; due: string; measure: string }>(() => metaOf(plan));
+    /* Filled from the plan as it is now each time the form opens, so a save
+       never writes back values a later read replaced. */
+    const toggleMeasure = () => {
+        if (!measureOpen) setMeta(metaOf(plan));
+        setMeasureOpen(!measureOpen);
+    };
 
     const withSection = (section: PlanSection, lines: PlanLine[]): Plan => ({ ...plan, sections: { ...plan.sections, [section]: lines } });
     const add = (section: PlanSection) => {
@@ -324,6 +339,11 @@ function PlanEditor({ plan, busy, me, onChange, file }: { plan: Plan; busy: bool
         if (!editing) return;
         const text = editing.text.trim();
         const lines = [...plan.sections[editing.section]];
+        /* A line clicked and left as it was: nothing to write. */
+        if (text === lines[editing.index]?.text) {
+            setEditing(null);
+            return;
+        }
         if (text) lines[editing.index] = { ...lines[editing.index], text };
         else lines.splice(editing.index, 1);
         onChange(withSection(editing.section, lines));
@@ -382,7 +402,7 @@ function PlanEditor({ plan, busy, me, onChange, file }: { plan: Plan; busy: bool
                 </div>
             ))}
             <div className="ox-measure">
-                <button type="button" className="ox-link" onClick={() => setMeasureOpen((open) => !open)} aria-expanded={measureOpen}>
+                <button type="button" className="ox-link" onClick={toggleMeasure} aria-expanded={measureOpen}>
                     {plan.measure ? "The measure and target" : "Add a measure, so what it owns gets a number"}
                 </button>
                 <a className="ox-link" {...file}>Open plan.md</a>
@@ -420,7 +440,11 @@ function AppsTab({ pod, go }: { pod: Pod; go: Go }) {
                 </div>
                 {url && <button type="button" className="ox-btn" onClick={async () => setCopied((await copy(url)) ? "mcp" : null)}>{copied === "mcp" ? "Address copied" : "Copy the address"}</button>}
             </section>
-            {tabs.isPending ? <p className="ox-loading">Loading apps…</p> : apps.length === 0 ? (
+            {tabs.isPending ? <p className="ox-loading">Loading apps…</p> : tabs.isError ? (
+                <Empty title="Couldn’t read its apps.">
+                    <button type="button" className="ox-btn" onClick={() => void tabs.refetch()}>Try again</button>
+                </Empty>
+            ) : apps.length === 0 ? (
                 <Empty title="No apps yet.">
                     <p>Apps are how people work with {pod.name}, and how people outside it use what it makes.</p>
                     <a className="ox-btn ox-btn--lemma" {...to(chatView({ kind: "chat", podId: pod.id, id: NEW_CHAT }), go)}>Ask {pod.name} to build one</a>
@@ -480,46 +504,53 @@ function XrayTab({ pod, go, actions }: { pod: Pod; go: Go; actions: FrameActions
 
     const apps = (tabs.data ?? []).flatMap((tab) => (tab.kind === "app" ? [tab] : []));
     const jobs = (schedules.data ?? []).filter((job) => !job.internal);
-    const groups: { title: string; pending: boolean; empty: string; pieces: ReactNode[] }[] = [
+    const groups: { title: string; pending: boolean; failed: boolean; empty: string; pieces: ReactNode[] }[] = [
         {
             title: "Runs on its own",
             pending: schedules.isPending,
+            failed: schedules.isError,
             empty: "Nothing scheduled.",
             pieces: jobs.map((job) => <Piece key={job.id} icon="clock" name={job.title} line={`${job.trigger}${job.active ? "" : " · paused"}${lastRan(job.lastFiredAt)}`} link={to(outcomeView(pod.id, "settings", "schedules"), go)} tone={job.active ? "lemma" : "off"} />),
         },
         {
             title: "Workflows",
             pending: workflows.isPending,
+            failed: workflows.isError,
             empty: "No workflows yet.",
             pieces: (workflows.data ?? []).map((flow) => <Piece key={flow.id} icon="flow" name={readableName(flow.name)} line={[flow.description, `${flow.steps} ${flow.steps === 1 ? "step" : "steps"}`, flow.active ? "" : "off"].filter(Boolean).join(" · ")} link={to({ name: "workflow", podId: pod.id, workflow: flow.name }, go)} tone={flow.active ? "lemma" : "off"} />),
         },
         {
             title: "Agents",
             pending: agents.isPending,
+            failed: agents.isError,
             empty: "Only its own agent.",
             pieces: (agents.data ?? []).map((agent) => <Piece key={agent.id} icon="agent" name={agent.front ? `${agent.label} (answers here)` : agent.label} line={agent.blurb} link={to({ name: "agent", podId: pod.id, agent: agent.name }, go)} tone="lemma" />),
         },
         {
             title: "Tables",
             pending: tables.isPending,
+            failed: tables.isError,
             empty: "No tables yet.",
             pieces: (tables.data?.items ?? []).map((table) => <Piece key={table.id} icon="table" name={table.name} line={table.detail} link={to({ name: "table", podId: pod.id, table: table.name }, go)} />),
         },
         {
             title: "Apps",
             pending: tabs.isPending,
+            failed: tabs.isError,
             empty: "No apps yet.",
             pieces: apps.map((app) => <Piece key={app.id} icon="app" name={app.label} line={app.visibility ? app.visibility.toLowerCase() : undefined} link={to({ name: "app", podId: pod.id, app: app.id.replace(/^app:/, "") }, go)} />),
         },
         {
             title: "Skills it follows",
             pending: skills.isPending,
+            failed: skills.isError,
             empty: "No skills written here yet.",
             pieces: (skills.data?.items ?? []).map((item) => <Piece key={item.id} icon="skill" name={item.name.replace(/\.md$/i, "")} line={item.description} link={to({ name: "file", podId: pod.id, path: item.kind === "file" ? item.path : item.path.replace(/\/+$/, "") + "/SKILL.md" }, go)} />),
         },
         {
             title: "Where people reach it",
             pending: surfaces.isPending,
+            failed: surfaces.isError,
             empty: "Only here.",
             pieces: (surfaces.data ?? []).map((surface) => <Piece key={surface.id} icon="plug" name={platformName(surface.platform)} line={[surface.handle, surface.active ? "" : "off"].filter(Boolean).join(" · ")} link={{ href: "#", onClick: (event) => { event.preventDefault(); actions.connect(pod.id); } }} tone={surface.active ? undefined : "off"} />),
         },
@@ -530,8 +561,8 @@ function XrayTab({ pod, go, actions }: { pod: Pod; go: Go; actions: FrameActions
             <div className="ox-xray">
                 {groups.map((group) => (
                     <section key={group.title} className="ox-xray__g">
-                        <h2>{group.title}{!group.pending && group.pieces.length > 0 && <span className="ox-vs"> · {group.pieces.length}</span>}</h2>
-                        {group.pending ? <p className="ox-loading">Loading…</p> : group.pieces.length === 0 ? <p className="ox-vs">{group.empty}</p> : <div className="ox-pieces">{group.pieces}</div>}
+                        <h2>{group.title}{!group.pending && !group.failed && group.pieces.length > 0 && <span className="ox-vs"> · {group.pieces.length}</span>}</h2>
+                        {group.pending ? <p className="ox-loading">Loading…</p> : group.failed ? <p className="ox-vs">Couldn’t read this.</p> : group.pieces.length === 0 ? <p className="ox-vs">{group.empty}</p> : <div className="ox-pieces">{group.pieces}</div>}
                     </section>
                 ))}
             </div>

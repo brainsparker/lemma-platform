@@ -3,7 +3,7 @@
  *  Nothing here reaches the network or the page, so all of it is tested
  *  directly (`tests/outcomes.test.ts`). */
 
-import { dump, load } from "js-yaml";
+import { CORE_SCHEMA, dump, load } from "js-yaml";
 import type { ConversationRef } from "@/data/types";
 import { listedAsChat } from "@/channels/chat-list";
 import { channelTitle, platformsOf, previewOf, type Channel } from "@/channels/model";
@@ -395,6 +395,9 @@ export interface Plan {
     /** `%` when the measure is a share. */
     unit: string | null;
     sections: Record<PlanSection, PlanLine[]>;
+    /** The file's text as it was read, when it was: a save edits that text
+     *  rather than replacing it, and refuses when the file has moved on. */
+    file?: string;
 }
 
 export function emptyPlan(outcome = ""): Plan {
@@ -423,42 +426,58 @@ function text(value: unknown): string | null {
     return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+const HEADING = /^#{2,3}\s+(.*)$/;
+const ITEM = /^(\s*[-*]\s+)(.*)$/;
+const META_KEYS = ["outcome", "kind", "target", "due", "unit", "measure"] as const;
+
+/** A plan file cut at its front matter: the raw block with its fences, what
+ *  is inside them, and the rest. A file with no closed block is all body. */
+function splitFront(source: string): { head: string; front: string | null; body: string } {
+    const all = source.replace(/\r\n/g, "\n");
+    if (!all.startsWith("---\n")) return { head: "", front: null, body: all };
+    const end = all.indexOf("\n---", 4);
+    if (end <= 0) return { head: "", front: null, body: all };
+    return { head: all.slice(0, end + 4), front: all.slice(4, end), body: all.slice(end + 4) };
+}
+
+/** The front matter as a map, or null when it will not parse. The core
+ *  schema keeps an unquoted `due: 2026-10-30` the string it was written as,
+ *  where the default one would read a Date and the plan would lose it. */
+function loadFront(front: string): Record<string, unknown> | null {
+    try {
+        const loaded = load(front, { schema: CORE_SCHEMA });
+        if (loaded === null || loaded === undefined) return {};
+        return typeof loaded === "object" && !Array.isArray(loaded) ? (loaded as Record<string, unknown>) : null;
+    } catch {
+        return null;
+    }
+}
+
 /** Reads a plan written by a person, by Lemma, or by this frame. Forgiving on
  *  purpose: an unknown heading is skipped, not fatal, and front matter that
  *  will not parse leaves the lines readable. */
 export function parsePlan(source: string): Plan {
     const plan = emptyPlan();
-    let body = source.replace(/\r\n/g, "\n");
-    if (body.startsWith("---\n")) {
-        const end = body.indexOf("\n---", 4);
-        if (end > 0) {
-            const front = body.slice(4, end);
-            body = body.slice(end + 4);
-            let meta: Record<string, unknown> = {};
-            try {
-                const loaded = load(front);
-                if (loaded && typeof loaded === "object" && !Array.isArray(loaded)) meta = loaded as Record<string, unknown>;
-            } catch {
-                meta = {};
-            }
-            plan.outcome = text(meta.outcome) ?? "";
-            const kind = text(meta.kind);
-            plan.kind = kind === "week" || kind === "date" ? kind : null;
-            plan.target = text(meta.target);
-            plan.due = text(meta.due);
-            plan.measure = text(meta.measure);
-            plan.unit = text(meta.unit);
-        }
+    const { front, body } = splitFront(source);
+    if (front !== null) {
+        const meta = loadFront(front) ?? {};
+        plan.outcome = text(meta.outcome) ?? "";
+        const kind = text(meta.kind);
+        plan.kind = kind === "week" || kind === "date" ? kind : null;
+        plan.target = text(meta.target);
+        plan.due = text(meta.due);
+        plan.measure = text(meta.measure);
+        plan.unit = text(meta.unit);
     }
     let current: PlanSection | null = null;
     for (const raw of body.split("\n")) {
-        const heading = /^#{2,3}\s+(.*)$/.exec(raw);
+        const heading = HEADING.exec(raw);
         if (heading) {
             current = sectionOf(heading[1]);
             continue;
         }
-        const item = /^\s*[-*]\s+(.*)$/.exec(raw);
-        if (item && current && item[1].trim()) plan.sections[current].push(lineOf(item[1]));
+        const item = ITEM.exec(raw);
+        if (item && current && item[2].trim()) plan.sections[current].push(lineOf(item[2]));
     }
     if (!plan.outcome && plan.sections.must[0]) plan.outcome = plan.sections.must[0].text;
     return plan;
@@ -466,23 +485,128 @@ export function parsePlan(source: string): Plan {
 
 const PREAMBLE = "<!-- The plan for what this Lemma owns. People and the Lemma both edit it: every line ends with who added it and when. The measure is one read-only SQL query that answers a single number. -->";
 
-export function serializePlan(plan: Plan): string {
+function metaOf(plan: Plan): Record<string, string> {
     const meta: Record<string, string> = {};
-    if (plan.outcome) meta.outcome = plan.outcome;
-    if (plan.kind) meta.kind = plan.kind;
-    if (plan.target) meta.target = plan.target;
-    if (plan.due) meta.due = plan.due;
-    if (plan.unit) meta.unit = plan.unit;
-    if (plan.measure) meta.measure = plan.measure;
+    for (const key of META_KEYS) {
+        const value = plan[key];
+        if (value) meta[key] = value;
+    }
+    return meta;
+}
+
+function written(line: PlanLine): string {
+    const by = line.by && line.on ? ` — ${line.by}, ${line.on}` : "";
+    return `${line.text}${by}`;
+}
+
+function sameLine(a: PlanLine, b: PlanLine): boolean {
+    return a.text === b.text && a.by === b.by && a.on === b.on;
+}
+
+/** The steps from a section's old lines to its new ones, as the longest run
+ *  they share: each old line kept or dropped, and the new lines that follow
+ *  each (-1: before the first). An edited line is a drop and an add in the
+ *  same place, so it stays where it was. */
+function alignLines(old: readonly PlanLine[], next: readonly PlanLine[]): { kept: boolean[]; after: Map<number, PlanLine[]> } {
+    const shared = Array.from({ length: old.length + 1 }, () => new Array<number>(next.length + 1).fill(0));
+    for (let i = old.length - 1; i >= 0; i -= 1) {
+        for (let j = next.length - 1; j >= 0; j -= 1) {
+            shared[i][j] = sameLine(old[i], next[j]) ? shared[i + 1][j + 1] + 1 : Math.max(shared[i + 1][j], shared[i][j + 1]);
+        }
+    }
+    const kept = new Array<boolean>(old.length).fill(false);
+    const after = new Map<number, PlanLine[]>();
+    const add = (at: number, line: PlanLine) => after.set(at, [...(after.get(at) ?? []), line]);
+    let i = 0;
+    let j = 0;
+    while (i < old.length || j < next.length) {
+        if (i < old.length && j < next.length && sameLine(old[i], next[j])) {
+            kept[i] = true;
+            i += 1;
+            j += 1;
+        } else if (i < old.length && (j >= next.length || shared[i + 1][j] >= shared[i][j + 1])) {
+            i += 1;
+        } else {
+            add(i - 1, next[j]);
+            j += 1;
+        }
+    }
+    return { kept, after };
+}
+
+/** The new front matter block, or the old one untouched when the plan's
+ *  own keys did not change, so a line edit never reformats it. */
+function mergedHead(plan: Plan, before: Plan, head: string, front: string | null): string {
+    const meta = metaOf(plan);
+    const was = metaOf(before);
+    if (META_KEYS.every((key) => meta[key] === was[key])) return head;
+    if (front === null) return Object.keys(meta).length ? "---\n" + dump(meta, { lineWidth: -1 }) + "---\n\n" : "";
+    const kept = loadFront(front);
+    if (kept === null) throw new Error("plan.md's front matter doesn't parse, so saving the measure would lose it. Fix it in plan.md first.");
+    for (const key of META_KEYS) {
+        if (meta[key]) kept[key] = meta[key];
+        else delete kept[key];
+    }
+    return "---\n" + dump(kept, { lineWidth: -1 }) + "---";
+}
+
+/** Writes the plan. Given the file it was read from, it edits that file in
+ *  place: only the lines and front matter keys the plan holds change, and
+ *  everything the parser does not read -- a title, prose, another heading,
+ *  another key -- stays as it was written. */
+export function serializePlan(plan: Plan, onto?: string | null): string {
+    if (onto) return mergePlan(plan, onto);
+    const meta = metaOf(plan);
     const front = Object.keys(meta).length ? "---\n" + dump(meta, { lineWidth: -1 }) + "---\n\n" : "";
     const sections = PLAN_SECTIONS.map((section) => {
-        const lines = plan.sections[section].map((line) => {
-            const by = line.by && line.on ? ` — ${line.by}, ${line.on}` : "";
-            return `- ${line.text}${by}`;
-        });
+        const lines = plan.sections[section].map((line) => `- ${written(line)}`);
         return `## ${SECTION_TITLES[section]}\n${lines.join("\n")}`;
     });
     return `${front}${PREAMBLE}\n\n${sections.join("\n\n")}\n`;
+}
+
+function mergePlan(plan: Plan, onto: string): string {
+    const before = parsePlan(onto);
+    const { head, front, body } = splitFront(onto);
+    const aligned = Object.fromEntries(PLAN_SECTIONS.map((section) => [section, alignLines(before.sections[section], plan.sections[section])])) as Record<PlanSection, ReturnType<typeof alignLines>>;
+    const seen: Record<PlanSection, number> = { must: 0, how: 0, who: 0, never: 0 };
+    const headingAt: Partial<Record<PlanSection, number>> = {};
+    const out: string[] = [];
+    let current: PlanSection | null = null;
+    for (const raw of body.split("\n")) {
+        const heading = HEADING.exec(raw);
+        if (heading) {
+            current = sectionOf(heading[1]);
+            out.push(raw);
+            if (current && headingAt[current] === undefined) headingAt[current] = out.length - 1;
+            continue;
+        }
+        const item = ITEM.exec(raw);
+        if (!item || !current || !item[2].trim()) {
+            out.push(raw);
+            continue;
+        }
+        const { kept, after } = aligned[current];
+        const index = seen[current];
+        seen[current] += 1;
+        if (index === 0) out.push(...(after.get(-1) ?? []).map((line) => `- ${written(line)}`));
+        if (kept[index]) out.push(raw);
+        /* A replaced line keeps the bullet and indent it was written with. */
+        out.push(...(after.get(index) ?? []).map((line, at) => `${at === 0 && !kept[index] ? item[1] : "- "}${written(line)}`));
+    }
+    /* Lines for a section that had none: under its heading when the file has
+       one, else under a new heading at the end. Inserted from the bottom up,
+       so earlier positions hold. */
+    const empty = PLAN_SECTIONS.filter((section) => before.sections[section].length === 0 && (aligned[section].after.get(-1) ?? []).length > 0);
+    const under = empty.filter((section) => headingAt[section] !== undefined).sort((a, b) => (headingAt[b] as number) - (headingAt[a] as number));
+    for (const section of under) {
+        out.splice((headingAt[section] as number) + 1, 0, ...(aligned[section].after.get(-1) ?? []).map((line) => `- ${written(line)}`));
+    }
+    for (const section of empty.filter((one) => headingAt[one] === undefined)) {
+        while (out.length && !out[out.length - 1].trim()) out.pop();
+        out.push("", `## ${SECTION_TITLES[section]}`, ...(aligned[section].after.get(-1) ?? []).map((line) => `- ${written(line)}`), "");
+    }
+    return mergedHead(plan, before, head, front) + out.join("\n");
 }
 
 export interface DraftInput {

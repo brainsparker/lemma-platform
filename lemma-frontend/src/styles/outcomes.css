@@ -1196,6 +1196,13 @@
     color: var(--ink-2);
 }
 
+/* The inputs drop their own outline, so the row around each shows focus. */
+.ox-add:focus-within {
+    outline: 2px solid var(--ink-2);
+    outline-offset: 2px;
+    border-radius: 8px;
+}
+
 .ox-measure {
     display: flex;
     gap: 16px;
@@ -1668,6 +1675,10 @@ a.ox-row:hover .ox-row__t {
     outline: none;
 }
 
+.ox-own:focus-within {
+    border-color: var(--ink-2);
+}
+
 /* ── palette ─────────────────────────────────────────────────────────── */
 
 .ox-scrim {
@@ -1708,6 +1719,10 @@ a.ox-row:hover .ox-row__t {
     font: inherit;
     font-size: 16px;
     outline: none;
+}
+
+.ox-palette__in:focus-within {
+    border-bottom-color: var(--ink-2);
 }
 
 .ox-palette__ask {

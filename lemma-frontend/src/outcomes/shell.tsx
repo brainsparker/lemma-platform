@@ -61,6 +61,14 @@ export interface Me {
     last_name?: string;
 }
 
+/** How many steps into the frame this history entry is, kept on the entry
+ *  itself so browser Back and Forward keep it true. `go` passes only this
+ *  key: Next.js copies its own state onto the entry, and an object that
+ *  already carried that state would skip the router's sync. */
+function step(): number {
+    return (window.history.state as { oxStep?: number } | null)?.oxStep ?? 0;
+}
+
 export function nameOf(me: Me | undefined): string {
     return [me?.first_name, me?.last_name].filter(Boolean).join(" ").trim() || me?.email?.split("@")[0] || "You";
 }
@@ -103,25 +111,22 @@ export function OutcomesShell() {
     const [handoff, setHandoff] = useState<Handoff | null>(null);
     const [fill, setFill] = useState<Fill | null>(null);
     const [navOpen, setNavOpen] = useState(false);
-    const steps = useRef(0);
     const go = useCallback<Go>((next, options = {}) => {
         const url = writeView(next);
         if (options.replace) {
-            window.history.replaceState(null, "", url);
+            window.history.replaceState({ oxStep: step() }, "", url);
             if (options.handoff) setHandoff(options.handoff);
             if (options.fill) setFill(options.fill);
             return;
         }
-        window.history.pushState(null, "", url);
-        steps.current += 1;
+        window.history.pushState({ oxStep: step() + 1 }, "", url);
         setHandoff(options.handoff ?? null);
         setFill(options.fill ?? null);
         setNavOpen(false);
         if (!fills(next)) document.querySelector(".ox-main")?.scrollTo({ top: 0 });
     }, []);
     const back = useCallback((fallback: View) => {
-        if (steps.current > 0) {
-            steps.current -= 1;
+        if (step() > 0) {
             window.history.back();
         } else {
             go(fallback);
@@ -275,7 +280,15 @@ export function OutcomesShell() {
     }
 
     let page;
-    if (!org || pods.isPending) {
+    if ((orgs.isError && !org) || (pods.isError && !pods.data)) {
+        page = (
+            <div className="ox-page">
+                <Empty title="Couldn’t load your workspace.">
+                    <button type="button" className="ox-btn" onClick={() => void (orgs.isError ? orgs.refetch() : pods.refetch())}>Try again</button>
+                </Empty>
+            </div>
+        );
+    } else if (!org || pods.isPending) {
         page = <p className="ox-loading">Loading {org?.name ?? "your organization"}…</p>;
     } else if (view.name === "today") {
         page = <Today org={org} pods={withPeople} activity={activity} queue={queue} me={myName} go={go} onAsk={ask} />;

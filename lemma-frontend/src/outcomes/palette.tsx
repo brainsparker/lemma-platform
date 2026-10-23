@@ -36,7 +36,7 @@ export function Palette({ pods, podId, activity, onClose, go, onAsk }: {
 
     return (
         <div className="ox-scrim" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-            <div className="ox-palette" role="dialog" aria-modal="true" aria-label="Ask, or jump to a Lemma">
+            <div className="ox-palette" role="dialog" aria-modal="true" aria-label="Ask, or jump to a Lemma" onKeyDown={(event) => { if (event.key === "Escape") onClose(); }}>
                 <form className="ox-palette__in" onSubmit={(event) => { event.preventDefault(); ask(); }}>
                     <Icon name="search" />
                     <label className="ox-sr" htmlFor="palette-text">Ask, or jump to a Lemma</label>
@@ -46,7 +46,6 @@ export function Palette({ pods, podId, activity, onClose, go, onAsk }: {
                         value={text}
                         placeholder="Ask anything, or type a Lemma’s name"
                         onChange={(event) => setText(event.target.value)}
-                        onKeyDown={(event) => { if (event.key === "Escape") onClose(); }}
                     />
                     <kbd>esc</kbd>
                 </form>

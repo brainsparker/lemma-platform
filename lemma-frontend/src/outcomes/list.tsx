@@ -29,6 +29,12 @@ const STARTERS: readonly Starter[] = [
     { name: "Hiring", outcome: "Two engineers signed by a date you choose", team: "People", kind: "By a date", counts: "Signed offers", builds: "A candidate pipeline, interview booking, scorecard chases", works: "Ashby, Google Calendar" },
 ];
 
+/** The plan's kind for a starter: a plan holds a weekly bar or a date, and
+ *  says neither for a monthly one rather than claim a cadence it is not. */
+function kindOfStarter(starter: Starter): Plan["kind"] {
+    return starter.kind === "Every week" ? "week" : starter.kind === "By a date" ? "date" : null;
+}
+
 function freeName(wanted: string, taken: ReadonlySet<string>): string {
     if (!taken.has(wanted.toLowerCase())) return wanted;
     for (let index = 2; index < 50; index += 1) {
@@ -57,12 +63,12 @@ export function OutcomesList({ org, pods, activity, plans, queue, go }: {
        and asks its agent to set the rest up: the build happens in that
        chat, with everything the agent can already do, and the reader lands
        in it to watch. */
-    const start = async (name: string, outcome: string) => {
+    const start = async (name: string, outcome: string, kind: Plan["kind"]) => {
         setBusy(name);
         setError(null);
         try {
             const pod = await source.createPod(org.id, freeName(name, new Set(pods.map((one) => one.name.toLowerCase()))), outcome);
-            const plan = { ...emptyPlan(outcome), kind: "week" as const, sections: { must: [{ text: outcome }], how: [], who: [], never: [] } };
+            const plan = { ...emptyPlan(outcome), kind, sections: { must: [{ text: outcome }], how: [], who: [], never: [] } };
             await savePlan(pod.id, plan, false).catch(() => undefined);
             const setup = await askIn(pod.id, `Set yourself up to own this: "${outcome}". Look at what is already connected, build the tables, app and schedules it needs, then ${planRequest(outcome).charAt(0).toLowerCase()}${planRequest(outcome).slice(1)}`).catch(() => null);
             await queryClient.invalidateQueries({ queryKey: ["pods", org.id] });
@@ -104,12 +110,12 @@ export function OutcomesList({ org, pods, activity, plans, queue, go }: {
                             <dt>Works in</dt><dd>{starter.works}</dd>
                         </dl>
                         <div className="ox-card__acts">
-                            <button type="button" className="ox-btn ox-btn--primary" disabled={busy !== null} onClick={() => start(starter.name, starter.outcome)}>{busy === starter.name ? "Starting…" : "Own this"}</button>
+                            <button type="button" className="ox-btn ox-btn--primary" disabled={busy !== null} onClick={() => start(starter.name, starter.outcome, kindOfStarter(starter))}>{busy === starter.name ? "Starting…" : "Own this"}</button>
                         </div>
                     </article>
                 ))}
             </div>
-            <form className="ox-own" onSubmit={(event) => { event.preventDefault(); const text = own.trim(); if (text) void start(ownName(text), text); }}>
+            <form className="ox-own" onSubmit={(event) => { event.preventDefault(); const text = own.trim(); if (text) void start(ownName(text), text, "week"); }}>
                 <label htmlFor="own-outcome">Or say your own</label>
                 <input id="own-outcome" value={own} onChange={(event) => setOwn(event.target.value)} placeholder="Every invoice over $10,000 gets a second approval" />
                 <button type="submit" className="ox-btn ox-btn--primary" disabled={busy !== null || !own.trim()}>Own it</button>

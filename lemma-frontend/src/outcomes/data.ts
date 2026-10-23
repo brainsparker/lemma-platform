@@ -4,8 +4,10 @@
  *  no endpoint here is new. The plan is a pod file and its number is a
  *  read-only query, so a plan works on any deployment that can store a file. */
 
-import { useQueries, useQuery } from "@tanstack/react-query";
+import { useCallback } from "react";
+import { useQueries, useQuery, type UseQueryResult } from "@tanstack/react-query";
 import { source, NEW_CONVERSATION, type ConversationRef, type Pod, type PodDetail } from "@/data";
+import { isMissing } from "@/session/auth-state";
 import { configuredApiUrl } from "@/session/origins";
 import { NOWHERE, writeAddress } from "@/shell/address";
 import { PLAN_PATH, parsePlan, readMeasure, serializePlan, type Plan } from "./model";
@@ -15,59 +17,92 @@ import { PLAN_PATH, parsePlan, readMeasure, serializePlan, type Plan } from "./m
  *  Kept under the workspace's `["conversations", podId]`, so a message sent
  *  from a thread in this frame reads the list again, as it does there. */
 export function usePodActivity(pods: readonly Pod[]): { byPod: Map<string, ConversationRef[]>; pending: boolean } {
-    const results = useQueries({
+    /* Stable, so the map keeps its identity until a result changes: an
+       inline combine runs, and makes a new map, on every render. */
+    const combine = useCallback((results: UseQueryResult<ConversationRef[]>[]) => ({
+        byPod: new Map(pods.map((pod, index) => [pod.id, results[index]?.data ?? []])),
+        pending: results.some((result) => result.isPending),
+    }), [pods]);
+    return useQueries({
         queries: pods.map((pod) => ({
             queryKey: ["conversations", pod.id, "outcome-activity"],
             queryFn: async () => (await source.listConversationsPage(pod.id, null, undefined, true)).items,
             staleTime: 30_000,
             refetchInterval: 60_000,
         })),
+        combine,
     });
-    return {
-        byPod: new Map(pods.map((pod, index) => [pod.id, results[index]?.data ?? []])),
-        pending: results.some((result) => result.isPending),
-    };
+}
+
+/** Each pod's answer, by pod id, as one map that changes only when one does. */
+function useByPod<T>(pods: readonly Pod[]) {
+    return useCallback((results: UseQueryResult<T>[]) => new Map(pods.map((pod, index) => [pod.id, results[index]?.data])), [pods]);
 }
 
 /** Who is in each outcome. The pod list carries no roster, so each is asked
  *  for under the key the workspace already uses, and shared with it. */
 export function usePodDetails(pods: readonly Pod[]): Map<string, PodDetail | undefined> {
-    const results = useQueries({
+    return useQueries({
         queries: pods.map((pod) => ({
             queryKey: ["pod-detail", pod.id],
             queryFn: () => source.getPodDetail(pod.id, pod.name, pod.iconUrl),
             staleTime: 5 * 60_000,
         })),
+        combine: useByPod<PodDetail>(pods),
     });
-    return new Map(pods.map((pod, index) => [pod.id, results[index]?.data]));
 }
 
-/** The plan file, or null when the pod has none yet. A read that fails for
- *  any reason is "no plan" here, and saving then creates one. */
+/** The plan file, or null when the pod has none yet. Only a missing file is
+ *  "no plan": any other failure is thrown, so the query retries a transient
+ *  one and shows the rest as a read that failed, never as a draft to save
+ *  over a file that is there. */
 export async function readPlan(podId: string): Promise<Plan | null> {
+    let file;
     try {
-        const file = await source.readFile(podId, PLAN_PATH);
-        return typeof file.text === "string" ? parsePlan(file.text) : null;
-    } catch {
-        return null;
+        file = await source.readFile(podId, PLAN_PATH);
+    } catch (error) {
+        if (isMissing(error)) return null;
+        throw error;
+    }
+    return typeof file.text === "string" ? { ...parsePlan(file.text), file: file.text } : null;
+}
+
+/** Thrown when plan.md changed between reading it and saving over it. */
+export class PlanMovedOn extends Error {
+    constructor() {
+        super("plan.md changed since it was read. It has been read again; make the change once more.");
+        this.name = "PlanMovedOn";
     }
 }
 
-export async function savePlan(podId: string, plan: Plan, exists: boolean): Promise<void> {
-    const text = serializePlan(plan);
-    if (exists) await source.writeFile(podId, PLAN_PATH, text);
-    else await source.createFile(podId, PLAN_PATH, text);
+/** Saves the plan and answers it as now written. An existing file is read
+ *  again first: when it still says what the plan was read from, the plan's
+ *  changes are written into it, keeping everything the parser does not
+ *  read; when someone -- often the Lemma -- wrote it since, nothing is
+ *  saved, so their lines are not lost. */
+export async function savePlan(podId: string, plan: Plan, exists: boolean): Promise<Plan> {
+    if (!exists) {
+        const text = serializePlan(plan);
+        await source.createFile(podId, PLAN_PATH, text);
+        return { ...plan, file: text };
+    }
+    const now = await source.readFile(podId, PLAN_PATH);
+    const current = typeof now.text === "string" ? now.text : null;
+    if (plan.file !== undefined && current !== plan.file) throw new PlanMovedOn();
+    const text = serializePlan(plan, current);
+    await source.writeFile(podId, PLAN_PATH, text);
+    return { ...plan, file: text };
 }
 
 export function usePlans(pods: readonly Pod[]): Map<string, Plan | null | undefined> {
-    const results = useQueries({
+    return useQueries({
         queries: pods.map((pod) => ({
             queryKey: ["outcome-plan", pod.id],
             queryFn: () => readPlan(pod.id),
             staleTime: 5 * 60_000,
         })),
+        combine: useByPod<Plan | null>(pods),
     });
-    return new Map(pods.map((pod, index) => [pod.id, results[index]?.data]));
 }
 
 /** The number a plan's measure answers, when it has one. */
@@ -115,6 +150,7 @@ export function planRequest(outcome: string): string {
     return [
         `Write the plan for what you own to ${PLAN_PATH}${outcome ? `: "${outcome}"` : ""}.`,
         "Use front matter with outcome (the one sentence you own: a bar held every week, or a finish line by a date), kind (week or date), target (like 90%), due (YYYY-MM-DD, only for a date), unit (% for a share) and measure: one read-only SQL query over this pod's tables that returns a single number.",
+        "Quote target, unit and due in double quotes, as in unit: \"%\" and due: \"2026-11-30\": unquoted, a % does not parse and a date may be read as something other than the text you wrote.",
         "Then four sections: ## What must be true, ## How we work, ## Who holds what, ## Never. One line per bullet, each ending with \" — Lemma, <Mon D>\".",
         "Only write lines that name something that exists here or that you are about to set up. If you build anything for this, say what you built in your reply.",
     ].join(" ");

@@ -27,7 +27,7 @@ export function Bars({ size = 22, label }: { size?: number; label?: string }) {
     );
 }
 
-const PATHS: Record<string, ReactNode> = {
+const PATHS = {
     chevron: <path d="m7 10 5 5 5-5" />,
     search: <><circle cx="11" cy="11" r="6.5" /><path d="m16 16 4 4" /></>,
     plus: <path d="M12 5v14M5 12h14" />,
@@ -52,7 +52,7 @@ const PATHS: Record<string, ReactNode> = {
     send: <path d="M12 19V5M6 11l6-6 6 6" />,
     more: <><circle cx="6" cy="12" r="1.4" /><circle cx="12" cy="12" r="1.4" /><circle cx="18" cy="12" r="1.4" /></>,
     gear: <><circle cx="12" cy="12" r="3" /><path d="M12 3.5v2.2M12 18.3v2.2M3.5 12h2.2M18.3 12h2.2M6 6l1.6 1.6M16.4 16.4 18 18M6 18l1.6-1.6M16.4 7.6 18 6" /></>,
-};
+} satisfies Record<string, ReactNode>;
 
 export type IconName = keyof typeof PATHS;
 

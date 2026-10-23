@@ -63,8 +63,10 @@ class TestWhatTheDeliverySays:
 
 
 def _schedule(*, account_id, name: str | None = None):
-    """The two fields `_conversation_metadata` reads off a schedule row."""
-    return SimpleNamespace(account_id=account_id, name=name, schedule_type="TIME")
+    """The fields `_conversation_metadata` reads off a schedule row."""
+    return SimpleNamespace(
+        id=uuid4(), account_id=account_id, name=name, schedule_type="TIME"
+    )
 
 
 class TestWhatTheScheduleAdds:
@@ -104,10 +106,10 @@ class TestWhatTheScheduleAdds:
             assert "repo" not in metadata
 
     def test_every_schedule_started_run_says_a_schedule_started_it(self):
-        metadata = _conversation_metadata(
-            _schedule(account_id=None, name="daily-invoices"), None
-        )
+        schedule = _schedule(account_id=None, name="daily-invoices")
+        metadata = _conversation_metadata(schedule, None)
         assert metadata["started_by"] == "SCHEDULE"
+        assert metadata["schedule_id"] == str(schedule.id)
         assert metadata["schedule_name"] == "daily-invoices"
         assert metadata["schedule_type"] == "TIME"
 

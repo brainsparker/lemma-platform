@@ -7,7 +7,7 @@ import { JSDOM } from "jsdom";
 import { act, createElement } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
-    askedLine, bannerLine, connectionsPlace, connectorChanges, connectorCreateBody, connectorPatchBody, coverageLine, missingForMe, modeBadge, myStatus,
+    askedLine, bannerLine, connectionsPlace, connectorCalled, connectorChanges, connectorCreateBody, connectorPatchBody, coverageLine, missingForMe, modeBadge, myStatus,
     readAskOutcome, readPodConnectors, slugProblem, waitingLine, type MyAccount,
 } from "../src/data/pod-connectors.ts";
 import {
@@ -126,6 +126,12 @@ test("the banner asks only for required per-member connectors I cannot use", () 
     assert.equal(bannerLine(missing, names, "Kit"), "Kit uses Gmail and Notion — connect yours");
     assert.equal(bannerLine(missing.slice(1), names, "Kit"), "Kit uses Notion — sign in again");
     assert.equal(bannerLine([], names, "Kit"), "");
+    // Three connectors on one REST API are three things; the app's name says
+    // none of them, so a connector named apart from its app goes by its name.
+    const crm = { ...CONNECTORS[2], slug: "crm", connectorId: "openapi" };
+    assert.equal(connectorCalled(crm, "OpenAPI (custom API)"), "crm");
+    assert.equal(connectorCalled(CONNECTORS[1], "Gmail"), "Gmail");
+    assert.equal(connectorCalled({ ...CONNECTORS[1], slug: "gmail-team" }, "Gmail"), "Gmail");
 });
 
 test("a slug reads the same in a URL, a YAML key and a tool argument, and is free", () => {
@@ -418,7 +424,7 @@ function seeded(actions: string[]) {
     return cache;
 }
 
-test("the Connections page draws each connector's badge and my standing, and editing only for editors", async () => {
+test("the Connections page draws each connector's badge and my standing, and editing only for editors", async (t) => {
     const window = dom();
     const { PodConnections } = await import("../src/connect/pod-connections.tsx");
     const { createRoot } = await import("react-dom/client");
@@ -426,6 +432,9 @@ test("the Connections page draws each connector's badge and my standing, and edi
         const holder = window.document.createElement("div");
         window.document.body.append(holder);
         const root = createRoot(holder);
+        // Unmounted however the test ends: a root left mounted after a failed
+        // assertion kept the process alive, and the whole suite never exited.
+        t.after(() => act(async () => root.unmount()));
         await act(async () => {
             root.render(createElement(QueryClientProvider, { client: seeded(actions) }, createElement(PodConnections, { pod: POD, focus: "support-inbox" })));
         });
@@ -452,14 +461,15 @@ test("the Connections page draws each connector's badge and my standing, and edi
     assert.ok(buttons.includes("Share with everyone"));
     assert.ok(buttons.includes("Share as…"));
     assert.ok(!text.includes("acc-bob"));
-    assert.match(text, /Allow use inside sandboxes/, "shown because this account's server says it has the setting");
+    // Only a shared account can be lent to a sandbox (the server refuses it
+    // on one only its owner uses), so a personal account offers no switch.
+    assert.doesNotMatch(text, /Allow use inside sandboxes/, "my account here is personal");
     const some = [...editor.holder.querySelectorAll("button")].find((one) => one.textContent === "Share with some people");
     await act(async () => { some?.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
     const picker = editor.holder.querySelector(".podconn__people")?.textContent ?? "";
     assert.match(picker, /Alice/, "members");
     assert.match(picker, /Editors/, "and the pod's roles");
     assert.match(picker, /Qa reviewers/);
-    await act(async () => editor.root.unmount());
 
     const member = await draw(["pod.read"]);
     const plain = [...member.holder.querySelectorAll("button")].map((one) => one.textContent);
@@ -467,7 +477,6 @@ test("the Connections page draws each connector's badge and my standing, and edi
     assert.ok(!plain.includes("Change"));
     assert.ok(!plain.includes("Ask members to connect"));
     assert.ok(plain.includes("Connect"), "but still connects their own");
-    await act(async () => member.root.unmount());
 });
 
 test("the banner asks for the required connectors I have not connected, and nothing when I have", async () => {

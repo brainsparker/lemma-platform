@@ -240,7 +240,10 @@ class PodConnectorCoverageService:
             waiting_on = [one for one in waiting_on if one.user_id in chosen]
         link = connect_url(pod_id, connector.slug)
         title = await self._connector_title(connector.auth_config_id) or connector.slug
-        text = f"This pod uses {title} — connect yours: {link}"
+        # By its own name: a pod with several connectors on one app (three on
+        # one REST API) would otherwise ask everyone about "OpenAPI".
+        called = title if title == connector.slug else f"{connector.slug} ({title})"
+        text = f"This pod uses {called} — connect yours: {link}"
         day = datetime.now(UTC).date().isoformat()
         asked: list[MemberAwaited] = []
         recently: list[MemberAwaited] = []

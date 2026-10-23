@@ -101,7 +101,7 @@ export function PodConnections({ pod, focus }: { pod: Pod; focus: string | null 
             </section>
 
             <MyAccountsHere pod={pod} me={me} accounts={podAccounts} reading={accounts} connectors={list} titleOf={titleOf}
-                orgAccounts={data.accounts.data ?? []} />
+                orgAccounts={data.accounts.data ?? []} installs={data.installs.data ?? []} />
 
             {editing && (
                 <ConnectorForm
@@ -327,7 +327,7 @@ function ConnectorForm({ pod, editing, connectors, installs, accounts, titleOf, 
 /** The accounts of mine in use here, and what only I can do with them:
  *  share with everyone or some people, withdraw, share as a connector in one
  *  step, take one out — and bring one of my other accounts in. */
-function MyAccountsHere({ pod, me, accounts, reading, connectors, titleOf, orgAccounts }: {
+function MyAccountsHere({ pod, me, accounts, reading, connectors, titleOf, orgAccounts, installs }: {
     pod: Pod;
     me: string;
     accounts: PodAccount[];
@@ -335,6 +335,7 @@ function MyAccountsHere({ pod, me, accounts, reading, connectors, titleOf, orgAc
     connectors: PodConnector[];
     titleOf: (connectorId: string) => string;
     orgAccounts: { id: string; connectorId: string; label: string; usable: boolean }[];
+    installs: Install[];
 }) {
     const cache = useQueryClient();
     const mine = ownedBy(accounts, me);
@@ -364,7 +365,8 @@ function MyAccountsHere({ pod, me, accounts, reading, connectors, titleOf, orgAc
             {mine.length > 0 && (
                 <ul className="podconn__list">
                     {mine.map((account) => (
-                        <MyAccountRow key={account.id} pod={pod} account={account} connectors={connectors} title={titleOf(account.connectorId)} />
+                        <MyAccountRow key={account.id} pod={pod} account={account} connectors={connectors} title={titleOf(account.connectorId)}
+                            installName={installs.find((one) => one.id === account.authConfigId)?.name ?? ""} />
                     ))}
                 </ul>
             )}
@@ -389,7 +391,11 @@ function MyAccountsHere({ pod, me, accounts, reading, connectors, titleOf, orgAc
     );
 }
 
-function MyAccountRow({ pod, account, connectors, title }: { pod: Pod; account: PodAccount; connectors: PodConnector[]; title: string }) {
+function MyAccountRow({ pod, account, connectors, title, installName }: {
+    pod: Pod; account: PodAccount; connectors: PodConnector[]; title: string;
+    /** Two accounts of one app are told apart by the installation each is on. */
+    installName: string;
+}) {
     const cache = useQueryClient();
     const me = useMe() ?? "";
     const [mode, setMode] = useState<"idle" | "some" | "as" | "remove" | "withdraw">("idle");
@@ -436,12 +442,14 @@ function MyAccountRow({ pod, account, connectors, title }: { pod: Pod; account: 
             <span className="podconn__what">
                 <span className="podconn__name">
                     <b>{account.label || "Your " + title + " account"}</b>
-                    <span className="podconn__app">{title}</span>
+                    <span className="podconn__app">{installName ? title + " · " + installName : title}</span>
                     <span className="pill">{visibilityWord(account.visibility)}</span>
                     {account.isMemberDefault && <span className="pill">your default here</span>}
                 </span>
                 {account.usedBy.length > 0 && <span className="podconn__purpose">Runs {account.usedBy.join(", ")} for everyone here</span>}
-                {account.sandboxes !== null && (
+                {/* Only a shared account can be lent to a sandbox; the server
+                    refuses it on one only its owner uses. */}
+                {account.sandboxes !== null && account.visibility !== "PERSONAL" && (
                     <label className="smanage__check podconn__sandbox">
                         <input type="checkbox" role="switch" checked={account.sandboxes} disabled={busy}
                             onChange={(event) => change.mutate({ sandboxes: event.target.checked })} />

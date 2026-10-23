@@ -395,9 +395,19 @@ export function missingForMe(connectors: PodConnector[], mine: MyAccount[], me: 
 
 /** The banner's sentence: "This pod uses Gmail — connect yours". `names`
  *  turns a catalog id into its title. */
+/** What to call a pod connector to a person: its app's name when the slug is
+ *  just that app (`gmail`), and its own name otherwise -- three connectors
+ *  on one REST API are three different things, and "OpenAPI" says none. */
+export function connectorCalled(connector: PodConnector, appTitle: string): string {
+    const slug = connector.slug;
+    const app = connector.connectorId;
+    if (appTitle && (slug === app || slug.startsWith(app + "-"))) return appTitle;
+    return slug || appTitle;
+}
+
 export function bannerLine(missing: { connector: PodConnector; status: MyStatus }[], names: (connectorId: string) => string, teammate: string): string {
     if (missing.length === 0) return "";
-    const said = [...new Set(missing.map((one) => names(one.connector.connectorId) || one.connector.slug))];
+    const said = [...new Set(missing.map((one) => connectorCalled(one.connector, names(one.connector.connectorId))))];
     const what = said.length === 1 ? said[0] : said.slice(0, -1).join(", ") + " and " + said[said.length - 1];
     const again = missing.every((one) => one.status.standing === "reconnect");
     return teammate + " uses " + what + " — " + (again ? "sign in again" : "connect yours");

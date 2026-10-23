@@ -194,7 +194,8 @@ async def test_asking_posts_one_line_in_each_missing_members_channel_once_a_day(
     assert world.users["viewer"]["id"] not in who
     link = body["connect_url"]
     assert link.endswith(f"/pods/{world.pod_id}/connections?connector=crm")
-    said = f"This pod uses Acme CRM — connect yours: {link}"
+    # By the pod's own name for it, with the app beside it.
+    said = f"This pod uses crm (Acme CRM) — connect yours: {link}"
     assert (await _lines_for(world, "bob")).count(said) == 1
     assert not await _has_channel(world, "alice") or said not in await _lines_for(
         world, "alice"

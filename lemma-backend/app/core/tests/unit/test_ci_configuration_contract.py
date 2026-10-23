@@ -194,8 +194,8 @@ def test_expensive_security_jobs_are_change_scoped() -> None:
     workflow = _read(".github/workflows/security.yml")
 
     assert "name: Detect security-relevant changes" in workflow
-    assert "if: needs.changes.outputs.python == 'true'" in workflow
-    assert "if: needs.changes.outputs.javascript == 'true'" in workflow
+    assert "needs.changes.outputs.python == 'true'" in workflow
+    assert "needs.changes.outputs.javascript == 'true'" in workflow
     assert "if: needs.changes.outputs.python_dependencies == 'true'" in workflow
     assert "if: needs.changes.outputs.backend_image == 'true'" in workflow
 

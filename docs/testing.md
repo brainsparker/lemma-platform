@@ -206,7 +206,9 @@ All three workflows also run on `merge_group`, so `main` can take changes
 through a merge queue instead of asking every branch to be brought up to date
 by hand. A merge group is the queued pull request on top of the latest `main`
 and of anything queued ahead of it, and it runs everything a pull request runs,
-including every e2e shard. Its filters see only that pull request's own change,
+including every e2e shard, except CodeQL, which never fails on a finding and so
+would gate nothing there. A merge group whose diff comes out empty fails "CI
+passed" rather than skipping every suite. Its filters see only that pull request's own change,
 so the queue's grouping strategy (in the same `protect-main` ruleset) has to be
 ALLGREEN, where every entry's run must pass; under HEADGREEN a later entry that
 skipped a suite could carry an earlier entry's failure into `main`.

@@ -55,7 +55,14 @@ jobs:
       # or the entry queued ahead -- so the diff is the queued pull request's
       # own change, the same files its pull request run filtered on. What must
       # never happen here is an empty diff: every suite would skip and "CI
-      # passed" would go green on a merge that tested nothing.
+      # passed" would go green on a merge that tested nothing. The step after
+      # this one fails the run if it does.
+      #
+      # It is not main..head on purpose. A later entry's candidate also holds
+      # the entries ahead of it, but their suites already ran on their own
+      # candidates, and under ALLGREEN each of those had to pass. A suite this
+      # entry's own files do not touch sees the same inputs it saw there, so
+      # rerunning it would cost runners and find nothing new.
       #
       # Because each queue entry filters on its own change only, the queue's
       # grouping strategy has to be ALLGREEN (every entry's run must pass), not
@@ -264,6 +271,21 @@ jobs:
               - 'scripts/_pytest_census_plugin.py'
               - 'scripts/check_host_pack.py'
               - 'scripts/plan_e2e_shards.py'
+            # Every file, so the step below can tell an empty diff from a
+            # change that no suite's filter covers. Not a job output: nothing
+            # gates on it.
+            any:
+              - '**'
+      # The empty diff the note above names, refused rather than trusted. Here
+      # it can only mean the action read the wrong range, so failing `changes`
+      # fails "CI passed" instead of letting every suite skip into a green one.
+      # One guard covers all three workflows: they run the same action over the
+      # same payload, and a merge group needs all three green.
+      - name: A merge group's diff is not empty
+        if: github.event_name == 'merge_group' && steps.filter.outputs.any != 'true'
+        run: |
+          echo "::error::paths-filter found no changed files between ${{ github.event.merge_group.base_sha }} and ${{ github.event.merge_group.head_sha }}, so every suite would skip."
+          exit 1
   backend-lint:
     name: lemma-backend quality gates
     timeout-minutes: 30

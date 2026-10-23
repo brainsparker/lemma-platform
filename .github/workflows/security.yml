@@ -2,10 +2,11 @@ name: Security
 
 on:
   pull_request:
-  # The merge queue. Each check here runs on a merge group exactly as on a
-  # pull request, scoped by the same filters to the queued pull request's own
-  # change; only the CodeQL findings comment, which has a pull request to
-  # write on, stays pull-request-only.
+  # The merge queue. Each gating check here runs on a merge group exactly as
+  # on a pull request, scoped by the same filters to the queued pull request's
+  # own change. CodeQL does not: its analyses never fail on a finding, so in
+  # the queue they would only upload results against a temporary ref -- see
+  # `codeql-python`.
   merge_group:
     types: [checks_requested]
   push:
@@ -141,7 +142,16 @@ jobs:
     timeout-minutes: 30
     name: CodeQL (python)
     needs: changes
-    if: needs.changes.outputs.python == 'true'
+    # Not in the merge queue. Neither analysis fails on a finding -- the
+    # findings comment below reports them, and "Security passed" fails only on
+    # an analysis that broke -- so a queue run would gate nothing. It would
+    # still spend about five runner-minutes per entry and upload SARIF against
+    # a `gh-readonly-queue/main/...` ref that is deleted moments later. The
+    # pull request's run already analysed this change, and the push to main
+    # analyses what lands.
+    if: >-
+      github.event_name != 'merge_group' &&
+      needs.changes.outputs.python == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -159,7 +169,10 @@ jobs:
     timeout-minutes: 30
     name: CodeQL (javascript-typescript)
     needs: changes
-    if: needs.changes.outputs.javascript == 'true'
+    # Not in the merge queue, for the reason on `codeql-python`.
+    if: >-
+      github.event_name != 'merge_group' &&
+      needs.changes.outputs.javascript == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read

@@ -165,7 +165,7 @@ cannot set either; the `__Host-` access cookie never reaches the API host, and
   check asked of the pod itself (listing its tables, talking to its agents) is
   met by a grant on the pod, named `pod`, which carries only read and use
   capabilities (`POD_GRANTABLE_PERMISSIONS` in `core/authorization/grants.py`).
-- **Existing apps** got, in migration 0062, reads of their pod's POD and
+- **Existing apps** got, in migration 0063, reads of their pod's POD and
   PUBLIC tables and top-level folders and files, and nothing else: nothing in
   the database records what an app called (see the migration's section).
 - The API host serves an app's files under `/pods/{pod_id}/apps/{name}/assets`

@@ -1,4 +1,4 @@
-"""Migration 0062 gives every existing app the grants it starts its life with.
+"""Migration 0063 gives every existing app the grants it starts its life with.
 
 An app used to be its viewer (audit H20); from 0062 it is its own principal,
 and holds only what it is granted. There is no record of what an app called --
@@ -33,8 +33,8 @@ from app.core.test_utils import get_postgres_container, get_postgres_url
 pytestmark = [pytest.mark.e2e, pytest.mark.slow]
 
 BACKEND = Path(__file__).resolve().parents[5]
-BEFORE = "0061_answers_shared"
-REVISION = "0062_pod_connectors"
+BEFORE = "0062_usage_counter_basis"
+REVISION = "0063_pod_connectors"
 READ_ROWS = {"datastore.table.read", "datastore.record.read"}
 
 

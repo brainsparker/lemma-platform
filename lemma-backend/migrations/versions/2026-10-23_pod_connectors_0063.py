@@ -1077,7 +1077,7 @@ def _upgrade_app_principal(conn) -> None:
     files = conn.execute(sa.text(_APP_FILE_READS)).rowcount
     pods = conn.execute(sa.text(_APP_POD_READS)).rowcount
     logging.getLogger("alembic.runtime.migration").info(
-        "0062: granted apps %d table, %d file and %d pod reads of their pods.",
+        "0063: granted apps %d table, %d file and %d pod reads of their pods.",
         tables,
         files,
         pods,

@@ -27,7 +27,7 @@ from supertokens_python.recipe.session.asyncio import (
 from supertokens_python.recipe.session.exceptions import TryRefreshTokenError
 from supertokens_python.recipe.session.interfaces import SessionContainer
 
-from app.core.live.connection import LiveConnection
+from app.core.live.connection import SocketConnection
 from app.core.live.limits import SLOT_REFRESH_SECONDS
 from app.core.live.pod_access import close_code_for
 from app.core.live.sessions import LiveSession, open_sockets
@@ -46,7 +46,7 @@ from app.core.live.protocol import (
     UnsubscribeRequest,
     parse_request,
 )
-from app.core.live.topics import LiveRegistry, live_registry
+from app.core.live.topics import FrameHandlers
 from app.core.log.log import get_logger
 from app.core.request_context import create_inherited_task
 
@@ -123,17 +123,15 @@ async def accept_and_authenticate(websocket: WebSocket) -> LiveSession | None:
     return _session_of(session)
 
 
-class LiveDispatcher:
-    """Acts on one socket's client frames, against the registered topics and
-    calls."""
+class LiveDispatcher[C: SocketConnection]:
+    """Acts on one socket's client frames, against the topics and calls
+    registered for its kind of socket."""
 
-    def __init__(
-        self, *, max_subscriptions: int, registry: LiveRegistry | None = None
-    ) -> None:
+    def __init__(self, *, max_subscriptions: int, registry: FrameHandlers[C]) -> None:
         self._max_subscriptions = max_subscriptions
-        self._registry = registry or live_registry()
+        self._registry = registry
 
-    async def handle(self, connection: LiveConnection, raw: str) -> None:
+    async def handle(self, connection: C, raw: str) -> None:
         # Bytes, as the limit says: a character may take four. The length in
         # characters is a floor of it, checked first so a huge frame is not
         # encoded only to be refused.
@@ -160,15 +158,13 @@ class LiveDispatcher:
             case CallRequest():
                 await self._call(connection, request)
 
-    def _unsubscribe(self, connection: LiveConnection, subscription_id: str) -> None:
+    def _unsubscribe(self, connection: C, subscription_id: str) -> None:
         if subscription_id in connection.subscriptions:
             connection.offer_unsubscribed(
                 subscription_id, UnsubscribedReason.CLIENT.value
             )
 
-    async def _subscribe(
-        self, connection: LiveConnection, request: SubscribeRequest
-    ) -> None:
+    async def _subscribe(self, connection: C, request: SubscribeRequest) -> None:
         if request.id in connection.subscriptions:
             connection.offer_error(
                 request.id, LiveErrorCode.INVALID, "Subscription id already in use."
@@ -203,7 +199,8 @@ class LiveDispatcher:
             # unreachable) must not take the socket and its others down.
             logger.error(
                 "live.subscribe.failed",
-                pod_id=str(connection.pod_id),
+                pod_id=connection.log_pod_id,
+                organization_id=connection.log_organization_id,
                 topic=request.topic,
                 error_type=type(exc).__name__,
                 exc_info=True,
@@ -214,12 +211,12 @@ class LiveDispatcher:
             )
 
     @staticmethod
-    def _drop(connection: LiveConnection, subscription_id: str) -> None:
+    def _drop(connection: SocketConnection, subscription_id: str) -> None:
         subscription = connection.subscriptions.pop(subscription_id, None)
         if subscription is not None:
             subscription.release()
 
-    async def _call(self, connection: LiveConnection, request: CallRequest) -> None:
+    async def _call(self, connection: C, request: CallRequest) -> None:
         call = self._registry.calls.get(request.method)
         if call is None:
             connection.offer_error(
@@ -245,7 +242,8 @@ class LiveDispatcher:
         except _TRANSIENT as exc:
             logger.error(
                 "live.call.failed",
-                pod_id=str(connection.pod_id),
+                pod_id=connection.log_pod_id,
+                organization_id=connection.log_organization_id,
                 method=call.name,
                 error_type=type(exc).__name__,
                 exc_info=True,
@@ -259,11 +257,11 @@ class LiveDispatcher:
 
 #: Acts on one client frame; ``None`` for a socket whose client sends nothing
 #: meaningful (it is read only to notice the disconnect).
-FrameHandler = Callable[[LiveConnection, str], Awaitable[None]]
+type FrameHandler[C: SocketConnection] = Callable[[C, str], Awaitable[None]]
 
 
-async def _receive(
-    websocket: WebSocket, connection: LiveConnection, handle: FrameHandler | None
+async def _receive[C: SocketConnection](
+    websocket: WebSocket, connection: C, handle: FrameHandler[C] | None
 ) -> None:
     """Dispatch client frames until the client goes away."""
     while True:
@@ -288,11 +286,11 @@ async def _keep(refresh: Callable[[], Awaitable[None]]) -> None:
         await refresh()
 
 
-async def serve(
+async def serve[C: SocketConnection](
     websocket: WebSocket,
-    connection: LiveConnection,
+    connection: C,
     *,
-    handle: FrameHandler | None,
+    handle: FrameHandler[C] | None,
     session: LiveSession,
     keep: Callable[[], Awaitable[None]] | None = None,
 ) -> None:
@@ -320,7 +318,8 @@ async def serve(
             ):
                 logger.error(
                     "live.socket.failed",
-                    pod_id=str(connection.pod_id),
+                    pod_id=connection.log_pod_id,
+                    organization_id=connection.log_organization_id,
                     error_type=type(error).__name__,
                     exc_info=error,
                 )

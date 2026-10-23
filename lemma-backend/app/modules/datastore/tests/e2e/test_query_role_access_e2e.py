@@ -15,6 +15,7 @@ unqualified name on the ``search_path``, it says the table does not exist.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import secrets
 from uuid import uuid4
@@ -26,7 +27,10 @@ from sqlalchemy.pool import NullPool
 
 from app.modules.datastore.infrastructure import pod_schema_memo
 from app.modules.datastore.infrastructure.session import get_datastore_engine
-from app.modules.datastore.infrastructure.query_role import pod_query_role_name
+from app.modules.datastore.infrastructure.query_role import (
+    _is_transient_conflict,
+    pod_query_role_name,
+)
 from app.modules.datastore.infrastructure.schema_manager import SchemaManager
 from app.modules.datastore.tests.e2e.harness import DatastoreApi
 
@@ -76,18 +80,29 @@ async def _make_legacy(schema_manager: SchemaManager, schema: str) -> None:
     made before per-pod roles was. This process forgets it saw the role, as a
     process that never had would."""
     role = pod_query_role_name(schema)
-    async with schema_manager.session_factory() as session:
-        for statement in (
-            f'REVOKE USAGE ON SCHEMA "{schema}" FROM "{role}"',
-            f'REVOKE SELECT ON ALL TABLES IN SCHEMA "{schema}" FROM "{role}"',
-            (
-                "ALTER DEFAULT PRIVILEGES FOR ROLE CURRENT_USER "
-                f'IN SCHEMA "{schema}" REVOKE SELECT ON TABLES FROM "{role}"'
-            ),
-            f'DROP ROLE "{role}"',
-        ):
-            await session.execute(text(statement))
-        await session.commit()
+    statements = (
+        f'REVOKE USAGE ON SCHEMA "{schema}" FROM "{role}"',
+        f'REVOKE SELECT ON ALL TABLES IN SCHEMA "{schema}" FROM "{role}"',
+        (
+            "ALTER DEFAULT PRIVILEGES FOR ROLE CURRENT_USER "
+            f'IN SCHEMA "{schema}" REVOKE SELECT ON TABLES FROM "{role}"'
+        ),
+        f'DROP ROLE "{role}"',
+    )
+    # The same retry the product's own grants take: a REVOKE racing another
+    # session's GRANT on the schema's tables fails with "tuple concurrently
+    # updated", which is contention, not a refusal.
+    for attempt in range(1, 6):
+        try:
+            async with schema_manager.session_factory() as session:
+                for statement in statements:
+                    await session.execute(text(statement))
+                await session.commit()
+            break
+        except Exception as exc:
+            if attempt == 5 or not _is_transient_conflict(exc):
+                raise
+            await asyncio.sleep(0.05 * 2**attempt)
     pod_schema_memo.forget(schema)
 
 

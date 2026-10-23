@@ -45,10 +45,11 @@ class PostgresRequestAccountingGateway:
             settings,
         )
         self._reported_unpriceable = False
-        #: The limits the latest request was admitted under. Its receipt is
-        #: charged to the windows those limits gave it -- the windows it was
-        #: dispatched in -- without asking the limit provider a second time.
-        self._admitted_under: UsageLimitValues | None = None
+        #: The limits each request in flight was admitted under, by request.
+        #: Its receipt is charged to the windows those limits gave it -- the
+        #: windows it was dispatched in -- without asking the limit provider a
+        #: second time.
+        self._admitted_under: dict[UUID, UsageLimitValues] = {}
 
     async def _limits(self, uow: SqlAlchemyUnitOfWork) -> UsageLimitValues:
         provider = build_usage_limit_port(uow)
@@ -211,7 +212,7 @@ class PostgresRequestAccountingGateway:
             await request_accounting.journal(
                 uow.session, request_id, self.identity, self.pricing, now
             )
-            self._admitted_under = limits
+            self._admitted_under[request_id] = limits
             return limited
 
     async def record(
@@ -219,13 +220,17 @@ class PostgresRequestAccountingGateway:
     ) -> bool:
         now = now or datetime.now(timezone.utc)
         async with self.factory() as uow:
-            limits = self._admitted_under or await self._limits(uow)
+            limits = self._admitted_under.pop(receipt.request_id, None)
+            if limits is None:
+                limits = await self._limits(uow)
             events: list[DomainEvent] = []
             exhausted = await request_accounting.record(
                 uow.session,
                 receipt,
                 self.identity,
-                self._windows(limits, receipt.occurred_at),
+                # Every window it fell in, limited or not: a lifted limit's
+                # counter keeps counting, so restoring it finds it exact.
+                budget_windows(self.identity, limits, receipt.occurred_at),
                 self._windows(limits, now),
                 events,
                 Decimal(str(self.settings.usage_limit_warn_fraction)),

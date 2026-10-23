@@ -22,9 +22,12 @@ recounted from the ledger instead of trusted when it is new; when the rows it
 counts change -- it keeps a digest, its basis, of the window's organization and
 source exclusions, and a window asking with another one recounts it -- or its
 limit changes; when a ledger row was inserted through the ORM by anything but
-settlement, which marks every counter that row falls into; and when it has not
-been recounted for `USAGE_COUNTER_REFRESH_SECONDS`, which bounds how long a
-ledger edit nothing announced (raw SQL) can go uncounted. A recount applies the
+settlement, which marks every counter that row falls into under the counter's
+recount lock; and when it has not been recounted for
+`USAGE_COUNTER_REFRESH_SECONDS`, which bounds how long a ledger edit nothing
+announced (raw SQL) can go uncounted. Settlement charges every window a request
+fell in that has a counter, limited or not, so a counter whose limit is lifted
+keeps counting and is exact when the same limit is restored. A recount applies the
 difference between the ledger sum and the counter as read in one snapshot, so
 a receipt settled while the sum ran keeps its charge, and recounts exclude one
 another with a transaction-scoped advisory lock rather than blocking

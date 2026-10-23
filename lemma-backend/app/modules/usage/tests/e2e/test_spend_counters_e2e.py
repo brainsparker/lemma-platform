@@ -359,6 +359,99 @@ async def test_a_refused_admission_keeps_the_recount_it_made(
     assert counter.basis is not None
 
 
+async def test_a_limit_lifted_and_restored_counts_what_was_spent_meanwhile(
+    db_manager: DatabaseManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Long enough that only the counter, never a refresh, can know the spend.
+    monkeypatch.setattr(usage_settings, "usage_counter_refresh_seconds", 3600)
+    monkeypatch.setattr(usage_settings, "usage_user_weekly_limit_usd", 1.0)
+    user_id = uuid4()
+    now = datetime.now(timezone.utc)
+    limited = _gateway(db_manager, _identity(user_id))
+    request_id = uuid4()
+    await limited.begin(request_id, now)
+    await limited.record(_receipt(request_id, now, "0.2"))
+
+    monkeypatch.setattr(usage_settings, "usage_user_weekly_limit_usd", None)
+    unlimited = _gateway(db_manager, _identity(user_id))
+    request_id = uuid4()
+    assert await unlimited.begin(request_id, now) is False
+    await unlimited.record(_receipt(request_id, now, "0.9"))
+
+    # The same limit back: the counter is trusted as it stands, so it must
+    # have counted the request made while there was none.
+    monkeypatch.setattr(usage_settings, "usage_user_weekly_limit_usd", 1.0)
+    with pytest.raises(UsageLimitExceededError):
+        await _gateway(db_manager, _identity(user_id)).begin(uuid4(), now)
+    counter = await _weekly_counter(db_manager, user_id)
+    assert counter.used_usd == Decimal("1.1")
+    assert counter.used_usd == await _ledger_total(db_manager, user_id)
+
+
+async def test_an_insert_marking_a_counter_never_lands_inside_a_recount(
+    db_manager: DatabaseManager,
+) -> None:
+    factory = SessionUnitOfWorkFactory(db_manager.session_factory)
+    user_id = uuid4()
+    now = datetime.now(timezone.utc)
+    counted = _week(user_id, now)
+    recounting = counted.model_copy(update={"excluded_source_types": ("elsewhere",)})
+    async with factory() as uow:
+        await request_accounting.check(uow.session, [counted])
+
+    async with db_manager.session_factory() as inserting, inserting.begin():
+        # The aggregate recorder's row, inserted and its counter marked, not
+        # yet committed.
+        inserting.add(
+            UsageRecord(
+                user_id=user_id,
+                source_type="agent_run",
+                profile_id="aggregate",
+                profile_scope="SYSTEM",
+                model_name="aggregate",
+                occurred_at=now,
+                cost_amount=Decimal("0.4"),
+            )
+        )
+        await inserting.flush()
+
+        async def recount() -> None:
+            async with factory() as uow:
+                await request_accounting.check(uow.session, [recounting])
+
+        recount_task = asyncio.create_task(recount())
+
+        async def recount_waiting() -> int:
+            async with db_manager.session_factory() as session:
+                return int(
+                    await session.scalar(
+                        text(
+                            "SELECT count(*) FROM pg_stat_activity"
+                            " WHERE wait_event_type = 'Lock'"
+                            " AND (query LIKE 'UPDATE usage_limit_counters%'"
+                            " OR query LIKE 'SELECT pg_advisory_xact_lock%')"
+                        )
+                    )
+                    or 0
+                )
+
+        # Without the insert's recount lock, the recount sums now -- without
+        # the row -- and its write, waiting on the mark's row lock, would
+        # set the counter back to trusted over it once the insert commits.
+        await eventually(
+            label="the recount waiting on the insert",
+            probe=recount_waiting,
+            done=lambda waiting: waiting == 1,
+        )
+    await recount_task
+
+    async with factory() as uow:
+        await request_accounting.check(uow.session, [recounting])
+    counter = await _weekly_counter(db_manager, user_id)
+    assert counter.used_usd == Decimal("0.4")
+    assert counter.used_usd == await _ledger_total(db_manager, user_id)
+
+
 async def test_warning_is_sent_once_per_limit_and_again_after_the_limit_changes(
     db_manager: DatabaseManager,
 ) -> None:

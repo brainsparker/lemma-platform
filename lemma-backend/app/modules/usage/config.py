@@ -44,9 +44,9 @@ class UsageSettings(BaseSettings):
         description=(
             "Longest a limit window's running total is trusted before it is "
             "recounted from the ledger. Every writer the code knows about keeps "
-            "the total exact or marks it for recounting, so this bounds only "
-            "what nothing announced: a ledger row edited by hand, or a limit "
-            "lifted and restored unchanged inside one window."
+            "the total exact or marks it for recounting, and a lifted limit's "
+            "counter keeps counting, so this bounds only what nothing "
+            "announced: a ledger row written or edited in raw SQL."
         ),
     )
 

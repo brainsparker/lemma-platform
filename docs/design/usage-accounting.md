@@ -55,9 +55,12 @@ input-token estimate. No database transaction stays open across provider I/O.
 Counter updates, receipt settlement and outbox events commit together.
 
 Spend is attributed to the request's original start window. The post-response
-limit check uses the current time and policy, including window rollover. Warning
-thresholds use the current limit and `USAGE_LIMIT_WARN_FRACTION`; changing a limit
-resets its warning latch.
+limit check uses the current time, including window rollover, and the limits
+the request was admitted under: settlement does not ask the limit provider a
+second time. A limit changed while a request was out applies at the next
+admission, which resolves limits afresh before any further dispatch. Warning
+thresholds use the admitted limit and `USAGE_LIMIT_WARN_FRACTION`; changing a
+limit resets its warning latch.
 
 ## Pricing and supported requests
 

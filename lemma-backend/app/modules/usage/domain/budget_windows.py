@@ -42,8 +42,7 @@ def spend_windows(
     was for. So a run can be held to the windows its requests will be before
     it has made one.
     """
-    month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    next_month = (month.replace(day=28) + timedelta(days=4)).replace(day=1)
+    month, next_month = _month_of(now)
     week = (now - timedelta(days=now.weekday())).replace(
         hour=0, minute=0, second=0, microsecond=0
     )
@@ -99,29 +98,33 @@ def spend_windows(
                 ),
             )
         )
-    if outside_audience:
-        windows.extend(_contacts_window(organization_id, limits, month, next_month))
+    if outside_audience and organization_id is not None:
+        windows.append(contacts_window(organization_id, limits, now))
     return windows
 
 
-def _contacts_window(
-    organization_id: UUID | None,
-    limits: UsageLimitValues,
-    month: datetime,
-    next_month: datetime,
-) -> list[BudgetWindow]:
-    """The organization's contacts cap, counting only runs for people outside."""
-    if organization_id is None:
-        return []
+def contacts_window(
+    organization_id: UUID, limits: UsageLimitValues, now: datetime
+) -> BudgetWindow:
+    """The organization's contacts cap, counting only runs for people outside.
+
+    Every request of such a run counts in it (``spend_windows``), and a surface
+    asks it before starting one: one window, so both read the same total.
+    """
+    month, next_month = _month_of(now)
     cap = limits.contacts_monthly_limit_usd
-    return [
-        BudgetWindow(
-            organization_id=organization_id,
-            user_id=None,
-            kind="contacts_month",
-            start=month,
-            end=next_month,
-            limit=None if cap is None else money(cap),
-            source_types=OUTSIDE_AUDIENCE_SOURCES,
-        )
-    ]
+    return BudgetWindow(
+        organization_id=organization_id,
+        user_id=None,
+        kind="contacts_month",
+        start=month,
+        end=next_month,
+        limit=None if cap is None else money(cap),
+        source_types=OUTSIDE_AUDIENCE_SOURCES,
+    )
+
+
+def _month_of(now: datetime) -> tuple[datetime, datetime]:
+    """The calendar month ``now`` falls in, as ``[start, end)``."""
+    month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    return month, (month.replace(day=28) + timedelta(days=4)).replace(day=1)

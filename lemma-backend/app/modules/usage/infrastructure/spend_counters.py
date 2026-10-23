@@ -27,7 +27,9 @@ write past this one, which is why the old code recomputed every time:
 Anything else -- a raw SQL edit of the ledger, a limit lifted and restored
 unchanged inside one window -- is caught by recounting any counter not counted
 for ``usage_counter_refresh_seconds``. That bound, not every request, is now
-how stale a total can be for a write nothing announced.
+how stale a total can be for a write nothing announced. The contacts cap is
+the one limit usage sets itself, and setting it marks the month's counter
+(``uncount``), so lifting and restoring it is announced.
 
 A recount never holds a settlement up for the length of its sum. It reads the
 counter and the ledger in one snapshot and adds the difference,
@@ -389,6 +391,22 @@ async def charge(
         )
     ).one_or_none()
     return None if row is None else _counter(row)
+
+
+async def uncount(session: AsyncSession, window: BudgetWindow) -> None:
+    """Have ``window``'s counter recounted from the ledger before it is next trusted.
+
+    For a change that leaves the counter's basis and limit as they were and
+    its total short: a limit removed and set again to the value it had. No
+    request is charged to a window while it has no limit, so its counter
+    missed what was spent meanwhile, and nothing else would say so. The
+    counter is found by its key; ``window``'s limit plays no part.
+    """
+    await session.execute(
+        update(UsageLimitCounter)
+        .where(_row_of(window), UsageLimitCounter.basis.is_not(None))
+        .values(basis=None)
+    )
 
 
 async def warn_once(

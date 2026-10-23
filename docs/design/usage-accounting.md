@@ -22,6 +22,15 @@ message check names the limit it hit; the run-start check commits what a
 recount learned even when it refuses, and the message check's recount commits
 with the message, so a refused message keeps none.
 
+A run for a contact or a group's outsider is asked one more thing first, by
+the surface that would start it: whether the organization's contacts cap is
+reached (`contacts_cap_reached`). Past it the surface starts no run and hands
+the person to a member. The surface reads the `contacts_month` counter the
+run's requests are admitted on, in a unit of work of its own that commits at
+once. A turn holds its conversation's lock while its message check reads the
+same counter, so a surface that recounted it inside the turn's own
+transaction would hold the counter while waiting for that lock.
+
 A window's counter is its running total. Settlement adds a receipt's cost to
 it in the transaction that prices the ledger row, and admission compares it
 with the limit without a lock or a ledger sum, so the cost of a request does
@@ -30,7 +39,10 @@ recounted from the ledger instead of trusted when it is new; when the rows it
 counts change -- it keeps a digest, its basis, of the window's organization and
 source exclusions, and a window asking with another one recounts it -- or its
 limit changes; when a ledger row was inserted through the ORM by anything but
-settlement, which marks every counter that row falls into; and when it has not
+settlement, which marks every counter that row falls into; when an owner sets
+the contacts cap, which marks the month's `contacts_month` counter -- no
+request is charged to a window while it has no limit, so a cap removed and set
+back to its old value would otherwise be trusted short; and when it has not
 been recounted for `USAGE_COUNTER_REFRESH_SECONDS`, which bounds how long a
 ledger edit nothing announced (raw SQL) can go uncounted. A recount applies the
 difference between the ledger sum and the counter as read in one snapshot, so
@@ -42,7 +54,10 @@ while its request was out is left for the next admission.
 The limits API (`get_usage_limits`) still sums the ledger, for every window: it
 reports spend in windows that have no limit, and those keep no counter. What it
 shows is the ledger's figure; what admits work is the counter's, and the two
-differ only for as long as a recount is due.
+differ only for as long as a recount is due. The contacts-cap API
+(`GET`/`PUT /usage/organizations/{id}/contacts-cap`) sums the month's outside
+spend the same way, for the same reason: it reports it whether or not a cap
+applies.
 
 Before provider I/O, admission commits a request journal entry marked `PENDING`.
 Afterward, settlement records the actual reported tokens and their per-request

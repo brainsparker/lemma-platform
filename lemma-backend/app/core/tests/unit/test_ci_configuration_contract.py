@@ -182,7 +182,11 @@ def test_every_gated_job_runs_in_the_merge_queue() -> None:
         # PyYAML reads the bare key `on` as the boolean True.
         assert "merge_group" in workflow[True], path
         jobs = workflow["jobs"]
-        for name in jobs[aggregator]["needs"]:
+        # The aggregator first: a skipped required check reads as passed, so
+        # an aggregator that stopped running in the queue would wave every
+        # entry through without looking at the jobs below.
+        assert "!= 'merge_group'" not in str(jobs[aggregator].get("if", "")), path
+        for name in [aggregator, *jobs[aggregator]["needs"]]:
             condition = str(jobs[name].get("if", ""))
             # `!= 'pull_request'` already lets a merge group through; only an
             # allowlist that names the pull request event has to name it too.

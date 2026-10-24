@@ -30,6 +30,9 @@ from app.modules.connectors.infrastructure.repositories.account_repository impor
     AccountRepository,
 )
 from app.modules.connectors.tests.e2e.test_pod_connectors_e2e import World, _world
+from app.modules.workspace.contracts.session_config import (
+    session_git_credentials_path,
+)
 
 pytestmark = pytest.mark.e2e
 
@@ -162,7 +165,9 @@ async def test_a_shared_account_reaches_a_sandbox_only_while_its_owner_allows_it
     assert allowed.status_code == status.HTTP_200_OK, allowed.text
     sandbox, notice = await _bridge_as(world, world.bob)
     assert notice is None
-    assert b"gho_alices_token" in sandbox.written["/tmp/.git-credentials"]
+    # Into the session's own credential store, not one every session reads.
+    written = sandbox.written[session_git_credentials_path(sandbox.session_id)]
+    assert b"gho_alices_token" in written
 
     # Alice withdraws it: nothing more is written, and the opt-in does not
     # outlive the sharing it was given for.

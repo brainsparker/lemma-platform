@@ -16,7 +16,8 @@ from collections import deque
 from dataclasses import dataclass, field
 from enum import StrEnum
 
-#: Older updates than this are merged rather than read out one by one.
+#: Updates past this many are dropped, oldest first, and a waiting update
+#: that can wait goes before an urgent one.
 MAX_QUEUED = 4
 #: A side that has made no sound for this long has finished, whether or not
 #: its engine said so: a model can take an update and choose not to answer,
@@ -59,7 +60,14 @@ class Floor:
     def queue(self, text: str, urgency: Urgency) -> None:
         self._queue.append((text, urgency))
         while len(self._queue) > MAX_QUEUED:
-            self._queue.popleft()
+            idle = next(
+                (entry for entry in self._queue if entry[1] is Urgency.WHEN_IDLE),
+                None,
+            )
+            if idle is None:
+                self._queue.popleft()
+            else:
+                self._queue.remove(idle)
 
     @property
     def waiting(self) -> int:

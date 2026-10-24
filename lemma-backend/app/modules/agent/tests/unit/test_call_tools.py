@@ -60,7 +60,7 @@ def test_the_canvas_is_what_runs_already_show() -> None:
     )
 
 
-async def test_a_relay_is_acknowledged_by_whether_it_will_be_said() -> None:
+async def test_a_relay_is_acknowledged_as_recorded_not_as_said() -> None:
     ctx = SimpleNamespace(tool_call_id="call-1", deps=SimpleNamespace())
     said = await relay_to_voice(
         ctx, RelayToVoiceRequest(text="found three", urgency="when_idle")
@@ -68,5 +68,5 @@ async def test_a_relay_is_acknowledged_by_whether_it_will_be_said() -> None:
     known = await relay_to_voice(
         ctx, RelayToVoiceRequest(text="started", urgency="context")
     )  # type: ignore[arg-type]
-    assert said.success and "will be said" in (said.message or "")
-    assert known.success and "known to the voice" in (known.message or "")
+    assert said.success and "to be said" in (said.message or "")
+    assert known.success and "for the voice to know" in (known.message or "")

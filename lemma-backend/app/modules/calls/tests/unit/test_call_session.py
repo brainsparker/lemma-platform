@@ -318,3 +318,16 @@ async def test_a_turn_heard_while_another_is_routed_is_not_called_handled() -> N
     assert second.startswith("[caller] and flights too")
     caller.inbox.put_nowait(None)
     await running
+
+
+def test_a_canvas_item_whose_data_is_json_text_is_described_by_its_title() -> None:
+    from app.modules.calls.services.session import _describe
+
+    shown = Shown(
+        conversation_id=uuid4(),
+        tool_call_id="t1",
+        tool_name="display_resource",
+        args={"type": "WIDGET", "data": json.dumps({"title": "Venues"})},
+        result={"success": True},
+    )
+    assert _describe(shown)[0] == "Venues"

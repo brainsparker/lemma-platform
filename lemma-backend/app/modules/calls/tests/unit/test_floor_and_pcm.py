@@ -45,6 +45,18 @@ def test_waiting_updates_go_out_in_one_breath_and_the_oldest_fall_away() -> None
     assert floor.take(20) is None
 
 
+def test_an_overflowing_floor_drops_an_update_that_can_wait_before_an_urgent_one() -> (
+    None
+):
+    floor = Floor(quiet_window_ms=0)
+    floor.queue("the booking failed", Urgency.NOW)
+    for index in range(MAX_QUEUED):
+        floor.queue(f"update {index}", Urgency.WHEN_IDLE)
+    said = floor.take(10)
+    assert said is not None
+    assert "the booking failed" in said and "update 0" not in said
+
+
 def test_resampling_keeps_the_duration() -> None:
     second_at_16k = bytes(16_000 * 2)
     converted = resample(second_at_16k, 16_000, 24_000)

@@ -669,6 +669,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'authorization.resource_names.dangling_grants_skipped': EventSpec('debug', frozenset({'pod_id'})),
     'background_task.failed': EventSpec('error', frozenset({'error_type', 'task_name'})),
     'calls.agents.follow.failed': EventSpec('warning', frozenset({'conversation_id'})),
+    'calls.cascade.listen.failed': EventSpec('warning', frozenset()),
     'calls.cascade.reply.failed': EventSpec('warning', frozenset()),
     'calls.deepgram.connect.failed': EventSpec('warning', frozenset()),
     'calls.frames.backlog_full.degraded': EventSpec('warning', frozenset({'item'})),

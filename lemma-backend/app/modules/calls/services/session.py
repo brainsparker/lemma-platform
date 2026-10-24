@@ -365,7 +365,10 @@ def _describe(shown: Shown) -> tuple[str, str]:
     that cannot render gets, which a voice is one of.
     """
     args = shown.args if isinstance(shown.args, dict) else {}
-    data = args.get("data") if isinstance(args.get("data"), dict) else {}
+    raw = args.get("data")
+    # A widget's data may arrive as JSON text; the display decodes it too.
+    data = decode(raw) if isinstance(raw, str) else raw
+    data = data if isinstance(data, dict) else {}
     path = args.get("path")
     title = (
         args.get("name")

@@ -33,6 +33,7 @@ from app.core.request_context import create_inherited_task
 from app.modules.calls.domain.voice import (
     AudioOut,
     EngineClosed,
+    EngineUnavailable,
     Heard,
     Inject,
     Interrupted,
@@ -136,31 +137,43 @@ class CascadeEngine:
     # -- listening ---------------------------------------------------------
 
     async def _listen(self) -> None:
-        async for turn in self._listener.turns():
-            match turn.event:
-                case "StartOfTurn":
-                    offer(self._events, UserSpeaking())
-                    if self._speaking is not None or (
-                        self._reply is not None and self._reply.committed.is_set()
-                    ):
-                        await self._interrupt()
-                case "Update":
-                    if turn.transcript:
-                        offer(self._events, Heard(turn.transcript, final=False))
-                case "EagerEndOfTurn":
-                    self._start(
-                        turn.transcript, committed=False, caller_line=turn.transcript
-                    )
-                case "TurnResumed":
-                    if self._reply is not None and not self._reply.committed.is_set():
-                        await self._cancel_reply()
-                case "EndOfTurn":
-                    self._end_of_turn(turn.transcript)
-        offer(
-            self._events,
-            EngineClosed("Speech recognition disconnected."),
-            essential=True,
-        )
+        try:
+            async for turn in self._listener.turns():
+                match turn.event:
+                    case "StartOfTurn":
+                        offer(self._events, UserSpeaking())
+                        if self._speaking is not None or (
+                            self._reply is not None and self._reply.committed.is_set()
+                        ):
+                            await self._interrupt()
+                    case "Update":
+                        if turn.transcript:
+                            offer(self._events, Heard(turn.transcript, final=False))
+                    case "EagerEndOfTurn":
+                        self._start(
+                            turn.transcript,
+                            committed=False,
+                            caller_line=turn.transcript,
+                        )
+                    case "TurnResumed":
+                        if (
+                            self._reply is not None
+                            and not self._reply.committed.is_set()
+                        ):
+                            await self._cancel_reply()
+                    case "EndOfTurn":
+                        self._end_of_turn(turn.transcript)
+        except EngineUnavailable:
+            # The speaker could not reconnect while the caller barged in.
+            logger.warning("calls.cascade.listen.failed", exc_info=True)
+        finally:
+            # Whatever stopped listening, the call is told: a session left
+            # waiting on events would hold a silent call open.
+            offer(
+                self._events,
+                EngineClosed("Speech recognition disconnected."),
+                essential=True,
+            )
 
     def _end_of_turn(self, transcript: str) -> None:
         if not transcript.strip():
@@ -206,6 +219,7 @@ class CascadeEngine:
                 APIError,
                 UsageLimitExceededError,
                 ConnectionClosed,
+                EngineUnavailable,
                 OSError,
                 TimeoutError,
             ):

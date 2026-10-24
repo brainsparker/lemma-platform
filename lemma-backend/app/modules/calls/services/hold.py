@@ -104,7 +104,7 @@ async def _hold_call(
     except EngineUnavailable as exc:
         # Partly open is still open: a socket or task it started is released.
         await engine.close()
-        await websocket.close(code=CLOSE_UNAVAILABLE, reason=str(exc))
+        await websocket.close(code=CLOSE_UNAVAILABLE, reason=_reason(exc))
         return
     agents = CallAgents(call_id=call_id, party=party)
     caller = Caller(
@@ -149,8 +149,15 @@ async def _hold_call(
         await websocket.close()
 
 
+#: A close frame carries 125 bytes, two of them the code.
+_MAX_REASON_BYTES = 123
+
+
 def _reason(exc: EngineUnavailable | DomainError) -> str:
-    return exc.message if isinstance(exc, DomainError) else str(exc)
+    text = exc.message if isinstance(exc, DomainError) else str(exc)
+    # Cut by bytes, dropping a character split at the edge: a longer reason
+    # makes the close itself fail, and the caller sees a dropped call.
+    return text.encode()[:_MAX_REASON_BYTES].decode(errors="ignore")
 
 
 def _engine_from(raw: object) -> VoiceEngineName | None:

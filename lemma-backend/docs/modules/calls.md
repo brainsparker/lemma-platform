@@ -70,7 +70,7 @@ flowchart LR
   arrives mid-run steers that run.
 - **Relays and the canvas** are read off the conversations' own event streams
   (`services/agents.py`): `relay_to_voice` from the coordinator, and
-  `show_on_canvas` or `display_resource` from anyone in the call. A relay is
+  `display_resource` from anyone in the call. A relay is
   either known to the voice at once or queued on the floor (`domain/floor.py`)
   until both sides pause; the module never relies on a provider's own "when
   idle" scheduling.

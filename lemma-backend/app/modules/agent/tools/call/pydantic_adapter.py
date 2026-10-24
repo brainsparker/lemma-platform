@@ -33,8 +33,10 @@ async def relay_to_voice(
     said as soon as the person stops talking, for failures and questions only.
     """
     del ctx
-    spoken = "will be said" if request.urgency != "context" else "is known to the voice"
-    return RelayToVoiceResponse(success=True, message=f"Relayed; it {spoken}.")
+    # Recorded, not delivered: the call's voice may still drop it, so the
+    # coordinator is not told it was said.
+    spoken = "to be said" if request.urgency != "context" else "for the voice to know"
+    return RelayToVoiceResponse(success=True, message=f"Relayed {spoken}.")
 
 
 coordinator_toolset = FunctionToolset[BaseAgentContext](tools=[relay_to_voice])

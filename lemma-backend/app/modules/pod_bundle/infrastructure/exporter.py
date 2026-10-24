@@ -212,9 +212,6 @@ class BundleExporter:
             list_app_names,
             require_app,
         )
-        from app.modules.connectors.contracts.provisioning import (
-            resolve_account_connector,
-        )
         from app.modules.datastore.contracts.provisioning import (
             get_table,
             list_table_names,
@@ -381,24 +378,10 @@ class BundleExporter:
                     schedule_name = str(schedule.name or schedule.id or "")
                     dir_ = root / "schedules" / schedule_name
                     dir_.mkdir(parents=True, exist_ok=True)
+                    # A schedule names its pod connector by slug, which is
+                    # portable as it stands: the importing pod declares a
+                    # connector of that name, on its own installation.
                     raw_schedule = _schedule_response_dict(schedule)
-                    account_id = raw_schedule.get("account_id")
-                    if account_id:
-                        info = await resolve_account_connector(
-                            uow, UUID(str(account_id))
-                        )
-                        if info is None:
-                            from app.modules.pod_bundle.domain.errors import (
-                                BundleInvalidError,
-                            )
-
-                            raise BundleInvalidError(
-                                f"Schedule '{schedule_name}' references account "
-                                f"{account_id}, which no longer exists."
-                            )
-                        raw_schedule["connector_id"], raw_schedule["connector_kind"] = (
-                            info
-                        )
                     payload = _normalize_schedule_payload(raw_schedule)
                     payload.setdefault("name", schedule_name)
                     _write_json(dir_ / f"{schedule_name}.json", payload)

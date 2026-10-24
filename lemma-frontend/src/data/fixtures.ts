@@ -20,6 +20,7 @@ import { byEffort, readConnectable, type Connectable } from "./connectable";
 import type { JoinPolicy, JoinRequest, OrgJoin } from "./joining";
 import { capabilityList, POD_DEFAULT_TOOLSETS } from "@/stage/colleagues";
 import { readAccount, readConnector, type Connector, type ConnectorAccount } from "./accounts";
+import { readPodConnectors } from "./pod-connectors";
 import {
     readChoice,
     readComputer,
@@ -463,9 +464,9 @@ const CONVERSATION: Conversation = {
             created_at: new Date().toISOString(),
             tool_name: "run_connector_operation",
             tool_args: {
-                auth_config: "google_drive",
+                connector: "google_drive",
                 operation: "GOOGLEDRIVE_FIND_FILE",
-                arguments: { query: "design partners", mime_type: "application/vnd.google-apps.spreadsheet" },
+                payload: { query: "design partners", mime_type: "application/vnd.google-apps.spreadsheet" },
             },
             tool_call_id: "call_drive",
         },
@@ -1184,7 +1185,6 @@ let SCHEDULES: Record<string, unknown>[] = [
         instruction: "Re-read the five competitors and write what changed into the tracker.",
         filter_instruction: null,
         filter_output_schema: null,
-        account_id: null,
         connector_trigger_id: null,
         user_id: "priya-user",
         visibility: "POD",
@@ -1212,7 +1212,7 @@ let SCHEDULES: Record<string, unknown>[] = [
             type: "object",
             properties: { matters: { type: "boolean", description: "Does the message name one of the five competitors?" } },
         },
-        account_id: "acct-1",
+        pod_connector: "slack",
         connector_trigger_id: "slack_message_posted",
         user_id: "sample-user",
         visibility: "POD",
@@ -1237,7 +1237,6 @@ let SCHEDULES: Record<string, unknown>[] = [
         instruction: null,
         filter_instruction: null,
         filter_output_schema: null,
-        account_id: null,
         connector_trigger_id: null,
         user_id: "sample-user",
         visibility: "POD",
@@ -1264,7 +1263,6 @@ let SCHEDULES: Record<string, unknown>[] = [
         instruction: "Write the first reply and leave it in drafts.",
         filter_instruction: null,
         filter_output_schema: null,
-        account_id: null,
         connector_trigger_id: null,
         user_id: "sample-user",
         visibility: "POD",
@@ -1617,6 +1615,17 @@ let ACCOUNTS: unknown[] = [
 
 /* Shaped exactly like `podSurfaces.available()`, so the sample exercises the
    real reading in `connectable.ts` rather than a convenient parallel one. */
+/** The sample space's connectors: a shared Slack and WhatsApp a surface can
+ *  answer as, GitHub on each person's own account, and a Teams connector
+ *  nobody has shared an account with yet — so every state a picker draws is
+ *  one somebody can look at. */
+const POD_CONNECTORS: unknown[] = [
+    { slug: "slack", connector_id: "slack", mode: "SHARED", status: "READY", purpose: "The team's Slack", shared_account: { display_name: "Acme Slack", owner_user_id: "priya-user", pod_account_id: "pa-slack" } },
+    { slug: "whatsapp-support", connector_id: "whatsapp", mode: "SHARED", status: "READY", purpose: "The support line", shared_account: { display_name: "+44 20 7946 0000", owner_user_id: "priya-user", pod_account_id: "pa-whatsapp" } },
+    { slug: "github", connector_id: "github", mode: "PER_MEMBER", status: "READY", purpose: "Each person's own GitHub" },
+    { slug: "teams-ops", connector_id: "teams", mode: "SHARED", status: "NEEDS_ACCOUNT", purpose: "Ops in Teams" },
+];
+
 const CONNECTABLE: unknown[] = [
     {
         platform: "TELEGRAM", connector_id: "telegram", title: "Telegram", connector_available: true, managed_setup_available: true,
@@ -3058,7 +3067,14 @@ export const fixtureSource: PodSource = {
         );
         return found?.id ?? "";
     },
-    async connectAccount(_podId: string, platform: string) {
+    async listPodConnectors() {
+        await wait(80);
+        return readPodConnectors(POD_CONNECTORS);
+    },
+    async connectOwnAccount(podId: string, platform: string) {
+        return fixtureSource.connectPodConnector(podId, platform, platform.toLowerCase());
+    },
+    async connectPodConnector(_podId: string, platform: string) {
         await wait(600);
         const made: Surface = {
             id: "s-" + platform.toLowerCase(),

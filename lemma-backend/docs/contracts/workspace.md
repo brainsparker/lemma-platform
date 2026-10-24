@@ -49,6 +49,8 @@ The table below is generated from the committed OpenAPI specification by `script
 | `machine.restart` | POST | `/machines/{ref}:restart` | Stop a machine and start it again |
 | `machine.startup` | GET | `/machines/{ref}/startup` | Whether a machine is ready, without waking it |
 | `workspace.browser.access` | POST | `/workspace/apps/browser/access` | Create workspace browser access URL |
+| `workspace.browser.beacon` | POST | `/workspace/browser/beacon` | Report how a live screen session went |
+| `workspace.browser.command` | POST | `/workspace/browser/commands` | Steer the workspace browser from the screen's toolbar |
 | `workspace.browser.current_page_url` | GET | `/workspace/browser/current-page-url` | What page a sign-in's browser is actually showing |
 | `workspace.browser.resize_display` | POST | `/workspace/browser/display-size` | Fit the workspace display to the pane showing it |
 | `workspace.browser.status` | GET | `/workspace/browser/status` | Whether the workspace browser can be watched |

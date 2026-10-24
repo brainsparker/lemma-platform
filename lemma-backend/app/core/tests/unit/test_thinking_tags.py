@@ -224,19 +224,37 @@ def test_a_stream_with_no_tags_passes_straight_through():
     ]
 
 
-def test_a_run_of_unfinished_tags_is_read_in_linear_time():
-    """Text a model was made to repeat -- ``<think<think=<think=...`` -- once made
-    every ``<think`` scan to the end of the message: 0.2s at 32k characters and
-    quadratic beyond. Blocks are now found by walking forward from each open
-    tag to its close. The bound is generous; the old shape takes ~8s here."""
-    import time
+def test_an_unfinished_tag_ends_at_the_next_angle_bracket():
+    """A tag never contains another ``<``. That stop is what keeps a run of
+    unfinished tags -- ``<think <think <think ...``, text a model was made to
+    repeat -- linear: without it every ``<think`` scans to the end of the message
+    for its ``>``. The cost is spent inside one regex call, where nothing
+    deterministic can count it, so this holds the stop itself, with answers that
+    change without it."""
+    assert split_thinking_segments(f"<think a{OPEN}b{CLOSE}") == [
+        ("text", "<think a"),
+        ("thinking", "b"),
+    ]
+    # Read past the ``<``, the fence and the stray ``<b>`` become one tag's
+    # attributes, and the rest of the answer is hidden as reasoning.
+    answer = "x <think a ``` <b> ``` y"
+    assert split_thinking_segments(answer) == [("text", answer)]
+    assert _stream(list(answer)) == [("text", answer)]
 
-    for repeated in (OPEN, "<think="):
-        text = "<think" + repeated * 30_000
-        started = time.perf_counter()
-        split_thinking_segments(text)
-        strip_thinking_tokens(text)
-        assert time.perf_counter() - started < 1.0, repeated
+
+def test_a_half_written_tag_is_released_once_a_later_angle_bracket_rules_it_out():
+    """Held back only while it could still become a tag. Without the stop the
+    held text waits for a ``>`` that never comes: the answer stalls until the
+    stream ends, and every delta that brings a ``<`` re-reads all of it, which is
+    quadratic in the stream."""
+    splitter = ThinkingStreamSplitter()
+    assert splitter.feed("Sure. <think a ") == [("text", "Sure. ")]
+
+    released = splitter.feed("``` code <b")
+
+    assert "".join(chunk for kind, chunk in released if kind == "text") == (
+        "<think a ``` code <b"
+    )
 
 
 # --- the review's probes ----------------------------------------------------

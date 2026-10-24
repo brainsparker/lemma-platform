@@ -13,6 +13,7 @@ from ..openapi_client.api.organizations import (
     org_member_list,
     org_navigation,
     org_needs_you_list,
+    org_permissions_me,
     org_recents_get,
 )
 from ..openapi_client.models.home_seen_request import HomeSeenRequest
@@ -24,6 +25,9 @@ from ..openapi_client.models.organization_app_list_response import (
 )
 from ..openapi_client.models.organization_create_request import (
     OrganizationCreateRequest,
+)
+from ..openapi_client.models.organization_effective_permissions_response import (
+    OrganizationEffectivePermissionsResponse,
 )
 from ..openapi_client.models.organization_home_response import OrganizationHomeResponse
 from ..openapi_client.models.organization_list_response import OrganizationListResponse
@@ -125,6 +129,10 @@ class Orgs(Resource):
             body_model=HomeSeenRequest,
         )
 
+    def permissions(self, org_id: str) -> OrganizationEffectivePermissionsResponse:
+        """The organization-level permission ids you hold in ``org_id``."""
+        return self._call(org_permissions_me, as_uuid(org_id))
+
 
 class BoundOrg(BoundResource):
     def get(self) -> OrganizationResponse:
@@ -136,3 +144,8 @@ class BoundOrg(BoundResource):
     def home(self) -> OrganizationHomeResponse:
         """This organization's pods, with their apps, agents and your roles."""
         return self._call(org_home, self._org_uuid())
+
+    def permissions(self) -> OrganizationEffectivePermissionsResponse:
+        """The organization-level permission ids you hold here, such as
+        ``org.installation.manage``."""
+        return self._call(org_permissions_me, self._org_uuid())

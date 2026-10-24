@@ -30,6 +30,7 @@ The table below is generated from the committed OpenAPI specification by `script
 | `org.member.update_role` | PATCH | `/organizations/{organization_id}/members/{member_id}/role` | Update Member Role |
 | `org.navigation` | GET | `/organizations/navigation` | List Organizations And Their Pods |
 | `org.needs_you.list` | GET | `/organizations/{organization_id}/needs-you` | List What Waits On You Across The Organization |
+| `org.permissions.me` | GET | `/organizations/{organization_id}/permissions/me` | My Permissions In An Organization |
 | `org.recents.get` | GET | `/organizations/{organization_id}/recents` | Get What Moved Lately In Each Pod |
 | `org.slug_availability` | GET | `/organizations/slug-availability` | Check Organization Slug Availability |
 | `org.suggested` | GET | `/organizations/suggested` | Get Suggested Organizations |

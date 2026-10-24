@@ -38,6 +38,7 @@ are a different authorization layer.
 | `/organizations/{org_id}` | Read/update organization and manage members/invitations |
 | `/organizations/navigation`, `/organizations/{org_id}/home` | Every organization with its pods, and one organization's pods with their apps, agents and the caller's roles -- one call each |
 | `/organizations/{org_id}/needs-you`, `/recents`, `/apps`, `/home/seen` | The organization overview: what waits on the caller, what moved in each pod, every app, and when they last looked at Home -- across every pod they may open (below) |
+| `/organizations/{org_id}/permissions/me` | The organization-level permission ids the caller holds, asked of the authorizer: what pages gate on (`org.installation.manage`), never a role |
 | `/organizations/invitations...` | Inspect, accept, and revoke invitations |
 | `/auth/verify-token` | Resolve bearer/delegation claims into user, pod, organization, function, and scope context |
 | `/auth/cli/*` | Publish CLI login metadata, mint a CLI session from a browser session, and refresh CLI tokens |

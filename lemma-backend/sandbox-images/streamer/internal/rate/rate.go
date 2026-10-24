@@ -10,10 +10,14 @@ package rate
 import "time"
 
 const (
-	MinBitrate      = 300_000
-	StartBitrate    = 2_500_000
-	MaxBitrateSmall = 6_000_000
-	MaxBitrateLarge = 10_000_000
+	MinBitrate   = 300_000
+	StartBitrate = 2_500_000
+	// Ceilings, not targets: congestion control climbs only this far even on
+	// a fast link. Past it a page of text and UI looks no better, and the
+	// extra bytes are what a viewer on a metered link pays for. Measured with
+	// `scripts/stream-bench.mjs`; the plan's budget is under 4 Mbps at 1x.
+	MaxBitrateSmall = 3_500_000
+	MaxBitrateLarge = 7_000_000
 	// Above this many pixels a frame is "large" (beyond ~1280x860).
 	LargeFramePixels = 1_100_000
 

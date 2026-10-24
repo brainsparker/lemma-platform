@@ -34,6 +34,25 @@ export function thinkingFor(model) {
     return model.includes('extended-thinking') ? { thinkingLevel: THINKING_LEVEL } : undefined;
 }
 
+/** What the gateway calls on an open provider session. The voice has no
+ *  tools, so that is audio and turns in, and a close.
+ *  @typedef {Pick<import('@google/genai').Session, 'sendRealtimeInput' | 'sendClientContent' | 'close'>} VoiceSession */
+
+/** Serve `/api/voice` on `server`.
+ *
+ *  `connect` opens the provider session; without one, Gemini Live on
+ *  `GEMINI_API_KEY`. The options are typed here because TypeScript infers
+ *  this module's signature from the destructuring, which keeps only the
+ *  options that have a default: a caller's own `connect` would read as an
+ *  option that does not exist.
+ *
+ *  @param {import('node:http').Server} server
+ *  @param {{
+ *      connect?: (options: import('@google/genai').LiveConnectParameters) => Promise<VoiceSession>,
+ *      maxCalls?: number,
+ *      maxDuration?: number,
+ *  }} [options]
+ */
 export function attachVoiceGateway(server, { connect, maxCalls = 8, maxDuration = 15 * 60_000 } = {}) {
     const wss = new WebSocketServer({ noServer: true, maxPayload: 256 * 1024 });
     server.on('upgrade', (request, socket, head) => {

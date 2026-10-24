@@ -1,4 +1,4 @@
-"""Where one session's own files live inside the sandbox.
+"""Where one session's delegated token is written inside the sandbox.
 
 A person has one sandbox, and every session of every agent of theirs runs in
 it. What must differ between them -- today the delegated ``LEMMA_TOKEN`` -- is
@@ -14,7 +14,9 @@ other processes' environments. A Linux user per actor is the step that would
 close that, and it is not taken yet; what is taken is that a lifted token
 counts for minutes, and not at all once its conversation has ended.
 
-Under ``/tmp``, so a credential never reaches the durable disk.
+Under ``/tmp``, so a credential never reaches the durable disk: one directory
+per session under ``SESSION_ROOT``, where any other per-session credential
+belongs beside it.
 """
 
 from __future__ import annotations
@@ -32,15 +34,12 @@ from sandbox_runtime.workspace.session_token import (
     TOKEN_FILE_VARIABLE,
 )
 
-#: The parent of every session's directory.
-SESSION_CONFIG_ROOT = SESSION_ROOT
-
 _SAFE_SESSION_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 _UNSAFE_CHARACTER = re.compile(r"[^A-Za-z0-9_-]")
 
 
-def session_config_dir(session_id: str) -> str:
-    """This session's directory: its id when that is a safe path segment.
+def session_token_dir(session_id: str) -> str:
+    """The session's own directory: its id when that is a safe path segment.
 
     Anything else -- a slash, a dot, a very long id -- is reduced to a safe
     prefix and suffixed with a digest of the whole id, so no id climbs out of
@@ -51,12 +50,12 @@ def session_config_dir(session_id: str) -> str:
     else:
         digest = hashlib.sha256(session_id.encode()).hexdigest()[:16]
         segment = f"{_UNSAFE_CHARACTER.sub('_', session_id)[:40]}-{digest}"
-    return f"{SESSION_CONFIG_ROOT}/{segment}"
+    return f"{SESSION_ROOT}/{segment}"
 
 
 def session_token_path(session_id: str) -> str:
     """The file this session's delegated token is written to, ``0600``."""
-    return f"{session_config_dir(session_id)}/{TOKEN_FILE_NAME}"
+    return f"{session_token_dir(session_id)}/{TOKEN_FILE_NAME}"
 
 
 #: A shell prefix that writes ``$LEMMA_TOKEN`` to ``$LEMMA_TOKEN_FILE`` before
@@ -69,7 +68,7 @@ TOKEN_FILE_SHELL_PREFIX = (
     'if [ -n "${LEMMA_TOKEN_FILE:-}" ] && [ -n "${LEMMA_TOKEN:-}" ]; then ('
     "umask 077; "
     'case "$LEMMA_TOKEN_FILE" in *..*) exit 0;; '
-    f"{SESSION_CONFIG_ROOT}/*/{TOKEN_FILE_NAME}) ;; *) exit 0;; esac; "
+    f"{SESSION_ROOT}/*/{TOKEN_FILE_NAME}) ;; *) exit 0;; esac; "
     'd="${LEMMA_TOKEN_FILE%/*}"; '
     '/bin/mkdir -p "$d" && /bin/chmod 700 "$d" && '
     'printf %s "$LEMMA_TOKEN" > "$LEMMA_TOKEN_FILE.$$" && '
@@ -86,11 +85,11 @@ def with_token_file(command: str, environment: Mapping[str, str]) -> str:
 
 
 __all__ = [
-    "SESSION_CONFIG_ROOT",
+    "SESSION_ROOT",
     "TOKEN_FILE_NAME",
     "TOKEN_FILE_SHELL_PREFIX",
     "TOKEN_FILE_VARIABLE",
-    "session_config_dir",
+    "session_token_dir",
     "session_token_path",
     "with_token_file",
 ]

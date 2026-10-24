@@ -63,7 +63,7 @@ from app.modules.workspace.providers.e2b_process_lifetime import (
     seconds_until,
     watch_for_exit,
 )
-from app.modules.workspace.contracts.session_config import with_token_file
+from app.modules.workspace.contracts.session_token_file import with_token_file
 from app.modules.workspace.providers import e2b_python_sessions
 from app.modules.workspace.providers.e2b_output import E2BOutputBuffer
 

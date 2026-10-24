@@ -1493,7 +1493,7 @@ async def test_a_command_writes_its_sessions_token_file_first(
     """The token lives minutes; the file is how a running process sees the next
     one. Typed into a terminal it would be echoed, so a PTY gets it written by
     a command of its own."""
-    from app.modules.workspace.contracts.session_config import (
+    from app.modules.workspace.contracts.session_token_file import (
         TOKEN_FILE_SHELL_PREFIX,
     )
     from app.modules.workspace.testing.fake_output_buffer import InMemoryOutputBuffer

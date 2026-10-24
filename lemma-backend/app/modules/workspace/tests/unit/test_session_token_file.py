@@ -12,10 +12,10 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.workspace.contracts.session_config import (
-    SESSION_CONFIG_ROOT,
+from app.modules.workspace.contracts.session_token_file import (
+    SESSION_ROOT,
     TOKEN_FILE_SHELL_PREFIX,
-    session_config_dir,
+    session_token_dir,
     session_token_path,
     with_token_file,
 )
@@ -32,13 +32,13 @@ def test_every_session_id_gets_a_path_the_runtime_agrees_to_write(
 ) -> None:
     path = session_token_path(session_id)
 
-    assert path.startswith(f"{SESSION_CONFIG_ROOT}/")
+    assert path.startswith(f"{SESSION_ROOT}/")
     assert _session_token_path(path) is not None
     assert ".." not in path.split("/")
 
 
 def test_two_sessions_never_share_a_directory() -> None:
-    assert session_config_dir("a/b") != session_config_dir("a_b")
+    assert session_token_dir("a/b") != session_token_dir("a_b")
     assert session_token_path("one") != session_token_path("two")
 
 
@@ -53,7 +53,7 @@ def test_only_an_environment_with_both_names_gets_the_prefix() -> None:
 def session_id() -> Iterator[str]:
     value = f"test-{uuid4().hex}"
     yield value
-    shutil.rmtree(session_config_dir(value), ignore_errors=True)
+    shutil.rmtree(session_token_dir(value), ignore_errors=True)
 
 
 def _run(command: str, environment: dict[str, str]) -> subprocess.CompletedProcess:
@@ -97,7 +97,7 @@ def test_the_prefix_writes_nowhere_else_and_never_fails_the_command(
         TOKEN_FILE_SHELL_PREFIX + "echo ran",
         {
             "LEMMA_TOKEN": "t",
-            "LEMMA_TOKEN_FILE": f"{SESSION_CONFIG_ROOT}/../{tmp_path.name}/lemma-token",
+            "LEMMA_TOKEN_FILE": f"{SESSION_ROOT}/../{tmp_path.name}/lemma-token",
         },
     )
 

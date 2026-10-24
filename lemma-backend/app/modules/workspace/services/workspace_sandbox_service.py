@@ -25,7 +25,7 @@ from sandbox_runtime.protocol import (
     WorkloadKind,
 )
 from app.modules.workspace.contracts import SandboxInfo
-from app.modules.workspace.contracts.session_config import (
+from app.modules.workspace.contracts.session_token_file import (
     TOKEN_FILE_VARIABLE,
     session_token_path,
 )

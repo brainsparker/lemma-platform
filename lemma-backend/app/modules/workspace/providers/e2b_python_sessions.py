@@ -25,7 +25,7 @@ from sandbox_runtime.protocol import (
     PythonSessionRef,
 )
 
-from app.modules.workspace.contracts.session_config import TOKEN_FILE_SHELL_PREFIX
+from app.modules.workspace.contracts.session_token_file import TOKEN_FILE_SHELL_PREFIX
 from app.modules.workspace.providers.base import ProviderInstance, PythonResult
 from app.modules.workspace.providers.e2b_python_runner import PYTHON_RUNNER
 from app.modules.workspace.providers.e2b_common import (

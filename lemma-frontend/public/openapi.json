@@ -178,6 +178,80 @@
         "title": "AccountListResponseSchema",
         "type": "object"
       },
+      "AccountPodUsage": {
+        "properties": {
+          "is_member_default": {
+            "title": "Is Member Default",
+            "type": "boolean"
+          },
+          "last_used_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Used At"
+          },
+          "pod_account_id": {
+            "format": "uuid",
+            "title": "Pod Account Id",
+            "type": "string"
+          },
+          "pod_id": {
+            "format": "uuid",
+            "title": "Pod Id",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/PodAccountSource"
+          },
+          "used_by": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Used By",
+            "type": "array"
+          },
+          "visibility": {
+            "$ref": "#/components/schemas/PodAccountVisibility"
+          }
+        },
+        "required": [
+          "pod_id",
+          "pod_account_id",
+          "visibility",
+          "source",
+          "is_member_default"
+        ],
+        "title": "AccountPodUsage",
+        "type": "object"
+      },
+      "AccountPodUsageResponse": {
+        "properties": {
+          "account_id": {
+            "format": "uuid",
+            "title": "Account Id",
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AccountPodUsage"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "account_id",
+          "items"
+        ],
+        "title": "AccountPodUsageResponse",
+        "type": "object"
+      },
       "AccountResponseSchema": {
         "description": "Schema for account response.",
         "properties": {
@@ -1878,18 +1952,6 @@
       },
       "AgentSurfaceResponse": {
         "properties": {
-          "account_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Account Id"
-          },
           "agent_id": {
             "anyOf": [
               {
@@ -1952,6 +2014,17 @@
           },
           "platform": {
             "$ref": "#/components/schemas/SurfacePlatform"
+          },
+          "pod_connector": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pod Connector"
           },
           "pod_id": {
             "format": "uuid",
@@ -6985,7 +7058,8 @@
                 "type": "null"
               }
             ],
-            "description": "Connected connector account used to provision provider-backed webhook schedules.",
+            "deprecated": true,
+            "description": "Deprecated: name `pod_connector` instead. Still accepted, as the pod connector that serves this account to you.",
             "title": "Account Id"
           },
           "agent_name": {
@@ -7075,6 +7149,18 @@
             ],
             "description": "Stable pod-scoped schedule name used for import/export upserts.",
             "title": "Name"
+          },
+          "pod_connector": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The pod connector, by slug, a WEBHOOK schedule listens through -- for a connector trigger or an MCP server's event. The account it means is the connector's decision: your own for a per-member connector, the shared one for a shared connector. It is resolved again on every fire and renewal, as the schedule's owner.",
+            "title": "Pod Connector"
           },
           "schedule_type": {
             "$ref": "#/components/schemas/ScheduleType"
@@ -8368,29 +8454,6 @@
       "EventDescriptorResponse": {
         "description": "An MCP Events descriptor, plus the schedule type that serves it.",
         "properties": {
-          "account_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Account Id"
-          },
-          "account_label": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Account Label"
-          },
           "description": {
             "title": "Description",
             "type": "string"
@@ -8423,6 +8486,17 @@
             },
             "title": "Payload Schema",
             "type": "object"
+          },
+          "pod_connector": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pod Connector"
           },
           "schedule_type": {
             "$ref": "#/components/schemas/ScheduleType"
@@ -11436,6 +11510,29 @@
         "title": "GenerationSettings",
         "type": "object"
       },
+      "GranteeRef": {
+        "properties": {
+          "grantee_id": {
+            "format": "uuid",
+            "title": "Grantee Id",
+            "type": "string"
+          },
+          "grantee_type": {
+            "enum": [
+              "ROLE",
+              "POD_MEMBER"
+            ],
+            "title": "Grantee Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "grantee_type",
+          "grantee_id"
+        ],
+        "title": "GranteeRef",
+        "type": "object"
+      },
       "GroupPublicResponse": {
         "description": "The pod's Public files and tables, the first few of each.",
         "properties": {
@@ -11750,6 +11847,29 @@
         "title": "IdentityStrength",
         "type": "string"
       },
+      "ImpactedPodConnector": {
+        "properties": {
+          "mode": {
+            "$ref": "#/components/schemas/PodConnectorMode"
+          },
+          "pod_id": {
+            "format": "uuid",
+            "title": "Pod Id",
+            "type": "string"
+          },
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          }
+        },
+        "required": [
+          "pod_id",
+          "slug",
+          "mode"
+        ],
+        "title": "ImpactedPodConnector",
+        "type": "object"
+      },
       "ImportPlanResponse": {
         "properties": {
           "bundle_name": {
@@ -11801,6 +11921,7 @@
         "type": "object"
       },
       "ImportStartRequest": {
+        "additionalProperties": false,
         "description": "Body for starting a URL-based import.",
         "properties": {
           "account_id": {
@@ -11813,7 +11934,8 @@
                 "type": "null"
               }
             ],
-            "description": "Connector account for a private GitHub repo.",
+            "deprecated": true,
+            "description": "Deprecated and ignored: a private repo is fetched through the pod's `github` connector, as you.",
             "title": "Account Id"
           },
           "kind": {
@@ -11912,6 +12034,18 @@
             },
             "title": "Committed Steps",
             "type": "array"
+          },
+          "connect_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Where to connect the GitHub account the pod's `github` connector needs, when the job failed for want of one.",
+            "title": "Connect Url"
           },
           "current_step": {
             "anyOf": [
@@ -12208,6 +12342,81 @@
           "manage_url"
         ],
         "title": "InstallationChoiceSchema",
+        "type": "object"
+      },
+      "InstallationImpactResponse": {
+        "description": "What deleting or disabling an installation stops, before it is done.",
+        "properties": {
+          "account_count": {
+            "title": "Account Count",
+            "type": "integer"
+          },
+          "auth_config_id": {
+            "format": "uuid",
+            "title": "Auth Config Id",
+            "type": "string"
+          },
+          "pod_account_count": {
+            "title": "Pod Account Count",
+            "type": "integer"
+          },
+          "pod_connectors": {
+            "items": {
+              "$ref": "#/components/schemas/ImpactedPodConnector"
+            },
+            "title": "Pod Connectors",
+            "type": "array"
+          }
+        },
+        "required": [
+          "auth_config_id",
+          "account_count",
+          "pod_account_count",
+          "pod_connectors"
+        ],
+        "title": "InstallationImpactResponse",
+        "type": "object"
+      },
+      "InstallationOperationExecutionRequest": {
+        "description": "The deprecated org-level execute's body: an installation, maybe an account.",
+        "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "deprecated": true,
+            "description": "Deprecated. Served only if it is the account a pod connector for this installation resolves to, or your own on a per-member one.",
+            "title": "Account Id"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "description": "The operation's arguments. A file argument takes a reference -- `{\"pod_path\": \"/me/report.pdf\"}`, `{\"file_id\": \"...\"}`, `{\"url\": \"https://...\"}` or `{\"base64\": \"...\", \"filename\": \"...\"}` -- read with the caller's own access before the call is made. `output_path` chooses where a file result lands in the pod.",
+            "title": "Payload",
+            "type": "object"
+          },
+          "pod_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The pod whose connectors serve the call, and that file references resolve in. Implied for a call made from inside a pod.",
+            "title": "Pod Id"
+          }
+        },
+        "required": [
+          "payload"
+        ],
+        "title": "InstallationOperationExecutionRequest",
         "type": "object"
       },
       "InstalledAppSummary": {
@@ -13681,35 +13890,11 @@
       },
       "OperationExecutionRequest": {
         "properties": {
-          "account_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Account Id"
-          },
           "payload": {
             "additionalProperties": true,
             "description": "The operation's arguments. A file argument takes a reference -- `{\"pod_path\": \"/me/report.pdf\"}`, `{\"file_id\": \"...\"}`, `{\"url\": \"https://...\"}` or `{\"base64\": \"...\", \"filename\": \"...\"}` -- read with the caller's own access before the call is made. `output_path` chooses where a file result lands in the pod.",
             "title": "Payload",
             "type": "object"
-          },
-          "pod_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "The pod that `pod_path` and `file_id` references resolve in, and that file results land in. Implied for a call made from inside a pod; name it when calling as a person from outside one.",
-            "title": "Pod Id"
           }
         },
         "required": [
@@ -14901,6 +15086,224 @@
         "title": "PlanStepResponse",
         "type": "object"
       },
+      "PodAccountCreateRequest": {
+        "properties": {
+          "account_id": {
+            "description": "One of your own accounts in this organization.",
+            "format": "uuid",
+            "title": "Account Id",
+            "type": "string"
+          },
+          "share_with": {
+            "description": "RESTRICTED only: the members or roles who may use it.",
+            "items": {
+              "$ref": "#/components/schemas/GranteeRef"
+            },
+            "maxItems": 100,
+            "title": "Share With",
+            "type": "array"
+          },
+          "visibility": {
+            "$ref": "#/components/schemas/PodAccountVisibility",
+            "default": "PERSONAL"
+          }
+        },
+        "required": [
+          "account_id"
+        ],
+        "title": "PodAccountCreateRequest",
+        "type": "object"
+      },
+      "PodAccountListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/PodAccountResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "PodAccountListResponse",
+        "type": "object"
+      },
+      "PodAccountResponse": {
+        "properties": {
+          "account_id": {
+            "format": "uuid",
+            "title": "Account Id",
+            "type": "string"
+          },
+          "auth_config_id": {
+            "format": "uuid",
+            "title": "Auth Config Id",
+            "type": "string"
+          },
+          "connector_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connector Id"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_member_default": {
+            "title": "Is Member Default",
+            "type": "boolean"
+          },
+          "last_used_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Used At"
+          },
+          "owner_user_id": {
+            "format": "uuid",
+            "title": "Owner User Id",
+            "type": "string"
+          },
+          "pod_id": {
+            "format": "uuid",
+            "title": "Pod Id",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/PodAccountSource"
+          },
+          "used_by": {
+            "description": "Slugs of the SHARED pod connectors that run as this account.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Used By",
+            "type": "array"
+          },
+          "visibility": {
+            "$ref": "#/components/schemas/PodAccountVisibility"
+          }
+        },
+        "required": [
+          "id",
+          "pod_id",
+          "account_id",
+          "auth_config_id",
+          "owner_user_id",
+          "visibility",
+          "is_member_default",
+          "source",
+          "created_at"
+        ],
+        "title": "PodAccountResponse",
+        "type": "object"
+      },
+      "PodAccountSource": {
+        "enum": [
+          "AUTO",
+          "MANUAL",
+          "IMPORT",
+          "MIGRATED"
+        ],
+        "title": "PodAccountSource",
+        "type": "string"
+      },
+      "PodAccountUpdateRequest": {
+        "properties": {
+          "is_member_default": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Owner only: make this the account your own calls use here.",
+            "title": "Is Member Default"
+          },
+          "share_with": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/GranteeRef"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "RESTRICTED only: replaces who may use it.",
+            "title": "Share With"
+          },
+          "visibility": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PodAccountVisibility"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Owner only. PERSONAL withdraws it: SHARED connectors using it need another account at once."
+          }
+        },
+        "title": "PodAccountUpdateRequest",
+        "type": "object"
+      },
+      "PodAccountVisibility": {
+        "enum": [
+          "PERSONAL",
+          "POD",
+          "RESTRICTED"
+        ],
+        "title": "PodAccountVisibility",
+        "type": "string"
+      },
       "PodConfig": {
         "description": "Typed pod-level configuration.",
         "properties": {
@@ -14960,6 +15363,312 @@
         },
         "title": "PodConfig",
         "type": "object"
+      },
+      "PodConnectorCreateRequest": {
+        "properties": {
+          "auth_config_id": {
+            "description": "The organization installation this connector uses.",
+            "format": "uuid",
+            "title": "Auth Config Id",
+            "type": "string"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/PodConnectorMode",
+            "description": "PER_MEMBER: each call uses the acting member's own account. SHARED: every call uses the one account set as `shared_pod_account_id`."
+          },
+          "purpose": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Shown to members when they are asked to connect.",
+            "title": "Purpose"
+          },
+          "required": {
+            "default": false,
+            "description": "PER_MEMBER: ask every member who has no account to connect one.",
+            "title": "Required",
+            "type": "boolean"
+          },
+          "shared_pod_account_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "SHARED only: a pod account its owner has already shared with the pod.",
+            "title": "Shared Pod Account Id"
+          },
+          "slug": {
+            "description": "Pod-local name apps, agents and bundles address it by, e.g. `gmail` or `support-inbox`.",
+            "title": "Slug",
+            "type": "string"
+          },
+          "visibility": {
+            "$ref": "#/components/schemas/PodConnectorVisibility",
+            "default": "POD"
+          }
+        },
+        "required": [
+          "slug",
+          "auth_config_id",
+          "mode"
+        ],
+        "title": "PodConnectorCreateRequest",
+        "type": "object"
+      },
+      "PodConnectorListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/PodConnectorResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "PodConnectorListResponse",
+        "type": "object"
+      },
+      "PodConnectorMode": {
+        "enum": [
+          "PER_MEMBER",
+          "SHARED"
+        ],
+        "title": "PodConnectorMode",
+        "type": "string"
+      },
+      "PodConnectorResponse": {
+        "properties": {
+          "auth_config_id": {
+            "format": "uuid",
+            "title": "Auth Config Id",
+            "type": "string"
+          },
+          "connector_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connector Id"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by_user_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By User Id"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "installation_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Installation Name"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/PodConnectorMode"
+          },
+          "pod_id": {
+            "format": "uuid",
+            "title": "Pod Id",
+            "type": "string"
+          },
+          "purpose": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Purpose"
+          },
+          "required": {
+            "title": "Required",
+            "type": "boolean"
+          },
+          "shared_account": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SharedAccountSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "shared_pod_account_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shared Pod Account Id"
+          },
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/PodConnectorSource",
+            "default": "MANUAL"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PodConnectorStatus"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "visibility": {
+            "$ref": "#/components/schemas/PodConnectorVisibility"
+          }
+        },
+        "required": [
+          "id",
+          "pod_id",
+          "slug",
+          "auth_config_id",
+          "mode",
+          "required",
+          "visibility",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "PodConnectorResponse",
+        "type": "object"
+      },
+      "PodConnectorSource": {
+        "enum": [
+          "AUTO",
+          "MANUAL",
+          "IMPORT",
+          "MIGRATED"
+        ],
+        "title": "PodConnectorSource",
+        "type": "string"
+      },
+      "PodConnectorStatus": {
+        "enum": [
+          "READY",
+          "NEEDS_ACCOUNT",
+          "UNAVAILABLE"
+        ],
+        "title": "PodConnectorStatus",
+        "type": "string"
+      },
+      "PodConnectorUpdateRequest": {
+        "description": "Fields left out are unchanged; `shared_pod_account_id: null` clears it.",
+        "properties": {
+          "mode": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PodConnectorMode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "purpose": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Purpose"
+          },
+          "required": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Required"
+          },
+          "shared_pod_account_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shared Pod Account Id"
+          },
+          "visibility": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PodConnectorVisibility"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "PodConnectorUpdateRequest",
+        "type": "object"
+      },
+      "PodConnectorVisibility": {
+        "enum": [
+          "POD",
+          "RESTRICTED"
+        ],
+        "title": "PodConnectorVisibility",
+        "type": "string"
       },
       "PodContactSettings": {
         "description": "How the pod treats the people outside it who write to it.",
@@ -16222,13 +16931,22 @@
         "type": "string"
       },
       "PublishStartRequest": {
+        "additionalProperties": false,
         "description": "Body for publishing a pod to GitHub.",
         "properties": {
           "account_id": {
-            "description": "GitHub connector account to publish as.",
-            "format": "uuid",
-            "title": "Account Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "deprecated": true,
+            "description": "Deprecated and ignored: the publish runs as the account the pod's `github` connector resolves to for you.",
+            "title": "Account Id"
           },
           "ai_readme": {
             "default": false,
@@ -16256,8 +16974,7 @@
           }
         },
         "required": [
-          "repo_name",
-          "account_id"
+          "repo_name"
         ],
         "title": "PublishStartRequest",
         "type": "object"
@@ -16286,7 +17003,20 @@
                 "type": "null"
               }
             ],
+            "deprecated": true,
             "title": "Account Id"
+          },
+          "connect_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Where to connect the GitHub account the pod's `github` connector needs, when the publish failed for want of one.",
+            "title": "Connect Url"
           },
           "error": {
             "anyOf": [
@@ -16372,7 +17102,6 @@
           "repo_name",
           "mode",
           "private",
-          "account_id",
           "events_url"
         ],
         "title": "PublishStatusResponse",
@@ -17089,6 +17818,7 @@
                 "type": "null"
               }
             ],
+            "deprecated": true,
             "title": "Account Id"
           },
           "agent_id": {
@@ -17283,6 +18013,18 @@
             "description": "Why the platform paused this schedule: `fire_cap` (it fired more than its daily ceiling), `consecutive_failures`, `fire_failed` (a scheduled run could not be started), or another system reason. Absent while it runs, or when a person paused it. Reactivating clears it.",
             "title": "Paused Reason"
           },
+          "pod_connector": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The pod connector it listens through, by slug.",
+            "title": "Pod Connector"
+          },
           "pod_id": {
             "anyOf": [
               {
@@ -17345,7 +18087,6 @@
           "agent_id",
           "workflow_id",
           "config",
-          "account_id",
           "connector_trigger_id",
           "filter_instruction",
           "filter_output_schema",
@@ -18093,6 +18834,48 @@
           "profile_id"
         ],
         "title": "SetOrganizationDefaultRuntimeRequest",
+        "type": "object"
+      },
+      "SharedAccountSummary": {
+        "properties": {
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "owner_user_id": {
+            "format": "uuid",
+            "title": "Owner User Id",
+            "type": "string"
+          },
+          "pod_account_id": {
+            "format": "uuid",
+            "title": "Pod Account Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "pod_account_id",
+          "owner_user_id"
+        ],
+        "title": "SharedAccountSummary",
         "type": "object"
       },
       "SharedResourceBody": {
@@ -19137,12 +19920,19 @@
         "type": "object"
       },
       "SurfaceConnection": {
-        "description": "Which account a surface runs on, and who connected it.\n\nAccounts are personal (``accounts.user_id``) while surfaces belong to the\npod, so ``account_id`` alone answers nothing for a teammate — they cannot\nresolve an id they don't own. This block is the pod-visible *identity* of\nthat account: enough for any editor to see who to ask, never the credential.",
+        "description": "Which account a surface's pod connector runs as, and whose it is.\n\nAccounts are personal (``accounts.user_id``) while surfaces belong to the\npod, so an account id alone answers nothing for a teammate — they cannot\nresolve an id they don't own. This block is the pod-visible *identity* of\nthat account: enough for any editor to see who to ask, never the credential.",
         "properties": {
           "account_id": {
-            "format": "uuid",
-            "title": "Account Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
           },
           "connected_by": {
             "anyOf": [
@@ -19169,13 +19959,17 @@
             ],
             "title": "Display Name"
           },
+          "pod_connector": {
+            "title": "Pod Connector",
+            "type": "string"
+          },
           "status": {
             "$ref": "#/components/schemas/SurfaceConnectionStatus",
             "default": "CONNECTED"
           }
         },
         "required": [
-          "account_id",
+          "pod_connector",
           "connector_id"
         ],
         "title": "SurfaceConnection",
@@ -19229,7 +20023,7 @@
         "type": "object"
       },
       "SurfaceConnectionStatus": {
-        "description": "Health of the account a surface runs on.\n\nMirrors ``AccountStatus`` and adds ``MISSING`` for a surface pointing at an\naccount row that is no longer there. Whether the owner is still in the pod\nis deliberately *not* folded in here: a departed owner's token keeps working\nuntil it expires, so it is a separate fact (``connected_by.is_pod_member``),\nnot a rung on this ladder.",
+        "description": "Health of the account a surface runs on.\n\nMirrors ``AccountStatus`` and adds ``MISSING`` for a surface whose pod\nconnector runs as no account right now: removed, or its account withdrawn\nby its owner or gone. Whether the owner is still in the pod\nis deliberately *not* folded in here: a departed owner's token keeps working\nuntil it expires, so it is a separate fact (``connected_by.is_pod_member``),\nnot a rung on this ladder.",
         "enum": [
           "CONNECTED",
           "REAUTH_REQUIRED",
@@ -19338,6 +20132,8 @@
                 "type": "null"
               }
             ],
+            "deprecated": true,
+            "description": "Deprecated: name `pod_connector` instead. Still accepted, as the pod connector that serves this account to you.",
             "title": "Account Id"
           },
           "config": {
@@ -19377,6 +20173,18 @@
           },
           "platform": {
             "$ref": "#/components/schemas/SurfacePlatform"
+          },
+          "pod_connector": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Slug of the SHARED pod connector this surface runs as: an account its owner shared with the pod. Omit to run on Lemma's own credentials where the platform has them.",
+            "title": "Pod Connector"
           }
         },
         "required": [
@@ -19931,6 +20739,8 @@
                 "type": "null"
               }
             ],
+            "deprecated": true,
+            "description": "Deprecated: name `pod_connector` instead. Still accepted, as the pod connector that serves this account to you.",
             "title": "Account Id"
           },
           "config": {
@@ -19967,6 +20777,18 @@
               }
             ],
             "title": "Is Enabled"
+          },
+          "pod_connector": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Slug of the SHARED pod connector to run this surface as instead: the repair when the account it runs as is withdrawn or expires. Omit to keep the one it has.",
+            "title": "Pod Connector"
           }
         },
         "title": "SurfaceUpdateRequest",
@@ -20415,18 +21237,6 @@
       },
       "TelegramManagedBotSetupResponse": {
         "properties": {
-          "account_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Account Id"
-          },
           "bot_launch_url": {
             "anyOf": [
               {
@@ -20471,6 +21281,17 @@
           "manager_bot_username": {
             "title": "Manager Bot Username",
             "type": "string"
+          },
+          "pod_connector": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pod Connector"
           },
           "setup_id": {
             "title": "Setup Id",
@@ -22542,30 +23363,6 @@
       },
       "VariableSpecResponse": {
         "properties": {
-          "connector": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "For a connector account variable, the connector the account must belong to (e.g. 'slack'), so the importer can connect the right connector. Null for non-connector variables.",
-            "title": "Connector"
-          },
-          "connector_kind": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "For a connector account variable, which of the connector's kinds the source install used ('composio', 'http', 'mcp', 'sql'), so the importer selects an account of the same kind. Null for non-connector variables.",
-            "title": "Connector Kind"
-          },
           "default": {
             "anyOf": [
               {
@@ -25438,6 +26235,56 @@
           "resource": "icon",
           "result": "entity",
           "verb": "upload"
+        }
+      }
+    },
+    "/me/connectors/accounts/{account_id}/pods": {
+      "get": {
+        "operationId": "connector.account.pods",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountPodUsageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Where One Of My Accounts Is Used",
+        "tags": [
+          "Connectors"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "connector.account",
+          "result": "entity",
+          "verb": "pods"
         }
       }
     },
@@ -28501,6 +29348,8 @@
     },
     "/organizations/{organization_id}/connectors/{auth_config_name}/operations/{operation_name}/execute": {
       "post": {
+        "deprecated": true,
+        "description": "Deprecated: use `pod.connector.operation.execute`. Still served, through the connectors the caller's pod declares for this installation; a person outside any pod uses their own account.",
         "operationId": "connector.operation.execute",
         "parameters": [
           {
@@ -28536,7 +29385,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/OperationExecutionRequest"
+                "$ref": "#/components/schemas/InstallationOperationExecutionRequest"
               }
             }
           },
@@ -28564,7 +29413,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Execute Connector Operation",
+        "summary": "Execute Connector Operation (deprecated)",
         "tags": [
           "Connectors"
         ],
@@ -28577,7 +29426,9 @@
           "resource": "connector.operation",
           "result": "entity",
           "verb": "execute"
-        }
+        },
+        "x-lemma-replacement": "call POST /pods/{pod_id}/connectors/{slug}/operations/{operation}/execute with the pod connector's slug (SDK: pod.connectors.execute(slug, ...)); the connector decides the account, so drop account_id",
+        "x-lemma-sunset": "2027-01-31"
       }
     },
     "/organizations/{organization_id}/connectors/{auth_config_name}/triggers": {
@@ -28783,6 +29634,66 @@
           "resource": "org",
           "result": "entity",
           "verb": "home"
+        }
+      }
+    },
+    "/organizations/{organization_id}/installations/{auth_config_id}/impact": {
+      "get": {
+        "operationId": "connector.installation.impact",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Organization Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "auth_config_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Auth Config Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstallationImpactResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "What Removing An Installation Would Stop",
+        "tags": [
+          "Connectors"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "connector.installation",
+          "result": "entity",
+          "verb": "impact"
         }
       }
     },
@@ -31105,7 +32016,7 @@
     },
     "/pods/{pod_id}/bundle/imports": {
       "post": {
-        "description": "Import a pod bundle from a URL. kind=URL takes a lemma signed download URL (from an export, or from POST …/bundle/uploads); kind=GITHUB takes a public repo (repo_url or owner+repo, with account_id for private repos). Returns 202 with an import_id; poll status until AWAITING_CONFIRMATION, review the plan, then apply.",
+        "description": "Import a pod bundle from a URL. kind=URL takes a lemma signed download URL (from an export, or from POST …/bundle/uploads); kind=GITHUB takes a repo (repo_url or owner+repo), fetched through the pod's `github` connector as the importer, or anonymously for a public repo. Returns 202 with an import_id; poll status until AWAITING_CONFIRMATION, review the plan, then apply.",
         "operationId": "pod.bundle.import.start",
         "parameters": [
           {
@@ -31484,7 +32395,7 @@
     },
     "/pods/{pod_id}/bundle/publishes": {
       "post": {
-        "description": "Publish the pod as a bundle to a new GitHub repository. Returns 202 with a publish_id; poll the status endpoint for the repo URL.",
+        "description": "Publish the pod as a bundle to a GitHub repository, as the account the pod's `github` connector resolves to for the caller. Refused up front with `CONNECTION_REQUIRED` / `REAUTH_REQUIRED` (with `connect_url`) or `POD_CONNECTOR_NOT_FOUND` when there is none. Returns 202 with a publish_id; poll the status endpoint for the repo URL.",
         "operationId": "pod.bundle.publish.start",
         "parameters": [
           {
@@ -35260,6 +36171,774 @@
           "resource": "channel.source",
           "result": "entity",
           "verb": "update"
+        }
+      }
+    },
+    "/pods/{pod_id}/connector-accounts": {
+      "get": {
+        "operationId": "pod.connector_account.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PodAccountListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Accounts In Use In The Pod",
+        "tags": [
+          "Connectors"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "pod.connector_account",
+          "result": "collection",
+          "verb": "list"
+        }
+      },
+      "post": {
+        "operationId": "pod.connector_account.add",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PodAccountCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PodAccountResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Add One Of Your Accounts To The Pod",
+        "tags": [
+          "Connectors"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "pod.connector_account"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "pod.connector_account",
+          "result": "entity",
+          "verb": "add"
+        }
+      }
+    },
+    "/pods/{pod_id}/connector-accounts/{pod_account_id}": {
+      "delete": {
+        "operationId": "pod.connector_account.remove",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "pod_account_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Remove An Account From The Pod",
+        "tags": [
+          "Connectors"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "pod.connector_account"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "pod.connector_account",
+          "result": "void",
+          "verb": "remove"
+        }
+      },
+      "patch": {
+        "operationId": "pod.connector_account.update",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "pod_account_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PodAccountUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PodAccountResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Share Or Withdraw Your Account In The Pod",
+        "tags": [
+          "Connectors"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "pod.connector_account"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "pod.connector_account",
+          "result": "entity",
+          "verb": "update"
+        }
+      }
+    },
+    "/pods/{pod_id}/connectors": {
+      "get": {
+        "operationId": "pod.connector.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PodConnectorListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Pod Connectors",
+        "tags": [
+          "Connectors"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "pod.connector",
+          "result": "collection",
+          "verb": "list"
+        }
+      },
+      "post": {
+        "operationId": "pod.connector.create",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PodConnectorCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PodConnectorResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Declare A Pod Connector",
+        "tags": [
+          "Connectors"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "pod.connector"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "pod.connector",
+          "result": "entity",
+          "verb": "create"
+        }
+      }
+    },
+    "/pods/{pod_id}/connectors/{slug}": {
+      "delete": {
+        "operationId": "pod.connector.delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Remove Pod Connector",
+        "tags": [
+          "Connectors"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "pod.connector"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "pod.connector",
+          "result": "void",
+          "verb": "delete"
+        }
+      },
+      "get": {
+        "operationId": "pod.connector.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PodConnectorResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Pod Connector",
+        "tags": [
+          "Connectors"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "pod.connector",
+          "result": "entity",
+          "verb": "get"
+        }
+      },
+      "patch": {
+        "operationId": "pod.connector.update",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PodConnectorUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PodConnectorResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Pod Connector",
+        "tags": [
+          "Connectors"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "pod.connector"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "pod.connector",
+          "result": "entity",
+          "verb": "update"
+        }
+      }
+    },
+    "/pods/{pod_id}/connectors/{slug}/operations": {
+      "get": {
+        "operationId": "pod.connector.operation.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Query"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationDiscoverResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Discover Pod Connector Operations",
+        "tags": [
+          "Connectors"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": true,
+          "resource": "pod.connector.operation",
+          "result": "collection",
+          "verb": "list"
+        }
+      }
+    },
+    "/pods/{pod_id}/connectors/{slug}/operations/{operation_name}": {
+      "get": {
+        "operationId": "pod.connector.operation.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "operation_name",
+            "required": true,
+            "schema": {
+              "title": "Operation Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Pod Connector Operation",
+        "tags": [
+          "Connectors"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "pod.connector.operation",
+          "result": "entity",
+          "verb": "get"
+        }
+      }
+    },
+    "/pods/{pod_id}/connectors/{slug}/operations/{operation_name}/execute": {
+      "post": {
+        "description": "Run an operation through a pod connector. The account it runs as is decided by the connector: the caller's own for a PER_MEMBER connector, the shared one for a SHARED connector. Typed refusals: `CONNECTION_REQUIRED` and `REAUTH_REQUIRED` (with `connect_url`), `CONNECTOR_NEEDS_ACCOUNT`, `CONNECTOR_UNAVAILABLE`.",
+        "operationId": "pod.connector.operation.execute",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "operation_name",
+            "required": true,
+            "schema": {
+              "title": "Operation Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OperationExecutionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationExecutionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Execute Pod Connector Operation",
+        "tags": [
+          "Connectors"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "pod.connector.operation"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "pod.connector.operation",
+          "result": "entity",
+          "verb": "execute"
         }
       }
     },
@@ -39864,7 +41543,7 @@
     },
     "/pods/{pod_id}/events": {
       "get": {
-        "description": "What standing work here can start on: the platform's own events, then\nevery event on an MCP server the caller connected in this organization.\nA connected app's catalog triggers are listed per install\n(`connector.trigger.list`).",
+        "description": "What standing work here can start on: the platform's own events, then\nevery event on an MCP server behind one of the pod's connectors the caller\nmay use. A connected app's catalog triggers are listed per install\n(`connector.trigger.list`).",
         "operationId": "schedule.event.list",
         "parameters": [
           {
@@ -44604,7 +46283,7 @@
         }
       },
       "patch": {
-        "description": "Partially update a surface. Only fields present in the request are\napplied; the surface's platform and name are immutable.\n\nPassing ``account_id`` rebinds the surface to a different connected account\n— the repair when the account it runs on expires, or its owner leaves the\npod. It must be an account the caller owns.",
+        "description": "Partially update a surface. Only fields present in the request are\napplied; the surface's platform and name are immutable.\n\nPassing ``pod_connector`` rebinds the surface to a different SHARED pod\nconnector -- the repair when the account it runs as is withdrawn or\nexpires. The caller must be able to use that connector and its account.",
         "operationId": "agent.surface.update",
         "parameters": [
           {

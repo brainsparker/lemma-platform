@@ -728,8 +728,10 @@ def doctor_pod(
                 )
             if str(
                 surf.get("credential_mode") or ""
-            ).upper() == "CUSTOM" and not surf.get("account_id"):
-                warnings.append(f"surface '{plat}' is CUSTOM but has no account_id.")
+            ).upper() == "CUSTOM" and not surf.get("pod_connector"):
+                warnings.append(
+                    f"surface '{plat}' is CUSTOM but names no pod_connector."
+                )
 
         return {
             "errors": errors,

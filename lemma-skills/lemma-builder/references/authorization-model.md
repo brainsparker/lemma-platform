@@ -81,10 +81,12 @@ gate (§3).
 
 No workload — the default pod agent included — performs a **destructive** action by
 default. Destructive = `pod.delete`, `pod.role.manage`, `pod.member.manage`,
-`datastore.table.delete`, `folder.delete`, `function.delete`, `agent.delete`,
-`workflow.delete`, `app.delete`, `schedule.delete`, `connector_account.manage`.
-(Row deletes via `datastore.record.write` and file deletes via `folder.write` are
-**not** destructive — routine automation, RLS-scoped.)
+`datastore.table.delete`, `datastore.record.delete`, `folder.delete`,
+`function.delete`, `agent.delete`, `workflow.delete`, `app.delete`,
+`schedule.delete`.
+Deleting rows is `datastore.record.delete`, its own permission: a grant of
+`datastore.record.write` writes rows but never deletes them. (File deletes via
+`folder.write` are **not** destructive.)
 
 Two ways to unlock a destructive action:
 
@@ -147,13 +149,14 @@ friendly verbs, or raw permission ids when you need one the presets don't cover.
 | Spec | Grant it produces | Use it for |
 | --- | --- | --- |
 | `tickets:read` | `datastore_table` → `datastore.table.read`, `datastore.record.read` | read a table |
-| `tickets:read,write` | + `datastore.record.write` | read + write rows (row *delete* rides on write) |
+| `tickets:read,write` | + `datastore.record.write` | read + write rows (not delete them) |
+| `tickets:delete-rows` | `datastore.record.delete` | delete rows (**destructive**: standing authority, no prompt) |
 | `tickets:alter` / `tickets:delete` | `datastore.table.update` / `.delete` | change or drop the table itself (**delete is destructive**) |
 | `/knowledge:read` | `folder` → `folder.read` | a shared folder **and everything beneath it** |
 | `/me/drafts:write` | `folder` → `folder.write` | the invoking user's private area |
 | `doc:/contracts/msa.pdf:read` | `document` → `folder.read` | one specific file |
-| `connector:gmail:use` | `connector` → `connector.use` | a connector, **user-resolved** (see below) |
-| `account:<account-id>:use` | `connector_account` → `connector_account.use` | a connector account, **pinned/fixed** (see below) |
+| `/reports:read,share` | `folder` → `folder.read`, `folder.share` | read files and make public links to them |
+| `connector:gmail:use` | `connector` → `connector.use` | one of the pod's connectors, by slug (see below) |
 | `function:score_ticket:execute` | `function` → `function.execute` | expose a function as a tool (§6) |
 | `agent:researcher:execute` | `agent` → `agent.execute` | dispatch another agent (§7) |
 | `workflow:intake:execute` | `workflow` → `workflow.execute` | start a workflow |
@@ -163,38 +166,21 @@ friendly verbs, or raw permission ids when you need one the presets don't cover.
 > `app:<name>:use` is the pre-rename spelling of a **connector** grant and still
 > works, with a note. Write `connector:<name>:use`. Bare `app:` now means a Lemma app.
 
-### Connector accounts: user-resolved vs fixed
+### Connectors: the grant names the pod connector
 
-This is the distinction §8 names, in grant form:
-
-**User-resolved (the default, and what you want most of the time).** One grant.
-Each invoker's own connected account is used, so the same agent reads *your*
-mail for you and *mine* for me.
+A workload is granted a **pod connector**, by its slug, and nothing else:
 
 ```json
-{ "resource_type": "connector", "resource_name": "gmail",
+{ "resource_type": "connector", "resource_name": "support-inbox",
   "permission_ids": ["connector.use"] }
 ```
 
-**Fixed account (a pinned shared identity).** Two grants — the connector *and*
-the specific account. Every invoker now acts through that one account, which is
-how a "support@" sender works, and how a schedule keeps sending after the person
-who set it up stops reading that mailbox.
+Which account that runs as is the connector's **mode** (§8), never the grant's
+and never the model's. There is no account grant to write: `account:<id>:use`
+is refused, because an account is put in front of anyone only by its **owner**.
 
-```json
-{ "resource_type": "connector", "resource_name": "gmail",
-  "permission_ids": ["connector.use"] },
-{ "resource_type": "connector_account", "resource_name": "<account-id>",
-  "permission_ids": ["connector_account.use"] }
-```
-
-An account has no human-facing name, so the grant carries its **id** — which is
-specific to the org that issued it. Export therefore replaces it with a
-`${…}` variable recorded in `pod.json` (with the connector and kind to reconnect),
-and import resolves it from `--var`. Unsupplied, the grant is **dropped with a
-warning** and the workload falls back to user-resolved mode; wire it up after
-import with `lemma agents permissions add <name> account:<id>:use`. Get the id
-from `lemma connectors overview`.
+A slug is pod-local and the same in every pod that declares it, so connector
+grants port across pods and orgs as long as the target pod declares the slug.
 
 ## §5 Permission implications
 
@@ -238,20 +224,44 @@ no agent grant at all (self-spawn is grant-free); to fan out to *other* agents i
 `agent:<other>:execute`. `doctor` warns when a SUBAGENTS agent has no agent grants
 ("self-spawn only").
 
-## §8 Connector account modes
+## §8 Pod connectors and pod accounts
 
-- **USER-owned (default)** — no `account_id`; the call runs against the invoking user's
-  own connected account. `connector.use` on the connector is enough.
-- **Pinned shared account (AGENT-owned)** — a fixed `account_id`; every invoker uses
-  that one account. Needs **two** grants on the workload: `connector.use` on the
-  connector and `connector_account.use` on the account. It then works whoever
-  triggered it — the classic shared-sender setup — as long as that person clears the
-  §2 ceiling, i.e. is a `POD_USER` or above (both `connector.use` and
-  `connector_account.use` are `POD_USER` permissions; a `POD_VIEWER` holds neither and
-  gets `DELEGATION_EXCEEDS_INVOKER`).
+Installations and accounts are **organization** things: an admin with
+`org.installation.manage` installs Gmail for the org; each person connects
+their own account once. A **pod** uses them through rows of its own:
 
-`connector_account.manage` is destructive (§3); plain `connector_account.use` is not.
-See `connectors.md` for the payload.
+- **Pod connector** — the pod's declaration of one installation under a
+  pod-local **slug** (`gmail`, `support-inbox`), with a mode:
+  - **PER_MEMBER** — each call runs as the **acting member's own** account. An
+    agent or function runs as the person who invoked it; a schedule as its
+    owner. A member with no account gets `CONNECTION_REQUIRED` with a
+    `connect_url`.
+  - **SHARED** — every call runs as **one** pod account its owner shared. A
+    shared mailbox, a telemetry key, a bot.
+- **Pod account** — one org account in use in the pod, owned by its owner,
+  `PERSONAL` (only the owner's own calls), `POD` (shared with the pod) or
+  `RESTRICTED` (shared with some members or roles).
+
+Who may do what:
+
+| Permission | Held by | Gates |
+| --- | --- | --- |
+| `org.installation.manage` | ORG_OWNER, ORG_EDITOR | installing, changing, disabling installations |
+| `pod.connector.manage` | POD_EDITOR, POD_ADMIN | declaring pod connectors, choosing a SHARED one's account among accounts already shared, removing a pod account |
+| `connector.use` | POD_USER+ (POD-visible connector); grantable to agents, functions, roles, members | running operations through a pod connector |
+| `connector_account.use` | the owner; POD_USER+ when POD-visible; grantees when RESTRICTED | the account half of a SHARED call |
+| `connector_account.share` | **the account's owner only** — no role, never conferrable | widening a pod account's visibility |
+
+A SHARED call is two checks: `connector.use` on the connector, then
+`connector_account.use` on the shared account — for an agent or function, the
+second is checked against the **person** behind the run. A `POD_VIEWER` holds
+neither, so cannot run connectors directly or through a workload.
+
+Refusals are typed and carry their remedy: `CONNECTION_REQUIRED` /
+`REAUTH_REQUIRED` (with `connect_url`), `CONNECTOR_NEEDS_ACCOUNT` (a SHARED
+connector nobody has shared an account for), `CONNECTOR_UNAVAILABLE` (the
+installation is disabled), `CONNECTION_REQUIRES_PERSON` (a PER_MEMBER connector
+called by a run with no member behind it). See `connectors.md`.
 
 ## §9 Import / export grant semantics
 
@@ -270,9 +280,9 @@ See `connectors.md` for the payload.
   and the backend's async job) defer both agents and functions.
 - A grant referencing a table/function/agent/workflow/schedule/app/folder the bundle
   neither creates nor finds in the pod is a **hard failure** (import aborts before
-  writing). A `connector_account` grant naming an unreachable account is too.
-- **Plain `connector` grants are environment-specific** — the connected account lives
-  in the target org, not the bundle; import surfaces them as advisories.
+  writing).
+- **`connector` grants name a pod connector slug** — the target pod must declare
+  it, and its members (or a SHARED account's owner) connect the accounts there.
 - **Destructive grants** import fine but are advised (standing authority, no prompt).
 
 Verify after import — this is one command, not a guess:

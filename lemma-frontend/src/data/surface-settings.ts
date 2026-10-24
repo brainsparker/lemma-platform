@@ -26,7 +26,7 @@ export const contactsSupported = (platform: string) => ["WHATSAPP", "TELEGRAM", 
  *  which is the only kind that answers contacts. Lemma's shared bot is every
  *  space's at once, and a stranger writing to it is writing to Lemma. */
 export function isOwnBot(surface: AgentSurfaceResponse): boolean {
-    return surface.platform === "RESEND" || Boolean(surface.account_id) || surface.credential_mode === "CUSTOM";
+    return surface.platform === "RESEND" || Boolean(surface.pod_connector) || surface.credential_mode === "CUSTOM";
 }
 
 export const routesSupported = (platform: string) => ["SLACK", "TEAMS"].includes(platform);

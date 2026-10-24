@@ -28,7 +28,6 @@ from .layout import (
     normalize_resource_dir_name,
 )
 from .normalize import BundleValidationIssue
-from .portability import require_account_variable_metadata
 
 __all__ = [
     "APP_MANIFEST_ALIAS",
@@ -53,6 +52,5 @@ __all__ = [
     "loads_jsonc",
     "normalize_resource_dir_name",
     "pack_bundle",
-    "require_account_variable_metadata",
     "strip_jsonc",
 ]

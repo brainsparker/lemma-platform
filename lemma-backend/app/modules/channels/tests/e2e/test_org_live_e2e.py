@@ -100,6 +100,17 @@ async def test_only_the_organizations_members_may_open_its_socket(
     assert await _refused(backend_server, pod.scenario.org_id, "not-a-token") == 4401
 
 
+async def test_a_pods_assistant_may_not_hold_its_organizations_socket(
+    pod: Pod, backend_server
+) -> None:
+    """Its token is pinned to one pod; the organization's socket reads them
+    all, so it is refused there even though it keeps its own pod's socket."""
+    headers = await pod.scenario.default_pod_agent_headers(user=pod.owner)
+    token = headers["Authorization"].removeprefix("Bearer ")
+
+    assert await _refused(backend_server, pod.scenario.org_id, token) == 4403
+
+
 async def test_a_reader_covers_only_the_pods_they_may_open(
     pod: Pod, backend_server
 ) -> None:

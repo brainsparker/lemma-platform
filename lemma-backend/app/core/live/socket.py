@@ -32,6 +32,7 @@ from app.core.live.limits import SLOT_REFRESH_SECONDS
 from app.core.live.pod_access import close_code_for
 from app.core.live.sessions import LiveSession, open_sockets
 from app.core.live.protocol import (
+    CLOSE_FORBIDDEN,
     CLOSE_UNAUTHENTICATED,
     MAX_CLIENT_FRAME_BYTES,
     PONG_FRAME,
@@ -120,7 +121,41 @@ async def accept_and_authenticate(websocket: WebSocket) -> LiveSession | None:
             code=CLOSE_UNAUTHENTICATED, reason="Unauthorized live socket."
         )
         return None
+    refusal = await _workload_refusal(websocket, session)
+    if refusal is not None:
+        await websocket.close(code=CLOSE_FORBIDDEN, reason=refusal)
+        return None
     return _session_of(session)
+
+
+async def _workload_refusal(
+    websocket: WebSocket, session: SessionContainer
+) -> str | None:
+    """Why a workload's token may not hold this socket, or None.
+
+    The socket authenticates itself, so the global gate never ran, and its
+    topics read as the user the token names. A workload's token got that
+    person's whole reach here -- in any pod. It is resolved now as on every
+    HTTP route: standing, revocation, and the pin to its own pod. The pod's
+    assistant reads exactly what its person reads, so it keeps the socket in
+    its own pod; a named agent or function would read past its grants, which
+    the topics do not apply, so it is refused.
+    """
+    from app.core.authorization.delegation import is_default_pod_agent_claims
+    from app.core.security import PrincipalRefused, resolve_delegated_principal
+
+    raw_pod_id = websocket.path_params.get("pod_id")
+    try:
+        claims = await resolve_delegated_principal(
+            session.get_access_token_payload() or {},
+            user_id=UUID(session.get_user_id()),
+            pod_id=UUID(str(raw_pod_id)) if raw_pod_id else None,
+        )
+    except PrincipalRefused as refused:
+        return refused.message
+    if claims is None or is_default_pod_agent_claims(claims):
+        return None
+    return "A named agent or function cannot hold a live socket."
 
 
 class LiveDispatcher:

@@ -50,6 +50,7 @@ async def test_the_conversation_names_its_workflow_and_keeps_its_origin():
         agent=adapter,
         function=Mock(),
         work=Mock(),
+        agent_access=Mock(require_execute=AsyncMock()),
     )
     node = AgentNode(id="review", config=AgentNodeConfig(agent_name="reviewer"))
 

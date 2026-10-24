@@ -23,6 +23,9 @@ from lemma_pod_bundle.layout import TABLE_DATA_FILE
 from app.core.concurrency.offload import run_blocking
 from app.core.log.log import get_logger
 from app.modules.pod_bundle.domain.errors import PodBundleDomainError
+from app.modules.pod_bundle.infrastructure.connector_grants import (
+    resolve_connector_grants,
+)
 from app.modules.pod_bundle.infrastructure.schedule_apply import apply_schedule
 from app.modules.pod_bundle.infrastructure.surface_apply import apply_surface
 from app.modules.pod_bundle.domain.state import PlanStep, StepKind
@@ -297,6 +300,7 @@ class BundleApplier:
             ctx=self._ctx,
             pod_id=self._pod_id,
             load=self._load,
+            warnings=self._warnings,
         )
 
     async def _apply_function_grants(self, step: PlanStep) -> None:
@@ -387,9 +391,14 @@ class BundleApplier:
         self, *, grantee_type: str, grantee_id: UUID, grants: list[_GrantInput]
     ) -> None:
         """Replace the grantee's resource grants on the step's own short UoW
-        session (see infrastructure/grants.py)."""
+        session (see infrastructure/grants.py), declaring first any connector
+        they name that the pod does not (see connector_grants.py)."""
+        grants = await resolve_connector_grants(
+            self._uow, self._ctx, pod_id=self._pod_id, grants=grants
+        )
         await apply_grants(
             self._uow.session,
+            ctx=self._ctx,
             pod_id=self._pod_id,
             grantee_type=grantee_type,
             grantee_id=grantee_id,

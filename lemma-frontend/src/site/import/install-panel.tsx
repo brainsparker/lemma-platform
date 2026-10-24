@@ -6,7 +6,6 @@ import {
     useQuery,
 } from "@tanstack/react-query";
 import {
-    ArrowSquareOut,
     ArrowsClockwise,
     Check,
     CircleNotch,
@@ -17,7 +16,7 @@ import {
 import { useSession } from "@/session/session";
 import { hasApiUrl, lemma } from "@/session/client";
 import { source as data } from "@/data";
-import { bestAccount } from "@/data/accounts";
+import { connectLinkLabel, failureOf } from "@/data/pod-connectors";
 import { Mark } from "@/shell/mark";
 import { personalNameFor } from "@/org/arrival";
 import { forgetInstall, markInstallArrival, rememberInstall } from "./pending-install";
@@ -42,20 +41,6 @@ import s from "./import.module.css";
 type Props = { owner: string; repo: string; title: string };
 
 const NEW = "new";
-
-/** The organization's own GitHub account, when it has a usable one.
- *
- *  Without one the archive fetch is anonymous, and GitHub rate-limits
- *  anonymous calls hard enough that an import sits through retries; with one it
- *  is a single authenticated request. Failing to read the list is not a reason
- *  to refuse the install — it only means the slower path. */
-async function githubAccountId(orgId: string): Promise<string | undefined> {
-    try {
-        return bestAccount(await data.listAccounts(orgId), "github")?.id;
-    } catch {
-        return undefined;
-    }
-}
 
 export function InstallPanel(props: Props) {
     const [client] = useState(
@@ -239,7 +224,19 @@ function Journey({ repo, owner, title }: Props) {
     const [confirm, setConfirm] = useState(false);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState("");
+    /* Where to fix the failure above, when the server named somewhere: a
+       pod connector refusing as CONNECTION_REQUIRED carries its link. */
+    const [errorLink, setErrorLink] = useState({ url: "", code: "" });
     const [retry, setRetry] = useState(0);
+    const fail = (e: unknown, fallback: string) => {
+        const said = failureOf(e, fallback);
+        setError(said.message);
+        setErrorLink({ url: said.connectUrl, code: said.code });
+    };
+    const clearError = () => {
+        setError("");
+        setErrorLink({ url: "", code: "" });
+    };
     /* The plain path shows a sentence and one button. The component list, and
        the names behind it, are one press away for whoever wants them. */
     const [choosing, setChoosing] = useState(false);
@@ -269,12 +266,10 @@ function Journey({ repo, owner, title }: Props) {
                     timer = setTimeout(() => void poll(), 1200);
                 }
             } catch (e) {
-                if (alive)
-                    setError(
-                        e instanceof Error
-                            ? e.message
-                            : "Lost track of the installation.",
-                    );
+                if (!alive) return;
+                const said = failureOf(e, "Lost track of the installation.");
+                setError(said.message);
+                setErrorLink({ url: said.connectUrl, code: said.code });
             }
         }
         timer = setTimeout(() => void poll(), 1200);
@@ -296,7 +291,7 @@ function Journey({ repo, owner, title }: Props) {
 
     async function review() {
         setBusy(true);
-        setError("");
+        clearError();
         try {
             let id = target === NEW ? created?.id : target;
             if (!id) {
@@ -304,7 +299,10 @@ function Journey({ repo, owner, title }: Props) {
                 setCreated(pod);
                 id = pod.id;
             }
-            const accountId = await githubAccountId(orgId);
+            /* Fetched through the pod's `github` connector as the person
+               installing, or anonymously for a public repository: no account
+               is named here. A failure for want of one comes back on the job
+               with its `connect_url`. */
             setJob(
                 await lemma(id).request<ImportStatusResponse>(
                     "POST",
@@ -314,17 +312,12 @@ function Journey({ repo, owner, title }: Props) {
                             kind: "GITHUB",
                             owner,
                             repo,
-                            account_id: accountId,
                         },
                     },
                 ),
             );
         } catch (e) {
-            setError(
-                e instanceof Error
-                    ? e.message
-                    : "Could not read what " + title + " includes.",
-            );
+            fail(e, "Could not read what " + title + " includes.");
         } finally {
             setBusy(false);
         }
@@ -333,7 +326,7 @@ function Journey({ repo, owner, title }: Props) {
     async function install() {
         if (!job?.plan) return;
         setBusy(true);
-        setError("");
+        clearError();
         try {
             setJob(
                 await lemma(job.pod_id).request<ImportStatusResponse>(
@@ -357,9 +350,7 @@ function Journey({ repo, owner, title }: Props) {
                 ),
             );
         } catch (e) {
-            setError(
-                e instanceof Error ? e.message : "The installation failed.",
-            );
+            fail(e, "The installation failed.");
         } finally {
             setBusy(false);
         }
@@ -383,7 +374,7 @@ function Journey({ repo, owner, title }: Props) {
         }
         setJob(null);
         setConfirm(false);
-        setError("");
+        clearError();
     }
 
     async function stop() {
@@ -396,7 +387,7 @@ function Journey({ repo, owner, title }: Props) {
             );
             setJob({ ...job, status: "CANCELLED" });
         } catch (e) {
-            setError(e instanceof Error ? e.message : "Could not stop it.");
+            fail(e, "Could not stop it.");
         } finally {
             setBusy(false);
         }
@@ -437,13 +428,21 @@ function Journey({ repo, owner, title }: Props) {
             <Warning size={16} aria-hidden />
             <span>
                 {error}
+                {errorLink.url && (
+                    <>
+                        {" "}
+                        <a className={s.link} href={errorLink.url}>
+                            {connectLinkLabel(errorLink.code)}
+                        </a>
+                    </>
+                )}
                 {polling && (
                     <>
                         {" "}
                         <button
                             className={s.link}
                             onClick={() => {
-                                setError("");
+                                clearError();
                                 setRetry((v) => v + 1);
                             }}
                         >
@@ -593,9 +592,9 @@ function Journey({ repo, owner, title }: Props) {
     const plan = job.plan;
     const groups = plan ? groupSteps(plan.steps) : [];
     const asked = plan ? askedVariables(plan.variables) : [];
-    /* Only what nothing can stand in for is put in front of the person: an
-       account, or a name we could not derive. Everything else is named after
-       the teammate, and shown prefilled to whoever opens the list. */
+    /* Only what nothing can stand in for is put in front of the person: a
+       name we could not derive. Everything else is named after the teammate,
+       and shown prefilled to whoever opens the list. */
     const needsFromYou = choosing
         ? asked
         : asked.filter((v) => needsAnswer(v, who));
@@ -673,6 +672,16 @@ function Journey({ repo, owner, title }: Props) {
                         : job.status === "PARTIALLY_CANCELLED"
                           ? "What was already installed stays with " + who + "."
                           : "Nothing was added."}
+                    {/* A repository the pod's `github` connector could not
+                        reach as you: connecting your account is the fix. */}
+                    {job.status === "FAILED" && job.connect_url && (
+                        <>
+                            {" "}
+                            <a className={s.link} href={job.connect_url}>
+                                {connectLinkLabel(job.error_code ?? "")}
+                            </a>
+                        </>
+                    )}
                 </p>
                 <button className={s.primary} onClick={() => void back()}>
                     <ArrowsClockwise size={16} aria-hidden />
@@ -783,7 +792,6 @@ function Journey({ repo, owner, title }: Props) {
                                 <Variable
                                     key={v.name}
                                     variable={v}
-                                    orgId={orgId}
                                     value={valueOf(v)}
                                     onChange={(value) =>
                                         setValues({
@@ -922,89 +930,25 @@ function Warnings({ list }: { list: string[] }) {
 
 function Variable({
     variable: v,
-    orgId,
     value,
     onChange,
 }: {
     variable: VariableSpec;
-    orgId: string;
     value: string;
     onChange: (value: string) => void;
 }) {
-    const accounts = useQuery({
-        queryKey: ["accounts", orgId],
-        queryFn: () => data.listAccounts(orgId),
-        enabled: v.kind === "account",
-    });
-    const label =
-        v.kind === "account" && v.connector
-            ? humanize(v.connector) + " account"
-            : humanize(v.name);
-    if (v.kind !== "account")
-        return (
-            <label className={s.field}>
-                <span>
-                    {label}
-                    {!v.required && <em> optional</em>}
-                </span>
-                {v.description && <small>{v.description}</small>}
-                <input
-                    required={v.required}
-                    value={value}
-                    onChange={(e) => onChange(e.target.value)}
-                />
-            </label>
-        );
-    const usable =
-        accounts.data?.filter(
-            (a) => a.usable && (!v.connector || a.connectorId === v.connector),
-        ) ?? [];
     return (
         <label className={s.field}>
-            <span>{label}</span>
+            <span>
+                {humanize(v.name)}
+                {!v.required && <em> optional</em>}
+            </span>
             {v.description && <small>{v.description}</small>}
-            <select
+            <input
                 required={v.required}
                 value={value}
                 onChange={(e) => onChange(e.target.value)}
-            >
-                <option value="">
-                    {accounts.isPending
-                        ? "Loading accounts…"
-                        : usable.length
-                          ? "Choose an account"
-                          : "No " + label.toLowerCase() + " connected yet"}
-                </option>
-                {usable.map((a) => (
-                    <option key={a.id} value={a.id}>
-                        {a.label || a.ref || a.connectorId}
-                    </option>
-                ))}
-            </select>
-            <span className={s.fieldActions}>
-                <a
-                    href={
-                        "/t?settings=connectors&org=" +
-                        encodeURIComponent(orgId)
-                    }
-                    target="_blank"
-                    rel="noreferrer"
-                >
-                    Connect one <ArrowSquareOut size={12} aria-hidden />
-                </a>
-                <button
-                    type="button"
-                    className={s.link}
-                    onClick={() => void accounts.refetch()}
-                >
-                    Refresh
-                </button>
-            </span>
-            {accounts.isError && (
-                <small role="alert" className={s.stepError}>
-                    Could not load connected accounts.
-                </small>
-            )}
+            />
         </label>
     );
 }

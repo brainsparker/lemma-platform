@@ -17,6 +17,11 @@ from supertokens_python.recipe.session.exceptions import (
 from app.core.authorization.current import set_current_context
 from app.core.auth_exemptions import exemption_of, is_self_authenticated_websocket
 from app.core.config import settings
+from app.core.api.actor_policy import (
+    refuse_workload,
+    route_template,
+    workload_may_call,
+)
 from app.core.authorization.delegation import (
     CLAIM_ACTOR_ID,
     DelegationClaims,
@@ -435,6 +440,23 @@ async def verify_auth(connection: HTTPConnection):
         )
         # `from e` so the traceback keeps the frame that actually failed.
         raise auth_unavailable() from e
+
+    # Outside the try: a refusal is an answer about the route, not a failure to
+    # check the session, and must not be turned into the 503 above.
+    if getattr(connection.state, "delegation_claims", None) is not None:
+        _refuse_workload_off_its_routes(connection)
+
+
+def _refuse_workload_off_its_routes(connection: HTTPConnection) -> None:
+    """A workload's token reaches only the routes ``actor_policy`` opens to it.
+
+    The matched route is read from the scope: global dependencies run after
+    routing. An unmatched one is refused rather than guessed at.
+    """
+    template = route_template(connection)
+    method = str(connection.scope.get("method", "GET"))
+    if template is None or not workload_may_call(method, template):
+        raise refuse_workload("call this route")
 
 
 #: Seconds a client should wait before retrying a request whose session could

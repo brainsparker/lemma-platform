@@ -59,6 +59,7 @@ export * from "./agents";
 export * from "./agent-names";
 export * from "./connectable";
 export * from "./accounts";
+export * from "./pod-connectors";
 export * from "./runtimes";
 export * from "./joining";
 export * from "./trouble";

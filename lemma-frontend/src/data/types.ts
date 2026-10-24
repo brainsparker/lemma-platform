@@ -3,6 +3,7 @@ import type { Contact, ContactReach, ContactsCap, NewWebWidget, OutreachSent, We
 import type { Audience, TableOpening } from "./public-rows";
 import type { Connectable } from "./connectable";
 import type { Connector, ConnectorAccount } from "./accounts";
+import type { PodConnector } from "./pod-connectors";
 import type { AgentDetail, AgentDraft, AgentRow } from "./agents";
 import type { Choice, Computer, Runtime, RuntimeTest } from "./runtimes";
 import type { JoinPolicy, JoinRequest, OrgJoin } from "./joining";
@@ -747,8 +748,16 @@ export interface PodSource {
     /** The account this authorisation produced, once it exists and is usable.
      *  Empty until then. */
     findAccount(orgId: string, connectorId: string, before: string[], authConfigId?: string): Promise<string>;
-    /** Put a surface on an account that has just been authorised. */
-    connectAccount(podId: string, platform: string, accountId: string): Promise<Surface>;
+    /** The connectors this pod declares, by slug: whose account each runs as
+     *  and whether it can run at all. */
+    listPodConnectors(podId: string): Promise<PodConnector[]>;
+    /** Put a surface on one of the pod's SHARED connectors, by slug — the one
+     *  account it answers as, for everyone. */
+    connectPodConnector(podId: string, platform: string, podConnector: string): Promise<Surface>;
+    /** Put a surface on an account the signed-in person just authorised or
+     *  typed in for it: shared into the pod as a SHARED connector (theirs to
+     *  share, and connecting it here is the asking), then bound by that slug. */
+    connectOwnAccount(podId: string, platform: string, accountId: string): Promise<Surface>;
     /** Begin the guided path. Finishing happens in Telegram. */
     startGuided(podId: string, platform: string): Promise<GuidedSetup>;
     /** Has the guided setup finished? */

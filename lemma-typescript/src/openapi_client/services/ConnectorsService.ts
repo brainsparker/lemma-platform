@@ -24,6 +24,7 @@ import type { ConnectRequestInitiateSchema } from '../models/ConnectRequestIniti
 import type { ConnectRequestResponseSchema } from '../models/ConnectRequestResponseSchema.js';
 import type { InstallationBindSchema } from '../models/InstallationBindSchema.js';
 import type { InstallationImpactResponse } from '../models/InstallationImpactResponse.js';
+import type { InstallationOperationExecutionRequest } from '../models/InstallationOperationExecutionRequest.js';
 import type { InstallRequestInitiateSchema } from '../models/InstallRequestInitiateSchema.js';
 import type { InstallRequestResponseSchema } from '../models/InstallRequestResponseSchema.js';
 import type { MessageResponseSchema } from '../models/MessageResponseSchema.js';
@@ -683,6 +684,38 @@ export class ConnectorsService {
                 'auth_config_name': authConfigName,
                 'operation_name': operationName,
             },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * @deprecated
+     * Execute Connector Operation (deprecated)
+     * Deprecated: use `pod.connector.operation.execute`. Still served, through the connectors the caller's pod declares for this installation; a person outside any pod uses their own account.
+     * @param organizationId
+     * @param authConfigName
+     * @param operationName
+     * @param requestBody
+     * @returns OperationExecutionResponse Successful Response
+     * @throws ApiError
+     */
+    public static connectorOperationExecute(
+        organizationId: string,
+        authConfigName: string,
+        operationName: string,
+        requestBody: InstallationOperationExecutionRequest,
+    ): CancelablePromise<OperationExecutionResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/organizations/{organization_id}/connectors/{auth_config_name}/operations/{operation_name}/execute',
+            path: {
+                'organization_id': organizationId,
+                'auth_config_name': authConfigName,
+                'operation_name': operationName,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
             errors: {
                 422: `Validation Error`,
             },

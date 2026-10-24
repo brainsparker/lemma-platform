@@ -642,30 +642,80 @@ async def test_M21_moving_a_file_into_a_folder_needs_write_there(
     )
 
 
-async def test_M22_a_named_agent_cannot_mint_a_public_link(
+def _mint(pod_id: str, path: str) -> str:
+    return f"/pods/{pod_id}/datastore/files/signed-url?path={path}"
+
+
+async def test_M22_a_named_agent_mints_a_public_link_only_where_granted(
     authenticated_client: AsyncClient, async_client: AsyncClient, world, fixed_test_user
 ):
     """M22: any ``folder.read`` holder -- agents included -- minted a 7-day
-    anonymous link to a file, outside every grant."""
+    anonymous link to a file, outside every grant. Making one is ``folder.share``
+    now: a named agent holds it only where it was granted, beside the read."""
     from app.modules.datastore.tests.e2e.harness import DatastoreApi
 
+    folder = f"/outbox_{uuid4().hex[:6]}"
     owner_api = DatastoreApi(authenticated_client, world["pod_id"])
-    await owner_api.upload_file("notes.md", b"# notes")
-    headers = await _agent_token(
+    await owner_api.create_folder(folder)
+    await owner_api.upload_file("notes.md", b"# notes", directory_path=folder)
+    path = f"{folder}/notes.md"
+    reads_only = await _agent_token(
         authenticated_client,
         pod_id=world["pod_id"],
         user_id=fixed_test_user["id"],
-        grants=[_grant("document", "/notes.md", "folder.read")],
+        grants=[_grant("folder", folder, "folder.read")],
+    )
+    shares = await _agent_token(
+        authenticated_client,
+        pod_id=world["pod_id"],
+        user_id=fixed_test_user["id"],
+        grants=[_grant("folder", folder, "folder.read", "folder.share")],
     )
 
-    response = await async_client.post(
-        f"/pods/{world['pod_id']}/datastore/files/signed-url",
-        params={"path": "/notes.md"},
-        headers=headers,
+    refused = await async_client.post(
+        _mint(world["pod_id"], path), headers=reads_only, json={}
+    )
+    minted = await async_client.post(
+        _mint(world["pod_id"], path), headers=shares, json={}
+    )
+
+    assert refused.status_code == status.HTTP_403_FORBIDDEN, refused.text
+    assert minted.status_code == status.HTTP_201_CREATED, minted.text
+    opened = await async_client.get(
+        "/public/s/" + minted.json()["signed_url"].rstrip("/").rsplit("/", 1)[-1]
+    )
+    assert opened.status_code == status.HTTP_200_OK, opened.text
+
+
+async def test_M22_a_viewer_and_the_assistant_mint_as_a_person(
+    authenticated_client: AsyncClient, async_client: AsyncClient, world
+):
+    """Every person role holds ``folder.share``, so separating it took nothing
+    from people; the assistant holds what its person holds."""
+    from app.modules.datastore.tests.e2e.harness import DatastoreApi
+
+    await DatastoreApi(authenticated_client, world["pod_id"]).upload_file(
+        "handout.md", b"# handout"
+    )
+    viewer, _ = await _member_of(
+        authenticated_client,
+        async_client,
+        org_id=world["org_id"],
+        pod_id=world["pod_id"],
+        role="POD_VIEWER",
+    )
+
+    by_viewer = await async_client.post(
+        _mint(world["pod_id"], "/handout.md"), headers=_bearer(viewer), json={}
+    )
+    by_assistant = await async_client.post(
+        _mint(world["pod_id"], "/handout.md"),
+        headers=world["workloads"]["assistant"],
         json={},
     )
 
-    assert response.status_code == status.HTTP_403_FORBIDDEN, response.text
+    assert by_viewer.status_code == status.HTTP_201_CREATED, by_viewer.text
+    assert by_assistant.status_code == status.HTTP_201_CREATED, by_assistant.text
 
 
 async def test_M22_a_pod_admin_sees_and_revokes_any_members_link(

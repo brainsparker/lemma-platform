@@ -193,17 +193,17 @@ def test_no_partial_apply_when_the_pod_was_not_left_half_changed(status, committ
         ("PublishStartRequest", {"repo_name": "crm"}),
     ],
 )
-def test_a_github_job_refuses_an_account_id(request_model, body):
+def test_a_github_job_accepts_a_deprecated_account_id(request_model, body):
     """The account is the pod's `github` connector's decision. An `account_id`
-    used to be accepted and ignored, which told a client it had chosen."""
+    is still accepted -- clients written before that send one -- and ignored;
+    the route's response says so. Anything else unknown is refused."""
     from app.modules.pod_bundle.api import schemas
 
     model = getattr(schemas, request_model)
     model.model_validate(body)
-    with pytest.raises(ValidationError, match="account_id"):
-        model.model_validate(
-            {**body, "account_id": "6d1f0b7e-0000-4000-8000-000000000000"}
-        )
+    model.model_validate({**body, "account_id": "6d1f0b7e-0000-4000-8000-000000000000"})
+    with pytest.raises(ValidationError, match="unexpected"):
+        model.model_validate({**body, "unexpected": True})
 
 
 def test_a_refused_publish_carries_its_connect_link():
@@ -225,4 +225,5 @@ def test_a_refused_publish_carries_its_connect_link():
     response = PublishStatusResponse.from_state(state).model_dump()
 
     assert response["connect_url"].endswith("connector=github")
-    assert "account_id" not in response
+    # Deprecated, always null; older generated clients read it as required.
+    assert response["account_id"] is None

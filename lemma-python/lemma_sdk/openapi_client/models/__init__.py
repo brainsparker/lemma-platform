@@ -347,6 +347,8 @@ _NAME_TO_MODULE = {
     'InstallationBindSchema': 'installation_bind_schema',
     'InstallationChoiceSchema': 'installation_choice_schema',
     'InstallationImpactResponse': 'installation_impact_response',
+    'InstallationOperationExecutionRequest': 'installation_operation_execution_request',
+    'InstallationOperationExecutionRequestPayload': 'installation_operation_execution_request_payload',
     'InstalledAppSummary': 'installed_app_summary',
     'JsonObject': 'json_object',
     'LineDelivery': 'line_delivery',
@@ -1073,6 +1075,8 @@ if TYPE_CHECKING:
     from .installation_bind_schema import InstallationBindSchema
     from .installation_choice_schema import InstallationChoiceSchema
     from .installation_impact_response import InstallationImpactResponse
+    from .installation_operation_execution_request import InstallationOperationExecutionRequest
+    from .installation_operation_execution_request_payload import InstallationOperationExecutionRequestPayload
     from .installed_app_summary import InstalledAppSummary
     from .json_object import JsonObject
     from .line_delivery import LineDelivery
@@ -1812,6 +1816,8 @@ __all__ = [
     'InstallationBindSchema',
     'InstallationChoiceSchema',
     'InstallationImpactResponse',
+    'InstallationOperationExecutionRequest',
+    'InstallationOperationExecutionRequestPayload',
     'InstalledAppSummary',
     'JsonObject',
     'LineDelivery',

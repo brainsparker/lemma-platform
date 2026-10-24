@@ -8,6 +8,11 @@ import type { BundleSourceKind } from './BundleSourceKind.js';
  */
 export type ImportStartRequest = {
     /**
+     * Deprecated and ignored: a private repo is fetched through the pod's `github` connector, as you.
+     * @deprecated
+     */
+    account_id?: (string | null);
+    /**
      * URL (a lemma signed download URL) or GITHUB (a public repo).
      */
     kind: BundleSourceKind;

@@ -209,12 +209,11 @@ async def test_variables_classified(tmp):
     assert by_name["app_slug"].default == "s"
 
 
-async def test_a_bundle_naming_accounts_is_refused(tmp):
+async def test_a_bundle_naming_an_account_still_plans(tmp):
     """Bundles name the pod connector a resource runs through, by slug. One
-    that asks the importer for an account predates that, and would create
-    surfaces and schedules wired to an id nothing reads any more."""
-    from app.modules.pod_bundle.domain.errors import BundleInvalidError
-
+    exported before that asks the importer for an account: deprecated, and
+    still imported -- the variable is offered as an optional account id, so a
+    template nobody re-exported keeps working."""
     root = _build_bundle(
         tmp,
         variables={
@@ -226,8 +225,11 @@ async def test_a_bundle_naming_accounts_is_refused(tmp):
             },
         },
     )
-    with pytest.raises(BundleInvalidError, match="acct.*pod connector"):
-        await PlanBuilder(FakeExisting()).build_plan(bundle_root=root)
+    plan = await PlanBuilder(FakeExisting()).build_plan(bundle_root=root)
+
+    [acct] = [v for v in plan.variables if v.name == "acct"]
+    assert (acct.kind, acct.required, acct.default) == ("free", False, None)
+    assert "Deprecated" in (acct.description or "")
 
 
 async def test_agent_grants_step_deferred_after_resources(tmp):

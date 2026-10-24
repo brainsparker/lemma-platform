@@ -316,105 +316,61 @@ async def test_get_session_uses_canonical_logical_workspace_id(
 
 
 @pytest.mark.asyncio
-async def test_one_persons_runs_in_two_pods_never_share_a_sandbox(
+async def test_every_run_of_a_person_shares_their_one_sandbox_with_its_own_token(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Every process in a sandbox can read every other's environment, and each
-    # carries its run's pod-pinned token. A sandbox shared across pods let a run
-    # in one lift a live token minted for another.
-    user_id, pod_a, pod_b = uuid4(), uuid4(), uuid4()
-    sandbox = _FakeSandbox()
-    manager_client = _FakeManagerClient()
-    _mint_session_tokens(monkeypatch)
-    service = _service(sandbox, manager_client=manager_client)
+    """One sandbox per person, whichever pod or agent the run is for.
 
-    async def session_in(pod_id: UUID | None, session_id: str):
+    A sandbox per pod and actor multiplied persisted disks and made a person
+    sign in to a site again for every agent. What keeps runs apart instead is
+    the token each session is handed: minted for that run's pod and workload.
+    """
+    user_id, pod_a, pod_b, named = uuid4(), uuid4(), uuid4(), uuid4()
+    sandbox = _FakeSandbox()
+    minted: list[dict[str, object]] = []
+
+    async def mint(**claims: object) -> str:
+        minted.append(claims)
+        return f"token-{len(minted)}"
+
+    monkeypatch.setattr(
+        "app.modules.identity.contracts.delegated_tokens.mint_delegated_token", mint
+    )
+    service = _service(sandbox, manager_client=_FakeManagerClient())
+
+    async def session(pod_id: UUID, **workload: object):
         # The organization is given so minting the environment reads no pod.
         return await service.get_session(
             user_id=user_id,
             pod_id=pod_id,
             organization_id=uuid4(),
-            session_id=session_id,
-        )
-
-    in_a = await session_in(pod_a, "a")
-    in_b = await session_in(pod_b, "b")
-    again_in_a = await session_in(pod_a, "a2")
-    personal = await session_in(None, "p")
-
-    assert in_a.logical_id != in_b.logical_id
-    assert again_in_a.logical_id == in_a.logical_id
-    assert personal.logical_id == user_id
-    assert user_id not in {in_a.logical_id, in_b.logical_id}
-    # The fabric was asked for each pod's own sandbox, not the person's.
-    assert set(sandbox.ensure_calls) == {in_a.logical_id, in_b.logical_id, user_id}
-    assert {logical for logical, _ in manager_client.directories} == {
-        in_a.logical_id,
-        in_b.logical_id,
-        user_id,
-    }
-
-
-@pytest.mark.asyncio
-async def test_the_assistant_and_a_named_agent_never_share_a_sandbox(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # A named agent's token is the person's access cut down to its grants; the
-    # assistant's is the person's own. Beside each other, the restricted one
-    # reads the other's out of /proc.
-    user_id, pod_id, named = uuid4(), uuid4(), uuid4()
-    _mint_session_tokens(monkeypatch)
-    service = _service(_FakeSandbox(), manager_client=_FakeManagerClient())
-
-    async def session_as(**identity: object):
-        return await service.get_session(
-            user_id=user_id,
-            pod_id=pod_id,
-            organization_id=uuid4(),
             session_id=str(uuid4()),
-            **identity,
+            **workload,
         )
 
-    # The assistant, by every name it has gone by: its pod's id, or none.
-    assistant = await session_as(workload_type="agent", workload_id=pod_id)
-    unnamed = await session_as()
-    agent = await session_as(workload_type="agent", workload_id=named)
-    # A command the agent runs with borrowed authority -- a token minted for
-    # nobody in particular -- still runs in the agent's own sandbox.
-    borrowed = await session_as(actor_id=named)
+    runs = [
+        await session(pod_a),
+        await session(pod_b),
+        await session(pod_a, workload_type="agent", workload_id=named),
+    ]
 
-    assert assistant.logical_id == unnamed.logical_id
-    assert agent.logical_id != assistant.logical_id
-    assert borrowed.logical_id == agent.logical_id
-
-
-@pytest.mark.asyncio
-async def test_a_pods_browser_grant_names_that_pods_sandbox(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    user_id, pod_id = uuid4(), uuid4()
-    sandbox = _FakeSandbox()
-
-    class _GrantRecorder(_FakeManagerClient):
-        def __init__(self) -> None:
-            super().__init__()
-            self.granted: list[UUID] = []
-
-        async def create_port_access(self, kind, logical_id, port, **_kwargs):
-            del kind, port
-            self.granted.append(logical_id)
-            return object()
-
-    manager_client = _GrantRecorder()
-    service = _service(sandbox, manager_client=manager_client)
-
-    await service.create_browser_access(user_id, pod_id=pod_id, ttl_seconds=60)
-    await service.create_browser_access(user_id, ttl_seconds=60)
-
-    pod_sandbox, personal_sandbox = manager_client.granted
-    assert pod_sandbox != user_id
-    assert personal_sandbox == user_id
-    assert sandbox.ensure_calls == [pod_sandbox, user_id]
+    assert {run.logical_id for run in runs} == {user_id}
+    assert set(sandbox.ensure_calls) == {user_id}
+    assert [run.env_vars["LEMMA_TOKEN"] for run in runs] == [
+        "token-1",
+        "token-2",
+        "token-3",
+    ]
+    assert [(claims["pod_id"], claims["workload_id"]) for claims in minted] == [
+        (pod_a, None),
+        (pod_b, None),
+        (pod_a, named),
+    ]
+    # And their git and gh read files of their own, named in the same
+    # environment, rather than whatever the last session configured globally.
+    assert len({run.env_vars["GIT_CONFIG_VALUE_0"] for run in runs}) == 3
+    assert len({run.env_vars["GH_CONFIG_DIR"] for run in runs}) == 3
+    assert "GIT_CONFIG_GLOBAL" not in runs[0].env_vars
 
 
 @pytest.mark.asyncio

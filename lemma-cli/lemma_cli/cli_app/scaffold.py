@@ -624,11 +624,15 @@ PERMISSION_PRESETS: dict[str, dict[str, list[str]]] = {
         "read": ["folder.read"],
         "write": ["folder.write"],
         "delete": ["folder.delete"],
+        # Make public links to files: anyone holding one opens the file.
+        "share": ["folder.share"],
     },
     "document": {
         "read": ["folder.read"],
         "write": ["folder.write"],
         "delete": ["folder.delete"],
+        # Make public links to files: anyone holding one opens the file.
+        "share": ["folder.share"],
     },
     # A pod connector, by slug. The connector decides the account a call runs
     # as -- the invoking member's own (PER_MEMBER) or the one its owner shared

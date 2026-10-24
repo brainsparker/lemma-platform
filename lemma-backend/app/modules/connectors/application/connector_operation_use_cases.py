@@ -20,6 +20,7 @@ from fastapi import Request
 
 from app.core.authorization.scope import (
     UowContext,
+    current_context_scope,
     pod_context_scope,
     uow_scope,
 )
@@ -50,6 +51,18 @@ from app.modules.connectors.services.connector_operation_service import (
     ConnectorOperationService,
     ResolvedConnectorExecution,
 )
+from app.modules.connectors.services.installation_execution import (
+    resolve_installation_execution,
+)
+
+
+def _token_pod_id(request: Request) -> UUID | None:
+    """The pod a function run's or a delegated workload's token is bound to."""
+    for name in ("function_run_claims", "delegation_claims"):
+        pod_id = getattr(getattr(request.state, name, None), "pod_id", None)
+        if pod_id is not None:
+            return UUID(str(pod_id))
+    return None
 
 
 class ConnectorOperationUseCases:
@@ -93,13 +106,79 @@ class ConnectorOperationUseCases:
                 operation_name=operation_name,
                 payload=payload,
             )
+        return await self._run(
+            resolved,
+            operation_name=operation_name,
+            user_id=user_id,
+            request=request,
+            pod_id=pod_id,
+        )
 
+    async def execute_installation_operation(
+        self,
+        *,
+        organization_id: UUID,
+        auth_config_name: str,
+        operation_name: str,
+        payload: dict[str, Any],
+        account_id: UUID | None,
+        pod_id: UUID | None,
+        user_id: UUID,
+        request: Request,
+    ) -> OperationExecutionResponse:
+        """The deprecated org-level execute: an installation, maybe an account.
+
+        Resolved through the pod's connectors when there is a pod -- the one in
+        the caller's token, else the body's (``pod_context_scope`` refuses the
+        two disagreeing) -- and otherwise as the person's own account. The rest
+        is the same saga as ``execute_pod_connector_operation``.
+        """
+        pod_id = pod_id or _token_pod_id(request)
+        scope = (
+            pod_context_scope(
+                self._uow_factory, request=request, user_id=user_id, pod_id=pod_id
+            )
+            if pod_id is not None
+            else current_context_scope(
+                self._uow_factory, request=request, user_id=user_id
+            )
+        )
+        async with scope as opened:
+            resolved = await resolve_installation_execution(
+                self._build(opened.uow),
+                opened.ctx,
+                user_id=user_id,
+                organization_id=organization_id,
+                auth_config_name=auth_config_name,
+                pod_id=pod_id,
+                account_id=account_id,
+                operation_name=operation_name,
+                payload=payload,
+            )
+        return await self._run(
+            resolved,
+            operation_name=operation_name,
+            user_id=user_id,
+            request=request,
+            pod_id=pod_id,
+        )
+
+    async def _run(
+        self,
+        resolved: ResolvedConnectorExecution,
+        *,
+        operation_name: str,
+        user_id: UUID,
+        request: Request,
+        pod_id: UUID | None,
+    ) -> OperationExecutionResponse:
         # Phase 1b: read the files the arguments name, as the caller, in their
         # pod. Skipped outright -- no scope, no read -- when there are none,
-        # which is nearly every call.
-        resolved = await self._materialize_file_inputs(
-            resolved, user_id=user_id, request=request, pod_id=pod_id
-        )
+        # which is nearly every call, and when there is no pod to read from.
+        if pod_id is not None:
+            resolved = await self._materialize_file_inputs(
+                resolved, user_id=user_id, request=request, pod_id=pod_id
+            )
         output_path = resolved.requested_output_path
 
         # Phase 2: the external operation call, with NO pooled connection held.
@@ -140,6 +219,9 @@ class ConnectorOperationUseCases:
         # Phase 3: if the result carries a file, decide what the caller actually
         # receives -- inline bytes for something small, a pod-datastore reference
         # for something large. Its own short scope, after the external call.
+        # Without a pod there is nowhere to store it, and it stays inline.
+        if pod_id is None:
+            return response
         return await self._capture_binary_output(
             response,
             output_path=output_path,

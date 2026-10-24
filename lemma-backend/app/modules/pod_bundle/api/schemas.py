@@ -181,8 +181,9 @@ class ImportPlanResponse(BaseModel):
 class ImportStartRequest(BaseModel):
     """Body for starting a URL-based import."""
 
-    # A GitHub import used to take an `account_id` and ignore it; refusing
-    # unknown fields keeps a stale client from believing it chose an account.
+    # Unknown fields are refused; the deprecated `account_id` is accepted, and
+    # its response says it was ignored, so a stale client is told rather than
+    # left believing it chose an account.
     model_config = ConfigDict(extra="forbid")
 
     kind: BundleSourceKind = Field(
@@ -199,6 +200,14 @@ class ImportStartRequest(BaseModel):
     repo: str | None = Field(default=None, description="GITHUB repo name.")
     ref: str | None = Field(
         default=None, description="GITHUB branch/tag/sha (optional)."
+    )
+    account_id: UUID | None = Field(
+        default=None,
+        deprecated=True,
+        description=(
+            "Deprecated and ignored: a private repo is fetched through the "
+            "pod's `github` connector, as you."
+        ),
     )
 
 
@@ -370,6 +379,14 @@ class PublishStartRequest(BaseModel):
             "created with."
         ),
     )
+    account_id: UUID | None = Field(
+        default=None,
+        deprecated=True,
+        description=(
+            "Deprecated and ignored: the publish runs as the account the pod's "
+            "`github` connector resolves to for you."
+        ),
+    )
     ai_readme: bool = Field(
         default=False, description="Polish the generated README with the system model."
     )
@@ -408,6 +425,9 @@ class PublishStatusResponse(BaseModel):
     repo_name: str
     mode: PublishMode
     private: bool
+    # Deprecated, and always null: a publish runs through the pod's `github`
+    # connector. Kept because older generated clients read it as required.
+    account_id: UUID | None = Field(default=None, deprecated=True)
     repo_url: str | None = None
     progress: ExportProgressResponse = Field(default_factory=ExportProgressResponse)
     events_url: str

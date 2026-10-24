@@ -10,9 +10,9 @@ gets no session at all. It also means the token can travel in the query string
 the way every other browser WebSocket in this codebase does, because browsers
 cannot set headers on a handshake.
 
-Only the owner ever reaches it. A workspace sandbox is keyed by user id and
-pod, so there is no identifier in this request that could name somebody else's
--- the session decides whose browser this is, and the pod which of theirs.
+Only the owner ever reaches it. A workspace sandbox is keyed by user id, so
+there is no identifier in this request that could name somebody else's -- the
+session decides whose browser this is.
 """
 
 from __future__ import annotations
@@ -22,19 +22,11 @@ from uuid import UUID
 import asyncio
 import contextlib
 import httpx
-from collections.abc import Awaitable, Callable
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, WebSocket, status
 from pydantic import BaseModel, Field
 from app.core.api.dependencies import CurrentUser
-from app.core.domain.errors import DomainError
-from app.modules.workspace.api.controllers.workspace_pod import (
-    AgentQuery,
-    PodQuery,
-    require_workspace_pod,
-)
-from app.modules.workspace.services.workspace_access import choose_view_workspace
 from app.core.request_context import create_inherited_task
 
 from app.core.config import settings
@@ -182,16 +174,6 @@ def _engine_error() -> type[Exception]:
     return DockerEngineError
 
 
-#: Which ``(pod, agent)`` a view opens, checked; see `choose_view_workspace`.
-ViewWorkspace = Callable[..., Awaitable[tuple[UUID | None, UUID | None]]]
-
-
-def view_workspaces() -> ViewWorkspace:
-    """How a view picks its browser. A dependency, so a test supplies its own
-    rather than a database."""
-    return choose_view_workspace
-
-
 def browser_view_service() -> BrowserViewService:
     """The service this controller drives. Injected for the same reason."""
     return BrowserViewService()
@@ -206,12 +188,9 @@ def browser_view_service() -> BrowserViewService:
 async def browser_status(
     user: CurrentUser,
     service: Annotated[BrowserViewService, Depends(browser_view_service)],
-    pod_id: PodQuery = None,
-    agent: AgentQuery = None,
 ) -> BrowserStatusResponse:
-    await require_workspace_pod(user.id, pod_id, agent)
     try:
-        found = await service.status(user.id, pod_id=pod_id, actor_id=agent)
+        found = await service.status(user.id)
     finally:
         await service.close()
     return BrowserStatusResponse(
@@ -233,8 +212,6 @@ async def current_page_url(
     user: CurrentUser,
     service: Annotated[BrowserViewService, Depends(browser_view_service)],
     origin: str = Query(),
-    pod_id: PodQuery = None,
-    agent: AgentQuery = None,
 ) -> CurrentPageUrlResponse:
     """Polled by the sign-in page while its VNC pane is open.
 
@@ -244,11 +221,8 @@ async def current_page_url(
     `sign-in-to-site/[conversationId]/[toolCallId]/page.tsx` reads instead,
     so a person mid-SSO-redirect still sees which site they are actually on.
     """
-    await require_workspace_pod(user.id, pod_id, agent)
     try:
-        url = await service.current_page_url(
-            user.id, origin=origin, pod_id=pod_id, actor_id=agent
-        )
+        url = await service.current_page_url(user.id, origin=origin)
     finally:
         await service.close()
     return CurrentPageUrlResponse(url=url)
@@ -283,8 +257,6 @@ async def resize_display(
     user: CurrentUser,
     service: Annotated[BrowserViewService, Depends(browser_view_service)],
     request: DisplaySizeRequest,
-    pod_id: PodQuery = None,
-    agent: AgentQuery = None,
 ) -> DisplaySizeResponse:
     """Resize the sandbox display so the picture matches the pane.
 
@@ -303,14 +275,9 @@ async def resize_display(
     # a display that never resized looked exactly like one that had nothing to
     # resize, and the pane letterboxed a 1920x1200 screen for days with no
     # trace anywhere of why. A degraded path still has to say it degraded.
-    await require_workspace_pod(user.id, pod_id, agent)
     try:
         size = await service.resize_display(
-            user.id,
-            width=request.width,
-            height=request.height,
-            pod_id=pod_id,
-            actor_id=agent,
+            user.id, width=request.width, height=request.height
         )
     except SandboxCapabilityUnsupported:
         logger.warning(
@@ -351,16 +318,11 @@ async def resize_display(
 _KEEP_AWAKE_SECONDS = 60.0
 
 
-async def _keep_awake(
-    service: BrowserViewService,
-    user_id: UUID,
-    pod_id: UUID | None,
-    actor_id: UUID | None,
-) -> None:
+async def _keep_awake(service: BrowserViewService, user_id: UUID) -> None:
     """Tell the idle sweep this person is still here, until the socket closes."""
     while True:
         await asyncio.sleep(_KEEP_AWAKE_SECONDS)
-        await service.keep_awake(user_id, pod_id=pod_id, actor_id=actor_id)
+        await service.keep_awake(user_id)
 
 
 @router.websocket("/view")
@@ -369,12 +331,9 @@ async def browser_view(
     service: Annotated[BrowserViewService, Depends(browser_view_service)],
     origins: Annotated[tuple[str, ...], Depends(allowed_origins)],
     resolve_user_id: Annotated[UserIdResolver, Depends(user_id_resolver)],
-    choose_workspace: Annotated[ViewWorkspace, Depends(view_workspaces)],
     mode: str = Query(default=MODE_VIEW),
     origin: str | None = Query(default=None),
     conversation: UUID | None = Query(default=None),
-    pod_id: PodQuery = None,
-    agent: AgentQuery = None,
 ) -> None:
     """One person, watching or driving their own browser, over VNC.
 
@@ -431,29 +390,8 @@ async def browser_view(
         return
 
     try:
-        # A sign-in link names its conversation and nothing else; the browser
-        # it needs is the one that conversation's agent runs beside.
-        pod_id, agent = await choose_workspace(
-            UUID(user_id), pod_id=pod_id, agent=agent, conversation=conversation
-        )
-    except DomainError as exc:
-        # 4403 rather than a code of its own: to the pane it is the same
-        # answer -- this socket is not yours to open -- and it stops on it.
-        logger.warning(
-            "workspace.browser_view.pod_refused.denied", status_code=exc.status_code
-        )
-        await _refuse(websocket, CLOSE_ORIGIN_REFUSED)
-        await service.close()
-        return
-
-    try:
         upstream_url, headers = await service.open_vnc_session(
-            UUID(user_id),
-            mode=mode,
-            pod_id=pod_id,
-            actor_id=agent,
-            origin=origin,
-            conversation_id=conversation,
+            UUID(user_id), mode=mode, origin=origin, conversation_id=conversation
         )
     except SandboxCapabilityUnsupported:
         logger.warning("workspace.browser_view.unsupported.denied")
@@ -528,10 +466,9 @@ async def browser_view(
     # runs quiesce, which deletes the browser profile, so what a slow sign-in
     # lost was the sign-in.
     watcher = UUID(user_id)
-    watch_begun(watcher, pod_id=pod_id, actor_id=agent)
+    watch_begun(watcher)
     awake = create_inherited_task(
-        _keep_awake(service, watcher, pod_id, agent),
-        name="workspace.browser_view.keep_awake",
+        _keep_awake(service, watcher), name="workspace.browser_view.keep_awake"
     )
     try:
         async with await connect_upstream(upstream_url, headers=headers) as upstream:
@@ -555,7 +492,7 @@ async def browser_view(
         await _hang_up(websocket, status.WS_1011_INTERNAL_ERROR, doing="failing")
     finally:
         await _collect(awake)
-        watch_ended(watcher, pod_id=pod_id, actor_id=agent)
+        watch_ended(watcher)
         await service.close()
 
 

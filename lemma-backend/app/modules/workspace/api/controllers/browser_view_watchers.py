@@ -13,7 +13,6 @@ from collections.abc import Callable
 from uuid import UUID
 
 from app.core.request_context import create_inherited_task
-from app.modules.workspace.domain.workspace_identity import workspace_sandbox_id
 from app.modules.workspace.services.browser_view_service import BrowserViewService
 
 #: How a reset gets a view service.
@@ -24,8 +23,7 @@ from app.modules.workspace.services.browser_view_service import BrowserViewServi
 #: there to stop. Every caller in the product takes the default.
 ServiceFactory = Callable[[], BrowserViewService]
 
-#: How many sockets are currently watching each display, by the workspace
-#: sandbox it is in -- one per person, pod and actor, so two are two.
+#: How many sockets are currently watching each person's display.
 #:
 #: In memory, and that is the right scope rather than a compromise: the count
 #: exists to answer "is anybody still looking at *this* display", a display
@@ -51,8 +49,6 @@ _SETTLE_SECONDS = 5.0
 async def _reset_after_settling(
     user_id: UUID,
     *,
-    pod_id: UUID | None,
-    actor_id: UUID | None,
     build_service: ServiceFactory,
     settle_seconds: float,
 ) -> None:
@@ -65,7 +61,7 @@ async def _reset_after_settling(
     line on every network blip, let alone an error.
     """
     await asyncio.sleep(settle_seconds)
-    if _watchers.get(workspace_sandbox_id(user_id, pod_id, actor_id)):
+    if _watchers.get(user_id):
         return
     service = build_service()
     try:
@@ -77,10 +73,10 @@ async def _reset_after_settling(
         # `None` means it could not say (an older image), and the local
         # count is all there is to go on then.
         with contextlib.suppress(Exception):
-            if await service.viewers(user_id, pod_id=pod_id, actor_id=actor_id):
+            if await service.viewers(user_id):
                 return
         with contextlib.suppress(Exception):
-            await service.reset_display(user_id, pod_id=pod_id, actor_id=actor_id)
+            await service.reset_display(user_id)
     finally:
         with contextlib.suppress(Exception):
             await service.close()
@@ -89,8 +85,6 @@ async def _reset_after_settling(
 def watch_ended(
     user_id: UUID,
     *,
-    pod_id: UUID | None = None,
-    actor_id: UUID | None = None,
     build_service: ServiceFactory = BrowserViewService,
     settle_seconds: float = _SETTLE_SECONDS,
 ) -> None:
@@ -105,27 +99,19 @@ def watch_ended(
     holding that open for the settle window would keep a connection and a
     service alive for five seconds after the person had gone.
     """
-    display = workspace_sandbox_id(user_id, pod_id, actor_id)
-    remaining = _watchers.get(display, 1) - 1
+    remaining = _watchers.get(user_id, 1) - 1
     if remaining > 0:
-        _watchers[display] = remaining
+        _watchers[user_id] = remaining
         return
-    _watchers.pop(display, None)
+    _watchers.pop(user_id, None)
     create_inherited_task(
         _reset_after_settling(
-            user_id,
-            pod_id=pod_id,
-            actor_id=actor_id,
-            build_service=build_service,
-            settle_seconds=settle_seconds,
+            user_id, build_service=build_service, settle_seconds=settle_seconds
         ),
         name="workspace.browser_view.reset_display",
     )
 
 
-def watch_begun(
-    user_id: UUID, *, pod_id: UUID | None = None, actor_id: UUID | None = None
-) -> None:
-    """One more socket is looking at this display."""
-    display = workspace_sandbox_id(user_id, pod_id, actor_id)
-    _watchers[display] = _watchers.get(display, 0) + 1
+def watch_begun(user_id: UUID) -> None:
+    """One more socket is looking at this person's display."""
+    _watchers[user_id] = _watchers.get(user_id, 0) + 1

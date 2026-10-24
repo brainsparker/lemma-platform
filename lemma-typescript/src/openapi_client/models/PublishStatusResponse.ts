@@ -10,6 +10,10 @@ import type { PublishStatus } from './PublishStatus.js';
  */
 export type PublishStatusResponse = {
     /**
+     * @deprecated
+     */
+    account_id?: (string | null);
+    /**
      * Where to connect the GitHub account the pod's `github` connector needs, when the publish failed for want of one.
      */
     connect_url?: (string | null);

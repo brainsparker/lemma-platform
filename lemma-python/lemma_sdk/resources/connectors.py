@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from typing import Any
 from uuid import UUID
 
@@ -18,6 +19,7 @@ from ..openapi_client.api.connectors import (
     connector_operation_detail,
     connector_operation_details_batch,
     connector_operation_discover,
+    connector_operation_execute,
     connector_operation_search,
     connector_trigger_get,
     connector_trigger_list,
@@ -110,6 +112,9 @@ from ..openapi_client.api.connectors import (
     pod_connector_operation_list,
     pod_connector_update,
 )
+from ..openapi_client.models.installation_operation_execution_request import (
+    InstallationOperationExecutionRequest,
+)
 from ..openapi_client.models.operation_execution_request import (
     OperationExecutionRequest,
 )
@@ -127,6 +132,7 @@ from ..openapi_client.models.pod_connector_response import PodConnectorResponse
 from ..openapi_client.models.pod_connector_update_request import (
     PodConnectorUpdateRequest,
 )
+from ..errors import LemmaDeprecationWarning, LemmaNotFoundError
 from ..types import ConnectorPayload, JsonObject
 from .base import BoundResource, compact
 
@@ -330,6 +336,38 @@ class ConnectorOperations:
             body_model=OperationDetailsBatchRequest,
         )
 
+    def execute(
+        self,
+        auth_config: str,
+        operation: str,
+        payload: ConnectorPayload,
+        *,
+        account_id: str | None = None,
+        pod_id: str | None = None,
+    ) -> OperationExecutionResponse:
+        """Deprecated: run ``operation`` on an installation, by its name.
+
+        Use ``connectors.execute(slug, operation, payload)``, which runs through
+        the pod connector. This still works -- the server serves it through the
+        connectors the pod declares for ``auth_config`` -- and warns with
+        :class:`~lemma_sdk.LemmaDeprecationWarning` saying so.
+        """
+        pod = pod_id if pod_id is not None else self._parent.pod_id
+        return self._parent._call(
+            connector_operation_execute,
+            self._parent._org_uuid(),
+            auth_config,
+            operation,
+            body=compact(
+                {
+                    "payload": payload,
+                    "account_id": account_id,
+                    "pod_id": str(pod) if pod is not None else None,
+                }
+            ),
+            body_model=InstallationOperationExecutionRequest,
+        )
+
 
 class ConnectorTriggers:
     def __init__(self, parent: "BoundConnectors") -> None:
@@ -382,6 +420,9 @@ class BoundConnectors(BoundResource):
         connector: str,
         operation: str,
         payload: ConnectorPayload,
+        *,
+        account_id: str | None = None,
+        pod_id: str | None = None,
     ) -> OperationExecutionResponse:
         """Run ``operation`` through the pod connector ``connector`` (its slug).
 
@@ -395,15 +436,38 @@ class BoundConnectors(BoundResource):
         shared an account for a shared connector), ``CONNECTOR_UNAVAILABLE``
         (the installation is disabled), ``CONNECTION_REQUIRES_PERSON`` (a
         per-member connector, called with no member behind the call).
+
+        Code written before pod connectors passed an installation's name and an
+        ``account_id``. That still runs, through the deprecated org-level route,
+        and warns: when ``account_id`` or ``pod_id`` is given, when there is no
+        pod, or when ``connector`` is not one of the pod's connectors.
         """
-        return self._call(
-            pod_connector_operation_execute,
-            self._pod_uuid(),
-            connector,
-            operation,
-            body={"payload": payload},
-            body_model=OperationExecutionRequest,
-        )
+        if account_id is not None or pod_id is not None or self.pod_id is None:
+            warnings.warn(
+                "connectors.execute(..., account_id=, pod_id=) is deprecated: "
+                "pass the pod connector's slug and drop account_id; the "
+                "connector decides the account.",
+                LemmaDeprecationWarning,
+                stacklevel=2,
+            )
+            return self.operations.execute(
+                connector, operation, payload, account_id=account_id, pod_id=pod_id
+            )
+        try:
+            return self._call(
+                pod_connector_operation_execute,
+                self._pod_uuid(),
+                connector,
+                operation,
+                body={"payload": payload},
+                body_model=OperationExecutionRequest,
+            )
+        except LemmaNotFoundError as missing:
+            if missing.code != "POD_CONNECTOR_NOT_FOUND":
+                raise
+            # Not a slug: most likely an installation name, as written before
+            # pod connectors. The server answers that one with its own warning.
+            return self.operations.execute(connector, operation, payload)
 
     def pod_connectors(self) -> PodConnectorListResponse:
         """The connectors this pod declares, with their mode and status."""

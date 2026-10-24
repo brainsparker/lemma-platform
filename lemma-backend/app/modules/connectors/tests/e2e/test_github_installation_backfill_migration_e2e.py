@@ -108,8 +108,8 @@ def test_installations_are_bound_where_derivable_and_cleared_where_contested() -
         _migrate(database_url, "upgrade", REVISION)
         with psycopg.connect(plain_url) as connection:
             bindings = connection.execute(
-                "SELECT installation_id, organization_id, bound_by_user_id "
-                "FROM github_installations"
+                "SELECT external_id, organization_id, bound_by_user_id "
+                "FROM connector_installations WHERE connector_id = 'github'"
             ).fetchall()
             refs = dict(
                 connection.execute(
@@ -128,5 +128,5 @@ def test_installations_are_bound_where_derivable_and_cleared_where_contested() -
         _migrate(database_url, "downgrade", BEFORE)
         with psycopg.connect(plain_url) as connection:
             assert connection.execute(
-                "SELECT to_regclass('github_installations')"
+                "SELECT to_regclass('connector_installations')"
             ).fetchone() == (None,)

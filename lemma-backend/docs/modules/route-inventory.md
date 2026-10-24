@@ -199,6 +199,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/organizations/{organization_id}/connectors/connect-requests` | `connector.connect_request.create` | Initiate Connect Request |
 | POST | `/organizations/{organization_id}/connectors/connect-requests/install` | `connector.connect_request.install` | Start Install Step |
 | POST | `/organizations/{organization_id}/connectors/{auth_config_name}/operations/details` | `connector.operation.details.batch` | Get Connector Operation Details In Batch |
+| POST | `/organizations/{organization_id}/connectors/{auth_config_name}/operations/{operation_name}/execute` | `connector.operation.execute` | Execute Connector Operation (deprecated) |
 | POST | `/pods/{pod_id}/connector-accounts` | `pod.connector_account.add` | Add One Of Your Accounts To The Pod |
 | POST | `/pods/{pod_id}/connectors` | `pod.connector.create` | Declare A Pod Connector |
 | POST | `/pods/{pod_id}/connectors/{slug}/operations/{operation_name}/execute` | `pod.connector.operation.execute` | Execute Pod Connector Operation |

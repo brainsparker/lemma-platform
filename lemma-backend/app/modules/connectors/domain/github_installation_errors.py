@@ -46,3 +46,26 @@ class GithubInstallationNotAdministeredError(ConnectorDomainError):
             code="GITHUB_INSTALLATION_NOT_ADMINISTERED",
             status_code=403,
         )
+
+
+class InstallationClaimNotPermittedError(GithubInstallationNotAdministeredError):
+    """The claimant controls the installation on GitHub, but not in Lemma.
+
+    Binding an installation is installing an app for the whole organization,
+    so it takes ``org.installation.manage`` as well -- the same rule as
+    binding Lemma's Slack app to a workspace. A subclass, so every caller that
+    leaves an unproven installation for an admin does the same with this one.
+    """
+
+    def __init__(self) -> None:
+        ConnectorDomainError.__init__(
+            self,
+            message=(
+                "Connecting this GitHub installation installs the app for your "
+                "whole Lemma organization, which only someone who manages its "
+                "connectors can do. Ask one of them to connect it first; after "
+                "that, anyone in this organization can use it."
+            ),
+            code="INSTALLATION_CLAIM_NOT_PERMITTED",
+            status_code=403,
+        )

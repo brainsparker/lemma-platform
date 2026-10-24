@@ -542,10 +542,12 @@ def _variables_from_manifest(pod_manifest: dict[str, Any]) -> list[VariableSpec]
     ``free`` variable (e.g. an app slug) is required only when it has no
     default.
 
-    There is no account variable: a surface or schedule names the pod connector
-    it runs through by slug, and the importing pod's connector decides the
-    account. A bundle that still declares one predates that and is refused,
-    rather than creating resources wired to an id nothing reads."""
+    An ``account`` variable is deprecated: a surface or schedule names the pod
+    connector it runs through by slug, and the importing pod's connector
+    decides the account. A bundle exported before that still imports -- the
+    variable is offered as an optional account id, which the schedule step
+    turns into the pod connector serving it -- so a template nobody
+    re-exported keeps working."""
     raw = pod_manifest.get("variables")
     if not isinstance(raw, dict):
         return []
@@ -553,11 +555,20 @@ def _variables_from_manifest(pod_manifest: dict[str, Any]) -> list[VariableSpec]
     for name, meta in raw.items():
         vtype = str((meta or {}).get("type") or "").lower()
         if vtype == "account":
-            raise BundleInvalidError(
-                f"Variable '{name}' asks for a connected account. Bundles name "
-                "the pod connector a resource runs through instead; re-export "
-                "this pod to get a bundle that imports."
+            specs.append(
+                VariableSpec(
+                    name=str(name),
+                    kind="free",
+                    description=(
+                        "Deprecated: one of your connected accounts. Leave it "
+                        "empty and choose the pod connector after import, or "
+                        "give an account id to use the connector serving it."
+                    ),
+                    required=False,
+                    default=None,
+                )
             )
+            continue
         kind = "pod_member" if vtype in ("member", "pod_member") else "free"
         default = (meta or {}).get("default")
         specs.append(

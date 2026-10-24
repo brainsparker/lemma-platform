@@ -839,3 +839,35 @@ async def test_a_paused_schedule_stops_listening_when_its_author_leaves(
     assert off.last_error.startswith("Turned off: the person whose account")
     assert await _subscriptions(db_session) == []
     assert row.remote_id in tracker.unsubscribed
+
+
+async def test_a_schedule_naming_an_account_listens_through_its_pod_connector(
+    authenticated_client, fixed_test_org, db_session, tracker, tracker_account
+):
+    """Deprecated, still served: `account_id` becomes the pod connector that
+    serves that account to its caller, and the response says so."""
+    install, account = tracker_account
+    pod_id = await _pod(authenticated_client, fixed_test_org["id"], install)
+
+    response = await authenticated_client.post(
+        f"/pods/{pod_id}/schedules",
+        json={
+            "schedule_type": "WEBHOOK",
+            "agent_name": "POD_DEFAULT",
+            "instruction": "Triage the new issue.",
+            "account_id": str(account.id),
+            "config": {
+                "source": "mcp",
+                "event": "issue.created",
+                "arguments": {"project": "web"},
+            },
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["pod_connector"] == TRACKER
+    assert response.json()["account_id"] is None
+    assert (
+        "schedule.create.account_id is deprecated"
+        in (response.headers["x-lemma-deprecation"])
+    )

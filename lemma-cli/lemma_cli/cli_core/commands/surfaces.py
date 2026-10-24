@@ -7,6 +7,7 @@ import typer
 
 from ...cli_app.enums import SURFACE_PLATFORM_HELP, SURFACE_PLATFORMS
 from ..confirm import confirm_destructive
+from ..deprecation import warn_deprecated
 from ..io import emit
 from ..payload import read_json
 from ..sdk import pod_client
@@ -170,6 +171,11 @@ def upsert_surface(
         dir_okay=False,
         readable=True,
     ),
+    # Deprecated: the account it runs as, from before pod connectors. Hidden,
+    # still served -- as the pod connector serving that account.
+    account_id: str | None = typer.Option(
+        None, "--account", "--account-id", hidden=True
+    ),
 ) -> None:
     """Create or update a surface: the agent's surface on a platform, or one by name.
 
@@ -192,6 +198,13 @@ def upsert_surface(
         payload["is_enabled"] = enabled
     if name:
         payload["name"] = name
+    if account_id:
+        payload["account_id"] = account_id
+    if payload.get("account_id"):
+        warn_deprecated(
+            "surfaces upsert --account" if account_id else "account_id in --data",
+            "pass --connector <slug> (a SHARED pod connector); it decides the account",
+        )
     result = run_with_client(
         ctx,
         lambda client, s: pod_client(client, s, pod).surfaces.upsert(

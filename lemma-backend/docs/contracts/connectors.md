@@ -33,6 +33,7 @@ The table below is generated from the committed OpenAPI specification by `script
 | `connector.operation.detail` | GET | `/organizations/{organization_id}/connectors/{auth_config_name}/operations/{operation_name}` | Get Connector Operation Details |
 | `connector.operation.details.batch` | POST | `/organizations/{organization_id}/connectors/{auth_config_name}/operations/details` | Get Connector Operation Details In Batch |
 | `connector.operation.discover` | GET | `/organizations/{organization_id}/connectors/{auth_config_name}/operations` | Discover Connector Operations |
+| `connector.operation.execute` | POST | `/organizations/{organization_id}/connectors/{auth_config_name}/operations/{operation_name}/execute` | Execute Connector Operation (deprecated) |
 | `connector.operation.search` | GET | `/organizations/{organization_id}/connector-operations` | Search Connector Operations Across Installs |
 | `connector.skill.get` | GET | `/connectors/{connector_id}/skill` | Get Connector Skill |
 | `connector.status.get` | GET | `/organizations/{organization_id}/connectors/status` | Get Connector Status |

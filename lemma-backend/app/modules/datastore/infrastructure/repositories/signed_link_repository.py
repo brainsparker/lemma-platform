@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from sqlalchemy import (
+    String,
     delete,
     func,
     insert,
@@ -74,6 +75,9 @@ class SignedLinkRepository(DatastoreRepositoryBase):
             literal(entity.code).label("code"),
             literal(entity.pod_id).label("pod_id"),
             literal(entity.created_by_user_id).label("created_by_user_id"),
+            literal(entity.minted_by_workload, type_=String(80)).label(
+                "minted_by_workload"
+            ),
             literal(entity.path).label("path"),
             literal(entity.object_key).label("object_key"),
             literal(entity.content_type).label("content_type"),
@@ -95,6 +99,7 @@ class SignedLinkRepository(DatastoreRepositoryBase):
                     "code",
                     "pod_id",
                     "created_by_user_id",
+                    "minted_by_workload",
                     "path",
                     "object_key",
                     "content_type",

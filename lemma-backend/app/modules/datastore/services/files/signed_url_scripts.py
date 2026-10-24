@@ -15,7 +15,8 @@ Redis holds — the hash's fields — more than they are Python.
 # this request would not fit in what is left — the whole request, which is what
 # makes the budget a ceiling rather than a line one response may cross.
 # {-3}: only the embedded allowance would be crossed. Otherwise a fixed-arity
-# {exhausted, pod_id, path, created_by_user_id, content_type, filename}.
+# {exhausted, pod_id, path, created_by_user_id, minted_by_workload,
+# content_type, filename}.
 # Fixed arity matters: Redis truncates a returned Lua table at its first nil, so
 # a hash missing one field used to hand Python a short list and raise IndexError
 # — a 500 where the honest answer was 404. Every field is coerced here instead.
@@ -80,6 +81,7 @@ return {
   redis.call('HGET', KEYS[1], 'pod_id') or '',
   redis.call('HGET', KEYS[1], 'path') or '',
   redis.call('HGET', KEYS[1], 'created_by_user_id') or '',
+  redis.call('HGET', KEYS[1], 'minted_by_workload') or '',
   redis.call('HGET', KEYS[1], 'content_type') or '',
   redis.call('HGET', KEYS[1], 'filename') or ''
 }
@@ -112,19 +114,20 @@ redis.call('HSET', KEYS[1],
   'pod_id', ARGV[1],
   'path', ARGV[2],
   'created_by_user_id', ARGV[3],
-  'content_type', ARGV[4],
-  'filename', ARGV[5],
-  'max_hits', ARGV[6],
-  'budget_units', ARGV[7],
+  'minted_by_workload', ARGV[4],
+  'content_type', ARGV[5],
+  'filename', ARGV[6],
+  'max_hits', ARGV[7],
+  'budget_units', ARGV[8],
   'spent_units', 0,
-  'embedded_budget_bytes', ARGV[8],
+  'embedded_budget_bytes', ARGV[9],
   'embedded_spent_bytes', 0,
-  'object_key', ARGV[9],
-  'content_sha256', ARGV[10],
-  'size_bytes', ARGV[11],
-  'budget_bytes', ARGV[12],
+  'object_key', ARGV[10],
+  'content_sha256', ARGV[11],
+  'size_bytes', ARGV[12],
+  'budget_bytes', ARGV[13],
   'spent_bytes', 0
 )
-redis.call('PEXPIREAT', KEYS[1], ARGV[13])
+redis.call('PEXPIREAT', KEYS[1], ARGV[14])
 return 1
 """

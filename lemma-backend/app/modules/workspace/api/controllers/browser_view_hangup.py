@@ -1,9 +1,8 @@
 """How a browser-view socket ends: refused, hung up on, and tidied after.
 
-Its own module because the socket controller was over the file-size ratchet
-with these inline, and because they answer one question together -- how to
-close a socket so the person's browser hears the reason -- which the routes
-only need to call.
+Its own module because they answer one question together -- how to close a
+socket so the person's browser hears the reason -- which the routes only need
+to call, and because the socket controller is long enough without them.
 """
 
 from __future__ import annotations

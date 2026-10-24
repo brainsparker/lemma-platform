@@ -25,10 +25,7 @@ from sandbox_runtime.protocol import (
     WorkloadKind,
 )
 from app.modules.workspace.contracts import SandboxInfo
-from app.modules.workspace.domain.workspace_identity import (
-    workload_actor,
-    workspace_sandbox_id,
-)
+from app.modules.workspace.contracts.session_config import session_config_env
 from app.modules.workspace.sandbox_session import (
     SandboxWorkspaceSession,
     canonical_workspace_cwd,
@@ -93,7 +90,7 @@ async def reset_workspace_store_state() -> None:
 class WorkspaceSandboxService(
     WorkspaceRuntimeBundleMixin, WorkspaceDirectoryEnsureMixin
 ):
-    """Workspace sandbox lifecycle and sessions, one sandbox per person per pod."""
+    """Service for user-scoped workspace sandbox lifecycle and sessions."""
 
     _inflight_ensures: dict[tuple[int, UUID], asyncio.Task[SandboxInfo]] = {}
     _inflight_directories: dict[
@@ -175,32 +172,11 @@ class WorkspaceSandboxService(
         cls._inflight_directories.clear()
         cls._ready_directories.clear()
 
-    async def resolve_workspace_id(
-        self, user_id: UUID, pod_id: UUID | None, *, actor_id: UUID | None = None
-    ) -> UUID:
-        """The sandbox ``user_id``'s work in ``pod_id``, as ``actor_id``, runs in.
+    async def _get_sandbox_info(self, user_id: UUID) -> SandboxInfo | None:
+        return await self.sandbox.get_sandbox(user_id)
 
-        One per person, per pod, per actor -- the assistant when ``actor_id``
-        is absent: see ``domain/workspace_identity`` for why the sandbox, and
-        nothing inside it, is where one run's token stops being reachable from
-        another's.
-
-        Resolved on every call rather than remembered: it is one idempotent
-        read, the same one a personal workspace has always paid per ensure,
-        and a remembered answer outlives a row that was removed underneath it.
-        """
-        if pod_id is None:
-            return user_id
-        resolve = getattr(self.sandbox, "resolve_workspace", None)
-        if resolve is None:
-            return workspace_sandbox_id(user_id, pod_id, actor_id)
-        return await resolve(user_id, pod_id, actor_id=actor_id)
-
-    async def _get_sandbox_info(self, workspace_id: UUID) -> SandboxInfo | None:
-        return await self.sandbox.get_sandbox(workspace_id)
-
-    async def _ensure_sandbox_info(self, workspace_id: UUID) -> SandboxInfo:
-        return await self.sandbox.ensure_sandbox(workspace_id)
+    async def _ensure_sandbox_info(self, user_id: UUID) -> SandboxInfo:
+        return await self.sandbox.ensure_sandbox(user_id)
 
     @staticmethod
     def _resolve_workspace_api_url() -> str:
@@ -209,43 +185,38 @@ class WorkspaceSandboxService(
         return settings.cli_api_url or settings.api_url
 
     async def _delete_sandbox(
-        self, workspace_id: UUID, sandbox_info: SandboxInfo | None
+        self, user_id: UUID, sandbox_info: SandboxInfo | None
     ) -> None:
         del sandbox_info
         suspend = getattr(self.sandbox, "suspend_sandbox", None)
         if suspend is not None:
-            await suspend(workspace_id)
+            await suspend(user_id)
             return
         # Compatibility for external ISandbox implementations written before
         # non-destructive suspension became an optional capability.
-        await self.sandbox.delete_sandbox(workspace_id)
+        await self.sandbox.delete_sandbox(user_id)
 
     async def _get_or_create_sandbox_once(
         self,
-        workspace_id: UUID,
+        user_id: UUID,
         *,
         force_reconcile: bool,
     ) -> SandboxInfo:
         # A read is cheap and cannot consume create admission. Only issue the
         # idempotent PUT when the sandbox runtime says the sandbox is absent/not ready.
-        existing = (
-            None if force_reconcile else await self._get_sandbox_info(workspace_id)
-        )
+        existing = None if force_reconcile else await self._get_sandbox_info(user_id)
         if existing is not None and existing.status == "RUNNING":
             return existing
-        return await self._ensure_sandbox_info(workspace_id)
+        return await self._ensure_sandbox_info(user_id)
 
     async def get_or_create_sandbox(
         self,
-        workspace_id: UUID,
+        user_id: UUID,
         *,
         force_reconcile: bool = False,
     ) -> SandboxInfo:
-        """Ensure one ready workspace sandbox without concurrent PUT herds.
-
-        ``workspace_id`` is from `resolve_workspace_id`.
-        """
-        key = (id(asyncio.get_running_loop()), workspace_id)
+        """Ensure one ready sandbox per user without concurrent PUT herds."""
+        key = (id(asyncio.get_running_loop()), user_id)
         while stopping := self._stopping.get(key):
             await stopping.wait()
         # There is deliberately no await between the stop-marker check and
@@ -255,10 +226,10 @@ class WorkspaceSandboxService(
         if task is None:
             task = create_inherited_task(
                 self._get_or_create_sandbox_once(
-                    workspace_id,
+                    user_id,
                     force_reconcile=force_reconcile,
                 ),
-                name=f"workspace-sandbox-ensure:{workspace_id}",
+                name=f"workspace-sandbox-ensure:{user_id}",
             )
             self._inflight_ensures[key] = task
 
@@ -270,23 +241,23 @@ class WorkspaceSandboxService(
         return await asyncio.shield(task)
 
     @classmethod
-    def forget_workspace(cls, workspace_id: UUID) -> None:
-        """Drop what is remembered about a workspace sandbox.
+    def forget_workspace(cls, user_id: UUID) -> None:
+        """Drop what is remembered about a user's workspace.
 
         One entry point, because everything remembered here stops being true at
         the same moment: the sandbox went away.
         """
-        loop_key = (id(asyncio.get_running_loop()), workspace_id)
+        loop_key = (id(asyncio.get_running_loop()), user_id)
         for cache_key in [
             cache_key
             for cache_key in cls._ready_directories
             if cache_key[: len(loop_key)] == loop_key
         ]:
             cls._ready_directories.pop(cache_key, None)
-        forget_python_sessions(workspace_id)
+        forget_python_sessions(user_id)
 
-    async def stop_sandbox(self, workspace_id: UUID) -> None:
-        key = (id(asyncio.get_running_loop()), workspace_id)
+    async def stop_sandbox(self, user_id: UUID) -> None:
+        key = (id(asyncio.get_running_loop()), user_id)
         existing_stop = self._stopping.get(key)
         if existing_stop is not None:
             await existing_stop.wait()
@@ -302,7 +273,7 @@ class WorkspaceSandboxService(
             )
             # A stopped sandbox's directories are not ready any more, whatever
             # the epoch says: stopping is how a workspace is torn down.
-            self.forget_workspace(workspace_id)
+            self.forget_workspace(user_id)
             for task in directory_tasks:
                 task.cancel()
             if directory_tasks:
@@ -314,8 +285,8 @@ class WorkspaceSandboxService(
                 except Exception:
                     # Stop still inspects and releases whatever the provider owns.
                     pass
-            sandbox_info = await self._get_sandbox_info(workspace_id)
-            await self._delete_sandbox(workspace_id, sandbox_info)
+            sandbox_info = await self._get_sandbox_info(user_id)
+            await self._delete_sandbox(user_id, sandbox_info)
         finally:
             if self._stopping.get(key) is stopped:
                 self._stopping.pop(key, None)
@@ -326,24 +297,13 @@ class WorkspaceSandboxService(
         user_id: UUID,
         *,
         ttl_seconds: int,
-        pod_id: UUID | None = None,
-        actor_id: UUID | None = None,
         ensure_sandbox: bool = True,
     ) -> PortAccessGrant:
-        """A signed URL for the browser in ``user_id``'s workspace in ``pod_id``,
-        as ``actor_id`` -- the assistant's when absent.
-
-        The pod and actor decide which browser: each workspace has its own,
-        with its own signed-in sessions.
-        """
-        workspace_id = await self.resolve_workspace_id(
-            user_id, pod_id, actor_id=actor_id
-        )
         if ensure_sandbox:
-            await self.get_or_create_sandbox(workspace_id)
+            await self.get_or_create_sandbox(user_id)
         return await self._get_manager_client().create_port_access(
             WorkloadKind.WORKSPACE,
-            workspace_id,
+            user_id,
             4848,
             protocol=PortProtocol.HTTP,
             expires_at=datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds),
@@ -444,50 +404,31 @@ class WorkspaceSandboxService(
         env_vars: dict[str, str] | None = None,
         ready_timeout_seconds: float | None = None,
         conversation_id: UUID | None = None,
-        actor_id: UUID | None = None,
     ) -> IWorkspaceSession:
-        """A session in the sandbox of ``user_id``, in ``pod_id``, as an actor.
-
-        The actor is ``actor_id`` when given, else the workload the token is
-        minted for. They differ for a run whose token is not its own -- the
-        sandbox must still be the run's, or its command lands beside another
-        actor's processes.
-        """
         resolved_cwd = canonical_workspace_cwd(initial_cwd)
         budget = ReadyBudget(ready_timeout_seconds)
-        # The pod picks the sandbox; the token minted below is only ever handed
-        # to processes in it. See `resolve_workspace_id`.
-        actor = (
-            actor_id
-            if actor_id is not None or pod_id is None
-            else workload_actor(pod_id, workload_type, workload_id)
-        )
-        workspace_id = await self._await_shared(
-            self.resolve_workspace_id(user_id, pod_id, actor_id=actor),
-            budget.remaining(),
-        )
         with _tracer.start_as_current_span("lemma.workspace.ensure_dir"):
             sandbox_info = await self._ensure_workspace_directory(
-                workspace_id, resolved_cwd, budget=budget
+                user_id, resolved_cwd, budget=budget
             )
         with _tracer.start_as_current_span("lemma.workspace.runtime_bundle"):
             # The install is a shielded shared task: running out of budget
             # abandons this caller's wait and leaves it running for the next.
             await self._await_shared(
-                self._ensure_runtime_bundle(workspace_id, sandbox_info),
+                self._ensure_runtime_bundle(user_id, sandbox_info),
                 budget.remaining(),
             )
             # Before the session exists: a restart must not end work this
             # session is about to start. See `workspace_runtime_restart`.
             if await self._await_shared(
-                ensure_runtime_current(self, workspace_id, sandbox_info),
+                ensure_runtime_current(self, user_id, sandbox_info),
                 budget.remaining(),
             ):
                 sandbox_info = await self._ensure_workspace_directory(
-                    workspace_id, resolved_cwd, budget=budget
+                    user_id, resolved_cwd, budget=budget
                 )
             await self._ensure_browser_proxy(
-                workspace_id, sandbox_info, wait_seconds=budget.remaining()
+                user_id, sandbox_info, wait_seconds=budget.remaining()
             )
 
         if env_vars is None:
@@ -509,6 +450,13 @@ class WorkspaceSandboxService(
                     ),
                     budget.remaining(),
                 )
+        # Named for the session here, not left to the session object, because
+        # the environment has to name it too: this session's git and gh read
+        # its own files, never the ones a concurrent session in the same
+        # sandbox is writing. Added after the cache, so an environment cached
+        # before these existed still gets them.
+        resolved_session_id = session_id or str(uuid4())
+        env_vars = {**env_vars, **session_config_env(resolved_session_id)}
 
         # Tell this session, once, if the disk it is about to use is not the one
         # it saw last. Without it an agent cannot distinguish a recreated
@@ -525,8 +473,6 @@ class WorkspaceSandboxService(
                         self.storage_generation_store.observe_storage_generation(
                             session_id=session_id,
                             generation=sandbox_info.storage_generation,
-                            sandbox_id=workspace_id,
-                            unlabelled_sandbox_id=user_id,
                         ),
                         timeout=budget.remaining(),
                     )
@@ -536,8 +482,8 @@ class WorkspaceSandboxService(
 
         return SandboxWorkspaceSession(
             client=self._get_manager_client(),
-            sandbox_id=str(workspace_id),
-            session_id=session_id,
+            sandbox_id=str(user_id),
+            session_id=resolved_session_id,
             env_vars=env_vars,
             initial_cwd=resolved_cwd,
             auto_close=close_on_exit,

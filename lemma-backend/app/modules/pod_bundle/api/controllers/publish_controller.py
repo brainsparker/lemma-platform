@@ -11,11 +11,13 @@ from collections.abc import AsyncGenerator
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, Request, Response, status
 from fastapi.responses import StreamingResponse
 
 from app.core.api.actor_policy import refuse_named_workloads
 from app.core.api.dependencies import CurrentUser, get_uow_factory
+from app.core.api.deprecation import note_deprecated_use
+from app.modules.connectors.contracts.deprecations import ACCOUNT_ADDRESSING_SUNSET
 from app.core.authorization.scope import pod_context_scope
 from app.core.domain.realtime import RealtimeChannel
 from app.core.infrastructure.channels.channel_service import (
@@ -71,8 +73,20 @@ async def start_publish(
     pod_id: UUID,
     data: PublishStartRequest,
     user: CurrentUser,
+    request: Request,
+    response: Response,
     use_cases: PublishUseCasesDep,
 ) -> PublishStatusResponse:
+    if data.account_id is not None:
+        note_deprecated_use(
+            request,
+            response,
+            use="pod.bundle.publish.start.account_id",
+            replacement=(
+                "drop account_id; the pod's `github` connector decides the account"
+            ),
+            sunset=ACCOUNT_ADDRESSING_SUNSET,
+        )
     state = await use_cases.start_publish(
         pod_id=pod_id,
         user_id=user.id,

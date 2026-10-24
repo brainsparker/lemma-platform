@@ -42,11 +42,13 @@ RESOURCE_ACTIONS: dict[ResourceType, tuple[str, ...]] = {
         Permissions.FOLDER_READ,
         Permissions.FOLDER_WRITE,
         Permissions.FOLDER_DELETE,
+        Permissions.FOLDER_SHARE,
     ),
     ResourceType.FOLDER: (
         Permissions.FOLDER_READ,
         Permissions.FOLDER_WRITE,
         Permissions.FOLDER_DELETE,
+        Permissions.FOLDER_SHARE,
     ),
     ResourceType.APP: (
         Permissions.APP_READ,

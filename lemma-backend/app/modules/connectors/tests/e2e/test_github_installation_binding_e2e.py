@@ -568,14 +568,15 @@ async def _org_with_github(scenario: E2EScenario, db_session, prefix: str):
 
 
 async def _held_by(db_session: AsyncSession, installation_id: str):
-    from app.modules.connectors.infrastructure.models.github_installation import (
-        GithubInstallation,
+    from app.modules.connectors.infrastructure.models.connector_installation import (
+        ConnectorInstallation,
     )
 
     db_session.expire_all()
     return await db_session.scalar(
-        select(GithubInstallation.organization_id).where(
-            GithubInstallation.installation_id == installation_id
+        select(ConnectorInstallation.organization_id).where(
+            ConnectorInstallation.connector_id == "github",
+            ConnectorInstallation.external_id == installation_id,
         )
     )
 
@@ -589,7 +590,7 @@ async def test_seeing_an_unbound_installation_connects_github_but_claims_nothing
     account is made, without the installation, waiting on an admin."""
     installation_id = _installation_id()
     github_sees(installation_id)
-    _, headers, org_id, auth_config_id = await _org_with_github(
+    mallory, headers, org_id, auth_config_id = await _org_with_github(
         scenario, db_session, "h4-mallory"
     )
 
@@ -610,8 +611,9 @@ async def test_seeing_an_unbound_installation_connects_github_but_claims_nothing
     [account] = await _accounts_on(db_session, org_id)
     assert account.external_ref is None
 
-    # An admin of `octo` binds it to this organization; her next reconcile
-    # picks it up, no proof of her own needed.
+    # An admin of `octo` binds it to this organization -- here Mallory once
+    # GitHub vouches for her, since she also manages her org's installations
+    # in Lemma; her next reconcile picks it up, no proof of her own needed.
     from app.modules.connectors.services.auth.github_bindings import (
         claim_installation,
     )
@@ -620,7 +622,7 @@ async def test_seeing_an_unbound_installation_connects_github_but_claims_nothing
         db_session,
         installation_id=installation_id,
         organization_id=UUID(org_id),
-        user_id=None,
+        user_id=UUID(mallory["id"]),
         administered=True,
     )
     await db_session.commit()
@@ -736,3 +738,42 @@ async def test_once_held_anyone_in_the_organization_connects_through_it(
     assert seen.status_code == 200, seen.text
     assert seen.json()["install_state"] == "READY", seen.json()
     assert seen.json()["installation_id"] == installation_id
+
+
+async def test_controlling_it_on_github_is_not_enough_to_install_it_for_the_org(
+    scenario, db_session, github
+):
+    """Binding installs the App for the whole Lemma organization, so the first
+    claim also takes `org.installation.manage` -- the rule Slack's binding
+    already had. A member who owns the installation on GitHub still connects
+    their sign-in; the installation waits for someone who manages installs."""
+    from app.modules.test_support.e2e_authz import invite_org_member
+
+    installation_id = _installation_id()
+    github.person("solo")
+    github.install(installation_id, on="solo", account_type="User")
+    github.users["gho_solo"].sees.add(installation_id)
+    await scenario.create_org(name_prefix="H4 member claim")
+    await _github_connector(db_session)
+    auth_config_id = await _install_github(scenario.owner_client, scenario.org_id)
+    member = await scenario.create_user("h4-plain-member")
+    await invite_org_member(
+        scenario.owner_client,
+        scenario.async_client,
+        org_id=scenario.org_id,
+        user=member,
+    )
+
+    claimed = await _setup_callback(
+        scenario,
+        db_session,
+        org_id=scenario.org_id,
+        auth_config_id=auth_config_id,
+        headers=auth_headers(member),
+        installation_id=installation_id,
+        code="solo",
+    )
+
+    assert claimed.status_code == 200, claimed.text
+    assert claimed.json()["install_state"] == "PENDING_APPROVAL"
+    assert await _held_by(db_session, installation_id) is None

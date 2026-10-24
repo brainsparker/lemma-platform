@@ -275,6 +275,14 @@ class SurfaceCreateRequest(BaseModel):
             "credentials where the platform has them."
         ),
     )
+    account_id: UUID | None = Field(
+        default=None,
+        deprecated=True,
+        description=(
+            "Deprecated: name `pod_connector` instead. Still accepted, as the "
+            "pod connector that serves this account to you."
+        ),
+    )
     credential_mode: SurfaceCredentialMode = SurfaceCredentialMode.SYSTEM
     config: SurfaceBehaviorConfigInput = Field(
         default_factory=SurfaceBehaviorConfigInput

@@ -15,6 +15,7 @@ from ..io import emit, list_items, to_plain
 from ..payload import build_request, read_json
 from ..state import console, run_with_client, state_from_ctx
 from ..context import org_for
+from ..deprecation import warn_deprecated
 
 app = typer.Typer(help="Connector, account, and operation commands.")
 
@@ -1011,6 +1012,57 @@ def _pod_connectors(client: Any, state: Any) -> Any:
     return pod_client(client, state).connectors
 
 
+def _resolve_account(client: Any, state: Any, account: str | None) -> str | None:
+    """Accept an account id OR the email it was connected with (deprecated path).
+
+    Only a value that looks like an email triggers the lookup -- anything else
+    is passed through as an id, so this never intercepts an identifier scheme it
+    doesn't recognize.
+    """
+    if not account or "@" not in account:
+        return account
+    needle = account.strip().casefold()
+    for item in list_items(_list_accounts(client, state, connector=None, limit=200)):
+        if str(item.get("email") or "").casefold() == needle:
+            return str(item.get("id"))
+    raise typer.BadParameter(
+        f"No connected account matches '{account}'. See `lemma connectors overview`.",
+        param_hint="--account",
+    )
+
+
+def _names_pod_files(value: Any) -> bool:
+    if isinstance(value, dict):
+        if "pod_path" in value or "file_id" in value:
+            return True
+        return any(_names_pod_files(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_names_pod_files(item) for item in value)
+    return False
+
+
+def _pod_for_files(client: Any, state: Any, body: dict) -> str | None:
+    """The selected pod, when a deprecated org-level call reads or writes files.
+
+    Sent only when a file is involved, exactly as before pod connectors, so
+    every other deprecated call is the call it always was.
+    """
+    if not (_names_pod_files(body) or body.get("output_path")):
+        return None
+    from ..context import selected_pod
+    from ..sdk import _ensure_pod_uuid
+
+    pod = selected_pod(state, required=False)
+    return _ensure_pod_uuid(client, state, pod) if pod else None
+
+
+#: What every deprecated connector flag says to use instead.
+_USE_POD_CONNECTOR = (
+    "name the pod connector by slug instead (`lemma connectors pod-list`); "
+    "it decides the account"
+)
+
+
 def _execute_operation(
     client: Any,
     state: Any,
@@ -1019,15 +1071,45 @@ def _execute_operation(
     operation: str,
     payload: dict,
     attach: list[str] | None = None,
+    account: str | None = None,
+    auth_config: str | None = None,
 ) -> Any:
-    if "account_id" in payload:
-        raise typer.BadParameter(
-            "account_id is gone: the pod connector decides which account a call "
-            "runs as. Name the pod connector instead (`lemma connectors pod-list`).",
-            param_hint="--data",
-        )
+    """Run an operation: through the pod connector, or the deprecated way.
+
+    ``account`` (``--account``, or ``account_id`` in the data) and
+    ``auth_config`` (``--auth-config``) are the shapes from before pod
+    connectors. Either one sends the call to the deprecated org-level route,
+    which the server still serves, with ``connector`` read as an installation.
+    """
+    data_account = payload.get("account_id")
+    if data_account is not None and not account:
+        account = str(data_account)
     body = _attach_files(client, state, payload.get("payload", payload), attach or [])
-    return _pod_connectors(client, state).execute(connector, operation, body)
+    if account is None and auth_config is None:
+        return _pod_connectors(client, state).execute(connector, operation, body)
+    return client.connectors.operations.execute(
+        auth_config or _resolve_auth_config(client, connector),
+        operation,
+        body,
+        account_id=_resolve_account(client, state, account),
+        pod_id=_pod_for_files(client, state, body),
+    )
+
+
+def _warn_legacy_flags(
+    payload: dict, *, account: str | None, auth_config: str | None
+) -> None:
+    uses = [
+        use
+        for use, given in (
+            ("--auth-config", auth_config),
+            ("--account", account),
+            ("account_id in --data", "account_id" in payload),
+        )
+        if given
+    ]
+    if uses:
+        warn_deprecated(" and ".join(uses), _USE_POD_CONNECTOR)
 
 
 @operations_app.command("execute")
@@ -1038,7 +1120,9 @@ def execute_operation(
         metavar="CONNECTOR",
         help="The pod connector's slug (gmail, support-inbox).",
     ),
-    operation: str = typer.Argument(..., help="Operation name."),
+    operation: Optional[str] = typer.Argument(
+        None, metavar="OPERATION", help="Operation name."
+    ),
     json_payload: str | None = typer.Option(
         None, "--data", "-d", help="Raw JSON payload (`-` reads stdin)."
     ),
@@ -1056,6 +1140,12 @@ def execute_operation(
         help="Strip large HTML body fields from the response.",
     ),
     attach: list[str] = typer.Option([], "--attach", help=_ATTACH_HELP),
+    # Deprecated: the installation and account, as named before pod connectors.
+    # Hidden, still served, and warned about.
+    auth_config_opt: str | None = typer.Option(
+        None, "--auth-config", "-c", hidden=True
+    ),
+    account: str | None = typer.Option(None, "--account", "--account-id", hidden=True),
 ) -> None:
     """Execute an operation through one of the selected pod's connectors.
 
@@ -1068,6 +1158,15 @@ def execute_operation(
     # for those was pure ceremony.
     payload = read_json(json_payload, file, required=False)
     state = state_from_ctx(ctx)
+    auth_config: str | None = None
+    if auth_config_opt is not None:
+        # `-c INSTALL OPERATION` took one positional; `-c INSTALL X OPERATION`
+        # let the second win, as it always did.
+        auth_config = auth_config_opt
+        operation = operation or connector
+    if not operation:
+        raise typer.BadParameter("Give an operation name.", param_hint="OPERATION")
+    _warn_legacy_flags(payload, account=account, auth_config=auth_config)
 
     def run(client, s):  # type: ignore[no-untyped-def]
         return _execute_operation(
@@ -1077,6 +1176,10 @@ def execute_operation(
             operation=operation,
             payload=payload,
             attach=attach,
+            account=account,
+            auth_config=(
+                _resolve_auth_config(client, auth_config) if auth_config else None
+            ),
         )
 
     result = run_with_client(ctx, run)
@@ -1304,6 +1407,47 @@ def _pod_connector_slugs(pod_connectors: Any) -> list[str]:
     return [str(item.get("slug")) for item in listed if item.get("slug")]
 
 
+class _InstallationOperations:
+    """An installation's operations, shaped like a pod connector's.
+
+    What `run --account` (deprecated) resolves against: the org-level
+    installation named the way it was before pod connectors, so the resolver
+    below serves both without knowing which it has.
+    """
+
+    def __init__(self, client: Any, state: Any) -> None:
+        self._client = client
+        self._state = state
+
+    def pod_connectors(self) -> Any:
+        return {"items": [{"slug": name} for name in _install_names(self._client)]}
+
+    def pod_operation(self, auth_config: str, name: str) -> Any:
+        from lemma_sdk.errors import LemmaNotFoundError
+
+        try:
+            detail = to_plain(
+                _operation_batch(self._client, self._state, auth_config, [name])
+            )
+        except Exception:  # noqa: BLE001 -- an unknown id just means "search instead"
+            detail = {}
+        items = detail.get("items") or []
+        if not items:
+            raise LemmaNotFoundError(404, f"No operation '{name}' on {auth_config}.")
+        return items[0]
+
+    def pod_operations(self, auth_config: str, query: str, *, limit: int) -> Any:
+        return _search_operations(self._client, self._state, auth_config, query, limit)
+
+
+def _install_names(client: Any) -> list[str]:
+    return [
+        str(item.get("name"))
+        for item in _auth_config_items(client) or []
+        if item.get("name")
+    ]
+
+
 def _resolve_operation(
     pod_connectors: Any, connector: str, selector: str
 ) -> tuple[dict[str, Any], bool]:
@@ -1399,6 +1543,9 @@ def run_connector_operation(
         help="Strip large HTML body fields from the response.",
     ),
     attach: list[str] = typer.Option([], "--attach", help=_ATTACH_HELP),
+    # Deprecated: the account, as picked before pod connectors. Hidden, still
+    # served, and warned about; CONNECTOR is then read as an installation.
+    account: str | None = typer.Option(None, "--account", "--account-id", hidden=True),
 ) -> None:
     """Run a connector operation in ONE call: resolve, check, execute.
 
@@ -1418,10 +1565,17 @@ def run_connector_operation(
     payload = read_json(json_payload, file, required=False)
     state = state_from_ctx(ctx)
     gave_payload = json_payload is not None or file is not None or bool(attach)
+    legacy = account is not None or "account_id" in payload
+    _warn_legacy_flags(payload, account=account, auth_config=None)
 
     def run(client, s):  # type: ignore[no-untyped-def]
-        pod_connectors = _pod_connectors(client, s)
-        detail, inferred = _resolve_operation(pod_connectors, connector, operation)
+        auth_config = _resolve_auth_config(client, connector) if legacy else None
+        source = (
+            _InstallationOperations(client, s) if legacy else _pod_connectors(client, s)
+        )
+        detail, inferred = _resolve_operation(
+            source, auth_config or connector, operation
+        )
         name = str(detail.get("name") or operation)
         input_schema = detail.get("input_schema") or {}
         required = _required_input_fields(input_schema)
@@ -1466,8 +1620,14 @@ def run_connector_operation(
             operation=name,
             payload=payload,
             attach=attach,
+            account=account,
+            auth_config=auth_config,
         )
-        typer.echo(f"Ran {connector} / {name}", err=True)
+        typer.echo(
+            f"Ran {auth_config or connector} / {name}"
+            + (f" (account {account})" if account else ""),
+            err=True,
+        )
         return result
 
     result = run_with_client(ctx, run)

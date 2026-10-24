@@ -12,8 +12,6 @@ export class WorkspaceService {
     /**
      * List workspace files
      * @param path
-     * @param podId The pod whose workspace to use. Each pod has its own, with its own files and browser. Omitted, your personal workspace.
-     * @param agent A named agent of `pod_id`, to use that agent's workspace. Each agent has its own. Omitted, the pod assistant's.
      * @param wake Start the workspace if it is paused. Off by default.
      * @param after Continue after this entry's path, from a previous response's `next_after`.
      * @returns WorkspaceFileListResponse Successful Response
@@ -21,8 +19,6 @@ export class WorkspaceService {
      */
     public static workspaceFilesList(
         path?: (string | null),
-        podId?: (string | null),
-        agent?: (string | null),
         wake: boolean = false,
         after?: (string | null),
     ): CancelablePromise<WorkspaceFileListResponse> {
@@ -31,8 +27,6 @@ export class WorkspaceService {
             url: '/workspace/files',
             query: {
                 'path': path,
-                'pod_id': podId,
-                'agent': agent,
                 'wake': wake,
                 'after': after,
             },
@@ -44,8 +38,6 @@ export class WorkspaceService {
     /**
      * Read workspace file content
      * @param path
-     * @param podId The pod whose workspace to use. Each pod has its own, with its own files and browser. Omitted, your personal workspace.
-     * @param agent A named agent of `pod_id`, to use that agent's workspace. Each agent has its own. Omitted, the pod assistant's.
      * @param offset
      * @param length
      * @param range
@@ -55,8 +47,6 @@ export class WorkspaceService {
      */
     public static workspaceFilesContent(
         path: string,
-        podId?: (string | null),
-        agent?: (string | null),
         offset?: number,
         length?: (number | null),
         range?: (string | null),
@@ -71,8 +61,6 @@ export class WorkspaceService {
             },
             query: {
                 'path': path,
-                'pod_id': podId,
-                'agent': agent,
                 'offset': offset,
                 'length': length,
             },
@@ -84,23 +72,17 @@ export class WorkspaceService {
     /**
      * Stat one workspace file
      * @param path
-     * @param podId The pod whose workspace to use. Each pod has its own, with its own files and browser. Omitted, your personal workspace.
-     * @param agent A named agent of `pod_id`, to use that agent's workspace. Each agent has its own. Omitted, the pod assistant's.
      * @returns WorkspaceFileEntry Successful Response
      * @throws ApiError
      */
     public static workspaceFilesStat(
         path: string,
-        podId?: (string | null),
-        agent?: (string | null),
     ): CancelablePromise<WorkspaceFileEntry> {
         return __request(OpenAPI, {
             method: 'GET',
             url: '/workspace/files:stat',
             query: {
                 'path': path,
-                'pod_id': podId,
-                'agent': agent,
             },
             errors: {
                 422: `Validation Error`,
@@ -109,25 +91,13 @@ export class WorkspaceService {
     }
     /**
      * Whether your computer is ready
-     * @param podId The pod whose workspace to use. Each pod has its own, with its own files and browser. Omitted, your personal workspace.
-     * @param agent A named agent of `pod_id`, to use that agent's workspace. Each agent has its own. Omitted, the pod assistant's.
      * @returns WorkspaceStatusResponse Successful Response
      * @throws ApiError
      */
-    public static workspaceStatus(
-        podId?: (string | null),
-        agent?: (string | null),
-    ): CancelablePromise<WorkspaceStatusResponse> {
+    public static workspaceStatus(): CancelablePromise<WorkspaceStatusResponse> {
         return __request(OpenAPI, {
             method: 'GET',
             url: '/workspace/status',
-            query: {
-                'pod_id': podId,
-                'agent': agent,
-            },
-            errors: {
-                422: `Validation Error`,
-            },
         });
     }
 }

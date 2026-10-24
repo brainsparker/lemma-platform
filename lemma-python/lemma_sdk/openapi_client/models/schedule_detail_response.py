@@ -47,6 +47,7 @@ class ScheduleDetailResponse:
         user_id (UUID):
         visibility (str):
         workflow_id (None | UUID):
+        account_id (None | Unset | UUID):
         agent_name (None | str | Unset):
         allowed_actions (list[str] | Unset):
         consecutive_failures (int | Unset):  Default: 0.
@@ -82,6 +83,7 @@ class ScheduleDetailResponse:
     user_id: UUID
     visibility: str
     workflow_id: None | UUID
+    account_id: None | Unset | UUID = UNSET
     agent_name: None | str | Unset = UNSET
     allowed_actions: list[str] | Unset = UNSET
     consecutive_failures: int | Unset = 0
@@ -157,6 +159,14 @@ class ScheduleDetailResponse:
             workflow_id = str(self.workflow_id)
         else:
             workflow_id = self.workflow_id
+
+        account_id: None | str | Unset
+        if isinstance(self.account_id, Unset):
+            account_id = UNSET
+        elif isinstance(self.account_id, UUID):
+            account_id = str(self.account_id)
+        else:
+            account_id = self.account_id
 
         agent_name: None | str | Unset
         if isinstance(self.agent_name, Unset):
@@ -255,6 +265,8 @@ class ScheduleDetailResponse:
                 "workflow_id": workflow_id,
             }
         )
+        if account_id is not UNSET:
+            field_dict["account_id"] = account_id
         if agent_name is not UNSET:
             field_dict["agent_name"] = agent_name
         if allowed_actions is not UNSET:
@@ -405,6 +417,23 @@ class ScheduleDetailResponse:
 
         workflow_id = _parse_workflow_id(d.pop("workflow_id"))
 
+        def _parse_account_id(data: object) -> None | Unset | UUID:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                account_id_type_0 = UUID(data)
+
+                return account_id_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(None | Unset | UUID, data)
+
+        account_id = _parse_account_id(d.pop("account_id", UNSET))
+
         def _parse_agent_name(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -543,6 +572,7 @@ class ScheduleDetailResponse:
             user_id=user_id,
             visibility=visibility,
             workflow_id=workflow_id,
+            account_id=account_id,
             agent_name=agent_name,
             allowed_actions=allowed_actions,
             consecutive_failures=consecutive_failures,

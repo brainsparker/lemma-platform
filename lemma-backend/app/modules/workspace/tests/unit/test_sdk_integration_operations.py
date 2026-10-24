@@ -60,8 +60,9 @@ def test_generated_sdk_spec_includes_connector_lifecycle_operations() -> None:
         "connector.account.list",
     }.issubset(operation_ids)
     assert "connector.account.credentials.get" not in operation_ids
-    # Operations run only through a pod connector; the org route is gone.
-    assert "connector.operation.execute" not in operation_ids
+    # Operations run through a pod connector; the org route is still served,
+    # deprecated, for code written before pod connectors.
+    assert "connector.operation.execute" in operation_ids
 
 
 def test_connectors_resource_builds_connect_account_and_execute_calls() -> None:

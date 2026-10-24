@@ -166,12 +166,12 @@ class _ManagerClient(Protocol):
     """
 
     async def read_file(
-        self, workspace_id: UUID, path: str, *, deadline_at: datetime
+        self, user_id: UUID, path: str, *, deadline_at: datetime
     ) -> bytes: ...
 
     async def write_file(
         self,
-        workspace_id: UUID,
+        user_id: UUID,
         path: str,
         data: bytes,
         *,
@@ -182,7 +182,7 @@ class _ManagerClient(Protocol):
     async def start_process(
         self,
         kind: WorkloadKind,
-        workspace_id: UUID,
+        user_id: UUID,
         *,
         operation_id: UUID,
         deadline_at: datetime,
@@ -193,7 +193,7 @@ class _ManagerClient(Protocol):
     async def read_process_output(
         self,
         kind: WorkloadKind,
-        workspace_id: UUID,
+        user_id: UUID,
         operation_id: UUID,
         *,
         deadline_at: datetime,
@@ -239,7 +239,7 @@ class WorkspaceRuntimeBundleMixin:
         return runtime_bundle()
 
     def _bundle_cache_key(
-        self, workspace_id: UUID, sandbox_info: SandboxInfo
+        self, user_id: UUID, sandbox_info: SandboxInfo
     ) -> tuple[int, UUID, str, int, int] | None:
         """Identity for "the overlay is installed", which belongs to the sandbox.
 
@@ -266,14 +266,14 @@ class WorkspaceRuntimeBundleMixin:
             return None
         return (
             id(asyncio.get_running_loop()),
-            workspace_id,
+            user_id,
             sandbox_info.allocation_id,
             sandbox_info.allocation_epoch,
             sandbox_info.storage_generation,
         )
 
     async def _ensure_runtime_bundle(
-        self, workspace_id: UUID, sandbox_info: SandboxInfo
+        self, user_id: UUID, sandbox_info: SandboxInfo
     ) -> None:
         """Install the configured bundle into this sandbox, at most once.
 
@@ -285,7 +285,7 @@ class WorkspaceRuntimeBundleMixin:
         bundle = self._runtime_bundle()
         if bundle is None:
             return
-        key = self._bundle_cache_key(workspace_id, sandbox_info)
+        key = self._bundle_cache_key(user_id, sandbox_info)
         if key is not None and self._installed_bundles.get(key) == bundle.version:
             # A hit refreshes the entry, so the bound below evicts by last use
             # and not by when the install happened. Without this, the sandbox
@@ -298,8 +298,8 @@ class WorkspaceRuntimeBundleMixin:
         task = self._inflight_bundles.get(key) if key is not None else None
         if task is None:
             task = create_inherited_task(
-                self._install_bundle(workspace_id, bundle),
-                name=f"workspace-runtime-bundle:{workspace_id}",
+                self._install_bundle(user_id, bundle),
+                name=f"workspace-runtime-bundle:{user_id}",
             )
             if key is not None:
                 self._inflight_bundles[key] = task
@@ -317,14 +317,14 @@ class WorkspaceRuntimeBundleMixin:
         if installed and key is not None:
             self._installed_bundles[key] = bundle.version
 
-    async def _install_bundle(self, workspace_id: UUID, bundle: RuntimeBundle) -> bool:
+    async def _install_bundle(self, user_id: UUID, bundle: RuntimeBundle) -> bool:
         """Install it, reporting whether the sandbox now has this version."""
         client = self._get_manager_client()
         try:
-            if await self._installed_version(client, workspace_id) == bundle.version:
+            if await self._installed_version(client, user_id) == bundle.version:
                 return True
-            await self._deliver(client, workspace_id, bundle)
-            await self._run_installer(client, workspace_id, bundle)
+            await self._deliver(client, user_id, bundle)
+            await self._run_installer(client, user_id, bundle)
         except _SANDBOX_FAILURES as exc:
             # Deliberately swallowed, and deliberately logged in full. The
             # sandbox keeps the image's copy of the first-party code, so the
@@ -332,7 +332,7 @@ class WorkspaceRuntimeBundleMixin:
             # today -- rather than a failed tool call.
             logger.warning(
                 "workspace.runtime_bundle.install_failed.degraded",
-                sandbox_id=str(workspace_id),
+                user_id=str(user_id),
                 version=bundle.version,
                 error_type=type(exc).__name__,
                 exc_info=True,
@@ -340,14 +340,14 @@ class WorkspaceRuntimeBundleMixin:
             return False
         logger.info(
             "workspace.runtime_bundle.installed",
-            sandbox_id=str(workspace_id),
+            user_id=str(user_id),
             version=bundle.version,
             component_version=bundle.component_version,
         )
         return True
 
     async def _installed_version(
-        self, client: _ManagerClient, workspace_id: UUID
+        self, client: _ManagerClient, user_id: UUID
     ) -> str | None:
         """What the sandbox itself says is installed, or None.
 
@@ -358,7 +358,7 @@ class WorkspaceRuntimeBundleMixin:
         """
         try:
             stamp = await client.read_file(
-                workspace_id,
+                user_id,
                 f"{RUNTIME_ROOT}/{runtime_install.CURRENT_LINK}/"
                 f"{runtime_install.STAMP_NAME}",
                 deadline_at=_deadline(_PROBE_BUDGET_SECONDS),
@@ -369,7 +369,7 @@ class WorkspaceRuntimeBundleMixin:
         return stamp.decode("utf-8", "replace").strip() or None
 
     async def _deliver(
-        self, client: _ManagerClient, workspace_id: UUID, bundle: RuntimeBundle
+        self, client: _ManagerClient, user_id: UUID, bundle: RuntimeBundle
     ) -> None:
         """Put the installer and the archive where the sandbox can reach them.
 
@@ -379,13 +379,13 @@ class WorkspaceRuntimeBundleMixin:
         """
         deadline_at = _deadline(_INSTALL_BUDGET_SECONDS)
         await client.write_file(
-            workspace_id,
+            user_id,
             INSTALLER_PATH,
             Path(runtime_install.__file__).read_bytes(),
             deadline_at=deadline_at,
         )
         await client.write_file(
-            workspace_id,
+            user_id,
             ARCHIVE_PATH,
             bundle.archive,
             deadline_at=deadline_at,
@@ -402,7 +402,7 @@ class WorkspaceRuntimeBundleMixin:
         )
 
     async def _run_installer(
-        self, client: _ManagerClient, workspace_id: UUID, bundle: RuntimeBundle
+        self, client: _ManagerClient, user_id: UUID, bundle: RuntimeBundle
     ) -> None:
         deadline_at = _deadline(_INSTALL_BUDGET_SECONDS)
         operation_id = uuid4()
@@ -413,15 +413,13 @@ class WorkspaceRuntimeBundleMixin:
         )
         await client.start_process(
             WorkloadKind.WORKSPACE,
-            workspace_id,
+            user_id,
             operation_id=operation_id,
             deadline_at=deadline_at,
             cwd="/tmp",
             shell_command=command,
         )
-        snapshot = await self._await_exit(
-            client, workspace_id, operation_id, deadline_at
-        )
+        snapshot = await self._await_exit(client, user_id, operation_id, deadline_at)
         if snapshot is None or snapshot.exit_code != 0:
             raise ProviderFailed(
                 f"the runtime bundle installer exited "
@@ -432,7 +430,7 @@ class WorkspaceRuntimeBundleMixin:
     async def _await_exit(
         self,
         client: _ManagerClient,
-        workspace_id: UUID,
+        user_id: UUID,
         operation_id: UUID,
         deadline_at: datetime,
     ) -> ProcessOutputSnapshot | None:
@@ -441,7 +439,7 @@ class WorkspaceRuntimeBundleMixin:
         while datetime.now(timezone.utc) < deadline_at:
             snapshot = await client.read_process_output(
                 WorkloadKind.WORKSPACE,
-                workspace_id,
+                user_id,
                 operation_id,
                 deadline_at=deadline_at,
                 after_sequence=after,
@@ -454,7 +452,7 @@ class WorkspaceRuntimeBundleMixin:
 
     async def _ensure_browser_proxy(
         self,
-        workspace_id: UUID,
+        user_id: UUID,
         sandbox_info: SandboxInfo,
         *,
         wait_seconds: float | None = None,
@@ -487,7 +485,7 @@ class WorkspaceRuntimeBundleMixin:
         try:
             await asyncio.wait_for(
                 self._get_manager_client().write_file(
-                    workspace_id,
+                    user_id,
                     BROWSER_PROXY_DECISION_PATH,
                     decision_bytes(proxy),
                     deadline_at=_deadline(budget),
@@ -497,7 +495,7 @@ class WorkspaceRuntimeBundleMixin:
         except (*_SANDBOX_FAILURES, asyncio.TimeoutError):
             logger.warning(
                 "workspace.browser_proxy.delivery_failed.degraded",
-                sandbox_id=str(workspace_id),
+                user_id=str(user_id),
                 exc_info=True,
             )
 

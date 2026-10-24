@@ -4,6 +4,7 @@ import type { ConnectRequestInitiateSchema } from "../openapi_client/models/Conn
 import type { ConnectRequestResponseSchema } from "../openapi_client/models/ConnectRequestResponseSchema.js";
 import type { OperationDetailsBatchRequest } from "../openapi_client/models/OperationDetailsBatchRequest.js";
 import type { OperationExecutionRequest } from "../openapi_client/models/OperationExecutionRequest.js";
+import type { OperationExecutionResponse } from "../openapi_client/models/OperationExecutionResponse.js";
 import type { PodAccountCreateRequest } from "../openapi_client/models/PodAccountCreateRequest.js";
 import type { PodAccountUpdateRequest } from "../openapi_client/models/PodAccountUpdateRequest.js";
 import type { PodConnectorCreateRequest } from "../openapi_client/models/PodConnectorCreateRequest.js";
@@ -31,6 +32,9 @@ type ConnectRequestInput = string | ConnectRequestInitiateSchema;
 type OperationScope = {
   organizationId: string;
   authConfigName: string;
+  /** Deprecated with `operations.execute`: the pod whose connectors serve the
+   *  call. Implied inside a pod. */
+  podId?: string;
 };
 type EnableAppOptions = Omit<AuthConfigCreateSchema, "connector_id" | "config"> & {
   config?: Record<string, unknown> | null;
@@ -85,7 +89,37 @@ export class ConnectorsNamespace {
         body,
       ));
     },
+    /**
+     * @deprecated Use `connectors.pod.execute(slug, operationName, payload)`:
+     * the pod connector decides the account, so drop `accountId`. Still served
+     * -- through the connectors the pod declares for this installation -- and
+     * each response says so, which this client logs once as a warning.
+     */
+    execute: (scope: OperationScope, operationName: string, payload: Record<string, unknown>, accountId?: string) => {
+      const podId = scope.podId ?? this.currentPodId();
+      return this.http.request<OperationExecutionResponse>(
+        "POST",
+        `/organizations/${encodePath(scope.organizationId)}/connectors/${encodePath(scope.authConfigName)}`
+          + `/operations/${encodePath(operationName)}/execute`,
+        {
+          body: {
+            payload,
+            ...(accountId ? { account_id: accountId } : {}),
+            ...(podId ? { pod_id: podId } : {}),
+          },
+        },
+      );
+    },
   };
+
+  /** The client's pod when it has one; the deprecated execute works without. */
+  private currentPodId(): string | undefined {
+    try {
+      return this.podId();
+    } catch {
+      return undefined;
+    }
+  }
 
   /**
    * The connectors this pod declares, addressed by slug. Running an operation

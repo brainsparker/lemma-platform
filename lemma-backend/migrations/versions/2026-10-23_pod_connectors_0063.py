@@ -708,15 +708,17 @@ def _drop_permissions(conn, permissions) -> None:
 
 
 # ---------------------------------------------------------------------------
-# GitHub App installations, bound to one organization each (audit H4)
+# Installations of Lemma-operated apps, bound to one organization each (H4)
 # ---------------------------------------------------------------------------
 #
-# An installation was only ever written down on accounts
+# A GitHub installation was only ever written down on accounts
 # (`accounts.external_ref`), so any Lemma account whose GitHub user could see
 # one could carry it, mint the App's tokens for it, and route its webhooks.
-# `github_installations` names its owner: one row per installation id, unique.
-# DDL is the model's exactly
-# (`connectors/infrastructure/models/github_installation.py`).
+# `connector_installations` names its owner: one row per (connector, upstream
+# id), unique. Generic, not GitHub's: any app Lemma operates across many
+# upstream tenants has the same fact to record (Lemma's own Slack app does,
+# in `slack_manager_installs`). DDL is the model's exactly
+# (`connectors/infrastructure/models/connector_installation.py`).
 #
 # Backfill, from the accounts carrying each installation:
 # - carried by accounts of exactly one organization: bound to it, attributed
@@ -728,15 +730,17 @@ def _drop_permissions(conn, permissions) -> None:
 # The downgrade drops the table. Cleared `external_ref`s stay cleared: putting
 # a contested installation back on several organizations is what this ends.
 
-_GITHUB_INSTALLATIONS = """
-CREATE TABLE github_installations (
-	installation_id VARCHAR(255) NOT NULL,
+_CONNECTOR_INSTALLATIONS = """
+CREATE TABLE connector_installations (
+	connector_id VARCHAR(255) NOT NULL,
+	external_id VARCHAR(255) NOT NULL,
 	organization_id UUID NOT NULL,
 	bound_by_user_id UUID,
+	metadata JSONB DEFAULT '{}' NOT NULL,
 	id UUID NOT NULL,
 	created_at TIMESTAMP WITH TIME ZONE NOT NULL,
 	PRIMARY KEY (id),
-	UNIQUE (installation_id),
+	CONSTRAINT uq_connector_installations_connector_external UNIQUE (connector_id, external_id),
 	FOREIGN KEY(organization_id) REFERENCES organizations (id) ON DELETE CASCADE,
 	FOREIGN KEY(bound_by_user_id) REFERENCES users (id) ON DELETE SET NULL
 )
@@ -747,11 +751,11 @@ def _upgrade_github_installation_org(conn) -> None:
     import logging
 
     log = logging.getLogger("alembic.runtime.migration")
-    conn.execute(sa.text(_GITHUB_INSTALLATIONS))
+    conn.execute(sa.text(_CONNECTOR_INSTALLATIONS))
     conn.execute(
         sa.text(
-            "CREATE INDEX ix_github_installations_organization_id "
-            "ON github_installations (organization_id)"
+            "CREATE INDEX ix_connector_installations_organization_id "
+            "ON connector_installations (organization_id)"
         )
     )
     first: dict[str, tuple[object, object]] = {}
@@ -771,10 +775,10 @@ def _upgrade_github_installation_org(conn) -> None:
             continue
         conn.execute(
             sa.text(
-                "INSERT INTO github_installations (id, created_at, "
-                "installation_id, organization_id, bound_by_user_id) VALUES "
-                "(gen_random_uuid(), now(), :installation_id, :organization_id, "
-                ":user_id)"
+                "INSERT INTO connector_installations (id, created_at, "
+                "connector_id, external_id, organization_id, bound_by_user_id) "
+                "VALUES (gen_random_uuid(), now(), 'github', :installation_id, "
+                ":organization_id, :user_id)"
             ),
             {
                 "installation_id": installation_id,
@@ -807,7 +811,7 @@ def _upgrade_github_installation_org(conn) -> None:
 
 
 def _downgrade_github_installation_org(conn) -> None:
-    conn.execute(sa.text("DROP TABLE github_installations"))
+    conn.execute(sa.text("DROP TABLE connector_installations"))
 
 
 # ---------------------------------------------------------------------------
@@ -934,47 +938,89 @@ def _downgrade_slack_app_made_by_lemma(conn) -> None:
 
 
 # ---------------------------------------------------------------------------
-# A named agent or function no longer makes public links (audit M22)
+# Making a public link to a file is its own permission (audit M22)
 # ---------------------------------------------------------------------------
 #
-# A public link hands a file to anyone holding it, outside every grant: that is
-# a person's act. The assistant mints as its person; a named agent or function
-# is refused. `datastore_signed_links.minted_by_workload` recorded which
-# workload minted a link so each fetch could re-check it under that workload's
-# authority. Every link that carries one was minted under the rule this ends, so
-# those links are deleted rather than kept working, and the column goes.
+# A public link hands a file to anyone holding it, outside every grant. Any
+# `folder.read` holder could mint one -- a named agent included, with nothing
+# granted for it. `folder.share` is that act, alone: every person role holds it
+# (from `POD_VIEWER` up), and a named agent or function holds it only by a
+# grant.
 #
-# Their cached copies in Redis are invalidated by the store itself: it keys
-# entries under a new prefix (`signed_url._KEY_PREFIX`), so an entry cached
-# before this deploy is never read again and expires on its own.
+# Carried to everyone who could share before, so nothing a person did stops:
+# every role -- system or custom -- that reads files gets it, and every grant
+# that let a member or a role read files (`folder.read`, or `folder.write` /
+# `folder.delete`, which imply it), on a file, a folder or pod-wide, gets a
+# `folder.share` twin. Grants to an agent, a function, an app or another pod
+# are left out: that is the one thing this changes.
 #
-# The downgrade puts the column back, empty. The deleted links cannot be
-# restored: a link's code is the capability, and it is gone with its row.
+# Links already minted are kept, the ones a workload minted included.
+# `datastore_signed_links.minted_by_workload` still records which workload made
+# each, and every fetch re-checks the link under that workload's authority, so
+# a link stops serving as soon as its workload loses the read.
+#
+# The downgrade drops the permission, which cascades its role rows and grants.
+
+_FOLDER_SHARE = "folder.share"
+_FOLDER_READERS = ("folder.read", "folder.write", "folder.delete")
 
 
-def _upgrade_drop_workload_minted_links(conn) -> None:
+def _upgrade_folder_share_permission(conn) -> None:
     import logging
 
-    deleted = conn.execute(
+    conn.execute(
         sa.text(
-            "DELETE FROM datastore_signed_links WHERE minted_by_workload IS NOT NULL"
-        )
+            "INSERT INTO auth_permissions (id, scope, resource_type, description, "
+            "system_only, created_at, updated_at) VALUES (:id, 'POD', 'folder', "
+            "'Make public links to files', false, now(), now()) "
+            "ON CONFLICT (id) DO NOTHING"
+        ),
+        {"id": _FOLDER_SHARE},
+    )
+    roles = conn.execute(
+        sa.text(
+            "INSERT INTO role_permissions (id, role_id, permission_id, created_at) "
+            "SELECT gen_random_uuid(), r.id, :share, now() FROM roles r "
+            "WHERE EXISTS (SELECT 1 FROM role_permissions rp WHERE "
+            "rp.role_id = r.id AND rp.permission_id = ANY(:readers)) "
+            "ON CONFLICT ON CONSTRAINT uq_role_permissions_role_permission "
+            "DO NOTHING"
+        ),
+        {"share": _FOLDER_SHARE, "readers": list(_FOLDER_READERS)},
+    ).rowcount
+    grants = conn.execute(
+        sa.text(
+            "INSERT INTO resource_permission_grants (id, pod_id, resource_type, "
+            "resource_id, grantee_type, grantee_id, permission_id, "
+            "created_by_user_id, created_at) SELECT DISTINCT ON (pod_id, "
+            "resource_type, resource_id, grantee_type, grantee_id) "
+            "gen_random_uuid(), pod_id, resource_type, resource_id, grantee_type, "
+            "grantee_id, :share, created_by_user_id, created_at "
+            "FROM resource_permission_grants "
+            "WHERE permission_id = ANY(:readers) AND grantee_type = ANY(:people) "
+            "ORDER BY pod_id, resource_type, resource_id, grantee_type, "
+            "grantee_id, created_at "
+            "ON CONFLICT ON CONSTRAINT uq_resource_permission_grants_scope "
+            "DO NOTHING"
+        ),
+        {
+            "share": _FOLDER_SHARE,
+            "readers": list(_FOLDER_READERS),
+            "people": list(_PEOPLE),
+        },
     ).rowcount
     logging.getLogger("alembic.runtime.migration").info(
-        "0063: deleted %d public links a named agent or function had minted.",
-        deleted,
-    )
-    conn.execute(
-        sa.text("ALTER TABLE datastore_signed_links DROP COLUMN minted_by_workload")
+        "0063: gave folder.share to %d roles and %d member or role grants.",
+        roles,
+        grants,
     )
 
 
-def _downgrade_drop_workload_minted_links(conn) -> None:
+def _downgrade_folder_share_permission(conn) -> None:
+    # Cascades its role rows and every grant carrying it.
     conn.execute(
-        sa.text(
-            "ALTER TABLE datastore_signed_links "
-            "ADD COLUMN minted_by_workload VARCHAR(80)"
-        )
+        sa.text("DELETE FROM auth_permissions WHERE id = :id"),
+        {"id": _FOLDER_SHARE},
     )
 
 
@@ -996,7 +1042,7 @@ def upgrade() -> None:
     _upgrade_github_installation_org(conn)
     _upgrade_record_delete_permission(conn)
     _upgrade_slack_app_made_by_lemma(conn)
-    _upgrade_drop_workload_minted_links(conn)
+    _upgrade_folder_share_permission(conn)
 
 
 def _copy_grants(conn, *, from_type: str, to_type: str, rows) -> None:
@@ -1026,7 +1072,7 @@ def _copy_grants(conn, *, from_type: str, to_type: str, rows) -> None:
 
 def downgrade() -> None:
     conn = op.get_bind()
-    _downgrade_drop_workload_minted_links(conn)
+    _downgrade_folder_share_permission(conn)
     _downgrade_slack_app_made_by_lemma(conn)
     _downgrade_record_delete_permission(conn)
     _downgrade_github_installation_org(conn)

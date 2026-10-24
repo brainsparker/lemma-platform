@@ -103,23 +103,21 @@ class RestartHost(Protocol):
         """The overlay this process installs."""
 
     def _bundle_cache_key(
-        self, workspace_id: UUID, sandbox_info: SandboxInfo
+        self, user_id: UUID, sandbox_info: SandboxInfo
     ) -> _Incarnation | None:
         """The sandbox incarnation an installed overlay is remembered under."""
 
-    async def get_or_create_sandbox(self, workspace_id: UUID) -> SandboxInfo:
-        """The workspace sandbox, resumed or created as needed."""
+    async def get_or_create_sandbox(self, user_id: UUID) -> SandboxInfo:
+        """The user's workspace sandbox, resumed or created as needed."""
 
 
-def was_restarted(workspace_id: UUID, version: str) -> bool:
-    """Whether this process restarted this workspace sandbox towards `version`."""
-    return any(
-        key[1] == workspace_id and key[-1] == version for key in list(_restarted)
-    )
+def was_restarted(user_id: UUID, version: str) -> bool:
+    """Whether this process restarted any sandbox of this user towards `version`."""
+    return any(key[1] == user_id and key[-1] == version for key in list(_restarted))
 
 
 async def ensure_runtime_current(
-    host: RestartHost, workspace_id: UUID, sandbox_info: SandboxInfo
+    host: RestartHost, user_id: UUID, sandbox_info: SandboxInfo
 ) -> bool:
     """Restart the sandbox once if its server is not running the overlay.
 
@@ -127,12 +125,12 @@ async def ensure_runtime_current(
     stale and must be resolved again. Concurrent callers share one decision, so
     two sessions opening together restart it once.
     """
-    key = (id(asyncio.get_running_loop()), workspace_id)
+    key = (id(asyncio.get_running_loop()), user_id)
     task = _inflight.get(key)
     if task is None:
         task = create_inherited_task(
-            _restart_if_stale(host, workspace_id, sandbox_info),
-            name=f"workspace-runtime-restart:{workspace_id}",
+            _restart_if_stale(host, user_id, sandbox_info),
+            name=f"workspace-runtime-restart:{user_id}",
         )
         _inflight[key] = task
         task.add_done_callback(
@@ -144,10 +142,10 @@ async def ensure_runtime_current(
 
 
 async def _restart_if_stale(
-    host: RestartHost, workspace_id: UUID, sandbox_info: SandboxInfo
+    host: RestartHost, user_id: UUID, sandbox_info: SandboxInfo
 ) -> bool:
     bundle = host._runtime_bundle()
-    incarnation = host._bundle_cache_key(workspace_id, sandbox_info)
+    incarnation = host._bundle_cache_key(user_id, sandbox_info)
     # Only towards an overlay this sandbox is known to have: restarting onto a
     # failed install would bring the server back on the floor.
     if (
@@ -156,12 +154,12 @@ async def _restart_if_stale(
         or host._installed_bundles.get(incarnation) != bundle.version
     ):
         return False
-    state = await _runtime_state(host, workspace_id)
+    state = await _runtime_state(host, user_id)
     decision = decide_runtime_restart(state, bundle.version)
     if decision is RuntimeRestart.BUSY:
         logger.info(
             "workspace.runtime_restart.deferred_busy",
-            sandbox_id=str(workspace_id),
+            user_id=str(user_id),
             version=bundle.version,
             running_version=state.version if state else None,
         )
@@ -170,10 +168,10 @@ async def _restart_if_stale(
     if decision is not RuntimeRestart.RESTART or _restarted.get(restart_key):
         return False
     _restarted[restart_key] = True
-    return await _restart(host, workspace_id, bundle.version, state)
+    return await _restart(host, user_id, bundle.version, state)
 
 
-async def _runtime_state(host: RestartHost, workspace_id: UUID) -> RuntimeState | None:
+async def _runtime_state(host: RestartHost, user_id: UUID) -> RuntimeState | None:
     """The runtime's own answer, or None when it cannot give one.
 
     A getattr, because a manager client standing in for a fabric with no HTTP
@@ -184,46 +182,46 @@ async def _runtime_state(host: RestartHost, workspace_id: UUID) -> RuntimeState 
     if read is None:
         return None
     try:
-        return await read(WorkloadKind.WORKSPACE, workspace_id)
+        return await read(WorkloadKind.WORKSPACE, user_id)
     except _SANDBOX_FAILURES:
         logger.warning(
             "workspace.runtime_restart.state_unavailable.degraded",
-            sandbox_id=str(workspace_id),
+            user_id=str(user_id),
             exc_info=True,
         )
         return None
 
 
 async def _restart(
-    host: RestartHost, workspace_id: UUID, version: str, before: RuntimeState | None
+    host: RestartHost, user_id: UUID, version: str, before: RuntimeState | None
 ) -> bool:
     logger.info(
         "workspace.runtime_restart.restarting",
-        sandbox_id=str(workspace_id),
+        user_id=str(user_id),
         version=version,
         running_version=before.version if before else None,
     )
     try:
         await host._get_manager_client().release_sandbox(
-            WorkloadKind.WORKSPACE, workspace_id
+            WorkloadKind.WORKSPACE, user_id
         )
-        resumed = await host.get_or_create_sandbox(workspace_id)
+        resumed = await host.get_or_create_sandbox(user_id)
     except _SANDBOX_FAILURES:
         logger.warning(
             "workspace.runtime_restart.restart_failed.degraded",
-            sandbox_id=str(workspace_id),
+            user_id=str(user_id),
             version=version,
             exc_info=True,
         )
         return True
-    resumed_incarnation = host._bundle_cache_key(workspace_id, resumed)
+    resumed_incarnation = host._bundle_cache_key(user_id, resumed)
     if resumed_incarnation is not None:
         _restarted[(*resumed_incarnation, version)] = True
-    after = await _runtime_state(host, workspace_id)
+    after = await _runtime_state(host, user_id)
     if after is not None and after.version != version:
         logger.error(
             "workspace.runtime_restart.still_stale.failed",
-            sandbox_id=str(workspace_id),
+            user_id=str(user_id),
             version=version,
             running_version=after.version,
         )

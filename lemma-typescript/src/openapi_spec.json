@@ -7048,6 +7048,20 @@
       "CreateScheduleRequest": {
         "description": "Request to create a pod schedule.",
         "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "deprecated": true,
+            "description": "Deprecated: name `pod_connector` instead. Still accepted, as the pod connector that serves this account to you.",
+            "title": "Account Id"
+          },
           "agent_name": {
             "anyOf": [
               {
@@ -11910,6 +11924,20 @@
         "additionalProperties": false,
         "description": "Body for starting a URL-based import.",
         "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "deprecated": true,
+            "description": "Deprecated and ignored: a private repo is fetched through the pod's `github` connector, as you.",
+            "title": "Account Id"
+          },
           "kind": {
             "$ref": "#/components/schemas/BundleSourceKind",
             "description": "URL (a lemma signed download URL) or GITHUB (a public repo)."
@@ -12347,6 +12375,48 @@
           "pod_connectors"
         ],
         "title": "InstallationImpactResponse",
+        "type": "object"
+      },
+      "InstallationOperationExecutionRequest": {
+        "description": "The deprecated org-level execute's body: an installation, maybe an account.",
+        "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "deprecated": true,
+            "description": "Deprecated. Served only if it is the account a pod connector for this installation resolves to, or your own on a per-member one.",
+            "title": "Account Id"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "description": "The operation's arguments. A file argument takes a reference -- `{\"pod_path\": \"/me/report.pdf\"}`, `{\"file_id\": \"...\"}`, `{\"url\": \"https://...\"}` or `{\"base64\": \"...\", \"filename\": \"...\"}` -- read with the caller's own access before the call is made. `output_path` chooses where a file result lands in the pod.",
+            "title": "Payload",
+            "type": "object"
+          },
+          "pod_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The pod whose connectors serve the call, and that file references resolve in. Implied for a call made from inside a pod.",
+            "title": "Pod Id"
+          }
+        },
+        "required": [
+          "payload"
+        ],
+        "title": "InstallationOperationExecutionRequest",
         "type": "object"
       },
       "InstalledAppSummary": {
@@ -16850,6 +16920,20 @@
         "additionalProperties": false,
         "description": "Body for publishing a pod to GitHub.",
         "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "deprecated": true,
+            "description": "Deprecated and ignored: the publish runs as the account the pod's `github` connector resolves to for you.",
+            "title": "Account Id"
+          },
           "ai_readme": {
             "default": false,
             "description": "Polish the generated README with the system model.",
@@ -16895,6 +16979,19 @@
       "PublishStatusResponse": {
         "description": "Status of a pod publish job (pure Redis read).",
         "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "deprecated": true,
+            "title": "Account Id"
+          },
           "connect_url": {
             "anyOf": [
               {
@@ -17697,6 +17794,19 @@
       "ScheduleDetailResponse": {
         "description": "Schedule detail response.",
         "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "deprecated": true,
+            "title": "Account Id"
+          },
           "agent_id": {
             "anyOf": [
               {
@@ -19998,6 +20108,20 @@
         "additionalProperties": false,
         "description": "Body for `POST /pods/{pod_id}/surfaces` \u2014 creates one surface.\n\nA pod may have several surfaces of the same ``platform`` \u2014 one bot per\nagent is the model, not the exception; ``name`` is the stable,\npod-unique identifier used to address it afterward. When omitted, it\ndefaults to the lowercased platform (so the common single-surface-per-\nplatform case needs no name at all) \u2014 pick an explicit name to create a\nsecond surface of the same platform.",
         "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "deprecated": true,
+            "description": "Deprecated: name `pod_connector` instead. Still accepted, as the pod connector that serves this account to you.",
+            "title": "Account Id"
+          },
           "config": {
             "$ref": "#/components/schemas/SurfaceBehaviorConfigInput"
           },
@@ -20591,6 +20715,20 @@
         "additionalProperties": false,
         "description": "Body for `PATCH /pods/{pod_id}/surfaces/{surface_name}`.\n\nPartial update (merge semantics): only fields present in the request are\napplied. The surface's ``platform`` and ``name`` are immutable \u2014 delete and\nrecreate to change either.",
         "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "deprecated": true,
+            "description": "Deprecated: name `pod_connector` instead. Still accepted, as the pod connector that serves this account to you.",
+            "title": "Account Id"
+          },
           "config": {
             "$ref": "#/components/schemas/SurfaceBehaviorConfigInput"
           },
@@ -29192,6 +29330,91 @@
           "result": "entity",
           "verb": "detail"
         }
+      }
+    },
+    "/organizations/{organization_id}/connectors/{auth_config_name}/operations/{operation_name}/execute": {
+      "post": {
+        "deprecated": true,
+        "description": "Deprecated: use `pod.connector.operation.execute`. Still served, through the connectors the caller's pod declares for this installation; a person outside any pod uses their own account.",
+        "operationId": "connector.operation.execute",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Organization Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "auth_config_name",
+            "required": true,
+            "schema": {
+              "title": "Auth Config Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "operation_name",
+            "required": true,
+            "schema": {
+              "title": "Operation Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InstallationOperationExecutionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationExecutionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Execute Connector Operation (deprecated)",
+        "tags": [
+          "Connectors"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "connector.operation"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "connector.operation",
+          "result": "entity",
+          "verb": "execute"
+        },
+        "x-lemma-replacement": "call POST /pods/{pod_id}/connectors/{slug}/operations/{operation}/execute with the pod connector's slug (SDK: pod.connectors.execute(slug, ...)); the connector decides the account, so drop account_id",
+        "x-lemma-sunset": "2027-01-31"
       }
     },
     "/organizations/{organization_id}/connectors/{auth_config_name}/triggers": {
@@ -51620,44 +51843,6 @@
               "title": "Origin",
               "type": "string"
             }
-          },
-          {
-            "description": "The pod whose browser to manage. Omitted, your personal one.",
-            "in": "query",
-            "name": "pod_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "format": "uuid",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "The pod whose browser to manage. Omitted, your personal one.",
-              "title": "Pod Id"
-            }
-          },
-          {
-            "description": "A named agent of `pod_id`, to manage that agent's browser. Omitted, the pod assistant's.",
-            "in": "query",
-            "name": "agent",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "format": "uuid",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "A named agent of `pod_id`, to manage that agent's browser. Omitted, the pod assistant's.",
-              "title": "Agent"
-            }
           }
         ],
         "responses": {
@@ -51700,44 +51885,6 @@
       "get": {
         "operationId": "web_login.list",
         "parameters": [
-          {
-            "description": "The pod whose browser to manage. Omitted, your personal one.",
-            "in": "query",
-            "name": "pod_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "format": "uuid",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "The pod whose browser to manage. Omitted, your personal one.",
-              "title": "Pod Id"
-            }
-          },
-          {
-            "description": "A named agent of `pod_id`, to manage that agent's browser. Omitted, the pod assistant's.",
-            "in": "query",
-            "name": "agent",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "format": "uuid",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "A named agent of `pod_id`, to manage that agent's browser. Omitted, the pod assistant's.",
-              "title": "Agent"
-            }
-          },
           {
             "description": "Start the computer if it is paused. Off by default so that rendering this list is never what wakes one.",
             "in": "query",
@@ -51921,46 +52068,6 @@
     "/workspace/apps/browser/access": {
       "post": {
         "operationId": "workspace.browser.access",
-        "parameters": [
-          {
-            "description": "The pod whose workspace to use. Each pod has its own, with its own files and browser. Omitted, your personal workspace.",
-            "in": "query",
-            "name": "pod_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "format": "uuid",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "The pod whose workspace to use. Each pod has its own, with its own files and browser. Omitted, your personal workspace.",
-              "title": "Pod Id"
-            }
-          },
-          {
-            "description": "A named agent of `pod_id`, to use that agent's workspace. Each agent has its own. Omitted, the pod assistant's.",
-            "in": "query",
-            "name": "agent",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "format": "uuid",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "A named agent of `pod_id`, to use that agent's workspace. Each agent has its own. Omitted, the pod assistant's.",
-              "title": "Agent"
-            }
-          }
-        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -52022,44 +52129,6 @@
               "title": "Origin",
               "type": "string"
             }
-          },
-          {
-            "description": "The pod whose workspace to use. Each pod has its own, with its own files and browser. Omitted, your personal workspace.",
-            "in": "query",
-            "name": "pod_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "format": "uuid",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "The pod whose workspace to use. Each pod has its own, with its own files and browser. Omitted, your personal workspace.",
-              "title": "Pod Id"
-            }
-          },
-          {
-            "description": "A named agent of `pod_id`, to use that agent's workspace. Each agent has its own. Omitted, the pod assistant's.",
-            "in": "query",
-            "name": "agent",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "format": "uuid",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "A named agent of `pod_id`, to use that agent's workspace. Each agent has its own. Omitted, the pod assistant's.",
-              "title": "Agent"
-            }
           }
         ],
         "responses": {
@@ -52101,46 +52170,6 @@
       "post": {
         "description": "Resize the sandbox display so the picture matches the pane.\n\nThe alternative, and what this replaces, is one fixed display scaled to\nfit: a 3:2 screen letterboxed into whatever box it lands in, small and\nringed with dead space. Resizing the display itself means the pixels sent\nare the pixels shown -- and a narrow pane gets a narrow *viewport*, so a\nsite serves its mobile layout to somebody signing in on a phone.\n\nA failure here is not an error for the person: they keep the display they\nhad. So an unreachable or sleeping sandbox answers with no size rather\nthan a status code the pane would have to special-case.",
         "operationId": "workspace.browser.resize_display",
-        "parameters": [
-          {
-            "description": "The pod whose workspace to use. Each pod has its own, with its own files and browser. Omitted, your personal workspace.",
-            "in": "query",
-            "name": "pod_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "format": "uuid",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "The pod whose workspace to use. Each pod has its own, with its own files and browser. Omitted, your personal workspace.",
-              "title": "Pod Id"
-            }
-          },
-          {
-            "description": "A named agent of `pod_id`, to use that agent's workspace. Each agent has its own. Omitted, the pod assistant's.",
-            "in": "query",
-            "name": "agent",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "format": "uuid",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "A named agent of `pod_id`, to use that agent's workspace. Each agent has its own. Omitted, the pod assistant's.",
-              "title": "Agent"
-            }
-          }
-        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -52192,46 +52221,6 @@
     "/workspace/browser/status": {
       "get": {
         "operationId": "workspace.browser.status",
-        "parameters": [
-          {
-            "description": "The pod whose workspace to use. Each pod has its own, with its own files and browser. Omitted, your personal workspace.",
-            "in": "query",
-            "name": "pod_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "format": "uuid",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "The pod whose workspace to use. Each pod has its own, with its own files and browser. Omitted, your personal workspace.",
-              "title": "Pod Id"
-            }
-          },
-          {
-            "description": "A named agent of `pod_id`, to use that agent's workspace. Each agent has its own. Omitted, the pod assistant's.",
-            "in": "query",
-            "name": "agent",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "format": "uuid",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "A named agent of `pod_id`, to use that agent's workspace. Each agent has its own. Omitted, the pod assistant's.",
-              "title": "Agent"
-            }
-          }
-        ],
         "responses": {
           "200": {
             "content": {
@@ -52242,16 +52231,6 @@
               }
             },
             "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
           }
         },
         "summary": "Whether the workspace browser can be watched",
@@ -52286,44 +52265,6 @@
                 }
               ],
               "title": "Path"
-            }
-          },
-          {
-            "description": "The pod whose workspace to use. Each pod has its own, with its own files and browser. Omitted, your personal workspace.",
-            "in": "query",
-            "name": "pod_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "format": "uuid",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "The pod whose workspace to use. Each pod has its own, with its own files and browser. Omitted, your personal workspace.",
-              "title": "Pod Id"
-            }
-          },
-          {
-            "description": "A named agent of `pod_id`, to use that agent's workspace. Each agent has its own. Omitted, the pod assistant's.",
-            "in": "query",
-            "name": "agent",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "format": "uuid",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "A named agent of `pod_id`, to use that agent's workspace. Each agent has its own. Omitted, the pod assistant's.",
-              "title": "Agent"
             }
           },
           {
@@ -52406,44 +52347,6 @@
               "minLength": 1,
               "title": "Path",
               "type": "string"
-            }
-          },
-          {
-            "description": "The pod whose workspace to use. Each pod has its own, with its own files and browser. Omitted, your personal workspace.",
-            "in": "query",
-            "name": "pod_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "format": "uuid",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "The pod whose workspace to use. Each pod has its own, with its own files and browser. Omitted, your personal workspace.",
-              "title": "Pod Id"
-            }
-          },
-          {
-            "description": "A named agent of `pod_id`, to use that agent's workspace. Each agent has its own. Omitted, the pod assistant's.",
-            "in": "query",
-            "name": "agent",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "format": "uuid",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "A named agent of `pod_id`, to use that agent's workspace. Each agent has its own. Omitted, the pod assistant's.",
-              "title": "Agent"
             }
           },
           {
@@ -52550,44 +52453,6 @@
               "title": "Path",
               "type": "string"
             }
-          },
-          {
-            "description": "The pod whose workspace to use. Each pod has its own, with its own files and browser. Omitted, your personal workspace.",
-            "in": "query",
-            "name": "pod_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "format": "uuid",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "The pod whose workspace to use. Each pod has its own, with its own files and browser. Omitted, your personal workspace.",
-              "title": "Pod Id"
-            }
-          },
-          {
-            "description": "A named agent of `pod_id`, to use that agent's workspace. Each agent has its own. Omitted, the pod assistant's.",
-            "in": "query",
-            "name": "agent",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "format": "uuid",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "A named agent of `pod_id`, to use that agent's workspace. Each agent has its own. Omitted, the pod assistant's.",
-              "title": "Agent"
-            }
           }
         ],
         "responses": {
@@ -52628,46 +52493,6 @@
     "/workspace/status": {
       "get": {
         "operationId": "workspace.status",
-        "parameters": [
-          {
-            "description": "The pod whose workspace to use. Each pod has its own, with its own files and browser. Omitted, your personal workspace.",
-            "in": "query",
-            "name": "pod_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "format": "uuid",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "The pod whose workspace to use. Each pod has its own, with its own files and browser. Omitted, your personal workspace.",
-              "title": "Pod Id"
-            }
-          },
-          {
-            "description": "A named agent of `pod_id`, to use that agent's workspace. Each agent has its own. Omitted, the pod assistant's.",
-            "in": "query",
-            "name": "agent",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "format": "uuid",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "A named agent of `pod_id`, to use that agent's workspace. Each agent has its own. Omitted, the pod assistant's.",
-              "title": "Agent"
-            }
-          }
-        ],
         "responses": {
           "200": {
             "content": {
@@ -52678,16 +52503,6 @@
               }
             },
             "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
           }
         },
         "summary": "Whether your computer is ready",

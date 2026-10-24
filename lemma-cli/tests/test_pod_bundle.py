@@ -2854,10 +2854,13 @@ def test_variable_applier_resolves_and_strips_unresolved(tmp_path: Path):
     assert out["keep"] == "value"
 
 
-def test_a_bundle_asking_for_an_account_is_refused(tmp_path: Path):
-    """Bundles name the pod connector a resource runs through; one that asks
-    the importer for an account predates that and would import resources
-    wired to an id nothing reads any more."""
+def test_a_bundle_asking_for_an_account_still_imports_with_a_warning(
+    tmp_path: Path, capsys
+):
+    """An ``account`` variable predates pod connectors. It is deprecated, not
+    refused -- templates nobody re-exported still import, as the server's
+    importer takes them: an optional variable, resolved only by --var (never
+    by the exporting org's recorded default)."""
     from lemma_cli.cli_app.pod_bundle import _build_variable_applier
 
     (tmp_path / "pod.json").write_text(
@@ -2865,20 +2868,154 @@ def test_a_bundle_asking_for_an_account_is_refused(tmp_path: Path):
             {
                 "name": "demo",
                 "variables": {
-                    "slack_account": {"type": "account", "connector": "slack"}
+                    "slack_account": {
+                        "type": "account",
+                        "connector": "slack",
+                        "default": "acct-from-the-exporting-org",
+                    }
                 },
             }
         ),
         encoding="utf-8",
     )
-    with pytest.raises(ValueError, match="slack_account.*pod connector"):
-        _build_variable_applier(
+
+    def applier(overrides):
+        return _build_variable_applier(
             client=None,
             pod_sdk=None,
             source_dir=tmp_path,
-            var_overrides=None,
+            var_overrides=overrides,
             member_override=None,
         )
+
+    unsupplied = applier(None)
+    assert "slack_account" in _console_text(capsys)
+    assert unsupplied({"account_id": "${slack_account}", "keep": 1}) == {"keep": 1}
+
+    supplied = applier({"slack_account": "acct-mine"})
+    assert supplied({"account_id": "${slack_account}"}) == {"account_id": "acct-mine"}
+
+
+def _console_text(capsys) -> str:
+    """What the import printed, with rich's line wrapping undone."""
+    captured = capsys.readouterr()
+    return " ".join((captured.out + captured.err).split())
+
+
+def _account_bundle(root: Path) -> Path:
+    """A bundle exported before pod connectors: a webhook schedule and a
+    surface that name an account through an ``account`` variable."""
+    (root / "pod.json").write_text(
+        json.dumps(
+            {
+                "name": "demo",
+                "variables": {"gmail_account": {"type": "account"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    schedule_dir = root / "schedules" / "inbox-watch"
+    schedule_dir.mkdir(parents=True)
+    (schedule_dir / "inbox-watch.json").write_text(
+        json.dumps(
+            {
+                "name": "inbox-watch",
+                "schedule_type": "WEBHOOK",
+                "agent_name": "triage",
+                "config": {"source": "composio"},
+                "account_id": "${gmail_account}",
+                "connector_trigger_id": "gmail:new_message",
+            }
+        ),
+        encoding="utf-8",
+    )
+    surface_dir = root / "surfaces" / "slack"
+    surface_dir.mkdir(parents=True)
+    (surface_dir / "slack.json").write_text(
+        json.dumps(
+            {
+                "name": "slack",
+                "platform": "SLACK",
+                "default_agent_name": "triage",
+                "account_id": "${gmail_account}",
+            }
+        ),
+        encoding="utf-8",
+    )
+    return root
+
+
+def _account_bundle_client(created: list, upserted: list) -> FakeClient:
+    empty = {"items": []}
+    return FakeClient(
+        tables=SimpleNamespace(list=lambda pod_id, limit=1000: empty),
+        functions=SimpleNamespace(list=lambda pod_id, limit=1000: empty),
+        agents=SimpleNamespace(list=lambda pod_id, limit=1000: empty),
+        workflows=SimpleNamespace(list=lambda pod_id, limit=1000: empty),
+        apps=SimpleNamespace(list=lambda pod_id, limit=1000: empty),
+        schedules=SimpleNamespace(
+            list=lambda pod_id, limit=1000: empty,
+            create=lambda pod_id, request: (
+                created.append(_plain(request)) or {"id": "sch-1", **_plain(request)}
+            ),
+        ),
+        surfaces=SimpleNamespace(
+            list=lambda pod_id, limit=100: empty,
+            upsert=lambda pod_id, name, payload: (
+                upserted.append(_plain(payload)) or {"name": name}
+            ),
+        ),
+        files=SimpleNamespace(
+            tree=lambda pod_id, root_path="/", files_per_directory=20: {
+                "tree": {"path": "/", "name": "/", "kind": "FOLDER", "children": []}
+            }
+        ),
+    )
+
+
+def test_an_account_named_schedule_is_skipped_when_no_account_is_supplied(
+    tmp_path: Path, capsys
+):
+    """Without an account the schedule cannot listen: it is left out and said
+    so, rather than failing the import -- the server's importer does the same."""
+    created: list = []
+    upserted: list = []
+    result = import_pod_bundle(
+        _account_bundle_client(created, upserted),
+        pod_id="pod_123",
+        source_dir=_account_bundle(tmp_path),
+    )
+
+    assert result["ok"] is True
+    assert created == []
+    assert result["summary"]["schedules"] == ["skipped:inbox-watch"]
+    # The surface still imports, on the platform's own bot, with no account.
+    assert len(upserted) == 1 and "account_id" not in upserted[0]
+    out = _console_text(capsys)
+    assert "'inbox-watch' named a connected account" in out
+    assert "not imported" in out
+    assert "surface 'slack' names an account (deprecated)" in out
+
+
+def test_an_account_named_schedule_sends_the_supplied_account_deprecated(
+    tmp_path: Path,
+):
+    """Given an account, the schedule is created with the deprecated
+    ``account_id``, which the server turns into the pod connector serving it."""
+    created: list = []
+    upserted: list = []
+    result = import_pod_bundle(
+        _account_bundle_client(created, upserted),
+        pod_id="pod_123",
+        source_dir=_account_bundle(tmp_path),
+        variables={"gmail_account": "11111111-2222-3333-4444-555555555555"},
+    )
+
+    assert result["ok"] is True
+    assert result["summary"]["schedules"] == ["created:inbox-watch"]
+    assert created[0]["account_id"] == "11111111-2222-3333-4444-555555555555"
+    assert "pod_connector" not in created[0]
+    assert upserted[0]["account_id"] == "11111111-2222-3333-4444-555555555555"
 
 
 def test_variable_applier_rejects_unknown_var(tmp_path: Path):

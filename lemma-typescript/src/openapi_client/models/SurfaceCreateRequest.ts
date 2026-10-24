@@ -16,6 +16,11 @@ import type { SurfacePlatform } from './SurfacePlatform.js';
  * second surface of the same platform.
  */
 export type SurfaceCreateRequest = {
+    /**
+     * Deprecated: name `pod_connector` instead. Still accepted, as the pod connector that serves this account to you.
+     * @deprecated
+     */
+    account_id?: (string | null);
     config?: SurfaceBehaviorConfigInput;
     credential_mode?: SurfaceCredentialMode;
     default_agent_name?: (string | null);

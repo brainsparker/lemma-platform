@@ -104,6 +104,30 @@ async def resolve_pod_connector(
     return _present(await resolver.resolve(ctx, connector))
 
 
+async def pod_connector_for_account(
+    uow: SqlAlchemyUnitOfWork, ctx: Context, *, pod_id: UUID, account_id: UUID
+) -> str:
+    """The slug of the pod connector a deprecated ``account_id`` means.
+
+    For request fields that used to take an account: they are still accepted,
+    and translated here into the pod connector that serves that account to
+    this caller -- the shared connector it is shared through, or a per-member
+    one for the caller's own account. Nothing a slug could not reach is
+    reachable this way; ``serve_installation`` refuses the rest.
+    """
+    resolver = _resolver(uow)
+    account = await resolver.accounts.get(account_id)
+    auth_config = (
+        await resolver.auth_configs.get(account.auth_config_id) if account else None
+    )
+    if account is None or auth_config is None:
+        raise AccountNotFoundError(str(account_id))
+    resolved = await resolver.serve_installation(
+        ctx, pod_id=pod_id, auth_config=auth_config, account_id=account_id
+    )
+    return resolved.pod_connector.slug
+
+
 async def resolve_standing_pod_connector(
     uow: SqlAlchemyUnitOfWork,
     *,

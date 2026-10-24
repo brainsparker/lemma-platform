@@ -57,6 +57,12 @@ class Permissions:
     FOLDER_READ: ClassVar[str] = "folder.read"
     FOLDER_WRITE: ClassVar[str] = "folder.write"
     FOLDER_DELETE: ClassVar[str] = "folder.delete"
+    #: Make a public link to a file: anyone holding it can open the file, outside
+    #: every grant. Its own permission, not part of ``folder.read``, so a named
+    #: agent or function makes one only where it was granted to (audit M22).
+    #: Every person role holds it; it does not imply ``folder.read``, which
+    #: minting a link also needs.
+    FOLDER_SHARE: ClassVar[str] = "folder.share"
 
     APP_READ: ClassVar[str] = "app.read"
     APP_CREATE: ClassVar[str] = "app.create"
@@ -233,6 +239,12 @@ PERMISSION_DEFINITIONS: tuple[PermissionDefinition, ...] = (
         "folder",
         "Delete folders and files",
     ),
+    PermissionDefinition(
+        Permissions.FOLDER_SHARE,
+        PermissionScope.POD,
+        "folder",
+        "Make public links to files",
+    ),
     PermissionDefinition(Permissions.APP_READ, PermissionScope.POD, "app", "Read apps"),
     PermissionDefinition(
         Permissions.APP_CREATE, PermissionScope.POD, "app", "Create apps"
@@ -387,6 +399,11 @@ POD_VIEWER_PERMISSIONS: frozenset[str] = frozenset(
         Permissions.DATASTORE_TABLE_READ,
         Permissions.DATASTORE_RECORD_READ,
         Permissions.FOLDER_READ,
+        # Whoever reads files may hand one on by a public link, as before this
+        # was its own permission. What separating it changes is software: a
+        # named agent's or function's grants decide, and a grant of
+        # ``folder.read`` no longer carries it.
+        Permissions.FOLDER_SHARE,
         Permissions.APP_READ,
         Permissions.AGENT_READ,
         Permissions.FUNCTION_READ,

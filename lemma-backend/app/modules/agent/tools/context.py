@@ -106,13 +106,8 @@ class BaseAgentContext(AgentContext):
         # The VM workspace's cwd even on a host-execution run: this manager
         # reaches the VM, and the host root means nothing there.
         refuse_owner_workspace(self)
-        # The run's pod and agent name the workspace: each actor in a pod has
-        # its own, and the agent's shell runs in this one.
         return WorkspaceFileManager(
-            self.user_id,
-            cwd=self.workspace_cwd or WORKSPACE_ROOT,
-            pod_id=self.pod_id,
-            actor_id=self.workload_id,
+            self.user_id, cwd=self.workspace_cwd or WORKSPACE_ROOT
         )
 
     async def get_subscription_models(self) -> SubscriptionModels:

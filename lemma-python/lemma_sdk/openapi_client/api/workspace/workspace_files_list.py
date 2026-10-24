@@ -1,6 +1,5 @@
 from http import HTTPStatus
 from typing import Any
-from uuid import UUID
 
 import httpx
 
@@ -14,8 +13,6 @@ from ...types import UNSET, Response, Unset
 def _get_kwargs(
     *,
     path: None | str | Unset = UNSET,
-    pod_id: None | Unset | UUID = UNSET,
-    agent: None | Unset | UUID = UNSET,
     wake: bool | Unset = False,
     after: None | str | Unset = UNSET,
 ) -> dict[str, Any]:
@@ -28,24 +25,6 @@ def _get_kwargs(
     else:
         json_path = path
     params["path"] = json_path
-
-    json_pod_id: None | str | Unset
-    if isinstance(pod_id, Unset):
-        json_pod_id = UNSET
-    elif isinstance(pod_id, UUID):
-        json_pod_id = str(pod_id)
-    else:
-        json_pod_id = pod_id
-    params["pod_id"] = json_pod_id
-
-    json_agent: None | str | Unset
-    if isinstance(agent, Unset):
-        json_agent = UNSET
-    elif isinstance(agent, UUID):
-        json_agent = str(agent)
-    else:
-        json_agent = agent
-    params["agent"] = json_agent
 
     params["wake"] = wake
 
@@ -101,8 +80,6 @@ def sync_detailed(
     *,
     client: AuthenticatedClient | Client,
     path: None | str | Unset = UNSET,
-    pod_id: None | Unset | UUID = UNSET,
-    agent: None | Unset | UUID = UNSET,
     wake: bool | Unset = False,
     after: None | str | Unset = UNSET,
 ) -> Response[ErrorResponse | WorkspaceFileListResponse]:
@@ -110,10 +87,6 @@ def sync_detailed(
 
     Args:
         path (None | str | Unset):
-        pod_id (None | Unset | UUID): The pod whose workspace to use. Each pod has its own, with
-            its own files and browser. Omitted, your personal workspace.
-        agent (None | Unset | UUID): A named agent of `pod_id`, to use that agent's workspace.
-            Each agent has its own. Omitted, the pod assistant's.
         wake (bool | Unset): Start the workspace if it is paused. Off by default. Default: False.
         after (None | str | Unset): Continue after this entry's path, from a previous response's
             `next_after`.
@@ -128,8 +101,6 @@ def sync_detailed(
 
     kwargs = _get_kwargs(
         path=path,
-        pod_id=pod_id,
-        agent=agent,
         wake=wake,
         after=after,
     )
@@ -145,8 +116,6 @@ def sync(
     *,
     client: AuthenticatedClient | Client,
     path: None | str | Unset = UNSET,
-    pod_id: None | Unset | UUID = UNSET,
-    agent: None | Unset | UUID = UNSET,
     wake: bool | Unset = False,
     after: None | str | Unset = UNSET,
 ) -> ErrorResponse | WorkspaceFileListResponse | None:
@@ -154,10 +123,6 @@ def sync(
 
     Args:
         path (None | str | Unset):
-        pod_id (None | Unset | UUID): The pod whose workspace to use. Each pod has its own, with
-            its own files and browser. Omitted, your personal workspace.
-        agent (None | Unset | UUID): A named agent of `pod_id`, to use that agent's workspace.
-            Each agent has its own. Omitted, the pod assistant's.
         wake (bool | Unset): Start the workspace if it is paused. Off by default. Default: False.
         after (None | str | Unset): Continue after this entry's path, from a previous response's
             `next_after`.
@@ -173,8 +138,6 @@ def sync(
     return sync_detailed(
         client=client,
         path=path,
-        pod_id=pod_id,
-        agent=agent,
         wake=wake,
         after=after,
     ).parsed
@@ -184,8 +147,6 @@ async def asyncio_detailed(
     *,
     client: AuthenticatedClient | Client,
     path: None | str | Unset = UNSET,
-    pod_id: None | Unset | UUID = UNSET,
-    agent: None | Unset | UUID = UNSET,
     wake: bool | Unset = False,
     after: None | str | Unset = UNSET,
 ) -> Response[ErrorResponse | WorkspaceFileListResponse]:
@@ -193,10 +154,6 @@ async def asyncio_detailed(
 
     Args:
         path (None | str | Unset):
-        pod_id (None | Unset | UUID): The pod whose workspace to use. Each pod has its own, with
-            its own files and browser. Omitted, your personal workspace.
-        agent (None | Unset | UUID): A named agent of `pod_id`, to use that agent's workspace.
-            Each agent has its own. Omitted, the pod assistant's.
         wake (bool | Unset): Start the workspace if it is paused. Off by default. Default: False.
         after (None | str | Unset): Continue after this entry's path, from a previous response's
             `next_after`.
@@ -211,8 +168,6 @@ async def asyncio_detailed(
 
     kwargs = _get_kwargs(
         path=path,
-        pod_id=pod_id,
-        agent=agent,
         wake=wake,
         after=after,
     )
@@ -226,8 +181,6 @@ async def asyncio(
     *,
     client: AuthenticatedClient | Client,
     path: None | str | Unset = UNSET,
-    pod_id: None | Unset | UUID = UNSET,
-    agent: None | Unset | UUID = UNSET,
     wake: bool | Unset = False,
     after: None | str | Unset = UNSET,
 ) -> ErrorResponse | WorkspaceFileListResponse | None:
@@ -235,10 +188,6 @@ async def asyncio(
 
     Args:
         path (None | str | Unset):
-        pod_id (None | Unset | UUID): The pod whose workspace to use. Each pod has its own, with
-            its own files and browser. Omitted, your personal workspace.
-        agent (None | Unset | UUID): A named agent of `pod_id`, to use that agent's workspace.
-            Each agent has its own. Omitted, the pod assistant's.
         wake (bool | Unset): Start the workspace if it is paused. Off by default. Default: False.
         after (None | str | Unset): Continue after this entry's path, from a previous response's
             `next_after`.
@@ -255,8 +204,6 @@ async def asyncio(
         await asyncio_detailed(
             client=client,
             path=path,
-            pod_id=pod_id,
-            agent=agent,
             wake=wake,
             after=after,
         )

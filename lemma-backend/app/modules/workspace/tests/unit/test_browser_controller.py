@@ -27,10 +27,7 @@ async def test_workspace_browser_access_uses_canonical_signed_port_grant(
     expires_at = datetime.now(timezone.utc) + timedelta(minutes=30)
 
     class FakeService:
-        async def create_browser_access(
-            self, logical_id, *, ttl_seconds, pod_id, actor_id
-        ):
-            assert pod_id is None and actor_id is None
+        async def create_browser_access(self, logical_id, *, ttl_seconds):
             calls.append((logical_id, ttl_seconds))
             return PortAccessGrant(
                 key=SandboxKey(

@@ -285,18 +285,19 @@ async def test_stream_bench_stack(
         assert "Stream probe" in (opened.stdout or ""), opened
 
         expires = datetime.now(timezone.utc) + timedelta(hours=6)
+        machine = (await authenticated_client.get("/machines/me")).json()
         grant = (
             await WorkspaceSandboxService()
             ._get_manager_client()
             .create_port_access(
-                None, UUID(fixed_test_user["id"]), PROBE_PORT, expires_at=expires
+                None, UUID(machine["id"]), PROBE_PORT, expires_at=expires
             )
         )
         # The grant names the configured API host; the bench reaches this process.
         probe_url = (
             backend_server["host_base_url"]
-            + "/public/workspace-ports/"
-            + grant.url.split("/public/workspace-ports/", 1)[1]
+            + "/public/machine-ports/"
+            + grant.url.split("/public/machine-ports/", 1)[1]
         )
 
         target = {

@@ -1,37 +1,10 @@
-import { ApiError } from "../http.js";
 import type { HttpClient } from "../http.js";
+import { MachinesNamespace } from "./machines.js";
 
-/**
- * The most the server will return from one read, whatever is asked for.
- *
- * `_MAX_CONTENT_BYTES` in the files controller. Kept here so the chunked
- * reader clamps to it rather than discovering it a slice at a time.
- */
-export const MAX_READ_BYTES = 8 * 1024 * 1024;
+export { MAX_READ_BYTES } from "./machines.js";
 
-function contentPath(path: string, options: { offset?: number; length?: number } = {}): string {
-  const query = new URLSearchParams({ path });
-  if (options.offset) query.set("offset", String(options.offset));
-  if (options.length) query.set("length", String(options.length));
-  return `/workspace/files:content?${query.toString()}`;
-}
-
-function rangeHeader(range: { start: number; end: number }): Record<string, string> {
-  return { Range: `bytes=${range.start}-${range.end}` };
-}
-
-/**
- * Whether a response to `Range: bytes=<start>-…` is the slice asked for: a
- * 206, or a `Content-Range` that starts at `start`. A `Content-Range` that
- * starts anywhere else is a different slice, whatever the status.
- */
-function rangeHonoured(status: number, contentRange: string | null, start: number): boolean {
-  if (contentRange) {
-    const match = /^bytes (\d+)-\d+\/(?:\d+|\*)$/.exec(contentRange.trim());
-    return match !== null && Number(match[1]) === start;
-  }
-  return status === 206;
-}
+/** The ref every `workspace` call is for: the person's own default machine. */
+const ME = "me";
 
 /** One entry in a workspace directory listing. */
 export interface WorkspaceFileEntry {
@@ -65,17 +38,6 @@ export interface WorkspaceFileListResponse {
   entries: WorkspaceFileEntry[];
 }
 
-/**
- * The caller's own sandbox files, read-only.
- *
- * Hand-written rather than generated because these routes are keyed by the
- * session's user rather than by a pod, so they carry no `podId` and sit outside
- * every pod-scoped service the generator produces.
- *
- * `list` does not start a paused workspace unless asked. That is the whole point
- * of `sleeping`: a file pane that started a sandbox on every render would hold
- * compute open for as long as it was on screen.
- */
 export interface WebLogin {
   /**
    * The site, as a person would name it.
@@ -202,214 +164,96 @@ export class WebLoginsNamespace {
   }
 }
 
+/**
+ * The caller's own computer, as it was addressed before machines.
+ *
+ * @deprecated Use `client.machines` with the ref `"me"`. Every method here
+ * keeps its old signature and answer but calls the `/machines/me` route, and
+ * the alias goes in the next minor release.
+ */
 export class WorkspaceNamespace {
-  constructor(private readonly http: HttpClient) {}
+  private readonly machines: MachinesNamespace;
 
+  constructor(http: HttpClient, machines?: MachinesNamespace) {
+    this.machines = machines ?? new MachinesNamespace(http);
+  }
+
+  /** @deprecated Use `machines.files.list("me", options)`. */
   listFiles(
     options: { path?: string; wake?: boolean; after?: string } = {},
   ): Promise<WorkspaceFileListResponse> {
-    return this.http.request<WorkspaceFileListResponse>("GET", "/workspace/files", {
-      params: {
-        ...(options.path ? { path: options.path } : {}),
-        ...(options.wake ? { wake: true } : {}),
-        // From a previous response's `nextAfter`. A directory bigger than one
-        // page was otherwise a dead end.
-        ...(options.after ? { after: options.after } : {}),
-      },
-    });
+    return this.machines.files.list(ME, options) as unknown as Promise<WorkspaceFileListResponse>;
   }
 
+  /** @deprecated Use `machines.files.stat("me", path)`. */
   statFile(path: string): Promise<WorkspaceFileEntry> {
-    return this.http.request<WorkspaceFileEntry>("GET", "/workspace/files:stat", {
-      params: { path },
-    });
+    return this.machines.files.stat(ME, path) as unknown as Promise<WorkspaceFileEntry>;
   }
 
   /**
    * A signed, short-lived URL for the live browser view.
    *
-   * Minting one starts the workspace if it is paused, so ask whether it is
-   * awake before calling this rather than after.
+   * @deprecated Use `machines.browser.access("me", { ttlSeconds })`, which
+   * answers without the `app` field: there is only ever the browser.
    */
-  browserAccess(ttlSeconds = 1800): Promise<{
+  async browserAccess(ttlSeconds = 1800): Promise<{
     app: string;
     url: string;
     expires_at: string;
   }> {
-    return this.http.request("POST", "/workspace/apps/browser/access", {
-      body: { ttl_seconds: ttlSeconds },
-    });
+    const access = await this.machines.browser.access(ME, { ttlSeconds });
+    return { app: "browser", url: access.url, expires_at: access.expires_at };
   }
 
   /**
    * Whether this person's computer is ready, without starting anything.
    *
-   * `ready` it is running; `downloading` it is fetching its image, which the
-   * first start after an update does; `starting` it is coming up; `asleep` it
-   * is not running and starts on first use; `unavailable` it could not be asked.
-   * While `downloading`, `done_mb` and `total_mb` say how far it has got, once
-   * that can be measured.
+   * @deprecated Use `machines.startup("me")`.
    */
-  status(): Promise<{
+  async status(): Promise<{
     state: "ready" | "downloading" | "starting" | "asleep" | "unavailable";
     detail: string | null;
     done_mb?: number | null;
     total_mb?: number | null;
   }> {
-    return this.http.request("GET", "/workspace/status");
+    const startup = await this.machines.startup(ME);
+    return {
+      state: startup.state as "ready" | "downloading" | "starting" | "asleep" | "unavailable",
+      detail: startup.detail ?? null,
+      done_mb: startup.done_mb,
+      total_mb: startup.total_mb,
+    };
   }
 
-  /**
-   * Whether the browser can be watched, without starting anything.
-   *
-   * `asleep` the computer is paused; `stopped` it is up but the browser is not
-   * (its resting state after two idle minutes); `running` there is one now;
-   * `unavailable` the relay did not answer, which on an older image stays true
-   * until it is replaced; `unsupported` this kind of computer cannot do it.
-   */
-  browserStatus(): Promise<{ state: string; detail: string | null }> {
-    return this.http.request("GET", "/workspace/browser/status");
+  /** @deprecated Use `machines.browser.status("me")`. */
+  async browserStatus(): Promise<{ state: string; detail: string | null }> {
+    const status = await this.machines.browser.status(ME);
+    return { state: status.state, detail: status.detail ?? null };
   }
 
-  /**
-   * What page the browser signing in to `origin` is actually showing.
-   *
-   * Polled by the sign-in page's anti-phishing host display while its VNC
-   * pane is open: VNC is pixels, not events, so there is nothing on the wire
-   * to react to the way the JSON stream this replaced had with its `url`
-   * message on every navigation. `null` when nothing can be read.
-   */
+  /** @deprecated Use `machines.browser.currentPageUrl("me", origin)`. */
   browserCurrentPageUrl(origin: string): Promise<{ url: string | null }> {
-    return this.http.request("GET", "/workspace/browser/current-page-url", {
-      params: { origin },
-    });
+    return this.machines.browser.currentPageUrl(ME, origin);
   }
 
-  /**
-   * Fit the workspace display to the pane showing it.
-   *
-   * The pane is a box of an arbitrary shape and the display is a real screen
-   * with a fixed size, so one of them has to move. Scaling the picture is
-   * what made the browser a small letterboxed rectangle; resizing the display
-   * means the pixels sent are the pixels shown, and a narrow pane gets a
-   * narrow *viewport* — so sites serve their mobile layout on a phone.
-   *
-   * `size` is what the display actually became, which may be smaller than
-   * asked for: the sandbox's framebuffer is a ceiling. `null` when nothing
-   * could be resized (a sleeping computer, an older image), which is not an
-   * error — the pane keeps the picture it had.
-   */
+  /** @deprecated Use `machines.browser.display("me", { width, height })`. */
   browserResizeDisplay(
     width: number,
     height: number,
   ): Promise<{ size: string | null }> {
-    return this.http.request("POST", "/workspace/browser/display-size", {
-      body: { width, height },
-    });
+    return this.machines.browser.display(ME, { width, height });
   }
 
-  /**
-   * Raw bytes of one file, from `offset`, at most `length` bytes.
-   *
-   * The query is built into the path because `requestBytes` takes no options —
-   * it is the byte-returning sibling of `request`, not a full request builder.
-   */
-  /**
-   * A file, or a slice of one.
-   *
-   * `range` sends an HTTP `Range` header and gets a 206 back. That is how a
-   * file larger than the server's single-read ceiling is reachable at all:
-   * ask for it a piece at a time. See `readWholeFile`, which does that for
-   * you.
-   */
+  /** @deprecated Use `machines.files.read("me", path, options)`. */
   readFile(
     path: string,
     options: { offset?: number; length?: number; range?: { start: number; end: number } } = {},
   ): Promise<Blob> {
-    return this.http.requestBytes("GET", contentPath(path, options), {
-      headers: options.range ? rangeHeader(options.range) : undefined,
-    });
+    return this.machines.files.read(ME, path, options);
   }
 
-  /**
-   * A whole file, however big, in as many requests as that takes.
-   *
-   * The server caps one read at 8 MiB, which used to mean a larger file
-   * could be listed and never opened — the pane offered a download that
-   * silently returned the first 8 MiB under the full name. Ranges are
-   * requested in order and stitched, so what a person saves is the file.
-   *
-   * **The size is discovered, not trusted.** This took a `sizeBytes` and
-   * stopped there, which made the caller's bookkeeping load-bearing for
-   * whether a download was complete. The explorer's was wrong on the case
-   * that matters: the open file lives in the URL and its size lived in React
-   * state, so a reload restored the path with a size of 0 and every download
-   * after it truncated at 8 MiB, under the whole file's name. Reading until
-   * the server returns a short slice needs nobody to have remembered
-   * anything. `sizeBytes` survives only as a hint that lets a small file skip
-   * straight to a single unranged read; passing 0 or nothing is correct.
-   *
-   * `chunk` is clamped to the server's ceiling rather than trusted either.
-   * Asking for 64 MiB got 8 MiB back and advanced the cursor by 64, so seven
-   * eighths of the file was skipped and the result was a corrupt download of
-   * roughly the right length — the same failure, reintroduced by the
-   * parameter meant to tune it.
-   */
-  async readWholeFile(
-    path: string,
-    sizeBytes = 0,
-    chunk = MAX_READ_BYTES,
-  ): Promise<Blob> {
-    const step = Math.min(Math.max(Math.floor(chunk), 1), MAX_READ_BYTES);
-    const parts: Blob[] = [];
-    let start = 0;
-    if (sizeBytes > 0 && sizeBytes <= step) {
-      const only = await this.readFile(path);
-      // Short of the server's ceiling means that was the whole file. Exactly
-      // the ceiling means the hint was stale -- the file grew after the
-      // listing that measured it -- and returning here would truncate at
-      // 8 MiB, which is the failure this method exists to prevent. So keep
-      // what arrived and carry on reading from where it stopped.
-      if (only.size < MAX_READ_BYTES) return only;
-      parts.push(only);
-      start = only.size;
-    }
-    for (;;) {
-      let part: Blob;
-      let honoured: boolean;
-      try {
-        const answer = await this.http.requestBytesResponse("GET", contentPath(path), {
-          headers: rangeHeader({ start, end: start + step - 1 }),
-        });
-        part = answer.blob;
-        honoured = rangeHonoured(answer.status, answer.contentRange, start);
-      } catch (error) {
-        // 416. The file ended exactly on a chunk boundary, or it is empty:
-        // both are "there is nothing at this offset", and neither is a
-        // failure. Any other status is.
-        if (error instanceof ApiError && error.statusCode === 416) break;
-        throw error;
-      }
-      if (!honoured) {
-        // The server ignored the Range and sent the file from byte 0. Read
-        // again at the next offset and it does the same, so the loop never
-        // ends and holds another copy each time. From the start, short of the
-        // ceiling, that is simply the whole file; anywhere else it cannot be
-        // stitched into one.
-        if (start === 0 && part.size < MAX_READ_BYTES) return part;
-        throw new Error(
-          `The server ignored the Range header reading "${path}" at byte ${start}; ` +
-            "stopping rather than stitching repeated copies of the file.",
-        );
-      }
-      if (part.size === 0) break;
-      parts.push(part);
-      start += part.size;
-      // Short of what was asked for means the server ran out of file, which
-      // is the ordinary way this ends — one request more than the file
-      // needs, rather than a 416 every time.
-      if (part.size < step) break;
-    }
-    return new Blob(parts);
+  /** @deprecated Use `machines.files.readWhole("me", path, sizeBytes, chunk)`. */
+  readWholeFile(path: string, sizeBytes = 0, chunk?: number): Promise<Blob> {
+    return this.machines.files.readWhole(ME, path, sizeBytes, chunk);
   }
 }

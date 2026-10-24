@@ -39,7 +39,14 @@ class ExecCommandRequest(BaseModel):
     )
     workdir: Optional[str] = Field(
         default=None,
-        description="Working directory; relative paths resolve inside the workspace.",
+        description="Working directory; relative paths resolve inside your working directory.",
+    )
+    machine: Optional[str] = Field(
+        default=None,
+        description=(
+            "Which machine to run on: `me`, `pod:<name>` for one of the pod's "
+            "machines, or one from `list_machines`. Omit for your usual one."
+        ),
     )
     yield_time_ms: Optional[int] = Field(
         default=None,
@@ -118,6 +125,13 @@ class ListProcessesRequest(BaseModel):
         default=None,
         description=TOOL_COMMENT_DESC,
     )
+    machine: Optional[str] = Field(
+        default=None,
+        description=(
+            "Which machine to run on: `me`, `pod:<name>` for one of the pod's "
+            "machines, or one from `list_machines`. Omit for your usual one."
+        ),
+    )
 
 
 class ManageProcessRequest(BaseModel):
@@ -148,6 +162,10 @@ class ManageProcessRequest(BaseModel):
         default=None,
         description="Milliseconds to wait for new output.",
     )
+    machine: Optional[str] = Field(
+        default=None,
+        description="For 'list': which machine. Other actions find the process's own.",
+    )
     comment: Optional[str] = Field(
         default=None,
         description=TOOL_COMMENT_DESC,
@@ -171,6 +189,13 @@ class ExecutePythonRequest(BaseModel):
             "`exec_command` there is no handle to come back to: this runs in "
             "the shared kernel and a timeout ends it. For work that may take "
             "longer, run it with `exec_command` and wait for the process."
+        ),
+    )
+    machine: Optional[str] = Field(
+        default=None,
+        description=(
+            "Which machine to run on: `me`, `pod:<name>` for one of the pod's "
+            "machines, or one from `list_machines`. Omit for your usual one."
         ),
     )
 

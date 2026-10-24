@@ -83,6 +83,7 @@ class ExistingResources(Protocol):
     async def schedule_names(self) -> set[str]: ...
     async def app_names(self) -> set[str]: ...
     async def surface_names(self) -> set[str]: ...
+    async def machine_names(self) -> set[str]: ...
 
 
 def _resource_subdirs(bundle_root: Path, resource_type: str) -> list[Path]:
@@ -303,6 +304,13 @@ class PlanBuilder:
             if data_path.is_file():
                 seeded_rows += _check_seed_rows(data_path, name, seeded_rows)
                 data_steps.append((name, {}))
+
+        # --- machines --------------------------------------------------------
+        # Before the agents that name one as theirs, and before every grants
+        # step: a grant of `machine.use` names the machine, which must exist.
+        existing_machines = await self._existing.machine_names()
+        for d in _resource_subdirs(bundle_root, "machines"):
+            steps.append(self._simple_step(StepKind.MACHINE, d.name, existing_machines))
 
         # --- functions (+ deferred grants) -----------------------------------
         existing_functions = await self._existing.function_names()
@@ -592,3 +600,12 @@ class ServiceExistingResources:
                 exc_info=True,
             )
             return set()
+
+    async def machine_names(self) -> set[str]:
+        """The pod's machines, by the name a bundle directory carries."""
+        from app.modules.workspace.contracts.pod_machines import (
+            list_pod_machine_names,
+        )
+
+        return await list_pod_machine_names(self._uow, pod_id=self._pod_id)
+

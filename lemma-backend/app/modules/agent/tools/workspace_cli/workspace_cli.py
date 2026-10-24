@@ -127,12 +127,70 @@ def _python_workspace_tool_failure(
     )
 
 
+#: How a session id says which machine it is on, when it is not the default.
+#: Carried in the id because a process is found again by its session id: the
+#: poll that comes back for a long build has to reach the machine it started on.
+_MACHINE_MARK = "@m:"
+
+
+def _machine_from_session(session_id: str | None) -> str | None:
+    if session_id and _MACHINE_MARK in session_id:
+        return session_id.rsplit(_MACHINE_MARK, 1)[1] or None
+    return None
+
+
+def _on_machine(session_id: str | None, machine_id) -> str | None:
+    if session_id is None:
+        return None
+    base = session_id.split(_MACHINE_MARK, 1)[0]
+    return f"{base}{_MACHINE_MARK}{machine_id}"
+
+
+async def resolve_run_machine(ctx: BaseAgentContext, machine: str | None):
+    """The machine a command goes to: the call's, else the agent's, else the
+    person's own -- decided by the machine resolver, never assumed."""
+    from app.modules.workspace.contracts.agent_machines import resolve_agent_machine
+
+    return await resolve_agent_machine(
+        ref=machine or getattr(ctx, "machine", None),
+        user_id=ctx.user_id,
+        pod_id=ctx.pod_id,
+        agent_id=ctx.workload_id,
+        agent_name=ctx.agent_name,
+        conversation_id=ctx.conversation_id,
+        # The conversation, not the run: a conversation waiting on its own
+        # build ends one run and starts another when the build is done, and
+        # both must find the same directory, slot and processes.
+        run_id=ctx.conversation_id,
+    )
+
+
+async def _named_machine(ctx: BaseAgentContext, machine: str | None):
+    """The machine a call names, or None for the person's own.
+
+    The person's own is decided without a lookup: whether the run may use it
+    was settled when its context was built (`started_in_lemma`). Any other
+    machine goes through the machine resolver.
+    """
+    ref = (machine or getattr(ctx, "machine", None) or "").strip()
+    if ref in ("", "me", "default"):
+        if not getattr(ctx, "started_in_lemma", True):
+            from app.modules.workspace.contracts.agent_machines import (
+                ChannelRunHasNoMachine,
+            )
+
+            raise ChannelRunHasNoMachine()
+        return None
+    return await resolve_run_machine(ctx, ref)
+
+
 async def get_workspace_session(
     ctx: BaseAgentContext,
     *,
     session_id: str | None,
     close_on_exit: bool,
     runtime=None,
+    machine: str | None = None,
 ):
     # Every sandbox and host session a tool opens comes through here.
     refuse_owner_workspace(ctx)
@@ -140,8 +198,13 @@ async def get_workspace_session(
     principal = workspace_principal(ctx)
     if runtime is None:
         runtime = get_workspace_tool_runtime()
+    machine = machine or _machine_from_session(session_id)
     host_workspace = getattr(ctx, "host_workspace", None)
-    if host_workspace is not None:
+    if (
+        host_workspace is not None
+        and machine is None
+        and not getattr(ctx, "machine", None)
+    ):
         # The user's Mac, chosen for this whole run; see
         # `host_execution_selection`. Never the VM for this run, whatever the
         # host is doing now -- a host that went away says so in the result.
@@ -160,6 +223,21 @@ async def get_workspace_session(
             close_on_exit=close_on_exit,
             conversation_id=ctx.conversation_id,
         )
+    initial_cwd = runtime_context.initial_cwd
+    machine_id = None
+    target = await _named_machine(ctx, machine)
+    if target is not None and target.shared:
+        from app.modules.workspace.contracts.agent_machines import begin_run
+
+        await begin_run(target, run_id=ctx.conversation_id, acting_user=ctx.user_id)
+        initial_cwd = target.run_workdir or initial_cwd
+        repo = ctx.workspace_repo
+        if repo is not None and target.run_workdir:
+            # A project on a shared machine is checked out into this run's
+            # own directory, so two reviews of one repo never share a tree.
+            initial_cwd = f"{target.run_workdir}/repos/{repo.owner}/{repo.repo}"
+        machine_id = target.machine_id
+        session_id = _on_machine(session_id, target.machine_id)
     # Nothing names a browser session here any more. The image's
     # `AGENT_BROWSER_SESSION` is the only browser there is, so a shell that
     # inherits it, the relay, and the pane the person watches are all looking
@@ -174,9 +252,10 @@ async def get_workspace_session(
         workload_name=principal.workload_name,
         scope_key=runtime_context.scope_key,
         session_id=session_id,
-        initial_cwd=runtime_context.initial_cwd,
+        initial_cwd=initial_cwd,
         close_on_exit=close_on_exit,
         conversation_id=ctx.conversation_id,
+        machine_id=machine_id,
     )
 
 
@@ -318,6 +397,7 @@ async def exec_command_internal(
                 session_id=runtime_context.default_shell_session_id,
                 close_on_exit=False,
                 runtime=runtime,
+                machine=request.machine,
             )
         async with workspace_session:
             # A repo-backed conversation needs credentials for every command,
@@ -354,6 +434,7 @@ async def exec_command_internal(
                     process_id=process_id,
                     session_id=workspace_session.session_id,
                 )
+                await _tag_for_run(ctx, workspace_session, process_id, request.cmd)
         stdout, stderr = render_terminal_result(
             result, tty=request.tty, max_output_tokens=request.max_output_tokens
         )
@@ -375,6 +456,26 @@ async def exec_command_internal(
             exc,
             operation="exec_command",
         )
+
+
+async def _tag_for_run(
+    ctx: BaseAgentContext, session, process_id: str, cmd: str
+) -> None:
+    """A process left running on a shared machine ends with the run."""
+    machine_ref = _machine_from_session(session.session_id)
+    if machine_ref is None:
+        return
+    from app.modules.workspace.contracts.agent_machines import tag_run_process
+
+    target = await resolve_run_machine(ctx, machine_ref)
+    await tag_run_process(
+        target,
+        run_id=ctx.conversation_id,
+        process_id=str(process_id),
+        command=cmd,
+        cwd=getattr(session, "_cwd", "") or "",
+        started_by=ctx.user_id,
+    )
 
 
 async def write_stdin_internal(
@@ -452,7 +553,6 @@ async def list_processes_internal(
     ctx: BaseAgentContext,
     request: ListProcessesRequest,
 ) -> ListProcessesResult:
-    del request
     try:
         runtime = get_workspace_tool_runtime()
         runtime_context = workspace_runtime_context(ctx)
@@ -460,6 +560,7 @@ async def list_processes_internal(
             ctx,
             session_id=runtime_context.default_shell_session_id,
             close_on_exit=False,
+            machine=getattr(request, "machine", None),
         )
         async with workspace_session:
             processes = await workspace_session.list_processes()
@@ -495,6 +596,7 @@ async def execute_python_internal(ctx: BaseAgentContext, request: ExecutePythonR
             ctx,
             session_id=workspace_runtime_context(ctx).default_python_session_id,
             close_on_exit=False,
+            machine=request.machine,
         )
         async with workspace_session:
             project_notice = await prepare_project_directory(

@@ -117,8 +117,10 @@ def test_toolset_resolver_returns_exactly_the_selected_toolsets():
         ]
     )
 
-    assert len(toolsets) == 2
-    assert toolsets[0] is not toolsets[1]
+    # WORKSPACE_CLI brings the machine tools with it, as a toolset of their
+    # own so the pod's assistant can defer them.
+    assert len(toolsets) == 3
+    assert len({id(item) for item in toolsets}) == 3
     assert all(item.__class__.__name__.endswith("Toolset") for item in toolsets)
 
 

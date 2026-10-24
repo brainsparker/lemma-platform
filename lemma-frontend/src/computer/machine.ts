@@ -49,7 +49,7 @@ export function rootsOf(listing: Listing | undefined): Roots {
     };
 }
 
-/** One entry, exactly as `GET /workspace/files` sends it. */
+/** One entry, exactly as `GET /machines/me/files` sends it. */
 export interface Entry {
     path: string;
     name: string;
@@ -58,7 +58,7 @@ export interface Entry {
     modified_at: string;
 }
 
-/** One directory, exactly as `GET /workspace/files` sends it.
+/** One directory, exactly as `GET /machines/me/files` sends it.
  *
  *  `sleeping` and `exists` are both false-by-absence in the schema and both
  *  mean something specific, which is why neither is folded into "no entries":
@@ -79,7 +79,7 @@ export interface Listing {
     entries?: Entry[];
 }
 
-/** What `GET /workspace/browser/status` answers without waking anything. */
+/** What `GET /machines/me/browser` answers without waking anything. */
 export type BrowserState = "asleep" | "stopped" | "running" | "unavailable" | "unsupported";
 
 /** What the machine is doing, from the two ambient answers together.

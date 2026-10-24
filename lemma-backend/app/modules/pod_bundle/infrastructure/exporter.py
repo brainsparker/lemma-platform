@@ -69,6 +69,7 @@ logger = get_logger(__name__)
 _EXPORT_RESOURCE_TYPES = (
     "connectors",
     "tables",
+    "machines",
     "functions",
     "agents",
     "workflows",
@@ -311,6 +312,12 @@ class BundleExporter:
                         f"table '{missing}' requested for seed data but not found "
                         f"in the pod; skipped"
                     )
+                done += 1
+                await on_progress(done, total)
+
+            # --- machines -----------------------------------------------------
+            if "machines" in selected:
+                await _export_machines(uow, root=root, pod_id=pod_id)
                 done += 1
                 await on_progress(done, total)
 
@@ -612,6 +619,24 @@ class BundleExporter:
             data_budget=data_budget,
             warnings=warnings,
             folder_paths=folder_paths,
+        )
+
+
+async def _export_machines(
+    uow: SqlAlchemyUnitOfWork, *, root: Path, pod_id: UUID
+) -> None:
+    """One directory per pod machine: its definition, never its disk."""
+    from dataclasses import asdict
+
+    from lemma_pod_bundle.normalize import _normalize_machine_payload
+
+    from app.modules.workspace.contracts.pod_machines import list_pod_machines
+
+    for spec in await list_pod_machines(uow, pod_id=pod_id):
+        dir_ = root / "machines" / spec.name
+        dir_.mkdir(parents=True, exist_ok=True)
+        _write_json(
+            dir_ / f"{spec.name}.json", _normalize_machine_payload(asdict(spec))
         )
 
 

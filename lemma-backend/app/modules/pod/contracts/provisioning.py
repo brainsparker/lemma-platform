@@ -94,3 +94,17 @@ async def create_first_pod(
 
 
 __all__ = ["append_recipe", "create_first_pod", "get_pod"]
+
+
+async def organization_pod_ids(uow, organization_id: UUID) -> list[UUID]:
+    """Every live pod of an organization: what an org-wide machine cap counts over."""
+    from sqlalchemy import select
+
+    from app.modules.pod.infrastructure.models.pod_models import Pod
+
+    rows = await uow.session.scalars(
+        select(Pod.id).where(
+            Pod.organization_id == organization_id, Pod.is_deleted.is_(False)
+        )
+    )
+    return list(rows)

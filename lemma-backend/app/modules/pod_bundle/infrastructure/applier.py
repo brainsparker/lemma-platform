@@ -86,6 +86,7 @@ class BundleApplier:
             StepKind.WORKFLOW: self._apply_workflow,
             StepKind.SURFACE: self._surface_step,
             StepKind.FILE: self._apply_file,
+            StepKind.MACHINE: self._apply_machine,
         }.get(step.kind)
         if handler is None:
             # APP and FUNCTION are applied by self-scoped runners because they
@@ -248,6 +249,27 @@ class BundleApplier:
             visibility=meta.get("visibility") or "POD",
         )
 
+    # --- machines --------------------------------------------------------
+
+    async def _apply_machine(self, step: PlanStep) -> None:
+        """Create the pod machine, or bring an existing one to the bundle's
+        definition. An upsert by name, like every step: a replay converges."""
+        from app.modules.workspace.contracts.pod_machines import upsert_pod_machine
+
+        payload = self._load("machines", step.name)
+        run_slots = payload.get("run_slots")
+        await upsert_pod_machine(
+            self._uow,
+            pod_id=self._pod_id,
+            user_id=self._user_id,
+            name=step.name,
+            template=str(payload.get("template") or "workspace"),
+            size=str(payload["size"]) if payload.get("size") else None,
+            visibility=str(payload.get("visibility") or "pod"),
+            run_slots=int(run_slots) if run_slots is not None else None,
+            display_name=payload.get("display_name"),
+        )
+
     # --- agents ----------------------------------------------------------
 
     async def _apply_agent(self, step: PlanStep) -> None:
@@ -271,6 +293,9 @@ class BundleApplier:
             "input_schema": payload.get("input_schema"),
             "output_schema": payload.get("output_schema"),
             "metadata": payload.get("metadata"),
+            # Which machine its commands run on. Absent means its own default,
+            # and a bundle saying so clears a machine the target agent had.
+            "machine": payload.get("machine"),
         }
         existing = await get_agent(
             self._uow, pod_id=self._pod_id, name=step.name, ctx=self._ctx

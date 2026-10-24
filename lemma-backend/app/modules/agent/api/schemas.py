@@ -397,6 +397,15 @@ class CreateAgentRequest(BaseModel):
     output_schema: JsonObject | None = None
     visibility: ResourceVisibility = ResourceVisibility.POD
     metadata: JsonObject | None = None
+    machine: str | None = Field(
+        default=None,
+        max_length=200,
+        description=(
+            "Where this agent's commands run: a machine ref such as "
+            "`pod:<name>` for one of the pod's machines. Unset runs on the "
+            "default machine of whoever the run acts for."
+        ),
+    )
     permissions: AgentPermissionsReplaceRequest | None = Field(
         default=None,
         description=(
@@ -419,6 +428,15 @@ class UpdateAgentRequest(BaseModel):
     output_schema: JsonObject | None = None
     visibility: ResourceVisibility | None = None
     metadata: JsonObject | None = None
+    machine: str | None = Field(
+        default=None,
+        max_length=200,
+        description=(
+            "Where this agent's commands run: a machine ref such as "
+            "`pod:<name>` for one of the pod's machines. Unset runs on the "
+            "default machine of whoever the run acts for."
+        ),
+    )
     permissions: AgentPermissionsReplaceRequest | None = Field(
         default=None,
         description=(

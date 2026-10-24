@@ -29,7 +29,6 @@ KNOWN_UNEXPOSED_PREFIXES = (
     "admin",
     "scheduler.job",  # internal scheduler ops
     "usage.",
-    "workspace.",  # workspace runtime is driven by the backend
     "app.public",
     "health_check",  # liveness probe
     # OAuth/consent browser callbacks — never called by a client

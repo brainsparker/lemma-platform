@@ -19,6 +19,13 @@
  *   backend emitter has. `sanitize_properties` is deprecated and is not used.
  * - **cookieless until consent.** Persistence starts in memory and is upgraded
  *   only once someone accepts. See `consent.ts`.
+ *
+ * Consent governs what is stored in the browser, not whether a signed-in person
+ * is counted. Inside the workspace, events carry the account's id whatever the
+ * answer was, as `/privacy` says. Without consent, though, nothing may persist
+ * an anonymous id between loads, so none is merged into the person
+ * (`reuseAnonymousId`). Otherwise every page load would add one more id to
+ * that person, until PostHog stops showing their events.
  */
 
 import { isAnalyticsDocument } from "./document";
@@ -30,6 +37,7 @@ import {
     CLIENT_SPINE_PROPERTIES,
     allowedProperties,
     isCatalogued,
+    type EventProperties,
     type WebAnalyticEvent,
 } from "@/site/analytics/catalog";
 import { hasAnalyticsConsent } from "@/site/analytics/consent";
@@ -38,18 +46,22 @@ import {
     toTemplateUrl,
 } from "@/site/analytics/route-template";
 
-type PostHog = typeof import("posthog-js").default;
-type PropertyValue = string | number | boolean;
+type PostHog = typeof import("posthog-js").posthog;
 
 /** The loaded SDK, or null. `ph !== null` *is* "started" — one source of truth
  *  beats a separate boolean that can disagree with it. */
 let ph: PostHog | null = null;
 let starting: Promise<void> | null = null;
 
-/** A pageview that arrived before the dynamic import finished. At most one: the
- *  first paint. Without it the very first navigation of a session — the one that
- *  tells you where people land — is lost to the async gap. */
-let pendingPathname: string | null = null;
+export interface AnalyticsIdentity {
+    userId: string;
+    organizationId?: string;
+    podId?: string;
+}
+
+/** Who was last identified, so withdrawing consent — which has to `reset()` to
+ *  clear the device — does not also stop counting the person still signed in. */
+let identified: AnalyticsIdentity | null = null;
 
 /**
  * A Desktop-local installation runs the whole backend on the user's machine,
@@ -131,6 +143,51 @@ function scrubAddresses(event: CaptureResult | null): CaptureResult | null {
     return event;
 }
 
+/** Errors whose message is fixed text this app wrote, and so says nothing about
+ *  anybody. Every other message is the error's type. */
+const FIXED_MESSAGES = new Set(["SignInLoopError"]);
+
+interface ExceptionFrame { filename?: unknown; abs_path?: unknown }
+interface ExceptionEntry { type?: unknown; value?: unknown; stacktrace?: { frames?: ExceptionFrame[] } }
+
+/** A stack frame's file, which is our own code — keep it, it is how an error
+ *  is found — unless it is a page: an inline script's frame names the page it
+ *  ran on, address and all. */
+function scrubFrameFile(raw: unknown): unknown {
+    if (typeof raw !== "string") return raw;
+    let url: URL;
+    try {
+        url = new URL(raw);
+    } catch {
+        return raw;
+    }
+    if (url.origin === window.location.origin && url.pathname.startsWith("/_next/")) return url.origin + url.pathname;
+    return scrubUrl(raw);
+}
+
+/**
+ * Keep an exception's type and where it was thrown, and drop what it said.
+ *
+ * A message is written wherever the error is raised, and is routinely made of
+ * whatever was in hand: `Cannot read "Q3 layoffs" of undefined`, a failed
+ * request's body, a file name. The type and the frames are enough to find the
+ * bug; the message is the part that can carry somebody's work out with it.
+ */
+function scrubExceptions(event: CaptureResult | null): CaptureResult | null {
+    if (!event || event.event !== "$exception") return event;
+    const list = event.properties?.$exception_list as ExceptionEntry[] | undefined;
+    for (const entry of list ?? []) {
+        const type = typeof entry.type === "string" ? entry.type : "Error";
+        if (!FIXED_MESSAGES.has(type)) entry.value = type;
+        for (const frame of entry.stacktrace?.frames ?? []) {
+            if ("filename" in frame) frame.filename = scrubFrameFile(frame.filename);
+            if ("abs_path" in frame) frame.abs_path = scrubFrameFile(frame.abs_path);
+        }
+    }
+    delete event.properties?.$exception_message;
+    return event;
+}
+
 /**
  * Default-deny on event names and property keys.
  *
@@ -149,6 +206,7 @@ function dropUnknownEvents(event: CaptureResult | null): CaptureResult | null {
         for (const key of Object.keys(event.properties)) {
             if (
                 key.startsWith("$") ||
+                SDK_KEYS.has(key) ||
                 key in kept ||
                 CLIENT_SPINE_PROPERTIES.includes(key)
             ) {
@@ -159,6 +217,12 @@ function dropUnknownEvents(event: CaptureResult | null): CaptureResult | null {
     }
     return event;
 }
+
+/** posthog-js's own properties without a `$`. It drops an event whose
+ *  `before_send` removed `token`, and an event without `distinct_id` belongs
+ *  to nobody. Deleting both, as this gate once did, lost every catalogued
+ *  event without a word. */
+const SDK_KEYS = new Set(["token", "distinct_id"]);
 
 /** What posthog-js is started with. Exported so the export-boundary test runs
  *  the real SDK on exactly this, rather than on a copy of it that could drift. */
@@ -176,11 +240,33 @@ export function analyticsOptions(): Partial<PostHogConfig> & { before_send: Befo
         // Anonymous traffic must not mint a person record for every bot
         // that hits the landing page.
         person_profiles: "identified_only",
-        // Upgraded to `localStorage+cookie` by `grantAnalyticsConsent`.
-        persistence: hasAnalyticsConsent() ? "localStorage+cookie" : "memory",
+        // Upgraded to `localStorage+cookie` by `applyAnalyticsPersistence`.
+        ...storage(hasAnalyticsConsent()),
         mask_personal_data_properties: true,
-        before_send: [dropUnknownEvents, scrubAddresses],
+        before_send: [dropUnknownEvents, scrubAddresses, scrubExceptions],
     };
+}
+
+/** Where the client keeps its ids, by the answer given. With nothing stored,
+ *  every load starts a new anonymous id, and that id is not merged into the
+ *  person it identifies as — there is no earlier visit it could join up. */
+function storage(granted: boolean): Pick<PostHogConfig, "persistence" | "reuseAnonymousId"> {
+    return granted
+        ? { persistence: "localStorage+cookie", reuseAnonymousId: false }
+        : { persistence: "memory", reuseAnonymousId: true };
+}
+
+/** Properties on every event, posthog-js's own pageviews included. `reset()`
+ *  clears them, so this runs after every reset too. */
+function registerSpine(client: PostHog): void {
+    client.register({ deployment: config.DEPLOYMENT });
+}
+
+/** Errors nothing caught. A render error is caught by the app's error pages
+ *  (`app/error.tsx`, `app/global-error.tsx`), which report it themselves. */
+function reportUncaught(): void {
+    window.addEventListener("error", (event) => captureClientError(event.error ?? event.message));
+    window.addEventListener("unhandledrejection", (event) => captureClientError(event.reason));
 }
 
 export function startAnalytics(): Promise<void> {
@@ -189,16 +275,17 @@ export function startAnalytics(): Promise<void> {
 
     starting = import("posthog-js")
         .then((mod) => {
-            const client = mod.default;
+            /* The named export rather than `default`: it is the client in a
+               bundle and under Node alike, where `default` is the CommonJS
+               module object and the export test could not start the real one. */
+            const client = mod.posthog;
             client.init(config.ANALYTICS_KEY, analyticsOptions());
+            registerSpine(client);
             ph = client;
+            reportUncaught();
             // Flags arrive after init, and again after identify reloads them.
             client.onFeatureFlags(notifyFlagListeners);
             notifyFlagListeners();
-            if (pendingPathname) {
-                capturePageview(pendingPathname);
-                pendingPathname = null;
-            }
         })
         .catch(() => {
             // A blocked or failed chunk load must not take the app with it.
@@ -220,23 +307,41 @@ export function startAnalytics(): Promise<void> {
  * store it was using, so the identifier actually leaves localStorage and the
  * cookie jar, and only then does `reset()` mint a fresh anonymous id — into
  * memory, where it stays. Resetting first would write that fresh id straight
- * back to the device we were trying to clear.
+ * back to the device we were trying to clear. A person still signed in is then
+ * identified again: what they withdrew was the identifier in this browser, not
+ * their account.
  */
 export function applyAnalyticsPersistence(granted: boolean): void {
     if (!ph) return;
-    if (granted) {
-        ph.set_config({ persistence: "localStorage+cookie" });
-        return;
-    }
-    ph.set_config({ persistence: "memory" });
+    ph.set_config(storage(granted));
+    if (granted) return;
     ph.reset();
+    registerSpine(ph);
+    if (identified) setAnalyticsIdentity(identified);
 }
 
-export function captureEvent(
-    name: WebAnalyticEvent,
-    properties: Record<string, PropertyValue> = {},
+/** A catalogued event. Waits for the SDK rather than dropping what happens
+ *  before its chunk has loaded: the first screen a person sees is often the
+ *  one that fires first. */
+export function captureEvent<E extends WebAnalyticEvent>(
+    name: E,
+    ...[properties]: keyof EventProperties<E> extends never ? [] : [EventProperties<E>]
 ): void {
-    ph?.capture(name, { ...properties, deployment: config.DEPLOYMENT });
+    void startAnalytics().then(() => {
+        ph?.capture(name, properties ?? {});
+    });
+}
+
+/**
+ * An error, for error tracking: its type and frames, never its message
+ * (`scrubExceptions`). Anything thrown may arrive here — a rejected promise's
+ * reason is as often a string or a plain object as an `Error` — and what is not
+ * an error is reported as one with nothing in it.
+ */
+export function captureClientError(thrown: unknown): void {
+    void startAnalytics().then(() => {
+        ph?.captureException(thrown instanceof Error ? thrown : new Error("Non-error thrown"));
+    });
 }
 
 /** Named so the error-tracking issue it becomes says what happened. */
@@ -257,19 +362,15 @@ export function captureSignInLoop(): void {
     void startAnalytics().then(() => {
         ph?.captureException(
             new SignInLoopError("A pod app kept sending a signed-in person back to sign in"),
-            { deployment: config.DEPLOYMENT },
         );
     });
 }
 
-export function capturePageview(pathname: string): void {
-    if (!ph) {
-        if (analyticsAllowed()) pendingPathname = pathname;
-        return;
-    }
-    // `$current_url` is set by posthog-js and rewritten in `before_send`, so
-    // there is exactly one place that decides what a URL may say.
-    ph.capture("$pageview");
+/** The page in front, as a pageview. Which navigations count is the caller's
+ *  (`isNewView`); `$current_url` is set by posthog-js and rewritten in
+ *  `before_send`, so there is exactly one place that decides what a URL may say. */
+export function capturePageview(): void {
+    ph?.capture("$pageview");
 }
 
 /**
@@ -284,11 +385,8 @@ export function capturePageview(pathname: string): void {
  * No group properties are sent. Org and pod *names* are exactly what the design
  * doc forbids in analytics; names live in Postgres and join on the id there.
  */
-export function setAnalyticsIdentity(identity: {
-    userId: string;
-    organizationId?: string;
-    podId?: string;
-}): void {
+export function setAnalyticsIdentity(identity: AnalyticsIdentity): void {
+    identified = identity;
     if (!ph) return;
     ph.identify(identity.userId);
 
@@ -301,8 +399,12 @@ export function setAnalyticsIdentity(identity: {
     if (identity.podId) ph.group("pod", identity.podId);
 }
 
+/** Signing out: the next person at this browser is somebody else. */
 export function resetAnalyticsIdentity(): void {
-    ph?.reset();
+    identified = null;
+    if (!ph) return;
+    ph.reset();
+    registerSpine(ph);
 }
 
 /* ── Feature flags ─────────────────────────────────────────────────────

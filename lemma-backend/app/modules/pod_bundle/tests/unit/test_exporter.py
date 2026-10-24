@@ -389,6 +389,19 @@ async def test_export_produces_expected_layout(patched_exporter, tmp_path):
     assert progress[-1][1] >= 1
 
 
+async def test_a_bundle_without_connectors_is_written_as_format_3(
+    patched_exporter, tmp_path
+):
+    """Format 4 only added ``connectors/``. A bundle declaring none is written
+    as 3, so a reader of 3 -- an older CLI or server -- still reads it whole,
+    as it read every such bundle before."""
+    _filename, zip_bytes, _progress = await _run_export(
+        patched_exporter, include=["tables"]
+    )
+    root = extract_bundle(zip_bytes, tmp_path / "out")
+    assert json.loads((root / "pod.json").read_text())["format_version"] == 3
+
+
 async def test_each_pod_connector_exports_without_its_installation_or_account(
     patched_exporter, tmp_path
 ):

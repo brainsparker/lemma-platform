@@ -204,6 +204,15 @@ export interface InstallationImpact {
     eventSubscriptionCount: number;
     /** Only the pods I can open, named by the server. */
     pods: ImpactedPod[];
+    /** Pods that lose a connector and that the server did not name — ones I
+     *  cannot open, or every one whose check did not finish — and how many
+     *  connectors they lose. Counted, never listed: a slug says what a pod is
+     *  for as plainly as its name. */
+    unnamedPodCount: number;
+    unnamedPodConnectorCount: number;
+    /** False when the server could not read everything it stops: the
+     *  counts are then a floor, not the whole. */
+    complete: boolean;
 }
 
 export function readImpact(raw: unknown): InstallationImpact {
@@ -216,6 +225,9 @@ export function readImpact(raw: unknown): InstallationImpact {
         surfaceCount: count(row["surface_count"]),
         scheduleCount: count(row["schedule_count"]),
         eventSubscriptionCount: count(row["event_subscription_count"]),
+        unnamedPodCount: count(row["unnamed_pod_count"]),
+        unnamedPodConnectorCount: count(row["unnamed_pod_connector_count"]),
+        complete: row["complete"] !== false,
         pods: (Array.isArray(row["pods"]) ? row["pods"] : []).map((entry) => {
             const one = record(entry);
             return {
@@ -248,7 +260,9 @@ function andList(parts: string[]): string {
 
 /** What the confirmation says before an installation goes: the accounts that
  *  go with it, and each teammate's connectors that stop. Empty lines left out;
- *  nothing at all is said as such, so "Remove" is never a leap in the dark. */
+ *  nothing at all is said as such, so "Remove" is never a leap in the dark --
+ *  but only when the server read everything: an unfinished read says so
+ *  rather than "nobody loses anything". */
 export function impactLines(impact: InstallationImpact, podName: (podId: string) => string): string[] {
     const lines: string[] = [];
     if (impact.accountCount) lines.push(plural(impact.accountCount, "connected account is", "connected accounts are") + " removed with it.");
@@ -270,10 +284,19 @@ export function impactLines(impact: InstallationImpact, podName: (podId: string)
         ] : [];
         lines.push((pod?.name || podName(podId) || "A teammate you cannot open") + " loses " + slugs.join(", ") + (what.length ? ": " + what.join(", ") : "") + ".");
     }
-    if (impact.podAccountCount && !impact.podConnectors.length) {
+    if (impact.unnamedPodCount) {
+        const connectors = impact.unnamedPodConnectorCount === 1 ? "a connector" : plural(impact.unnamedPodConnectorCount, "connector", "connectors");
+        /* Unfinished, the server never learned which of them I may open. */
+        const who = impact.complete
+            ? plural(impact.unnamedPodCount, "teammate you cannot open loses", "teammates you cannot open lose")
+            : plural(impact.unnamedPodCount, "more teammate loses", "more teammates lose");
+        lines.push(who + " " + connectors + ".");
+    }
+    if (impact.podAccountCount && !impact.podConnectors.length && !impact.unnamedPodCount) {
         lines.push(plural(impact.podAccountCount, "teammate's use", "teammates' uses") + " of these accounts stop.");
     }
-    if (lines.length === 0) lines.push("Nothing uses it yet. Nobody loses anything.");
+    if (!impact.complete) lines.push("Couldn’t read everything this affects.");
+    else if (lines.length === 0) lines.push("Nothing uses it yet. Nobody loses anything.");
     return lines;
 }
 

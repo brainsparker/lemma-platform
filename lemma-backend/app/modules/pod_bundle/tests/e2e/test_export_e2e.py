@@ -165,7 +165,8 @@ async def test_export_pod_bundle_roundtrip(
 
     # pod.json manifest.
     pod = json.loads((root / "pod.json").read_text())
-    assert pod["format_version"] == 4
+    # No pod connectors, so the format a reader of 3 reads whole.
+    assert pod["format_version"] == 3
     assert pod["name"] == test_pod["name"]
 
     # Table manifest + seeded data.csv (the table was named in data_tables).

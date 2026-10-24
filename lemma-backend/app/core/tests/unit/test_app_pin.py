@@ -123,7 +123,8 @@ def test_an_app_reaches_its_own_pod():
 @pytest.mark.parametrize(
     "pod_id", ["01a16e3d-0000-7000-8000-000000000001", "not-a-uuid"]
 )
-def test_an_app_is_refused_another_pod(pod_id: str):
+def test_an_app_is_refused_another_pod(pod_id: str, monkeypatch):
+    monkeypatch.setattr(settings, "app_pin_cross_pod_enforced", True)
     request = _request(
         template="/pods/{pod_id}/datastore/tables", path_params={"pod_id": pod_id}
     )
@@ -133,6 +134,40 @@ def test_an_app_is_refused_another_pod(pod_id: str):
 
     assert refused.value.code == APP_ROUTE_NOT_ALLOWED
     assert refused.value.details["route"] == "/pods/{pod_id}/datastore/tables"
+
+
+def test_another_pod_is_served_and_recorded_until_enforcement_is_on(monkeypatch):
+    """On main an app could name any pod. Until the refusal is switched on, a
+    call to another pod is served as before and logged, so deployed apps
+    relying on it show up first."""
+    monkeypatch.setattr(settings, "app_pin_cross_pod_enforced", False)
+    request = _request(
+        template="/pods/{pod_id}/datastore/tables",
+        path_params={"pod_id": "01a16e3d-0000-7000-8000-000000000001"},
+    )
+
+    _require_app_route(request, _app())
+
+
+def test_an_app_invites_only_as_a_member_of_its_own_pod():
+    from app.core.app_pin import refuse_app_invitation_above_member
+
+    app = _app()
+    request = SimpleNamespace(state=SimpleNamespace(app_request=app))
+    refuse_app_invitation_above_member(
+        request, role="ORG_MEMBER", pod_id=app.pod_id, pod_role="POD_USER"
+    )
+    for role, pod_id, pod_role in (
+        ("ORG_OWNER", None, None),
+        ("ORG_EDITOR", None, None),
+        ("ORG_MEMBER", app.pod_id, "POD_ADMIN"),
+        ("ORG_MEMBER", uuid4(), "POD_USER"),
+    ):
+        with pytest.raises(DomainError) as refused:
+            refuse_app_invitation_above_member(
+                request, role=role, pod_id=pod_id, pod_role=pod_role
+            )
+        assert refused.value.code == APP_ROUTE_NOT_ALLOWED
 
 
 def test_an_app_sets_connectors_up_in_its_own_organization_only():

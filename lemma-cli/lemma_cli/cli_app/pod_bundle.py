@@ -41,6 +41,7 @@ from lemma_pod_bundle.layout import (
     normalize_file_folders,
     FILES_MANIFEST,
     FORMAT_VERSION as FORMAT_VERSION,
+    FORMAT_VERSION_WITHOUT_CONNECTORS as FORMAT_VERSION_WITHOUT_CONNECTORS,
     JSON_FILE_REF_KEY as JSON_FILE_REF_KEY,
     POD_MEMBER_TOKEN,
     RESOURCE_DIR_ALIASES as RESOURCE_DIR_ALIASES,
@@ -61,6 +62,7 @@ from lemma_pod_bundle.layout import (
     check_format_version,
     _sanitize_resource_name,
     _write_json,
+    bundle_format_version,
     load_resource_payload,
     normalize_resource_dir_name,
 )
@@ -982,7 +984,6 @@ def export_pod_bundle(
     bundle_root = output_dir / pod_name
     _ensure_clean_dir(bundle_root, force=force)
     _ensure_resource_dirs(bundle_root)
-    _write_json(bundle_root / "pod.json", _normalize_pod_payload(pod))
 
     # Connectors first: everything below may name one by slug. Each is the
     # catalog connector and the mode -- never the installation or the account.
@@ -991,6 +992,12 @@ def export_pod_bundle(
         connectors = export_pod_connectors(
             pod_sdk, bundle_root, should_export_name=should_export_name
         )
+    # Written once the connectors are: a bundle with none stays the format a
+    # reader of 3 reads whole.
+    _write_json(
+        bundle_root / "pod.json",
+        _normalize_pod_payload(pod, format_version=bundle_format_version(bundle_root)),
+    )
 
     tables: list[dict[str, Any]] = []
     if should_export("tables"):

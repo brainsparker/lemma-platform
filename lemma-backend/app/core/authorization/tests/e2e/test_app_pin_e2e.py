@@ -170,15 +170,21 @@ def _code(response) -> str | None:
     [
         ("PATCH", "/organizations/{org_id}", {"name": "Renamed by an app"}),
         ("PUT", "/usage/organizations/{org_id}/contacts-cap", {"limit": 1}),
+        (
+            "PATCH",
+            "/organizations/{org_id}/members/00000000-0000-0000-0000-000000000001/role",
+            {"role": "ORG_OWNER"},
+        ),
         ("GET", "/pods/{other_pod_id}/datastore/tables", None),
         ("POST", "/pods", None),
     ],
 )
 async def test_H20_an_editors_app_opened_by_the_org_owner_stays_in_its_pod(
-    browser: AsyncClient, world, method: str, path: str, body
+    browser: AsyncClient, world, method: str, path: str, body, monkeypatch
 ):
     """H20: the owner opening an editor's app handed the app the owner's whole
     organization -- its settings, its spending, every pod."""
+    monkeypatch.setattr(settings, "app_pin_cross_pod_enforced", True)
     concrete = path.format(**world)
     payload = body
     if path == "/pods":
@@ -244,6 +250,18 @@ async def test_an_app_manages_its_orgs_people_as_its_viewer(
     assert invited.status_code < 300, invited.text
     assert refused.status_code == status.HTTP_403_FORBIDDEN, refused.text
     assert _code(refused) != APP_ROUTE_NOT_ALLOWED, refused.text
+    # Never into a higher role, even by an owner: that is how an editor's app,
+    # opened by its owner, would make the editor an owner.
+    promoted = await browser.post(
+        f"/organizations/{world['org_id']}/invitations",
+        headers=owner,
+        json={
+            "email": f"invited-as-owner-{uuid4().hex[:6]}@example.com",
+            "role": "ORG_OWNER",
+        },
+    )
+    assert promoted.status_code == status.HTTP_403_FORBIDDEN, promoted.text
+    assert _code(promoted) == APP_ROUTE_NOT_ALLOWED, promoted.text
 
 
 async def test_H20_the_owner_still_reaches_their_org_outside_the_app(

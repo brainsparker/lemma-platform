@@ -74,7 +74,7 @@ Rules:
   - `"instruction": {"$file": "instruction.md"}`
   - `"config": {"$json_file": "config.json"}` — parsed as JSON
 - `visibility` (`PERSONAL|POD|RESTRICTED|PUBLIC`, default `POD`) is a first-class field on tables/functions/agents/workflows/schedules and round-trips through export/import.
-- `pod.json` is metadata plus the portability variables: `{"name": ..., "description": ..., "icon_url": ..., "format_version": 4, "variables": {...}}`. A bundle of a newer format than your CLI reads is refused up front: update the CLI.
+- `pod.json` is metadata plus the portability variables: `{"name": ..., "description": ..., "icon_url": ..., "format_version": 3, "variables": {...}}`; `4` when the bundle declares a pod connector under `connectors/`, which readers of 3 would skip. A bundle of a newer format than your CLI reads is refused up front: update the CLI.
 - `payloads/` and `README.md` are ignored by pod import, but they are part of a high-quality handoff: keep sample function/workflow inputs, account setup JSON, seed records, and the end-to-end smoke test there.
 
 ### Per-resource JSON shapes
@@ -163,7 +163,7 @@ demo/
 
 ```jsonc
 // pod.json
-{ "name": "demo", "description": "Ticket triage demo", "format_version": 4 }
+{ "name": "demo", "description": "Ticket triage demo", "format_version": 3 }
 // tables/tickets/tickets.json
 { "name": "tickets", "primary_key_column": "id", "enable_rls": false,
   "columns": [

@@ -46,7 +46,7 @@ CANCELLED if it was cancelling, in the dead transaction.
 | Routes | What they do |
 | --- | --- |
 | `/pods/{pod_id}/bundle/uploads` | Stage a local zip and mint a signed Lemma URL |
-| `/.../bundle/imports` | Start URL/GitHub planning, poll, replan, approve apply, cancel, or stream SSE |
+| `/.../bundle/imports` | Start URL/GitHub planning, poll, replan, approve apply, cancel, or stream SSE. An import is its starter's: anyone else gets 404 (`POD_BUNDLE_IMPORT_NOT_FOUND`), since its plan was computed with the starter's authority and lists their own accounts |
 | `/.../bundle/exports` | Start/poll an export; authenticated signed-token download is `/pods/bundle/download` |
 | `/.../bundle/publishes` | Start/poll/stream GitHub publication |
 
@@ -92,11 +92,25 @@ declaration changed between the two is refused at its step
 (`POD_BUNDLE_CONNECTOR_CONFLICT`) rather than kept. A SHARED connector's account
 is shared and the connector declared in the one CONNECTOR step's unit of work,
 after the connector checks, so a refused declaration leaves no account widened.
+An account the importer shares here with only some people is never widened to
+the whole pod: the apply is refused with 409
+(`POD_BUNDLE_ACCOUNT_SHARED_WITH_SOME`) before anything is queued, as lemma-cli
+refuses it.
 
-**Format version.** `pod.json`'s `format_version` is 4 since connectors joined
-the format; `lemma_pod_bundle.check_format_version` refuses a newer one at
-planning (and in the CLI's direct import) instead of importing a bundle with
-what it added left out.
+A schedule exported before pod connectors names an account rather than a pod
+connector. One the importer could not use -- somebody else's not shared with
+them here, or gone -- is planned as skipped with a warning
+(`infrastructure/account_checks.py`): at planning for an id in the bundle, when
+the apply is requested for one given as an import variable. The rest of the
+bundle imports.
+
+**Format version.** `pod.json`'s `format_version` is 4 for a bundle that
+declares a pod connector, and 3 for one that does not
+(`lemma_pod_bundle.bundle_format_version`): 4 added only `connectors/`, so a
+reader of 3 still reads every bundle it read before. Both exporters write it
+after the connectors. `lemma_pod_bundle.check_format_version` refuses a newer
+one at planning (and in the CLI's direct import) instead of importing a bundle
+with what it added left out.
 
 **Grants** travel in the manifest of the agent or function that holds them
 (`permissions.grants`, by resource name), as a deferred `*_GRANTS` step after

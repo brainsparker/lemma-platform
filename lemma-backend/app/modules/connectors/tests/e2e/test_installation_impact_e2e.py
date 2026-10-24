@@ -213,7 +213,16 @@ async def test_the_preview_counts_surfaces_schedules_and_subscriptions_by_pod(
     assert seen["schedule_count"] == 2, "the count is everyone's"
     assert [one["pod_id"] for one in seen["pods"]] == [shared["id"]]
     assert hidden["name"] not in as_editor.text, "a pod they cannot open is not named"
+    assert hidden["id"] not in as_editor.text, "nor pointed at by its id"
+    assert seen["pod_connectors"] == [
+        {"pod_id": shared["id"], "slug": "crm", "mode": "SHARED"}
+    ], "its connectors' slugs are not listed either"
+    assert (seen["unnamed_pod_count"], seen["unnamed_pod_connector_count"]) == (
+        1,
+        1,
+    ), "it is counted instead"
     assert seen["complete"] is True
+    assert (body["unnamed_pod_count"], body["unnamed_pod_connector_count"]) == (0, 0)
 
 
 async def test_a_preview_that_cannot_be_completed_still_answers(
@@ -254,5 +263,44 @@ async def test_a_preview_that_cannot_be_completed_still_answers(
         await uow.commit()
 
     assert soft.complete is False
-    assert [one.slug for one in soft.pod_connectors] == ["crm"]
+    # Whether the caller could open the pod was never learned, so it is not
+    # named: the slug is counted, not listed.
+    assert soft.pod_connectors == []
+    assert (soft.unnamed_pod_count, soft.unnamed_pod_connector_count) == (1, 1)
     assert soft.pods == []
+
+
+async def test_a_preview_past_the_pods_it_checks_names_none_of_the_rest(
+    scenario: E2EScenario, db_session
+):
+    """A pod past the ones checked for whether the caller can open it is
+    counted, never listed: unchecked is not the same as allowed."""
+    from app.core.infrastructure.db.session import async_session_maker
+    from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
+    from app.modules.connectors.api.dependencies import get_pod_connector_service
+    from app.modules.connectors.services.installation_impact import (
+        with_what_else_stops,
+    )
+
+    await scenario.create_org_with_pod(name_prefix="Impact First")
+    first = scenario.pod
+    await scenario.create_pod(name_prefix="Impact Second")
+    second = scenario.pod
+    install = await _install(scenario, db_session)
+    await _declare(scenario, first["id"], install, "PER_MEMBER")
+    await _declare(scenario, second["id"], install, "PER_MEMBER")
+    owner = UUID(scenario.owner_user["id"])
+
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        impact = await get_pod_connector_service(uow).impact(
+            user_id=owner,
+            organization_id=UUID(scenario.org_id),
+            auth_config_id=install.id,
+        )
+        seen = await with_what_else_stops(uow, impact, user_id=owner, max_named=1)
+        await uow.commit()
+
+    assert seen.complete is True
+    assert len(seen.pods) == 1
+    assert [one.pod_id for one in seen.pod_connectors] == [seen.pods[0].pod_id]
+    assert (seen.unnamed_pod_count, seen.unnamed_pod_connector_count) == (1, 1)

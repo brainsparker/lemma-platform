@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from lemma_pod_bundle import pack_bundle
+from lemma_pod_bundle import bundle_format_version, pack_bundle
 from lemma_pod_bundle.layout import (
     RESOURCE_DIRS,
     TABLE_DATA_FILE,
@@ -246,7 +246,6 @@ class BundleExporter:
                 raise BundleInvalidError(f"Pod {pod_id} no longer exists.")
             pod_dict = _pod_response_dict(pod)
             pod_name = str(pod_dict.get("name") or str(pod_id)).strip() or str(pod_id)
-            _write_json(root / "pod.json", _normalize_pod_payload(pod_dict))
 
             # Total = the pod.json step + every selected resource type; drives the
             # progress bar deterministically without a pre-count DB round-trip.
@@ -259,6 +258,14 @@ class BundleExporter:
                 await export_connectors(root, uow, ctx=ctx, pod_id=pod_id)
                 done += 1
                 await on_progress(done, total)
+            # Written once the connectors are: a bundle with none stays the
+            # format a reader of 3 reads whole.
+            _write_json(
+                root / "pod.json",
+                _normalize_pod_payload(
+                    pod_dict, format_version=bundle_format_version(root)
+                ),
+            )
 
             # --- tables (+ optional data) -------------------------------------
             if "tables" in selected:

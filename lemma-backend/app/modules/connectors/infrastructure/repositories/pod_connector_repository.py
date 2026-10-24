@@ -313,14 +313,6 @@ class PodAccountRepository:
         )
         return await self._reread(pod_account_id)
 
-    async def allows_sandbox_use(self, pod_account_id: UUID) -> bool:
-        """Whether the owner still allows it inside sandboxes: read fresh,
-        not off an entity in hand, because the bridge asks it again later."""
-        allowed = await self.session.scalar(
-            select(PodAccount.allow_sandbox_use).where(PodAccount.id == pod_account_id)
-        )
-        return bool(allowed)
-
     async def make_member_default(self, pod_account: PodAccountEntity) -> None:
         """This account, and no other of the owner's on its installation here."""
         await self.session.execute(

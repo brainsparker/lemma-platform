@@ -604,66 +604,17 @@ async def test_a_shared_account_its_owner_allowed_in_sandboxes_is_written() -> N
     borrowed account's token reaches a workspace (design §3.8), and the
     credential remembers whose it is, for the session's marker."""
     lent = _Resolved(owner=uuid4(), allow_sandbox_use=True)
+    ctx = _context()
 
-    credential = await _resolve(_context(), lent)
+    credential = await _resolve(ctx, lent)
 
     assert credential == bridge._GithubCredential(
         access_token="gho_realtoken",
         login="octocat",
         email=None,
         borrowed_pod_account_id=lent.pod_account_id,
+        borrower_user_id=ctx.user_id,
     )
-
-
-@pytest.mark.asyncio
-async def test_a_borrowed_token_is_taken_back_once_its_owner_withdraws_it() -> None:
-    """The marker is per session, so the owner turning sandbox use off has to
-    reach sessions that already hold a copy: each later git command asks
-    again, and the first one after the change removes the token."""
-    pod_account_id = uuid4()
-    redis = _FakeRedis()
-    session = _FakeCredentialSession()
-    allowed = {"now": True}
-
-    async def _lent(ctx):
-        del ctx
-        return bridge._GithubCredential(
-            access_token="gho_lent",
-            login="alice",
-            email=None,
-            borrowed_pod_account_id=pod_account_id,
-        )
-
-    async def _still_allowed(asked: UUID) -> bool:
-        assert asked == pod_account_id
-        return allowed["now"]
-
-    async def _ensure() -> str | None:
-        return await bridge.ensure_github_credentials(
-            _context(),
-            session,
-            redis=redis,
-            resolve_credential=_lent,
-            sandbox_use_allowed=_still_allowed,
-        )
-
-    assert await _ensure() is None
-    assert redis.values[_MARKER_KEY] == f"borrowed:{pod_account_id}"
-    commands_after_provisioning = len(session.commands)
-
-    # Still allowed: nothing more happens.
-    assert await _ensure() is None
-    assert len(session.commands) == commands_after_provisioning
-
-    allowed["now"] = False
-    notice = await _ensure()
-
-    assert notice is not None and "no longer allows it" in notice
-    [take_back] = session.commands[commands_after_provisioning:]
-    assert take_back.startswith("rm -f ")
-    assert "/tmp/lemma-sess/session-1/git-credentials" in take_back
-    assert "/tmp/lemma-sess/session-1/gh/hosts.yml" in take_back
-    assert redis.values[_MARKER_KEY] == "unavailable"
 
 
 @pytest.mark.asyncio

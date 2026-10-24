@@ -12653,7 +12653,7 @@
         "type": "object"
       },
       "InstallationImpactResponse": {
-        "description": "What deleting or disabling an installation stops, before it is done.\n\nThe counts are the whole organization's; `pods` names only the pods the\ncaller can open.",
+        "description": "What deleting or disabling an installation stops, before it is done.\n\nThe counts are the whole organization's; `pods` and `pod_connectors` name\nonly the pods the caller can open, and the rest are counted in\n`unnamed_pod_count`.",
         "properties": {
           "account_count": {
             "title": "Account Count",
@@ -12681,6 +12681,7 @@
             "type": "integer"
           },
           "pod_connectors": {
+            "description": "Its pod connectors in the pods the caller can open.",
             "items": {
               "$ref": "#/components/schemas/ImpactedPodConnector"
             },
@@ -12705,6 +12706,18 @@
             "default": 0,
             "description": "Surfaces that answer through one of its pod connectors.",
             "title": "Surface Count",
+            "type": "integer"
+          },
+          "unnamed_pod_connector_count": {
+            "default": 0,
+            "description": "The pod connectors those unnamed pods lose.",
+            "title": "Unnamed Pod Connector Count",
+            "type": "integer"
+          },
+          "unnamed_pod_count": {
+            "default": 0,
+            "description": "Pods that lose a connector and are not named here: the caller cannot open them, or (with `complete: false`) whether they can could not be checked.",
+            "title": "Unnamed Pod Count",
             "type": "integer"
           }
         },

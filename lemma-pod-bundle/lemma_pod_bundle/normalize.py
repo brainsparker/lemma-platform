@@ -68,9 +68,13 @@ def _attach_permissions_payload(
 _AGENT_CLEARABLE_SCHEMA_FIELDS = ("output_schema", "input_schema")
 
 
-def _normalize_pod_payload(pod: dict[str, Any]) -> dict[str, Any]:
+def _normalize_pod_payload(
+    pod: dict[str, Any], *, format_version: int = FORMAT_VERSION
+) -> dict[str, Any]:
+    """``pod.json``. An exporter passes ``bundle_format_version`` of what it
+    wrote, so a bundle with no connectors stays readable by a reader of 3."""
     return {
-        "format_version": FORMAT_VERSION,
+        "format_version": format_version,
         "name": pod.get("name"),
         "description": pod.get("description"),
         "icon_url": pod.get("icon_url"),

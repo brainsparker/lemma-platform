@@ -47,12 +47,18 @@ from uuid import UUID
 from sqlalchemy import text
 from starlette.requests import HTTPConnection
 
-from app.core.api.actor_policy import app_may_call, refuse_app_route, route_template
+from app.core.api.actor_policy import (
+    APP_ROUTE_NOT_ALLOWED,
+    app_may_call,
+    refuse_app_route,
+    route_template,
+)
 from app.core.app_hosts import app_label_from_host, split_release_label
 from app.core.config import settings
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.cache.resilient_cache import ResilientJsonCache
 from app.core.infrastructure.db.session import async_session_maker
+from app.core.log.log import get_logger
 
 #: How long a slug's app is remembered. A slug renamed away and taken by another
 #: app inside this window is still pinned to the first app's pod for that long.
@@ -68,6 +74,9 @@ _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 class UnknownAppHost(Exception):
     """The request came from an app host whose slug names no app."""
+
+
+logger = get_logger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,6 +219,84 @@ def app_request_of(connection: HTTPConnection) -> AppOnHost | None:
     return getattr(connection.state, "app_request", None)
 
 
+def refuse_other_pod(connection: HTTPConnection, named: UUID | None) -> bool:
+    """Refuse an app's page naming a pod other than its own in a body or query.
+
+    The pin reads only path parameters; a route outside ``/pods/{pod_id}`` that
+    takes its pod from what the caller sends calls this with it. For a person
+    it does nothing. Under the same switch as a path's pod: until
+    ``app_pin_cross_pod_enforced`` is on, another pod is recorded and served,
+    and True says so.
+    """
+    app = app_request_of(connection)
+    if app is None or named is None or named == app.pod_id:
+        return False
+    method = str(connection.scope.get("method", "GET")).upper()
+    template = route_template(connection)
+    if not settings.app_pin_cross_pod_enforced:
+        logger.warning(
+            "apps.pin.cross_pod_observed",
+            app_id=str(app.app_id),
+            app_pod_id=str(app.pod_id),
+            route=f"{method} {template}",
+        )
+        return True
+    raise DomainError(
+        "A pod app's page acts only in its own pod, and this request names another.",
+        code=APP_ROUTE_NOT_ALLOWED,
+        status_code=403,
+        details={"method": method, "route": template},
+    )
+
+
+def app_pod_for(connection: HTTPConnection, named: UUID | None) -> UUID | None:
+    """The pod a route outside ``/pods/{pod_id}`` acts in, given the one the
+    request names: as named for a person; for an app's page, its own pod,
+    whether or not it names one (:func:`refuse_other_pod`) -- or, while the
+    cross-pod refusal is off, the other pod it named."""
+    if refuse_other_pod(connection, named):
+        return named
+    app = app_request_of(connection)
+    return named if app is None else app.pod_id
+
+
+#: What an app's page may invite someone as: a member of the organization,
+#: and at most a user of the app's own pod.
+_APP_INVITABLE_POD_ROLES = frozenset({None, "POD_VIEWER", "POD_USER"})
+
+
+def refuse_app_invitation_above_member(
+    connection: HTTPConnection,
+    *,
+    role: str,
+    pod_id: UUID | None,
+    pod_role: str | None,
+) -> None:
+    """An app invites as a plain member, never into a higher role.
+
+    Inviting is the one change to the organization's people an app may make
+    (``APP_ROUTES``). Anything more -- an owner or editor, a pod admin, another
+    pod -- is what an editor's app, opened by an owner, would use to promote
+    the editor, so it is the viewer's to do in Lemma itself.
+    """
+    app = app_request_of(connection)
+    if app is None:
+        return
+    within = (
+        role == "ORG_MEMBER"
+        and (pod_id is None or pod_id == app.pod_id)
+        and pod_role in _APP_INVITABLE_POD_ROLES
+    )
+    if not within:
+        raise DomainError(
+            "An app can invite someone only as a member of the organization "
+            "(and at most a user of its own pod). Invite them into a higher "
+            "role from Lemma.",
+            code=APP_ROUTE_NOT_ALLOWED,
+            status_code=403,
+        )
+
+
 def _same_id(raw: object, expected: UUID) -> bool:
     try:
         return UUID(str(raw)) == expected
@@ -224,7 +311,16 @@ def _require_app_route(connection: HTTPConnection, app: AppOnHost) -> None:
         raise refuse_app_route(method, template)
     params = connection.path_params
     if "pod_id" in params and not _same_id(params["pod_id"], app.pod_id):
-        raise refuse_app_route(method, template)
+        if settings.app_pin_cross_pod_enforced:
+            raise refuse_app_route(method, template)
+        # Served as on main for now, and recorded: an app that relies on
+        # another pod shows up here before the refusal is switched on.
+        logger.warning(
+            "apps.pin.cross_pod_observed",
+            app_id=str(app.app_id),
+            app_pod_id=str(app.pod_id),
+            route=f"{method} {template}",
+        )
     if "organization_id" in params and not _same_id(
         params["organization_id"], app.organization_id
     ):
@@ -267,7 +363,9 @@ __all__ = [
     "app_host_slug",
     "app_of_connection",
     "app_on_host",
+    "app_pod_for",
     "app_request_of",
     "is_null_origin",
     "pin_app_request",
+    "refuse_other_pod",
 ]

@@ -21,14 +21,15 @@ T = TypeVar("T", bound="InstallationImpactResponse")
 class InstallationImpactResponse:
     """What deleting or disabling an installation stops, before it is done.
 
-    The counts are the whole organization's; `pods` names only the pods the
-    caller can open.
+    The counts are the whole organization's; `pods` and `pod_connectors` name
+    only the pods the caller can open, and the rest are counted in
+    `unnamed_pod_count`.
 
         Attributes:
             account_count (int):
             auth_config_id (UUID):
             pod_account_count (int):
-            pod_connectors (list[ImpactedPodConnector]):
+            pod_connectors (list[ImpactedPodConnector]): Its pod connectors in the pods the caller can open.
             complete (bool | Unset): False when the surfaces, schedules and subscriptions could not be counted just now: the
                 counts above them are zero for that reason, not because nothing stops. Removing is not blocked by it. Default:
                 True.
@@ -36,6 +37,9 @@ class InstallationImpactResponse:
             pods (list[ImpactedPod] | Unset): Per pod the caller can open: what stops there.
             schedule_count (int | Unset): Schedules that listen through one of its pod connectors. Default: 0.
             surface_count (int | Unset): Surfaces that answer through one of its pod connectors. Default: 0.
+            unnamed_pod_connector_count (int | Unset): The pod connectors those unnamed pods lose. Default: 0.
+            unnamed_pod_count (int | Unset): Pods that lose a connector and are not named here: the caller cannot open them,
+                or (with `complete: false`) whether they can could not be checked. Default: 0.
     """
 
     account_count: int
@@ -47,6 +51,8 @@ class InstallationImpactResponse:
     pods: list[ImpactedPod] | Unset = UNSET
     schedule_count: int | Unset = 0
     surface_count: int | Unset = 0
+    unnamed_pod_connector_count: int | Unset = 0
+    unnamed_pod_count: int | Unset = 0
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -76,6 +82,10 @@ class InstallationImpactResponse:
 
         surface_count = self.surface_count
 
+        unnamed_pod_connector_count = self.unnamed_pod_connector_count
+
+        unnamed_pod_count = self.unnamed_pod_count
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -96,6 +106,10 @@ class InstallationImpactResponse:
             field_dict["schedule_count"] = schedule_count
         if surface_count is not UNSET:
             field_dict["surface_count"] = surface_count
+        if unnamed_pod_connector_count is not UNSET:
+            field_dict["unnamed_pod_connector_count"] = unnamed_pod_connector_count
+        if unnamed_pod_count is not UNSET:
+            field_dict["unnamed_pod_count"] = unnamed_pod_count
 
         return field_dict
 
@@ -137,6 +151,10 @@ class InstallationImpactResponse:
 
         surface_count = d.pop("surface_count", UNSET)
 
+        unnamed_pod_connector_count = d.pop("unnamed_pod_connector_count", UNSET)
+
+        unnamed_pod_count = d.pop("unnamed_pod_count", UNSET)
+
         installation_impact_response = cls(
             account_count=account_count,
             auth_config_id=auth_config_id,
@@ -147,6 +165,8 @@ class InstallationImpactResponse:
             pods=pods,
             schedule_count=schedule_count,
             surface_count=surface_count,
+            unnamed_pod_connector_count=unnamed_pod_connector_count,
+            unnamed_pod_count=unnamed_pod_count,
         )
 
         installation_impact_response.additional_properties = d

@@ -123,10 +123,13 @@ _ORG_CONNECTORS = "/organizations/{organization_id}/connectors"
 
 #: Routes outside a pod that a pod app's page may call (H20, ``core/app_pin``).
 #: The page acts as its viewer with their whole access, but only in its own
-#: pod; outside it, only who is viewing, the connector catalogue, and setting
-#: a connector up in its own pod's organization -- so an app can onboard a
-#: person into a connector. Each of these checks the viewer's own permission.
-#: Anything else (org settings, members, billing, other pods) is refused.
+#: pod. Outside it, reads, and the steps that start something new: who is
+#: viewing, the connector catalogue, a new installation and the viewer's own
+#: connect flow, inviting someone as a member. Nothing that changes what
+#: already exists for other people -- an installation every member's
+#: credentials go through, someone's role, someone's membership -- because the
+#: viewer's own permission is exactly what an editor's app, opened by an
+#: owner, would borrow to make the editor an owner (review of #1059).
 APP_ROUTES: frozenset[tuple[str, str]] = frozenset(
     {
         ("GET", "/users/me"),
@@ -134,21 +137,17 @@ APP_ROUTES: frozenset[tuple[str, str]] = frozenset(
         ("GET", "/connectors"),
         ("GET", "/connectors/{connector_id}"),
         ("GET", "/connectors/{connector_id}/skill"),
-        # Auth configs: create, list, get, update, refresh.
+        # Installations: create a new one, and read. Never edit, refresh or
+        # delete one: its server and client are where every member's
+        # credentials go, and members reach a new one only by choosing it.
         ("POST", f"{_ORG_CONNECTORS}/auth-configs"),
         ("GET", f"{_ORG_CONNECTORS}/auth-configs"),
         ("GET", f"{_ORG_CONNECTORS}/auth-configs/{{auth_config_name}}"),
-        ("PATCH", f"{_ORG_CONNECTORS}/auth-configs/{{auth_config_name}}"),
-        (
-            "POST",
-            f"{_ORG_CONNECTORS}/auth-configs/{{auth_config_name}}/operations/refresh",
-        ),
-        # Accounts: create, list, get, update, delete, GitHub installations.
+        # The viewer's own accounts: connect, read, update; never delete.
         ("POST", f"{_ORG_CONNECTORS}/accounts"),
         ("GET", f"{_ORG_CONNECTORS}/accounts"),
         ("GET", f"{_ORG_CONNECTORS}/accounts/{{account_id}}"),
         ("PATCH", f"{_ORG_CONNECTORS}/accounts/{{account_id}}"),
-        ("DELETE", f"{_ORG_CONNECTORS}/accounts/{{account_id}}"),
         ("GET", f"{_ORG_CONNECTORS}/accounts/{{account_id}}/github/installations"),
         ("POST", f"{_ORG_CONNECTORS}/accounts/{{account_id}}/github/installations"),
         # Connect requests and installs.
@@ -179,16 +178,13 @@ APP_ROUTES: frozenset[tuple[str, str]] = frozenset(
         # The app host's own door: a ticket for this host's access cookie. It
         # names the app by ``Origin`` itself (``apps/api/app_access_controller``).
         ("POST", "/apps/access/tickets"),
-        # The app's own organization and its people, as the viewer: internal
-        # apps pick colleagues (`useOrganizationMembers`) and onboard them --
-        # invite, change a role, remove -- and each route already asks the
-        # viewer's own permission, so an app does what its viewer may and
-        # nothing more. The organization's own settings stay out.
+        # The app's own organization and its people: internal apps pick
+        # colleagues (`useOrganizationMembers`) and invite new ones -- as a
+        # plain member only, which the invitation route holds an app to.
+        # Changing anyone's role or removing them stays in Lemma.
         ("GET", "/organizations/{organization_id}"),
         ("GET", "/organizations/{organization_id}/permissions/me"),
         ("GET", "/organizations/{organization_id}/members"),
-        ("PATCH", "/organizations/{organization_id}/members/{member_id}/role"),
-        ("DELETE", "/organizations/{organization_id}/members/{member_id}"),
         ("GET", "/organizations/{organization_id}/invitations"),
         ("POST", "/organizations/{organization_id}/invitations"),
         # Connector reads an onboarding app shows alongside setup.
@@ -203,6 +199,9 @@ APP_ROUTES: frozenset[tuple[str, str]] = frozenset(
 
 WORKLOAD_NOT_ALLOWED = "WORKLOAD_NOT_ALLOWED"
 APP_ROUTE_NOT_ALLOWED = "APP_ROUTE_NOT_ALLOWED"
+#: The code a pod app's page is refused with on a route a person must call
+#: themselves (:func:`require_person`).
+APP_PERSON_ONLY = "APP_PERSON_ONLY"
 
 
 def workload_may_call(method: str, path_template: str) -> bool:
@@ -245,6 +244,15 @@ def refuse_workload(action_label: str) -> DomainError:
     )
 
 
+def refuse_app_for_person(action_label: str) -> DomainError:
+    return DomainError(
+        f"A pod app's page may not {action_label}: a person must do this "
+        "themselves in Lemma, not through an app acting for them.",
+        code=APP_PERSON_ONLY,
+        status_code=403,
+    )
+
+
 def route_template(connection: HTTPConnection) -> str | None:
     """The matched route's path template, e.g. ``/pods/{pod_id}/agents``."""
     route = connection.scope.get("route")
@@ -252,16 +260,27 @@ def route_template(connection: HTTPConnection) -> str | None:
 
 
 def require_person(action_label: str):
-    """Close one pod-scoped route to workloads.
+    """Close one pod-scoped route to workloads and to pod apps' pages.
 
     Pod routes are open to workloads by default; this is for the few that must
     be a person's own act whatever a workload was granted or approved for --
-    conferring membership, opening a function to people outside the pod.
+    conferring membership, opening a function to people outside the pod,
+    sharing their own account, answering their own approvals.
+
+    A pod app's page (``core/app_pin``) is a workload too, for these: it holds
+    its viewer's cookie, but its script is the app author's, so a member
+    opening an editor's app would otherwise have it share their account or
+    approve on their behalf without ever seeing the question.
     """
 
     async def _dependency(request: Request) -> None:
         if getattr(request.state, "delegation_claims", None) is not None:
             raise refuse_workload(action_label)
+        # Lazily: ``app_pin`` imports this module.
+        from app.core.app_pin import app_request_of
+
+        if app_request_of(request) is not None:
+            raise refuse_app_for_person(action_label)
 
     return Depends(_dependency)
 
@@ -286,9 +305,11 @@ def refuse_named_workloads(action_label: str):
 
 
 __all__ = [
+    "APP_PERSON_ONLY",
     "APP_ROUTE_NOT_ALLOWED",
     "APP_ROUTES",
     "app_may_call",
+    "refuse_app_for_person",
     "refuse_app_route",
     "refuse_named_workloads",
     "POD_SCOPED_PREFIX",

@@ -400,22 +400,6 @@ async def share_own_account_as_pod_connector(
     return created.slug
 
 
-async def pod_account_allows_sandbox_use(
-    uow: SqlAlchemyUnitOfWork, pod_account_id: UUID
-) -> bool:
-    """Whether a pod account's owner still allows it inside sandboxes.
-
-    Asked again by the git bridge before it keeps serving a borrowed token
-    to a session that already has one: the owner turning it off has to stop
-    other members' sandboxes being given it, not only new ones.
-    """
-    from app.modules.connectors.infrastructure.repositories.pod_connector_repository import (
-        PodAccountRepository,
-    )
-
-    return await PodAccountRepository(uow).allows_sandbox_use(pod_account_id)
-
-
 async def shared_connectors_running_as(
     uow: SqlAlchemyUnitOfWork, account_ids: list[UUID]
 ) -> dict[UUID, list[tuple[UUID, str]]]:
@@ -506,7 +490,6 @@ __all__ = [
     "ReauthRequiredError",
     "acting_person",
     "get_pod_connector",
-    "pod_account_allows_sandbox_use",
     "resolve_pod_connector",
     "resolve_standing_pod_connector",
     "shared_connector_for",

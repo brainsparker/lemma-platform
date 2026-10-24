@@ -9,7 +9,9 @@ those modules' contracts; nothing here reads their tables.
 The counts are the organization's: whoever removes an installation removes it
 for everyone, and should know how much goes. The pods are named only where the
 caller could open them, asked of the caller's own authority in each, the way a
-request of theirs to that pod would be.
+request of theirs to that pod would be. Everywhere else -- including a pod past
+the ones checked, or every pod when the check itself failed -- the connectors
+are counted, never listed: a slug says what a pod is for as plainly as its name.
 
 It fails soft. The preview is advice before a removal, never a condition of
 it: if this half cannot be read, the caller gets the connectors module's own
@@ -76,11 +78,21 @@ async def with_what_else_stops(
     *,
     user_id: UUID,
     can_open: PodVisible = caller_can_open,
+    max_named: int = MAX_NAMED_PODS,
 ) -> InstallationImpactResponse:
-    """``impact`` with the surfaces, schedules and subscriptions added, or
-    unchanged and marked incomplete when they could not be read."""
+    """``impact`` with the surfaces, schedules and subscriptions added and the
+    pods the caller cannot open taken out, or -- when the rest could not be
+    read -- with only what was learned and marked incomplete."""
+    connectors: Sequence[tuple[UUID, str]] = sorted(
+        {(one.pod_id, one.slug) for one in impact.pod_connectors}
+    )
+    visible: frozenset[UUID] = frozenset()
     try:
-        return await _what_else_stops(uow, impact, user_id=user_id, can_open=can_open)
+        candidates = sorted({pod_id for pod_id, _slug in connectors})[:max_named]
+        visible = frozenset(
+            [pod_id for pod_id in candidates if await can_open(uow, user_id, pod_id)]
+        )
+        whole = await _what_else_stops(uow, impact, connectors, visible)
     except SQLAlchemyError, RedisError, OSError, DomainError:
         logger.warning(
             "connectors.installation_impact.partial.degraded",
@@ -92,19 +104,32 @@ async def with_what_else_stops(
         # a savepoint: the authorizer commits mid-check to hand its connection
         # back, which a savepoint does not survive.
         await uow.session.rollback()
-        return impact.model_copy(update={"complete": False})
+        return _named_only(impact, visible).model_copy(update={"complete": False})
+    return _named_only(whole, visible)
+
+
+def _named_only(
+    impact: InstallationImpactResponse, visible: frozenset[UUID]
+) -> InstallationImpactResponse:
+    """``impact`` listing only the pod connectors in ``visible`` pods; the
+    others are counted."""
+    named = [one for one in impact.pod_connectors if one.pod_id in visible]
+    unnamed = [one for one in impact.pod_connectors if one.pod_id not in visible]
+    return impact.model_copy(
+        update={
+            "pod_connectors": named,
+            "unnamed_pod_count": len({one.pod_id for one in unnamed}),
+            "unnamed_pod_connector_count": len(unnamed),
+        }
+    )
 
 
 async def _what_else_stops(
     uow: SqlAlchemyUnitOfWork,
     impact: InstallationImpactResponse,
-    *,
-    user_id: UUID,
-    can_open: PodVisible,
+    connectors: Sequence[tuple[UUID, str]],
+    visible: frozenset[UUID],
 ) -> InstallationImpactResponse:
-    connectors: Sequence[tuple[UUID, str]] = sorted(
-        {(one.pod_id, one.slug) for one in impact.pod_connectors}
-    )
     session = uow.session
     surfaces = await surfaces_on_pod_connectors(
         session, connectors, limit=MAX_IMPACT_ROWS
@@ -123,8 +148,6 @@ async def _what_else_stops(
     slugs_in: dict[UUID, list[str]] = defaultdict(list)
     for pod_id, slug in connectors:
         slugs_in[pod_id].append(slug)
-    candidates = sorted(set(slugs_in))[:MAX_NAMED_PODS]
-    visible = [pod_id for pod_id in candidates if await can_open(uow, user_id, pod_id)]
     pods = [
         ImpactedPod(
             pod_id=pod.id,
@@ -134,7 +157,7 @@ async def _what_else_stops(
             schedule_count=schedules_in[pod.id],
             event_subscription_count=subscriptions_in[pod.id],
         )
-        for pod in await pods_by_ids(session=session, pod_ids=visible)
+        for pod in await pods_by_ids(session=session, pod_ids=sorted(visible))
     ]
     return impact.model_copy(
         update={

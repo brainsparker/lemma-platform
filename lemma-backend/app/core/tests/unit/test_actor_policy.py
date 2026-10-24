@@ -90,6 +90,25 @@ def test_every_app_route_exists():
             "DELETE",
             "/organizations/{organization_id}/connectors/auth-configs/{auth_config_name}",
         ),
+        # Never what already exists for other people (review of #1059): an
+        # installation every member's credentials go through, a role, a seat.
+        (
+            "PATCH",
+            "/organizations/{organization_id}/connectors/auth-configs/{auth_config_name}",
+        ),
+        (
+            "POST",
+            (
+                "/organizations/{organization_id}/connectors/auth-configs"
+                "/{auth_config_name}/operations/refresh"
+            ),
+        ),
+        (
+            "DELETE",
+            "/organizations/{organization_id}/connectors/accounts/{account_id}",
+        ),
+        ("PATCH", "/organizations/{organization_id}/members/{member_id}/role"),
+        ("DELETE", "/organizations/{organization_id}/members/{member_id}"),
         ("PUT", "/usage/organizations/{organization_id}/contacts-cap"),
         ("POST", "/users/me/profile"),
         ("POST", "/pods"),
@@ -111,7 +130,5 @@ def test_an_app_may_call_its_pod_and_connector_setup():
     assert app_may_call(
         "POST", "/organizations/{organization_id}/connectors/auth-configs"
     )
-    assert app_may_call(
-        "DELETE", "/organizations/{organization_id}/connectors/accounts/{account_id}"
-    )
+    assert app_may_call("POST", "/organizations/{organization_id}/invitations")
     assert not app_may_call("POST", "/pods/bundle/download")

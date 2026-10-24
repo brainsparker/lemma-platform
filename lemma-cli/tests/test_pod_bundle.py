@@ -410,6 +410,9 @@ def test_export_pod_bundle_skips_excluded_apps(tmp_path: Path):
     assert result["excluded"] == ["apps"]
     assert result["counts"]["apps"] == 0
     assert (tmp_path / "demo-pod" / "pod.json").exists()
+    # No pod connectors: format 3, which a reader of 3 reads whole.
+    pod = json.loads((tmp_path / "demo-pod" / "pod.json").read_text())
+    assert pod["format_version"] == 3
     assert list((tmp_path / "demo-pod" / "apps").iterdir()) == []
 
 

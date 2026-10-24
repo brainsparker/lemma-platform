@@ -8,12 +8,16 @@ from typing import Any
 
 from .jsonc import loads_jsonc
 
-#: The newest bundle format this code reads and the one it writes. 4 added
+#: The newest bundle format this code reads. 4 added
 #: ``connectors/<slug>/<slug>.json``: a reader of 3 would skip that directory
 #: and import everything that names those connectors bound to nothing, so a
 #: reader refuses a newer format up front (:func:`check_format_version`)
 #: rather than importing half of it.
 FORMAT_VERSION = 4
+#: The format a bundle declaring no pod connector is written as. Nothing else
+#: changed in 4, so writing 4 for it would only lock out the readers of 3 that
+#: read it whole (:func:`bundle_format_version`).
+FORMAT_VERSION_WITHOUT_CONNECTORS = 3
 # The bundle's root manifest file (pod metadata, contents scope, variables).
 POD_MANIFEST_FILE = "pod.json"
 # Legacy placeholder for a pod-member assignee; superseded by ${name} variables
@@ -310,3 +314,11 @@ def check_format_version(pod_manifest: object) -> int:
             "leave out what the newer format added."
         )
     return version
+
+
+def bundle_format_version(bundle_root: Path) -> int:
+    """The format to write in this bundle's ``pod.json``: 4 only when it
+    declares a pod connector, the one thing a reader of 3 would leave out."""
+    connectors = bundle_root / "connectors"
+    declares = connectors.is_dir() and any(p.is_dir() for p in connectors.iterdir())
+    return FORMAT_VERSION if declares else FORMAT_VERSION_WITHOUT_CONNECTORS

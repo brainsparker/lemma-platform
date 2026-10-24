@@ -296,13 +296,28 @@ class ImpactedPod(BaseModel):
 class InstallationImpactResponse(BaseModel):
     """What deleting or disabling an installation stops, before it is done.
 
-    The counts are the whole organization's; `pods` names only the pods the
-    caller can open."""
+    The counts are the whole organization's; `pods` and `pod_connectors` name
+    only the pods the caller can open, and the rest are counted in
+    `unnamed_pod_count`."""
 
     auth_config_id: UUID
     account_count: int
     pod_account_count: int
-    pod_connectors: list[ImpactedPodConnector]
+    pod_connectors: list[ImpactedPodConnector] = Field(
+        description="Its pod connectors in the pods the caller can open."
+    )
+    unnamed_pod_count: int = Field(
+        default=0,
+        description=(
+            "Pods that lose a connector and are not named here: the caller "
+            "cannot open them, or (with `complete: false`) whether they can "
+            "could not be checked."
+        ),
+    )
+    unnamed_pod_connector_count: int = Field(
+        default=0,
+        description="The pod connectors those unnamed pods lose.",
+    )
     surface_count: int = Field(
         default=0,
         description="Surfaces that answer through one of its pod connectors.",

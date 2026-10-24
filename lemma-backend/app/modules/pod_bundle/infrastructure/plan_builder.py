@@ -51,6 +51,7 @@ from app.modules.pod_bundle.infrastructure.connector_planning import (
     NoConnectorLookup,
     plan_connectors,
 )
+from app.modules.pod_bundle.infrastructure import account_checks
 from app.modules.pod_bundle.infrastructure.grants import has_grants
 from app.modules.pod_bundle.infrastructure.plan_variables import (
     variables_from_manifest,
@@ -235,8 +236,11 @@ class PlanBuilder:
         *,
         connectors: ConnectorLookup | None = None,
         grants: GrantConferral | None = None,
+        accounts: account_checks.AccountUsability | None = None,
     ):
         self._existing = existing
+        #: Whether the importer could use an account a schedule names.
+        self._accounts = accounts or account_checks.AnyAccountUsable()
         #: Grants on connectors the pod does not declare (``connector_grants``).
         self._directory = directory
         #: The bundle's own ``connectors/`` (``connector_planning``).
@@ -332,17 +336,17 @@ class PlanBuilder:
         # --- schedules -------------------------------------------------------
         existing_schedules = await self._existing.schedule_names()
         for d in _resource_subdirs(bundle_root, "schedules"):
-            steps.append(
-                self._create_once_step(
-                    StepKind.SCHEDULE,
-                    d.name,
-                    existing_schedules,
-                    reason=(
-                        "a schedule of this name already exists; importing a "
-                        "bundle does not replace it"
-                    ),
-                )
+            step = self._create_once_step(
+                StepKind.SCHEDULE,
+                d.name,
+                existing_schedules,
+                reason=(
+                    "a schedule of this name already exists; importing a "
+                    "bundle does not replace it"
+                ),
             )
+            payload = load_resource_payload(d, d.name, resource_type="schedules")
+            steps.append(account_checks.noting_deprecated_account(step, payload))
 
         # --- surfaces --------------------------------------------------------
         existing_surfaces = await self._existing.surface_names()
@@ -419,6 +423,14 @@ class PlanBuilder:
             step.index = i
 
         variables = variables_from_manifest(pod_manifest)
+        # An account written into the bundle is known now; one given as an
+        # import variable is checked again when the apply is requested.
+        await account_checks.skip_unusable_accounts(
+            steps,
+            warnings,
+            replacements={v.name: v.default for v in variables if v.default},
+            check=self._accounts,
+        )
 
         return ImportPlan(
             format_version=format_version,

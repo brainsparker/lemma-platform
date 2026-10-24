@@ -42,6 +42,32 @@ if TYPE_CHECKING:
     )
 
 
+#: The code an import is refused with when it would widen an account the
+#: importer shares with only some of the pod.
+ACCOUNT_SHARED_WITH_SOME = "POD_BUNDLE_ACCOUNT_SHARED_WITH_SOME"
+
+
+class AccountSharedWithSomeError(DomainError):
+    """An import may not widen a RESTRICTED pod account to the whole pod.
+
+    The importer chose to share, for a bundled SHARED connector, an account
+    they already share with only some people here. Widening it hands it to
+    everyone else, and putting its list back is not something an import can
+    promise -- so it is refused, as lemma-cli's import of the same bundle
+    refuses it, and the person widens it themselves if that is what they mean.
+    """
+
+    def __init__(self, *, slug: str, account_id: UUID):
+        super().__init__(
+            f"connector '{slug}': account {account_id} is shared with some "
+            "people in this pod. Share it with the whole pod from the "
+            "Connections page first, or choose another account.",
+            code=ACCOUNT_SHARED_WITH_SOME,
+            status_code=409,
+            details={"slug": slug, "account_id": str(account_id)},
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class InstallationChoice:
     """One active installation of a catalog connector in an organization."""
@@ -259,7 +285,7 @@ async def declare_bundled_pod_connector(
     shared_pod_account_id: UUID | None = None
     if share_account_id is not None and connector_mode is PodConnectorMode.SHARED:
         shared_pod_account_id = await _shared_with_the_pod(
-            service, ctx, pod_id=pod_id, account_id=share_account_id
+            service, ctx, pod_id=pod_id, slug=slug, account_id=share_account_id
         )
     created = await service.create_connector(
         ctx,
@@ -278,12 +304,20 @@ async def declare_bundled_pod_connector(
 
 
 async def _shared_with_the_pod(
-    service: PodConnectorService, ctx: Context, *, pod_id: UUID, account_id: UUID
+    service: PodConnectorService,
+    ctx: Context,
+    *,
+    pod_id: UUID,
+    slug: str,
+    account_id: UUID,
 ) -> UUID:
     """The importer's own account, shared with the whole pod; its pod account id.
 
-    One already in the pod -- added by hand, or on its owner's first use -- is
-    widened rather than added again, which the pod would refuse as a duplicate.
+    One already in the pod only for its owner (added on their first use) is
+    widened rather than added again, which the pod would refuse as a
+    duplicate. One shared with some people is refused
+    (:class:`AccountSharedWithSomeError`): the apply request checks it first
+    (``restricted_pod_accounts``), and this holds for a share narrowed since.
     ``add_account`` and ``update_account`` both refuse an account that is not
     the acting person's own, so an import shares nobody's credential but its
     importer's.
@@ -303,6 +337,8 @@ async def _shared_with_the_pod(
         return added.id
     if existing.visibility is PodAccountVisibility.POD:
         return existing.id
+    if existing.visibility is PodAccountVisibility.RESTRICTED:
+        raise AccountSharedWithSomeError(slug=slug, account_id=account_id)
     widened = await service.update_account(
         ctx,
         pod_id,
@@ -312,6 +348,89 @@ async def _shared_with_the_pod(
         is_member_default=None,
     )
     return widened.id
+
+
+async def restricted_pod_accounts(
+    uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, account_ids: Sequence[UUID]
+) -> set[UUID]:
+    """Which of these accounts the pod holds shared with only some people."""
+    from app.modules.connectors.infrastructure.models.pod_connector import (
+        PodAccount,
+    )
+
+    if not account_ids:
+        return set()
+    rows = await uow.session.execute(
+        select(PodAccount.account_id).where(
+            PodAccount.pod_id == pod_id,
+            PodAccount.account_id.in_(sorted(set(account_ids))),
+            PodAccount.visibility == PodAccountVisibility.RESTRICTED.value,
+        )
+    )
+    return set(rows.scalars().all())
+
+
+async def deprecated_account_refusal(
+    uow: SqlAlchemyUnitOfWork, ctx: Context, *, pod_id: UUID, account_id: UUID
+) -> str | None:
+    """Why the importer could not use an account a bundle names, or None.
+
+    For a schedule exported before pod connectors, which names an account
+    rather than a pod connector: applying it turns the account into the pod
+    connector serving it to the importer (``pod_connector_for_account``),
+    which refuses one that is neither theirs nor shared with them here. Asked
+    before anything is applied, so that schedule is planned as skipped rather
+    than failing the import after earlier steps landed. Reads only: the
+    shared case is checked as a standing binding would be, with no use
+    recorded.
+    """
+    from app.modules.connectors.services.pod_connector_composition import (
+        build_pod_connector_resolver,
+    )
+    from app.modules.connectors.services.pod_connector_resolution import (
+        acting_person,
+    )
+
+    resolver = build_pod_connector_resolver(uow)
+    account = await resolver.accounts.get(account_id)
+    auth_config = (
+        await resolver.auth_configs.get(account.auth_config_id) if account else None
+    )
+    if (
+        account is None
+        or auth_config is None
+        or (
+            ctx.organization_id is not None
+            and auth_config.organization_id != ctx.organization_id
+        )
+    ):
+        return "that account does not exist in this organization"
+    if auth_config.status is AuthConfigStatus.DISABLED:
+        return f"its installation ({auth_config.name}) is disabled"
+    person = acting_person(ctx)
+    if account.user_id == person:
+        return None
+    for connector in await resolver.pod_connectors.list_for_installation(
+        pod_id, auth_config.id
+    ):
+        if connector.mode is not PodConnectorMode.SHARED:
+            continue
+        shared = (
+            await resolver.pod_accounts.get(connector.shared_pod_account_id)
+            if connector.shared_pod_account_id is not None
+            else None
+        )
+        if shared is None or shared.account_id != account_id:
+            continue
+        try:
+            await resolver.require_use(ctx, connector, auth_config)
+            await resolver.resolve_standing(
+                connector, on_behalf_of=person, record_use=False
+            )
+        except DomainError as refusal:
+            return refusal.message
+        return None
+    return "it is somebody else's account, and it is not shared with you in this pod"
 
 
 async def ensure_lemma_app_installation(
@@ -334,14 +453,18 @@ async def ensure_lemma_app_installation(
 
 
 __all__ = [
+    "ACCOUNT_SHARED_WITH_SOME",
+    "AccountSharedWithSomeError",
     "DeclaredPodConnector",
     "InstallationChoice",
     "OwnAccountChoice",
     "declare_bundled_pod_connector",
     "declared_pod_connectors",
+    "deprecated_account_refusal",
     "ensure_lemma_app_installation",
     "exported_pod_connectors",
     "installations_of",
     "lemma_app_installable",
     "own_accounts_on",
+    "restricted_pod_accounts",
 ]

@@ -245,6 +245,30 @@ test("the impact preview names the surfaces, schedules and subscriptions that st
     ], "the pod's name comes with the preview; one the reader cannot open stays unnamed");
 });
 
+test("a preview that could not read everything never says nobody loses anything", () => {
+    const empty = readImpact({ auth_config_id: "ac", account_count: 0, pod_account_count: 0, pod_connectors: [], complete: false });
+    assert.equal(empty.complete, false);
+    assert.deepEqual(impactLines(empty, () => ""), ["Couldn’t read everything this affects."]);
+    const some = readImpact({ auth_config_id: "ac", account_count: 2, pod_account_count: 0, pod_connectors: [], complete: false });
+    assert.deepEqual(impactLines(some, () => ""), ["2 connected accounts are removed with it.", "Couldn’t read everything this affects."]);
+    assert.equal(readImpact({}).complete, true, "an older server that says nothing was complete");
+});
+
+test("pods I cannot open are counted, not named, in the impact preview", () => {
+    const one = readImpact({ auth_config_id: "ac", account_count: 0, pod_account_count: 1, pod_connectors: [],
+        unnamed_pod_count: 1, unnamed_pod_connector_count: 1 });
+    assert.deepEqual(impactLines(one, () => ""), ["1 teammate you cannot open loses a connector."]);
+    const many = readImpact({ auth_config_id: "ac", account_count: 0, pod_account_count: 0,
+        pod_connectors: [{ pod_id: "p1", slug: "crm", mode: "SHARED" }],
+        pods: [{ pod_id: "p1", name: "Kit", pod_connectors: ["crm"] }],
+        unnamed_pod_count: 2, unnamed_pod_connector_count: 3 });
+    assert.deepEqual(impactLines(many, () => ""), ["Kit loses crm.", "2 teammates you cannot open lose 3 connectors."]);
+    const unchecked = readImpact({ auth_config_id: "ac", account_count: 0, pod_account_count: 0, pod_connectors: [],
+        unnamed_pod_count: 1, unnamed_pod_connector_count: 2, complete: false });
+    assert.deepEqual(impactLines(unchecked, () => ""), ["1 more teammate loses 2 connectors.", "Couldn’t read everything this affects."],
+        "an unfinished check says nothing about who can open what");
+});
+
 test("I may install as the server says, not as a copy of its role table says", () => {
     assert.deepEqual(readOrgActions({ organization_id: "o1", actions: ["org.read", INSTALLATION_MANAGE, 3] }), ["org.read", INSTALLATION_MANAGE]);
     assert.deepEqual(readOrgActions(null), [], "nothing readable holds nothing");

@@ -16,6 +16,7 @@ the whole of the problem before: any pod user could grant ``connector_account
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -79,15 +80,13 @@ from app.modules.connectors.services.pod_connector_notices import (
 from app.modules.connectors.services.pod_connector_resolution import acting_person
 
 
-#: Said to the owner who turns ``allow_sandbox_use`` off. The git bridge stops
-#: serving the token at once, and takes it back out of a session on that
-#: session's next git command; a sandbox that runs none keeps its copy until
-#: the stale-session sweep removes it.
-SANDBOX_USE_WITHDRAWN_NOTICE = (
-    "No sandbox is given this account's token from now on. A sandbox that "
-    "already has a copy loses it on its next git command, or when it is swept "
-    "as stale; until then it can still read it."
-)
+def withdraw_sandbox_borrowers_after_commit(
+    uow: SqlAlchemyUnitOfWork, pod_account_ids: Sequence[UUID | None]
+) -> None:
+    """Imported on use: only a change to whom an account serves needs it."""
+    from app.modules.connectors.contracts import sandbox_borrowers
+
+    sandbox_borrowers.withdraw_sandbox_borrowers_after_commit(uow, pod_account_ids)
 
 
 class PodConnectorService:
@@ -171,6 +170,7 @@ class PodConnectorService:
     ) -> PodConnectorResponse:
         await ctx.require(Permissions.POD_CONNECTOR_MANAGE, ResourceRef.pod(pod_id))
         connector = await self._connector(pod_id, slug)
+        previous_account = connector.shared_pod_account_id
         changes = {
             field: getattr(data, field)
             for field in ("mode", "required", "purpose", "visibility")
@@ -187,6 +187,8 @@ class PodConnectorService:
                     ctx, connector, data.shared_pod_account_id
                 )
         updated = await self.pod_connectors.update(connector)
+        if updated.shared_pod_account_id != previous_account:
+            withdraw_sandbox_borrowers_after_commit(self.uow, [previous_account])
         return await self._present_connector(updated, ctx)
 
     async def delete_connector(self, ctx: Context, pod_id: UUID, slug: str) -> None:
@@ -198,6 +200,9 @@ class PodConnectorService:
             resource_ids=[connector.id],
         )
         await self.pod_connectors.delete(connector.id)
+        withdraw_sandbox_borrowers_after_commit(
+            self.uow, [connector.shared_pod_account_id]
+        )
 
     async def _with_shared_account(
         self, ctx: Context, connector: PodConnectorEntity, pod_account_id: UUID
@@ -370,6 +375,11 @@ class PodConnectorService:
         was_allowed = pod_account.allow_sandbox_use
         pod_account = await self.pod_accounts.set_sandbox_use(pod_account.id, allowed)
         if was_allowed and not allowed:
+            from app.modules.connectors.contracts.sandbox_borrowers import (
+                SANDBOX_USE_WITHDRAWN_NOTICE,
+            )
+
+            withdraw_sandbox_borrowers_after_commit(self.uow, [pod_account.id])
             return pod_account, SANDBOX_USE_WITHDRAWN_NOTICE
         return pod_account, None
 
@@ -393,6 +403,8 @@ class PodConnectorService:
         """Owner only. ``share_with=None`` keeps a RESTRICTED account's grantees."""
         ref = ResourceRef.connector_account(pod_account.pod_id, pod_account.id)
         await ctx.require(Permissions.CONNECTOR_ACCOUNT_SHARE, ref)
+        # Who it serves is changing: sessions that borrowed it re-check.
+        withdraw_sandbox_borrowers_after_commit(self.uow, [pod_account.id])
         keep_grantees = (
             visibility is PodAccountVisibility.RESTRICTED and share_with is None
         )
@@ -570,6 +582,7 @@ class PodConnectorService:
             await self.accounts.delete(account_id)
 
     async def _remove(self, pod_account_ids: list[UUID]) -> None:
+        withdraw_sandbox_borrowers_after_commit(self.uow, pod_account_ids)
         await self.pod_connectors.clear_shared_account(pod_account_ids)
         await delete_grants_on(
             self._session,

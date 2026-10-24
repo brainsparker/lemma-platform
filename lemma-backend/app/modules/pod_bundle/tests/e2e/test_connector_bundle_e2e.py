@@ -398,3 +398,111 @@ async def test_sharing_an_account_already_in_the_pod_widens_it_for_the_connector
     accounts = (await client.get(f"/pods/{pod_b}/connector-accounts")).json()["items"]
     [row] = accounts
     assert (row["id"], row["visibility"]) == (mine.json()["id"], "POD")
+
+
+async def test_an_account_shared_with_some_people_is_not_widened_by_an_import(
+    scenario, db_session, worker
+):
+    """The importer shares their account here with only some people. Choosing
+    it for the bundled SHARED connector would widen it to the whole pod; the
+    apply is refused before anything is written, as lemma-cli refuses it, and
+    the account keeps its list."""
+    connector_id = await _catalog_connector(db_session)
+    zip_bytes, _ = await _exported_pod(scenario, db_session, connector_id)
+    _, account_b = await _importing_pod(
+        scenario, db_session, connector_id, installed=True
+    )
+    client, pod_b = scenario.owner_client, scenario.pod_id
+    me = await scenario.current_pod_member_id()
+    narrow = await client.post(
+        f"/pods/{pod_b}/connector-accounts",
+        json={
+            "account_id": account_b,
+            "visibility": "RESTRICTED",
+            "share_with": [{"grantee_type": "POD_MEMBER", "grantee_id": me}],
+        },
+    )
+    assert narrow.status_code == status.HTTP_201_CREATED, narrow.text
+
+    import_id = await start_and_plan_import(client, pod_b, zip_bytes)
+    refused = await client.post(
+        f"/pods/{pod_b}/bundle/imports/{import_id}/apply",
+        json={"connectors": {"crm-shared": {"share_account_id": account_b}}},
+    )
+    assert refused.status_code == status.HTTP_409_CONFLICT, refused.text
+    assert refused.json()["code"] == "POD_BUNDLE_ACCOUNT_SHARED_WITH_SOME"
+    assert refused.json()["details"]["slug"] == "crm-shared"
+
+    assert await _pod_connectors(client, pod_b) == {}
+    accounts = (await client.get(f"/pods/{pod_b}/connector-accounts")).json()["items"]
+    [row] = accounts
+    assert (row["id"], row["visibility"]) == (narrow.json()["id"], "RESTRICTED")
+    got = (await client.get(f"/pods/{pod_b}/bundle/imports/{import_id}")).json()
+    assert got["status"] == "AWAITING_CONFIRMATION"
+
+
+async def test_a_schedule_naming_an_account_the_importer_cannot_use_is_skipped(
+    scenario, db_session, worker, tmp_path
+):
+    """A schedule exported before pod connectors names an account, given here
+    as the import variable: a colleague's, not shared with the importer. It is
+    planned as skipped with a warning when the apply is requested, and the
+    rest of the bundle imports -- rather than the schedule failing the import
+    with the table already created."""
+    from lemma_pod_bundle import pack_bundle
+
+    connector_id = await _catalog_connector(db_session)
+    await scenario.create_org_with_pod(name_prefix="Importer")
+    client, pod_id = scenario.owner_client, scenario.pod_id
+    install_id = await _install(db_session, scenario.org_id, connector_id)
+    colleague = await scenario.create_user("colleague")
+    await scenario.add_user_to_pod(user=colleague, role="POD_EDITOR")
+    theirs = await _connect(
+        db_session,
+        user_id=colleague["id"],
+        org_id=scenario.org_id,
+        install_id=install_id,
+        connector_id=connector_id,
+    )
+
+    root = tmp_path / "legacy"
+    files = {
+        "pod.json": {
+            "name": "Legacy",
+            "format_version": 3,
+            "variables": {"acct": {"type": "account", "connector": connector_id}},
+        },
+        "tables/tickets/tickets.json": {
+            "name": "tickets",
+            "primary_key_column": "id",
+            "columns": [{"name": "id", "type": "UUID", "required": True, "auto": True}],
+        },
+        "schedules/on_ticket/on_ticket.json": {
+            "name": "on_ticket",
+            "schedule_type": "WEBHOOK",
+            "config": {},
+            "account_id": "${acct}",
+            "connector_trigger_id": "crm_new_deal",
+        },
+    }
+    for rel, payload in files.items():
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text(json.dumps(payload), encoding="utf-8")
+
+    import_id = await start_and_plan_import(client, pod_id, pack_bundle(root))
+    applied = await client.post(
+        f"/pods/{pod_id}/bundle/imports/{import_id}/apply",
+        json={"variables": {"acct": theirs}},
+    )
+    assert applied.status_code == status.HTTP_202_ACCEPTED, applied.text
+    [schedule] = [s for s in applied.json()["plan"]["steps"] if s["kind"] == "SCHEDULE"]
+    assert schedule["status"] == "SKIPPED", schedule
+
+    final = await wait_import(client, pod_id, import_id, until={"COMPLETED", "FAILED"})
+    assert final["status"] == "COMPLETED", final
+    assert any("on_ticket" in w and theirs in w for w in final["warnings"]), final
+    tables = await client.get(f"/pods/{pod_id}/datastore/tables")
+    assert "tickets" in tables.text
+    schedules = await client.get(f"/pods/{pod_id}/schedules")
+    assert "on_ticket" not in schedules.text
+    assert await _pod_connectors(client, pod_id) == {}

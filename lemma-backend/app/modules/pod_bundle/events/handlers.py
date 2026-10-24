@@ -377,6 +377,9 @@ async def _plan_from_staging(worker_ctx, store, staging, state: ImportState) -> 
                 user_id=state.user_id, pod_id=state.pod_id
             )
             async with context_scope(ctx):
+                from app.modules.pod_bundle.infrastructure.account_checks import (
+                    ServiceAccountUsability,
+                )
                 from app.modules.pod_bundle.infrastructure.connector_grants import (
                     ServiceConnectorDirectory,
                 )
@@ -401,6 +404,7 @@ async def _plan_from_staging(worker_ctx, store, staging, state: ImportState) -> 
                     directory,
                     connectors=ServiceConnectorLookup(**scope, user_id=state.user_id),
                     grants=ServiceGrantConferral(**scope),
+                    accounts=ServiceAccountUsability(**scope),
                 ).build_plan(bundle_root=bundle_root)
 
     await _raise_if_cancelled(store, import_id)

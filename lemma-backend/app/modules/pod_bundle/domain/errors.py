@@ -25,6 +25,18 @@ class BundleJobExpiredError(PodBundleDomainError):
         super().__init__(message, code="POD_BUNDLE_EXPIRED", status_code=410)
 
 
+class BundleJobNotFoundError(PodBundleDomainError):
+    """No import of this id that the caller started.
+
+    An import is its starter's: its plan was computed with their authority
+    and lists their own accounts, so nobody else may read, apply, re-plan or
+    cancel it. Said as "not found" rather than "forbidden", so an id seen
+    elsewhere tells nobody else that the import exists."""
+
+    def __init__(self, message: str = "No such import in this pod."):
+        super().__init__(message, code="POD_BUNDLE_IMPORT_NOT_FOUND", status_code=404)
+
+
 class BundleInvalidError(PodBundleDomainError):
     def __init__(self, message: str, details: object | None = None):
         super().__init__(

@@ -2036,10 +2036,9 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                             {allTabs.filter((tab): tab is Extract<Tab, {kind: "workflow"}> => tab.kind === "workflow").map(tab => (
                                 <Pane className="pane run-pane" key={pod.id + tab.id} {...paneProps(tab.id)}>
                                     <div className="run-page">
-                                        <WorkflowPage pod={pod} orgId={activeOrgId} name={tab.name}
+                                        <WorkflowPage pod={pod} name={tab.name}
                                             onBack={() => pickTab("space:workflows")}
                                             onOpenRun={openRun}
-                                            onConnect={() => setSettings("connectors")}
                                             onDiscuss={(name) => {
                                                 void (async () => {
                                                     const id = await discussion.open("workflow", name);

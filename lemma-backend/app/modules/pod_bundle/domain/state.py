@@ -116,23 +116,13 @@ class PlanStep(BaseModel):
 
 class VariableSpec(BaseModel):
     """A ``${var}`` placeholder declared by the bundle that the importer may
-    (or must) resolve — connector accounts, pod member references."""
+    (or must) resolve — pod member references, app slugs."""
 
     name: str
-    kind: Literal["account", "pod_member", "free"] = "free"
+    kind: Literal["pod_member", "free"] = "free"
     description: str | None = None
     required: bool = False
     default: str | None = None
-    # For ``kind="account"`` variables: the connector the account must belong
-    # to (e.g. "slack", "jira") and which of its kinds the source install used
-    # ("composio", "package", "mcp", ...), both resolved from the source
-    # account at export time -- never inferred from a resource's own name -- so
-    # the importer can prompt for, and verify, exactly the right combination.
-    # Both are required for every ``kind="account"`` variable; None only for
-    # non-account variables. ``connector_kind`` rather than ``kind`` because
-    # ``kind`` above already names the variable's own type.
-    connector: str | None = None
-    connector_kind: str | None = None
 
 
 class ImportPlan(BaseModel):
@@ -193,6 +183,13 @@ class Progress(BaseModel):
     total: int = 0
 
 
+def connect_url_of(error: object) -> str | None:
+    """The connect link a typed connector refusal carries, if it carries one."""
+    details = getattr(error, "details", None)
+    url = details.get("connect_url") if isinstance(details, dict) else None
+    return url if isinstance(url, str) else None
+
+
 class _BundleJobState(BaseModel):
     """Shared shape of the three job-state documents."""
 
@@ -201,6 +198,9 @@ class _BundleJobState(BaseModel):
     error: str | None = None
     error_type: str | None = None
     error_code: str | None = None
+    #: Where to connect the account a refusal named (`CONNECTION_REQUIRED`,
+    #: `REAUTH_REQUIRED`), so the remedy reaches the person with the error.
+    connect_url: str | None = None
     retryable: bool = False
     version: int = 0
     attempt: int = 1
@@ -220,7 +220,6 @@ class _BundleJobState(BaseModel):
 class ImportState(_BundleJobState):
     import_id: UUID
     source: BundleSource
-    account_id: UUID | None = None
     status: ImportStatus = ImportStatus.QUEUED
     staging_key: str | None = None
     plan: ImportPlan | None = None
@@ -273,7 +272,10 @@ class PublishState(_BundleJobState):
     repo_name: str
     mode: PublishMode = PublishMode.CREATE
     private: bool = False
-    account_id: UUID | None = None
+    #: The repository lock this publish holds (`publish_lock.publish_lock_key`
+    #: of the account the pod's `github` connector resolved to), kept only to
+    #: release it. Not an input: nobody names the account a publish runs as.
+    publish_lock_key: str | None = None
     ai_readme: bool = False
     staging_key: str | None = None
     repo_url: str | None = None

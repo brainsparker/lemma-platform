@@ -74,10 +74,10 @@ def sync_detailed(
     """Start Pod Import
 
      Import a pod bundle from a URL. kind=URL takes a lemma signed download URL (from an export, or from
-    POST …/bundle/uploads); kind=GITHUB takes a public repo (repo_url or owner+repo, with account_id for
-    private repos); kind=TEMPLATE takes the name of a template that ships with Lemma (404 when there is
-    none by that name). Returns 202 with an import_id; poll status until AWAITING_CONFIRMATION, review
-    the plan, then apply.
+    POST …/bundle/uploads); kind=GITHUB takes a repo (repo_url or owner+repo), fetched through the pod's
+    `github` connector as the importer, or anonymously for a public repo; kind=TEMPLATE takes the name
+    of a template that ships with Lemma (404 when there is none by that name). Returns 202 with an
+    import_id; poll status until AWAITING_CONFIRMATION, review the plan, then apply.
 
     Args:
         pod_id (UUID):
@@ -112,10 +112,10 @@ def sync(
     """Start Pod Import
 
      Import a pod bundle from a URL. kind=URL takes a lemma signed download URL (from an export, or from
-    POST …/bundle/uploads); kind=GITHUB takes a public repo (repo_url or owner+repo, with account_id for
-    private repos); kind=TEMPLATE takes the name of a template that ships with Lemma (404 when there is
-    none by that name). Returns 202 with an import_id; poll status until AWAITING_CONFIRMATION, review
-    the plan, then apply.
+    POST …/bundle/uploads); kind=GITHUB takes a repo (repo_url or owner+repo), fetched through the pod's
+    `github` connector as the importer, or anonymously for a public repo; kind=TEMPLATE takes the name
+    of a template that ships with Lemma (404 when there is none by that name). Returns 202 with an
+    import_id; poll status until AWAITING_CONFIRMATION, review the plan, then apply.
 
     Args:
         pod_id (UUID):
@@ -145,10 +145,10 @@ async def asyncio_detailed(
     """Start Pod Import
 
      Import a pod bundle from a URL. kind=URL takes a lemma signed download URL (from an export, or from
-    POST …/bundle/uploads); kind=GITHUB takes a public repo (repo_url or owner+repo, with account_id for
-    private repos); kind=TEMPLATE takes the name of a template that ships with Lemma (404 when there is
-    none by that name). Returns 202 with an import_id; poll status until AWAITING_CONFIRMATION, review
-    the plan, then apply.
+    POST …/bundle/uploads); kind=GITHUB takes a repo (repo_url or owner+repo), fetched through the pod's
+    `github` connector as the importer, or anonymously for a public repo; kind=TEMPLATE takes the name
+    of a template that ships with Lemma (404 when there is none by that name). Returns 202 with an
+    import_id; poll status until AWAITING_CONFIRMATION, review the plan, then apply.
 
     Args:
         pod_id (UUID):
@@ -181,10 +181,10 @@ async def asyncio(
     """Start Pod Import
 
      Import a pod bundle from a URL. kind=URL takes a lemma signed download URL (from an export, or from
-    POST …/bundle/uploads); kind=GITHUB takes a public repo (repo_url or owner+repo, with account_id for
-    private repos); kind=TEMPLATE takes the name of a template that ships with Lemma (404 when there is
-    none by that name). Returns 202 with an import_id; poll status until AWAITING_CONFIRMATION, review
-    the plan, then apply.
+    POST …/bundle/uploads); kind=GITHUB takes a repo (repo_url or owner+repo), fetched through the pod's
+    `github` connector as the importer, or anonymously for a public repo; kind=TEMPLATE takes the name
+    of a template that ships with Lemma (404 when there is none by that name). Returns 202 with an
+    import_id; poll status until AWAITING_CONFIRMATION, review the plan, then apply.
 
     Args:
         pod_id (UUID):

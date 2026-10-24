@@ -199,7 +199,6 @@ class ImportUseCases:
         owner: str | None = None,
         repo: str | None = None,
         ref: str | None = None,
-        account_id: UUID | None = None,
         template: str | None = None,
     ) -> ImportState:
         """Single URL-based import entry point.
@@ -291,7 +290,6 @@ class ImportUseCases:
                 pod_id=pod_id,
                 user_id=user_id,
                 status=ImportStatus.QUEUED,
-                account_id=account_id,
                 source=BundleSource(
                     kind=BundleSourceKind.GITHUB,
                     repo_url=url or f"https://github.com/{owner}/{repo}",
@@ -305,7 +303,6 @@ class ImportUseCases:
                 user_id=user_id,
                 owner=owner,
                 repo=repo,
-                account_id=account_id,
             )
 
         async with self._uow_factory() as uow:

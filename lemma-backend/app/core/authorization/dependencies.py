@@ -421,9 +421,12 @@ def require_resource_admin_or_creator(
         # a destructive action: table/agent/etc. deletion is gated (explicit
         # grant or session approval), and a workload delegating for the creator
         # would otherwise bypass that. Fall through to ctx.require (the gate).
+        # Nor does it outlive membership: someone removed from the pod keeps
+        # their `created_by`, and must not keep the delete that came with it.
         workload_destructive = ctx.is_delegated and permission_id in DESTRUCTIVE_ACTIONS
         if (
             not workload_destructive
+            and ctx.belongs_to_its_pod()
             and ctx.user_id is not None
             and resource.resource_id is not None
         ):

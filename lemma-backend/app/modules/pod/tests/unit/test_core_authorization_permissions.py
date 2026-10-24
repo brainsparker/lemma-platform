@@ -971,6 +971,7 @@ async def test_an_org_owner_does_not_read_a_members_personal_resource():
     decision = await authorizer.authorize(ctx, Permissions.DATASTORE_TABLE_READ, table)
 
     assert not decision.allowed
+    assert decision.reason_code == "PERSONAL_RESOURCE_DENIED"
 
 
 @pytest.mark.asyncio

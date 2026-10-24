@@ -185,7 +185,11 @@ class CallSession:
                         Inject.CONTEXT,
                     )
             case "canvas.render_failed":
-                await self._render_failed(control)
+                # Off this loop: the caller's audio keeps flowing while the
+                # coordinator is told.
+                create_inherited_task(
+                    self._render_failed(control), name="calls.session.render_failed"
+                )
         return False
 
     async def _render_failed(self, control: dict[str, JsonValue]) -> None:
@@ -197,10 +201,13 @@ class CallSession:
             return
         self._failures_reported.add(item)
         title = self._titles.get(item, "an item")
-        await self._agents.send_turn(
-            f"[canvas] '{title}' could not be drawn on the person's screen: "
-            f"{error}. Show a corrected one, or something else."
-        )
+        try:
+            await self._agents.send_turn(
+                f"[canvas] '{title}' could not be drawn on the person's screen: "
+                f"{error}. Show a corrected one, or something else."
+            )
+        except DomainError, SQLAlchemyError, OSError:
+            logger.warning("calls.session.render_failed.undelivered", exc_info=True)
 
     # -- the voice -----------------------------------------------------------
 

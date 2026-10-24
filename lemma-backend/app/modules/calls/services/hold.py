@@ -96,8 +96,14 @@ async def _hold_call(
             instructions=instructions,
             party=talk_party,
         )
+    except (EngineUnavailable, DomainError) as exc:
+        await websocket.close(code=CLOSE_UNAVAILABLE, reason=_reason(exc))
+        return
+    try:
         await engine.open()
     except EngineUnavailable as exc:
+        # Partly open is still open: a socket or task it started is released.
+        await engine.close()
         await websocket.close(code=CLOSE_UNAVAILABLE, reason=str(exc))
         return
     agents = CallAgents(call_id=call_id, party=party)
@@ -141,6 +147,10 @@ async def _hold_call(
         )
     with contextlib.suppress(RuntimeError, WebSocketDisconnect):
         await websocket.close()
+
+
+def _reason(exc: EngineUnavailable | DomainError) -> str:
+    return exc.message if isinstance(exc, DomainError) else str(exc)
 
 
 def _engine_from(raw: object) -> VoiceEngineName | None:

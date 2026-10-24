@@ -221,11 +221,16 @@ class CascadeEngine:
 
     async def _write_and_speak(self, reply: _Reply, history: Sequence[Line]) -> None:
         pending = ""
-        async for delta in self._talker.reply(history, reply.prompt):
-            pending += delta
-            sentences, pending = _split(pending)
-            for sentence in sentences:
-                await self._say(reply, sentence)
+        # Closed here, not by a finalizer: a reply cancelled mid-stream must
+        # unwind the talker's run in this task, where its context was set.
+        async with contextlib.aclosing(
+            self._talker.reply(history, reply.prompt)
+        ) as deltas:
+            async for delta in deltas:
+                pending += delta
+                sentences, pending = _split(pending)
+                for sentence in sentences:
+                    await self._say(reply, sentence)
         if pending.strip():
             await self._say(reply, pending.strip())
         if not reply.spoken:

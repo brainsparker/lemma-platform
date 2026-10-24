@@ -155,8 +155,13 @@ async def call_canvas(uow: SqlAlchemyUnitOfWork, call_id: UUID) -> list[CanvasIt
             shown_at=row.created_at,
         )
         for tool_call_id, row in calls.items()
-        if tool_call_id in results
+        if _shown(results.get(tool_call_id))
     ]
+
+
+def _shown(result: JsonValue) -> bool:
+    """A display that succeeded: the same test the live call applies."""
+    return isinstance(result, dict) and bool(result.get("success"))
 
 
 __all__ = [

@@ -138,6 +138,25 @@ async def test_a_spawned_sub_agent_is_followed_and_the_coordinators_run_state_is
     assert _signals(agents) == [Working(running=True), Working(running=False)]
 
 
+async def test_a_stream_that_fails_tells_the_voice_and_does_not_stop_the_call_closing() -> (
+    None
+):
+    @asynccontextmanager
+    async def broken(conversation_id):
+        raise RedisConnectionError("gone")
+        yield
+
+    agents = CallAgents(
+        call_id=uuid4(), party=Party(user_id=uuid4(), pod_id=uuid4()), stream=broken
+    )
+    agents._watch(agents.call_id)
+    await agents._watching[agents.call_id]
+    await agents.close()
+    [signal] = _signals(agents)
+    assert isinstance(signal, Relay)
+    assert "stopped arriving" in signal.text
+
+
 def _caller() -> Caller:
     return Caller(
         user_id=uuid4(), organization_id=uuid4(), pod_id=uuid4(), call_id=uuid4()

@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from uuid import UUID, uuid4
 
 from pydantic import JsonValue
+from redis.exceptions import RedisError
 
 from app.modules.calls.domain.frames import (
     EVENT_BACKLOG,
@@ -170,9 +171,9 @@ class CallAgents:
     async def close(self) -> None:
         for task in self._watching.values():
             task.cancel()
-        for task in self._watching.values():
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
+        # Gathered, not awaited one by one: a watcher that failed must not
+        # stop the call from closing the rest or recording its transcript.
+        await asyncio.gather(*self._watching.values(), return_exceptions=True)
 
     def _watch(self, conversation_id: UUID) -> None:
         if conversation_id in self._watching:
@@ -182,9 +183,27 @@ class CallAgents:
         )
 
     async def _follow(self, conversation_id: UUID) -> None:
-        async with self._stream(conversation_id) as frames:
-            async for frame in frames:
-                self._read(conversation_id, frame)
+        try:
+            async with self._stream(conversation_id) as frames:
+                async for frame in frames:
+                    self._read(conversation_id, frame)
+        except RedisError, OSError:
+            # The call carries on without this conversation's relays and
+            # canvas items; the voice is told rather than left waiting.
+            logger.warning(
+                "calls.agents.follow.failed",
+                conversation_id=str(conversation_id),
+                exc_info=True,
+            )
+            offer(
+                self._signals,
+                Relay(
+                    text="Updates from part of your team stopped arriving; "
+                    "do not promise results from it.",
+                    urgency="when_idle",
+                ),
+                essential=True,
+            )
 
     def _read(self, conversation_id: UUID, frame: dict[str, JsonValue]) -> None:
         kind = frame.get("type")

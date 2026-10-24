@@ -772,8 +772,8 @@ each card saving one operator section:
   key is the backend's too: each turn of a call asks the
   [decisions API](../configuration.md#decisions) whether it needs the agents,
   and with the key stored locald sets `TYPESAFE_API_KEY` and
-  `DECISION_PROVIDER=typesafe`, so that takes a third of a second rather than
-  the AI model's few. **Web search** works with no key (DuckDuckGo)
+  `DECISION_PROVIDER=typesafe`, so decisions use the dedicated provider,
+  which answers faster than the AI model. **Web search** works with no key (DuckDuckGo)
   and switches to Brave Search when a Brave key is stored.
 
 Tests are read-only requests locald makes (`config.test`): with the typed

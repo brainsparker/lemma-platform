@@ -56,6 +56,7 @@ async def call_config(pod_id: UUID) -> CallConfigResponse:
     status_code=status.HTTP_201_CREATED,
     operation_id="call.open",
     summary="Open a call",
+    dependencies=[require_pod_membership("call agents in this pod")],
     description=(
         "Open a live voice call with a pod agent. The call is a conversation: "
         "its agent coordinates the call, hands work to sub-agents and shows "

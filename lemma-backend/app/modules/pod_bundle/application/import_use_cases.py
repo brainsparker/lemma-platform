@@ -62,7 +62,7 @@ from app.modules.pod_bundle.infrastructure.rate_limiter import (
     get_bundle_rate_limiter,
 )
 from app.modules.pod_bundle.infrastructure.staging import BundleStagingStorage
-from app.modules.pod_bundle.infrastructure.templates import pack_template
+from app.modules.pod_bundle.application.template_imports import stage_template
 from app.core.concurrency.offload import run_blocking
 from app.modules.pod_bundle.infrastructure.state_store import (
     PodBundleStateStore,
@@ -245,13 +245,9 @@ class ImportUseCases:
 
         # Abuse guard: count this import against the user's daily cap (separate
         # bucket from exports) once POD_UPDATE is authorized. Staging an upload
-        # is not counted — only starting the plan/apply pipeline is.
-        #
-        # A template is not counted either. Hiring a teammate is not importing a
-        # bundle the person supplied: what a template carries is fixed by what
-        # ships with this server, so its cost to the worker is small and known,
-        # and counting it would spend the allowance a person needs for the
-        # import-fix-import loop of authoring their own bundles.
+        # is not counted — only starting the plan/apply pipeline is — and nor
+        # is a template: what it carries ships with this server, so its cost is
+        # small and known, and the allowance is for bundles people author.
         if kind is not BundleSourceKind.TEMPLATE:
             await self._rate_limiter.check_and_increment(
                 user_id=user_id,
@@ -266,22 +262,8 @@ class ImportUseCases:
                 raise BundleInvalidError(
                     "A template name is required for kind=TEMPLATE."
                 )
-            archive = await run_blocking(pack_template, template)
-            staging_key = await self._staging.put_archive(
-                "pod-imports", import_id, archive
-            )
-            state = ImportState(
-                import_id=import_id,
-                pod_id=pod_id,
-                user_id=user_id,
-                status=ImportStatus.QUEUED,
-                staging_key=staging_key,
-                source=BundleSource(
-                    kind=BundleSourceKind.TEMPLATE,
-                    template=template,
-                    url=f"template:{template}",
-                ),
-            )
+            staged = await stage_template(self._staging, template, import_id)
+            state = staged.import_state(pod_id=pod_id, user_id=user_id)
             # Already staged, so straight to planning: the same job (and dedup
             # key) a replan uses, with nothing left to fetch.
             kind_name: str = PLAN

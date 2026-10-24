@@ -22,7 +22,6 @@ from uuid import UUID, uuid4
 
 from app.core.authorization.scope import context_scope
 from app.core.authorization.service import AuthorizationDataService
-from app.core.concurrency.offload import run_blocking
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.contracts.setup_conversations import (
@@ -43,11 +42,9 @@ from app.modules.pod_bundle.domain.errors import (
     BundleInvalidError,
     BundleTemplateNotFoundError,
 )
-from app.modules.pod_bundle.domain.state import (
-    BundleSource,
-    BundleSourceKind,
-    ImportState,
-    ImportStatus,
+from app.modules.pod_bundle.application.template_imports import (
+    StagedTemplate,
+    stage_template,
 )
 from app.modules.pod_bundle.events.template_setup import SET_UP_LEMMA, SetUpLemmaJob
 from app.modules.pod_bundle.events.work import BundleJobQueue, plan_key
@@ -61,7 +58,6 @@ from app.modules.pod_bundle.infrastructure.state_store import (
     PodBundleStateStore,
     get_pod_bundle_state_store,
 )
-from app.modules.pod_bundle.infrastructure.templates import pack_template
 
 #: Said at the top of a new plan, so whoever opens it knows what it is for.
 PLAN_PREAMBLE = (
@@ -120,7 +116,7 @@ class StartUseCases:
     async def start(self, *, user_id: UUID, request: StartRequest) -> StartedLemma:
         owning = _what_it_owns(request)
         uow = self._uow
-        staged: tuple[UUID, str] | None = None
+        staged: StagedTemplate | None = None
         if owning.card is not None:
             # Before anything is written: an upload is external I/O, and the
             # transaction holds nothing yet to keep it open across. A failure
@@ -164,11 +160,7 @@ class StartUseCases:
         import_id: UUID | None = None
         if owning.card is not None and staged is not None:
             import_id = await self._queue_template(
-                pod_id=pod.id,
-                user_id=user_id,
-                template=owning.card.id,
-                staged=staged,
-                setup=setup,
+                pod_id=pod.id, user_id=user_id, staged=staged, setup=setup
             )
         await uow.commit()
         return StartedLemma(
@@ -179,50 +171,34 @@ class StartUseCases:
             import_id=import_id,
         )
 
-    async def _stage_archive(self, template: str) -> tuple[UUID, str]:
-        import_id = uuid4()
-        archive = await run_blocking(pack_template, template)
+    async def _stage_archive(self, template: str) -> StagedTemplate:
         staging = self._staging or BundleStagingStorage()
-        key = await staging.put_archive("pod-imports", import_id, archive)
-        return import_id, key
+        return await stage_template(staging, template, uuid4())
 
     async def _queue_template(
         self,
         *,
         pod_id: UUID,
         user_id: UUID,
-        template: str,
-        staged: tuple[UUID, str],
+        staged: StagedTemplate,
         setup: SetupConversation,
     ) -> UUID:
-        import_id, staging_key = staged
-        state = ImportState(
-            import_id=import_id,
-            pod_id=pod_id,
-            user_id=user_id,
-            status=ImportStatus.QUEUED,
-            staging_key=staging_key,
-            source=BundleSource(
-                kind=BundleSourceKind.TEMPLATE,
-                template=template,
-                url=f"template:{template}",
-            ),
-        )
+        state = staged.import_state(pod_id=pod_id, user_id=user_id)
         await self._state_store.stage_import(self._uow, state)
         await self._job_queue.queue_job(
             self._uow,
             SET_UP_LEMMA,
             SetUpLemmaJob(
-                import_id=import_id,
+                import_id=staged.import_id,
                 pod_id=pod_id,
                 user_id=user_id,
                 conversation_id=setup.conversation_id,
                 run_id=setup.run_id,
             ),
             pod_id=pod_id,
-            dedup_key=plan_key(import_id),
+            dedup_key=plan_key(staged.import_id),
         )
-        return import_id
+        return staged.import_id
 
 
 def _what_it_owns(request: StartRequest) -> _Owning:

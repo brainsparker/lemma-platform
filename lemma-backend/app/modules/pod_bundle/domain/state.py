@@ -12,7 +12,7 @@ from enum import Enum
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.modules.pod_bundle.domain.connector_plan import ConnectorChoice, ConnectorPlan
 
@@ -141,6 +141,13 @@ class ImportPlan(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     #: The bundle's pod connectors and the choices each offers the importer.
     connectors: list[ConnectorPlan] = Field(default_factory=list)
+
+    @field_validator("description", mode="before")
+    @classmethod
+    def _text_or_nothing(cls, value: object) -> object:
+        """A ``pod.json`` description that is not text is no description: the
+        bundle is someone else's file, and one stray field must not fail a plan."""
+        return value if isinstance(value, str) else None
 
     def next_pending_step(self) -> PlanStep | None:
         for step in self.steps:

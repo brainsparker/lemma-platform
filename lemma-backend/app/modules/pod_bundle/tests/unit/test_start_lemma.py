@@ -9,7 +9,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.modules.pod.contracts.outcome import OutcomeInput, PodOutcome
-from app.modules.pod_bundle.api.schemas import StartLemmaRequest
+from app.modules.pod_bundle.api.start_schemas import StartLemmaRequest
 from app.modules.pod_bundle.application.start_use_cases import (
     setup_request,
     starter_plan,

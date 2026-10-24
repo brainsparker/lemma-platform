@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, status
 
 from app.core.api.dependencies import CurrentUser, UoWDep
-from app.modules.pod_bundle.api.schemas import (
+from app.modules.pod_bundle.api.start_schemas import (
     StartedPodResponse,
     StartLemmaRequest,
     StartLemmaResponse,

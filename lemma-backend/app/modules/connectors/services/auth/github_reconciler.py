@@ -123,11 +123,14 @@ class GithubInstallationReconciler:
                 return cached
 
         answer, token = await self._ask(account)
-        outcome = await self._proven(
+        outcome, administered = await self._proven(
             account, await self._admissible(account, answer), token
         )
+        # Bound before it is remembered: READY is what the claim made true,
+        # not what GitHub said, and a claim refused here must not leave a
+        # cached READY with nothing bound and no token to mint.
+        outcome = await self._bind(account, outcome, administered=administered)
         await self._remember(key, outcome)
-        await self._bind(account, outcome)
         return outcome
 
     async def invalidate(self, account_id: object) -> None:
@@ -166,9 +169,10 @@ class GithubInstallationReconciler:
         """What GitHub said, less the installations another organization holds.
 
         GitHub answers which installations this person can *see*; seeing one
-        is not owning it (audit H4). One bound to another Lemma organization is
-        neither offered nor resolved to, and an outcome that named one is
-        worked out again from what is left.
+        is not owning it (audit H4). One another Lemma organization holds on a
+        proven claim is neither offered nor resolved to, and an outcome that
+        named one is worked out again from what is left. One held on a binding
+        migration 0063 derived stays in, for `_proven` to ask GitHub about.
         """
         named = {choice.installation_id for choice in outcome.choices}
         if outcome.installation_id:
@@ -198,9 +202,10 @@ class GithubInstallationReconciler:
         account: AccountEntity,
         outcome: InstallationOutcome,
         token: str | None,
-    ) -> InstallationOutcome:
+    ) -> tuple[InstallationOutcome, bool]:
         """The outcome, unless it names an installation nobody holds yet that
-        this person cannot prove they control.
+        this person cannot prove they control; and whether GitHub said they
+        control it (asked only when it decides something).
 
         Binding an unbound installation hands this organization the App's
         token on every repository in it (audit H4), so only its owner on
@@ -211,46 +216,66 @@ class GithubInstallationReconciler:
         """
         installation_id = outcome.installation_id
         if not outcome.is_ready or not installation_id:
-            return outcome
+            return outcome, False
         if str(account.external_ref or "") == installation_id:
-            return outcome
-        if await self._bindings.owner(installation_id) is not None:
-            return outcome  # this organization's: `_admissible` dropped others
+            return outcome, False
+        if await self._bindings.owner(installation_id) == account.organization_id:
+            return outcome, False
+        # Unbound, or held unproven elsewhere (`_admissible` dropped the rest):
+        # either way only GitHub's proof lets this organization have it.
         administered = False
         if token:
             async with connection_released(self._session):
                 administered = await self._prove(token, installation_id)
         if administered:
-            return outcome
-        return InstallationOutcome(
-            InstallState.PENDING_APPROVAL, choices=outcome.choices
+            return outcome, True
+        return (
+            InstallationOutcome(InstallState.PENDING_APPROVAL, choices=outcome.choices),
+            False,
         )
 
-    async def _bind(self, account: Any, outcome: InstallationOutcome) -> None:
-        """Record a newly resolved installation on the account.
+    async def _bind(
+        self, account: Any, outcome: InstallationOutcome, *, administered: bool
+    ) -> InstallationOutcome:
+        """Record a newly resolved installation on the account, and say what
+        that made true.
 
         This is what closes the loop with no redirect and no webhook: somebody
         installs the App, comes back, and the next read of their account binds
         it. `external_ref` is the inbound routing key, so it is only ever
         written from an answer GitHub gave about this account's own token.
+
+        READY only once the claim stands. Refused for want of Lemma's
+        permission -- a GitHub admin who may not install apps for the
+        organization -- it is PENDING_APPROVAL: somebody who manages the
+        organization's installations has to connect it. Lost to another
+        organization since `_admissible` read the binding, it is whatever is
+        left to choose from.
         """
         if not outcome.is_ready or not outcome.installation_id:
-            return
+            return outcome
         if str(account.external_ref or "") == outcome.installation_id:
-            return
+            return outcome
         try:
             # `_proven` let it through: held by this organization already, or
             # proved to be this person's to bind.
             await self._bindings.claim(
-                account, outcome.installation_id, administered=True
+                account, outcome.installation_id, administered=administered
             )
-        except (
-            GithubInstallationBoundElsewhereError,
-            GithubInstallationNotAdministeredError,
-        ):
-            # Lost a race to another organization since `_admissible` read the
-            # binding. Left unbound; the next read offers what is left.
-            return
+        except GithubInstallationNotAdministeredError:
+            # `InstallationClaimNotPermittedError` among them.
+            return InstallationOutcome(
+                InstallState.PENDING_APPROVAL, choices=outcome.choices
+            )
+        except GithubInstallationBoundElsewhereError:
+            left = tuple(
+                choice
+                for choice in outcome.choices
+                if choice.installation_id != outcome.installation_id
+            )
+            if not left:
+                return InstallationOutcome(InstallState.INSTALL_REQUIRED)
+            return InstallationOutcome(InstallState.CHOOSE_INSTALL, choices=left)
         account.external_ref = outcome.installation_id
         await self._service.account_repository.update(account)
         await self._service.uow.commit()
@@ -258,6 +283,7 @@ class GithubInstallationReconciler:
             "connectors.github_reconciler.installation_bound.diagnostic",
             account_id=str(account.id),
         )
+        return outcome
 
     async def _cache_op(self, awaitable: Any) -> Any:
         """Run one cache call, and never let it be the reason something failed.

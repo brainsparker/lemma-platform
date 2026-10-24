@@ -96,6 +96,19 @@ async def tool_authorization_context(
     return ctx
 
 
+async def approver_context(uow: SqlAlchemyUnitOfWork, deps: AgentContext) -> Context:
+    """The approving person's own context, for conferring what a card offered.
+
+    Never the authority a tool runs with -- that is one of the three above.
+    It is who decides whether the agent may be *given* a grant: a card that
+    offers one is answered by its person, and the grant is theirs to confer
+    only as far as they could use it themselves (``conferral``).
+    """
+    return await create_authorization_data_service(uow).build_user_context(
+        user_id=deps.user_id, organization_id=deps.org_id, pod_id=deps.pod_id
+    )
+
+
 def workload_principal_type(deps: AgentContext) -> str:
     """``FUNCTION`` for a function's own delegated token, else ``AGENT``.
 

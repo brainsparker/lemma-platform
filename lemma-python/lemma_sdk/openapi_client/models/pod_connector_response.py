@@ -10,6 +10,7 @@ from attrs import field as _attrs_field
 from dateutil.parser import isoparse
 
 from ..models.pod_connector_mode import PodConnectorMode
+from ..models.pod_connector_source import PodConnectorSource
 from ..models.pod_connector_status import PodConnectorStatus
 from ..models.pod_connector_visibility import PodConnectorVisibility
 from ..types import UNSET, Unset
@@ -41,6 +42,7 @@ class PodConnectorResponse:
         purpose (None | str | Unset):
         shared_account (None | SharedAccountSummary | Unset):
         shared_pod_account_id (None | Unset | UUID):
+        source (PodConnectorSource | Unset):
     """
 
     auth_config_id: UUID
@@ -59,6 +61,7 @@ class PodConnectorResponse:
     purpose: None | str | Unset = UNSET
     shared_account: None | SharedAccountSummary | Unset = UNSET
     shared_pod_account_id: None | Unset | UUID = UNSET
+    source: PodConnectorSource | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -126,6 +129,10 @@ class PodConnectorResponse:
         else:
             shared_pod_account_id = self.shared_pod_account_id
 
+        source: str | Unset = UNSET
+        if not isinstance(self.source, Unset):
+            source = self.source.value
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -154,6 +161,8 @@ class PodConnectorResponse:
             field_dict["shared_account"] = shared_account
         if shared_pod_account_id is not UNSET:
             field_dict["shared_pod_account_id"] = shared_pod_account_id
+        if source is not UNSET:
+            field_dict["source"] = source
 
         return field_dict
 
@@ -264,6 +273,13 @@ class PodConnectorResponse:
             d.pop("shared_pod_account_id", UNSET)
         )
 
+        _source = d.pop("source", UNSET)
+        source: PodConnectorSource | Unset
+        if isinstance(_source, Unset):
+            source = UNSET
+        else:
+            source = PodConnectorSource(_source)
+
         pod_connector_response = cls(
             auth_config_id=auth_config_id,
             created_at=created_at,
@@ -281,6 +297,7 @@ class PodConnectorResponse:
             purpose=purpose,
             shared_account=shared_account,
             shared_pod_account_id=shared_pod_account_id,
+            source=source,
         )
 
         pod_connector_response.additional_properties = d

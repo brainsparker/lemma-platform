@@ -11,6 +11,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.authorization.authz_epoch import bump_after_commit
+from app.core.authorization.conferral import assert_can_confer_replacement
 from app.core.authorization.context import Context, ResourceType
 from app.core.authorization.grant_generation import (
     AGENT_GRANTEE,
@@ -172,12 +173,33 @@ async def normalize_pod_resource_grants(
 async def replace_grantee_resource_grants(
     session: AsyncSession,
     *,
+    ctx: Context,
     pod_id: UUID,
     grantee_type: str,
     grantee_id: UUID,
     grants: Sequence[NormalizedResourceGrant],
     created_by_user_id: UUID | None,
+    action: str = "grant access you could not use yourself",
 ) -> None:
+    """Replace everything ``grantee_id`` holds in the pod with ``grants``.
+
+    The conferral bound runs here, in the writer, and not at each caller: the
+    bundle importer was a caller that skipped it, which let an editor import an
+    agent holding a delete they did not have (audit H13). Taking ``ctx`` as a
+    required argument is what makes "every grant write is bounded" a property
+    of the code rather than of every caller remembering. Only what the write
+    adds is conferred (`assert_can_confer_replacement`), so a grantee holding a
+    grant beyond the saver's reach can still be edited by them.
+    """
+    await assert_can_confer_replacement(
+        ctx,
+        session,
+        grants,
+        pod_id=pod_id,
+        grantee_type=grantee_type,
+        grantee_id=grantee_id,
+        action=action,
+    )
     await session.execute(
         delete(ResourcePermissionGrantModel).where(
             ResourcePermissionGrantModel.pod_id == pod_id,
@@ -542,22 +564,16 @@ async def apply_inline_workload_grants(
         pod_id=pod_id,
         grants=grants_payload,
     )
-    # Conferral like the permissions-replace route: an inline block used to
-    # skip it, so an editor could arm an agent with deletes they could not do.
-    from app.core.authorization.conferral import assert_can_confer_grants
-
-    await assert_can_confer_grants(
-        ctx,
-        grants,
-        pod_id=pod_id,
-        action=f"grant {grantee_type.lower()} permissions you could not use",
-    )
+    # The writer bounds it by what the saver could use themselves; an inline
+    # block once skipped that, letting an editor arm an agent with deletes.
     await replace_grantee_resource_grants(
         session,
+        ctx=ctx,
         pod_id=pod_id,
         grantee_type=grantee_type,
         grantee_id=grantee_id,
         grants=grants,
         created_by_user_id=created_by_user_id,
+        action=f"grant {grantee_type.lower()} permissions you could not use",
     )
     return True

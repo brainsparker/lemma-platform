@@ -12,11 +12,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from app.core.authorization.context import Context, Person
+from app.core.authorization.context import Context
 from app.modules.connectors.domain.execution_plan import ResolvedConnectorExecution
 from app.modules.connectors.domain.pod_connector_errors import (
     ConnectorUnavailableError,
-    PodConnectorNotFoundError,
 )
 
 if TYPE_CHECKING:
@@ -40,9 +39,10 @@ async def resolve_installation_execution(
     """Resolve the call through pod connectors, or the person's own account.
 
     With a pod (from the caller's token, or the body), the installation is
-    reached through a connector that pod declares for it. A person may still
-    use their own account where there is no pod, or the pod declares no
-    connector for the installation -- which is what main allowed them.
+    reached through the pod's connectors for it (``serve_installation``):
+    the caller's own account through a PER_MEMBER connector, declared on this
+    first use when the pod has none, as the agent tools and the CLI do. With
+    no pod, a person uses their own account -- what main allowed them.
     """
     if service.connector_service is None:
         raise ConnectorUnavailableError(slug=auth_config_name)
@@ -52,18 +52,13 @@ async def resolve_installation_execution(
         auth_config_name=auth_config_name,
     )
     resolver = service.pod_connector_resolver
-    account = None
     if pod_id is not None:
-        try:
-            account = (
-                await resolver.serve_installation(
-                    ctx, pod_id=pod_id, auth_config=auth_config, account_id=account_id
-                )
-            ).account
-        except PodConnectorNotFoundError:
-            if not isinstance(ctx.actor, Person):
-                raise
-    if account is None:
+        account = (
+            await resolver.serve_installation(
+                ctx, pod_id=pod_id, auth_config=auth_config, account_id=account_id
+            )
+        ).account
+    else:
         account = await resolver.own_account(ctx, auth_config, account_id)
     return await service.execution_for(
         ctx,

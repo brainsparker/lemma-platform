@@ -108,7 +108,7 @@ def test_installations_are_bound_where_derivable_and_cleared_where_contested() -
         _migrate(database_url, "upgrade", REVISION)
         with psycopg.connect(plain_url) as connection:
             bindings = connection.execute(
-                "SELECT external_id, organization_id, bound_by_user_id "
+                "SELECT external_id, organization_id, bound_by_user_id, proven_at "
                 "FROM connector_installations WHERE connector_id = 'github'"
             ).fetchall()
             refs = dict(
@@ -117,7 +117,9 @@ def test_installations_are_bound_where_derivable_and_cleared_where_contested() -
                     "WHERE connector_id = 'github'"
                 ).fetchall()
             )
-        assert bindings == [(SOLO, ids["a"], ids["first_user"])]
+        # Bound, but unproven: nobody showed GitHub's proof for it, so a
+        # proven claim from the org that really administers it takes it over.
+        assert bindings == [(SOLO, ids["a"], ids["first_user"], None)]
         assert refs == {
             ids["first"]: SOLO,
             ids["second"]: SOLO,

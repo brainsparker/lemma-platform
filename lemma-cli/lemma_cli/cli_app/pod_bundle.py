@@ -5,9 +5,11 @@ import json
 import subprocess
 import shutil
 import tempfile
+from collections.abc import Mapping
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
+from uuid import UUID
 from zipfile import ZIP_DEFLATED, ZipFile
 
 # The pure bundle-format vocabulary (constants, JSONC parsing, table diffing,
@@ -2243,6 +2245,45 @@ def _deprecated_schedule_account(
     )
 
 
+def _deprecated_surface_account(
+    raw: Mapping[str, object],
+    payload: Mapping[str, object],
+    body: dict[str, object],
+    surface_name: str,
+    surface_key: str,
+) -> str | None:
+    """A surface exported before pod connectors, which named an account.
+
+    Returns the warning to print, if any. An account the importer supplied is
+    sent as the deprecated ``account_id`` (added to ``body``), which the server
+    answers with the pod connector serving it to them; without one the surface
+    runs on the platform's own bot. The server's importer translates it the
+    same way and says the same thing, so the two importers agree.
+    """
+    if "account_id" not in raw or payload.get("pod_connector"):
+        return None
+    if not _is_uuid(payload.get("account_id")):
+        return (
+            f"surface '{surface_name}' named a connected account, which bundles "
+            "no longer carry; it runs on the platform's own bot until you name "
+            "the pod connector it should run as (`lemma surfaces upsert "
+            f"{surface_key} --connector <slug>`)."
+        )
+    body["account_id"] = payload["account_id"]
+    return (
+        f"surface '{surface_name}' names an account (deprecated); it runs as "
+        "the pod connector serving that account instead."
+    )
+
+
+def _is_uuid(value: object) -> bool:
+    try:
+        UUID(str(value))
+    except ValueError:
+        return False
+    return bool(value)
+
+
 def _create_schedule_from_payload(
     client: Lemma,
     *,
@@ -2803,19 +2844,11 @@ def import_pod_bundle(
         action = "updated" if exists else "created"
         _progress_start("surface", surface_name, "upserting")
         body = _surface_upsert_body(payload)
-        if "account_id" in raw_surface and not payload.get("pod_connector"):
-            # Exported before pod connectors. An account the importer supplied
-            # is sent as the deprecated `account_id`, which the server answers
-            # with the pod connector serving it; none leaves the surface on the
-            # platform's own bot until a connector is named.
-            if payload.get("account_id"):
-                body["account_id"] = payload["account_id"]
-            console.print(
-                f"[yellow]warning[/yellow] surface '{surface_name}' names an "
-                "account (deprecated); name the pod connector it runs as "
-                f"instead (`lemma surfaces upsert {surface_key} --connector "
-                "<slug>`)."
-            )
+        account_warning = _deprecated_surface_account(
+            raw_surface, payload, body, surface_name, surface_key
+        )
+        if account_warning:
+            console.print(f"[yellow]warning[/yellow] {account_warning}")
         pod_sdk.surfaces.upsert(surface_key, {**body, "platform": platform})
         summary["surfaces"].append(f"{action}:{surface_name}")
         _progress_done("surface", surface_name, action)

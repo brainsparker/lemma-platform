@@ -2,17 +2,24 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.exc import IntegrityError
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.connectors.domain.pod_connector import (
     PodAccountEntity,
     PodAccountVisibility,
     PodConnectorEntity,
+)
+from app.modules.connectors.domain.errors import ConnectorConflictError
+from app.modules.connectors.domain.pod_connector_errors import (
+    PodAccountNotFoundError,
+    PodConnectorConflictError,
+    PodConnectorNotFoundError,
 )
 from app.modules.connectors.infrastructure.models.pod_connector import (
     PodAccount,
@@ -22,6 +29,12 @@ from app.modules.connectors.infrastructure.models.pod_connector import (
 #: A pod declares a handful of connectors and holds one account per member per
 #: installation. The ceiling is generous for that and still a ceiling.
 LIST_LIMIT = 500
+
+#: How stale ``pod_accounts.last_used_at`` may get before a use writes it.
+#: It answers "is this account still used here", which minutes do not change;
+#: writing it on every call held the row's lock for the call's length on a busy
+#: shared account.
+LAST_USED_RESOLUTION = timedelta(minutes=5)
 
 
 class PodConnectorRepository:
@@ -43,6 +56,22 @@ class PodConnectorRepository:
         stmt = (
             select(PodConnector)
             .where(PodConnector.pod_id == pod_id)
+            .order_by(PodConnector.slug)
+            .limit(LIST_LIMIT)
+        )
+        rows = (await self.session.execute(stmt)).scalars().all()
+        return [row.to_entity() for row in rows]
+
+    async def list_for_installation(
+        self, pod_id: UUID, auth_config_id: UUID
+    ) -> list[PodConnectorEntity]:
+        """The pod's connectors on one installation, by slug."""
+        stmt = (
+            select(PodConnector)
+            .where(
+                PodConnector.pod_id == pod_id,
+                PodConnector.auth_config_id == auth_config_id,
+            )
             .order_by(PodConnector.slug)
             .limit(LIST_LIMIT)
         )
@@ -91,15 +120,26 @@ class PodConnectorRepository:
             required=entity.required,
             purpose=entity.purpose,
             visibility=entity.visibility.value,
+            source=entity.source.value,
             created_by_user_id=entity.created_by_user_id,
         )
-        self.session.add(row)
-        await self.session.flush()
+        # In a savepoint: two declarations of one slug race, and the loser gets
+        # the typed conflict with its transaction intact, not a 500.
+        try:
+            async with self.session.begin_nested():
+                self.session.add(row)
+                await self.session.flush()
+        except IntegrityError as exc:
+            if "uq_pod_connectors_pod_slug" not in str(exc.orig):
+                raise
+            raise PodConnectorConflictError(entity.slug) from exc
         return row.to_entity()
 
     async def update(self, entity: PodConnectorEntity) -> PodConnectorEntity:
         row = await self.session.get(PodConnector, entity.id)
-        assert row is not None, "updated a pod connector that was never read"
+        if row is None:
+            # Removed between the read that found it and this write.
+            raise PodConnectorNotFoundError(entity.slug)
         row.mode = entity.mode.value
         row.shared_pod_account_id = entity.shared_pod_account_id
         row.required = entity.required
@@ -212,7 +252,9 @@ class PodAccountRepository:
         """Insert, or return the row already there for (pod, account).
 
         Two first calls by the same person race to auto-add the same account;
-        the loser reads the winner's row instead of failing the call.
+        the loser reads the winner's row instead of failing the call. Two of
+        the owner's accounts racing to be their member default is the other
+        race: the loser goes in as not the default.
         """
         if entity.is_member_default and await self.get_member_default(
             pod_id=entity.pod_id,
@@ -220,6 +262,18 @@ class PodAccountRepository:
             auth_config_id=entity.auth_config_id,
         ):
             entity = entity.model_copy(update={"is_member_default": False})
+        stored = await self._insert(entity)
+        if stored is None and entity.is_member_default:
+            stored = await self._insert(
+                entity.model_copy(update={"is_member_default": False})
+            )
+        if stored is None:
+            raise ConnectorConflictError(
+                "That account was added to this pod concurrently; try again."
+            )
+        return stored
+
+    async def _insert(self, entity: PodAccountEntity) -> PodAccountEntity | None:
         await self.session.execute(
             insert(PodAccount)
             .values(
@@ -237,9 +291,7 @@ class PodAccountRepository:
             )
             .on_conflict_do_nothing()
         )
-        stored = await self.get_by_pod_and_account(entity.pod_id, entity.account_id)
-        assert stored is not None, "pod account vanished between insert and read"
-        return stored
+        return await self.get_by_pod_and_account(entity.pod_id, entity.account_id)
 
     async def set_visibility(
         self, pod_account_id: UUID, visibility: PodAccountVisibility
@@ -270,11 +322,38 @@ class PodAccountRepository:
             .values(is_member_default=True, updated_at=_now())
         )
 
-    async def touch(self, pod_account_id: UUID) -> None:
+    async def touch(self, pod_account: PodAccountEntity) -> None:
+        """Record a use, at most once per ``LAST_USED_RESOLUTION``.
+
+        Free when the stamp is fresh (read off the row already in hand). When
+        it is stale, one statement that skips a row somebody else is writing:
+        a concurrent use is already recording the same fact, and waiting on its
+        lock -- held, on a busy shared account, across an OAuth refresh -- is
+        what this used to do on every call.
+        """
+        now = _now()
+        stale_before = now - LAST_USED_RESOLUTION
+        if (
+            pod_account.last_used_at is not None
+            and pod_account.last_used_at > stale_before
+        ):
+            return
+        claimable = (
+            select(PodAccount.id)
+            .where(
+                PodAccount.id == pod_account.id,
+                or_(
+                    PodAccount.last_used_at.is_(None),
+                    PodAccount.last_used_at < stale_before,
+                ),
+            )
+            .with_for_update(skip_locked=True)
+            .scalar_subquery()
+        )
         await self.session.execute(
             update(PodAccount)
-            .where(PodAccount.id == pod_account_id)
-            .values(last_used_at=_now())
+            .where(PodAccount.id == claimable)
+            .values(last_used_at=now)
         )
 
     async def delete(self, pod_account_ids: list[UUID]) -> None:
@@ -286,7 +365,8 @@ class PodAccountRepository:
 
     async def _reread(self, pod_account_id: UUID) -> PodAccountEntity:
         row = await self.session.get(PodAccount, pod_account_id)
-        assert row is not None, "pod account vanished while it was being written"
+        if row is None:
+            raise PodAccountNotFoundError()
         await self.session.refresh(row)
         return row.to_entity()
 

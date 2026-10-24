@@ -100,6 +100,7 @@ CREATE TABLE pod_connectors (
 	required BOOLEAN DEFAULT 'false' NOT NULL,
 	purpose TEXT,
 	visibility VARCHAR(20) DEFAULT 'POD' NOT NULL,
+	source VARCHAR(20) DEFAULT 'MANUAL' NOT NULL,
 	created_by_user_id UUID,
 	id UUID NOT NULL,
 	created_at TIMESTAMP WITH TIME ZONE NOT NULL,
@@ -197,6 +198,13 @@ _PEOPLE = ("ROLE", "POD_MEMBER")
 _CONNECTOR_NAMESPACE = uuid5(NAMESPACE_URL, "lemma.connector.resource")
 
 
+def _log():
+    """Where this migration says what it dropped, collapsed or left unbound."""
+    import logging
+
+    return logging.getLogger("alembic.runtime.migration")
+
+
 def _legacy_connector_resource_id(connector_id: str) -> UUID:
     return uuid5(_CONNECTOR_NAMESPACE, connector_id)
 
@@ -281,14 +289,37 @@ def _per_member_connectors(conn) -> None:
             else None
         )
         if install is None:
-            conn.execute(
+            dropped = conn.execute(
                 sa.text(
                     "DELETE FROM resource_permission_grants WHERE pod_id = :pod "
                     "AND resource_type = 'connector' AND resource_id = :r"
                 ),
                 {"pod": pod_id, "r": legacy_id},
+            ).rowcount
+            _log().warning(
+                "0063: pod %s: dropped %d connector grant(s) for %s -- the org has "
+                "no ACTIVE installation of it, so nothing could be declared.",
+                pod_id,
+                dropped,
+                connector_id or legacy_id,
             )
             continue
+        installs = conn.execute(
+            sa.text(
+                "SELECT count(*) FROM auth_configs WHERE organization_id = :org "
+                "AND connector_id = :c AND status = 'ACTIVE'"
+            ),
+            {"org": organization_id, "c": connector_id},
+        ).scalar()
+        if installs and installs > 1:
+            _log().info(
+                "0063: pod %s: %s has %d ACTIVE installations; its grants were "
+                "declared on the default one (%s).",
+                pod_id,
+                connector_id,
+                installs,
+                install,
+            )
         pod_connector_id = _insert_pod_connector(
             conn,
             pod_id=pod_id,
@@ -639,13 +670,32 @@ def _bindings(conn, unbacked: dict) -> None:
                 "WHERE s.account_id IS NOT NULL ORDER BY s.created_at, s.id"
             )
         ).all()
+        unbound = 0
         for row in rows:
+            slug = slug_for(conn, unbacked, row)
+            if slug is None:
+                unbound += 1
+                _log().warning(
+                    "0063: %s %s (pod %s) named account %s, which no pod connector "
+                    "can serve; it is left with no connector and stops until one "
+                    "is chosen.",
+                    table,
+                    row.id,
+                    row.pod_id,
+                    row.account_id,
+                )
             conn.execute(
                 sa.text(
                     f"UPDATE {table} SET pod_connector_slug = :slug WHERE id = :id"
                 ),  # noqa: S608
-                {"slug": slug_for(conn, unbacked, row), "id": row.id},
+                {"slug": slug, "id": row.id},
             )
+        _log().info(
+            "0063: %s: %d bound to a pod connector, %d left unbound.",
+            table,
+            len(rows) - unbound,
+            unbound,
+        )
 
 
 def _unbind(conn) -> None:
@@ -668,6 +718,76 @@ def _unbind(conn) -> None:
             "AND pc.mode = 'PER_MEMBER' AND pa.owner_user_id = s.user_id"
         )
     )
+
+
+# ---------------------------------------------------------------------------
+# Workstream C: how a pod connector was declared, and the account a standing
+# binding pinned
+# ---------------------------------------------------------------------------
+#
+# 1. `pod_connectors.source` (AUTO | MANUAL | IMPORT | MIGRATED, default
+#    MANUAL). A connector the agent tools, the deprecated execute or a
+#    deprecated `account_id` declare on a person's first use of their own
+#    account is AUTO (`ensure_pod_connector_for_installation`). Every row that
+#    exists when this runs was made by this migration's backfill: MIGRATED.
+#
+# 2. `schedules.pod_account_id`, FK `pod_accounts` ON DELETE SET NULL. On a
+#    PER_MEMBER connector, the owner's pod account the schedule listens
+#    through. Without it a schedule on the owner's second account (Telegram
+#    bot B) resolved to their member default (bot A): B's schedule went quiet
+#    and A's events fired twice. Backfilled from the old `account_id`, through
+#    the pod account `_own_account_slug` put in the pod for it. SHARED
+#    bindings pin nothing (they follow their connector), and surfaces only
+#    ever bind SHARED connectors, so `agent_surfaces` gets no column.
+#
+# Model: `connectors/infrastructure/models/pod_connector.py` (PodConnector.source)
+# and `schedule/infrastructure/models/schedule.py` (Schedule.pod_account_id,
+# Index ix_schedules_pod_account).
+#
+# Order in `upgrade()`: after `_bindings(conn, unbacked)` and BEFORE
+#   `ALTER TABLE schedules DROP COLUMN account_id` (it reads `account_id`).
+# Order in `downgrade()`: after `_unbind(conn)` (which wrote the owner's
+#   default back) and before `DROP TABLE pod_connectors` / `pod_accounts`.
+
+
+def _upgrade_pinned_pod_accounts(conn) -> None:
+    conn.execute(sa.text("UPDATE pod_connectors SET source = 'MIGRATED'"))
+    conn.execute(sa.text("ALTER TABLE schedules ADD COLUMN pod_account_id UUID"))
+    conn.execute(
+        sa.text(
+            "ALTER TABLE schedules ADD CONSTRAINT schedules_pod_account_id_fkey "
+            "FOREIGN KEY (pod_account_id) REFERENCES pod_accounts (id) "
+            "ON DELETE SET NULL"
+        )
+    )
+    conn.execute(
+        sa.text("CREATE INDEX ix_schedules_pod_account ON schedules (pod_account_id)")
+    )
+    # The account it named, where it is the owner's own on the PER_MEMBER
+    # connector it now listens through.
+    pinned = conn.execute(
+        sa.text(
+            "UPDATE schedules s SET pod_account_id = pa.id "
+            "FROM pod_connectors pc, pod_accounts pa "
+            "WHERE pc.pod_id = s.pod_id AND pc.slug = s.pod_connector_slug "
+            "AND pc.mode = 'PER_MEMBER' AND pa.pod_id = s.pod_id "
+            "AND pa.account_id = s.account_id AND pa.owner_user_id = s.user_id "
+            "AND pa.auth_config_id = pc.auth_config_id"
+        )
+    ).rowcount
+    _log().info("0063: schedules: %d pinned to their own pod account.", pinned)
+
+
+def _downgrade_pinned_pod_accounts(conn) -> None:
+    # The pinned account, not the owner's default `_unbind` wrote.
+    conn.execute(
+        sa.text(
+            "UPDATE schedules s SET account_id = pa.account_id FROM pod_accounts pa "
+            "WHERE pa.id = s.pod_account_id AND pa.owner_user_id = s.user_id"
+        )
+    )
+    # Its FK and index go with it; `pod_connectors.source` goes with its table.
+    conn.execute(sa.text("ALTER TABLE schedules DROP COLUMN pod_account_id"))
 
 
 def _add_permissions(conn, permissions) -> None:
@@ -727,6 +847,12 @@ def _drop_permissions(conn, permissions) -> None:
 #   is the vulnerability. Each is logged and those accounts' `external_ref`
 #   is cleared; they bind again through the setup callback, where the first
 #   organization to do so holds it.
+# Every binding derived here is *unproven* (`proven_at` NULL): it keeps
+# working for its organization, but nobody showed GitHub's proof for it, so
+# it may be an installation somebody squatted on before H4. A proven claim
+# from another organization (a GitHub admin of it, with
+# `org.installation.manage`) takes it over; the holder's own next proven
+# claim stamps `proven_at`, after which it is final.
 # The downgrade drops the table. Cleared `external_ref`s stay cleared: putting
 # a contested installation back on several organizations is what this ends.
 
@@ -736,6 +862,7 @@ CREATE TABLE connector_installations (
 	external_id VARCHAR(255) NOT NULL,
 	organization_id UUID NOT NULL,
 	bound_by_user_id UUID,
+	proven_at TIMESTAMP WITH TIME ZONE,
 	metadata JSONB DEFAULT '{}' NOT NULL,
 	id UUID NOT NULL,
 	created_at TIMESTAMP WITH TIME ZONE NOT NULL,
@@ -817,6 +944,8 @@ def _downgrade_github_installation_org(conn) -> None:
 # ---------------------------------------------------------------------------
 # Deleting records is its own permission (audit H14)
 # ---------------------------------------------------------------------------
+# Deleting records is its own permission (audit H14)
+# ---------------------------------------------------------------------------
 #
 # Deleting a table's rows asked for `datastore.record.write`, so whoever could
 # write one row could empty the table, and a workload's delete was not
@@ -885,54 +1014,134 @@ def _downgrade_record_delete_permission(conn) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Lemma-made Slack apps say so on surfaces bound before the flag existed
+# Slack identities email matching or forged deliveries left behind (M17, H9)
 # ---------------------------------------------------------------------------
 #
-# A surface bound to a teammate's Slack app records whether Lemma made the app
-# (`SurfaceSlackConfig.app_made_by_lemma`) or a person brought one; only the
-# second has a signing secret a person holds (`customer_held_secrets`).
-# Surfaces bound before the flag lack it and read as person-held. The install
-# behind a Lemma-made app is named "<app name> (<app id>)" by
-# `SlackAppProvisioner._create`; one a person brings is
-# "<agent name> (<client id>)" (`slack_manager_bots._own_app_install`). A Slack
-# app id is `A` and upper-case letters and digits; a client id is two numbers
-# joined by a dot. So an ORG_CUSTOM Slack install whose name ends in `(A...)`
-# is Lemma's, and the surfaces whose pod connector runs through one get
-# `app_made_by_lemma: true`. The downgrade takes the key back off them.
+# The identity cache (`agent_surface_external_users.resolved_user_id`) records
+# who a sender resolved to, never how. Before this PR a Slack sender was
+# resolved by profile email -- which a workspace admin can set (M17) -- and a
+# delivery on a bring-your-own app, whose signing secret a person holds, wrote
+# its claimed sender's resolution too (H9). Those rows kept naming people.
+#
+# After this PR the only thing that names a Slack sender is Slack's proof of
+# them in the workspace (`slack_workspace_people`: the installer's grant or
+# Sign in with Slack), which `record_proof` writes through to the cache, or a
+# binding made through the installation (`surface_verified_identities`), which
+# is read before the cache and never written to it. So a Slack row is sound
+# exactly when a proof in its workspace says the same; every other Slack
+# resolution is cleared. The sender is re-proved on their next message: the
+# proof path (`_slack_proof`) re-resolves a proven person and writes the row
+# back; anyone else is nobody until they prove themselves. The read side
+# (`agent_surfaces/services/slack_cached_identity.py`) applies the same rule at
+# read time, for a row an older process writes after this ran.
+#
+# Rows on other platforms, and Slack rows' profile fields, are untouched.
+# The downgrade restores nothing: the cleared answers were unproven, and the
+# code before this migration would honour them again.
 
-#: Surfaces on a Lemma-made teammate app: the surface names its pod connector,
-#: and the connector the installation it runs through. The surface type is
+
+def _upgrade_slack_identity_reproof(conn) -> None:
+    cleared = conn.execute(
+        sa.text(
+            "UPDATE agent_surface_external_users e SET resolved_user_id = NULL "
+            "WHERE e.platform = 'SLACK' AND e.resolved_user_id IS NOT NULL "
+            "AND NOT EXISTS (SELECT 1 FROM slack_workspace_people p "
+            "WHERE p.team_id = e.tenant_id AND p.slack_user_id = e.external_user_id "
+            "AND p.user_id = e.resolved_user_id)"
+        )
+    ).rowcount
+    _log().info(
+        "0063: cleared %d cached Slack sender identit(ies) no Slack proof backs; "
+        "each is re-proved on its next message.",
+        cleared,
+    )
+
+
+def _downgrade_slack_identity_reproof(conn) -> None:
+    """Nothing to put back: what was cleared was never proven."""
+
+
+# ---------------------------------------------------------------------------
+# Lemma-made Slack apps say so on their install (replaces the surface flag)
+# ---------------------------------------------------------------------------
+#
+# Whether Lemma made a teammate's Slack app -- through the manifest flow, so
+# Slack handed its signing secret to Lemma and no person chose it -- is a fact
+# about the app, and the app is its ORG_CUSTOM install. It lives in
+# `auth_configs.metadata.app_made_by_lemma`; a surface reads it through its pod
+# connector (`SurfaceAuthConfig.made_by_lemma`). On the surface it outlived the
+# app: deleting the pod connector and re-declaring the slug on a bring-your-own
+# install kept the surface trusting deliveries any secret holder can sign.
+# (Not `connector_installations`: that table is who owns an upstream tenant --
+# a GitHub installation, a Slack team -- unique across organizations; this is
+# a property of one org's app registration, several per org.)
+#
+# Marked, on ORG_CUSTOM Slack installs:
+# 1. the install behind any surface already saying `app_made_by_lemma: true`
+#    (none on a database this branch never ran on; kept for one that did);
+# 2. the install of a pending teammate app Lemma created
+#    (`slack_pending_app_bindings.app_id` is set only by Lemma's own create);
+# 3. an install named "<app name> (<app id>)", which is how
+#    `SlackAppProvisioner._create` names Lemma's; one a person brings is
+#    "<agent name> (<client id>)" (`slack_manager_bots._own_app_install`). A
+#    Slack app id is `A` and upper-case letters and digits; a client id is two
+#    numbers joined by a dot.
+# Then the key comes off every surface, where nothing reads it any more.
+# The downgrade takes the key off the installs.
+
+_SLACK_ORG_APP = "c.connector_id = 'slack' AND c.config_source = 'ORG_CUSTOM'"
+
+_MARK = (
+    "UPDATE auth_configs c SET metadata = "
+    "CASE WHEN jsonb_typeof(c.metadata) = 'object' THEN c.metadata "
+    "ELSE '{}'::jsonb END || '{\"app_made_by_lemma\": true}'::jsonb "
+    "WHERE " + _SLACK_ORG_APP + " AND "
+)
+
+#: Installs behind a surface that says Lemma made its app. The surface type is
 #: compared after any enum-repr prefix, as ``to_entity`` reads it.
-_LEMMA_MADE_SLACK_SURFACES = r"""
-FROM pod_connectors pc
-JOIN auth_configs c ON c.id = pc.auth_config_id
-WHERE pc.pod_id = s.pod_id
-  AND pc.slug = s.pod_connector_slug
-  AND regexp_replace(upper(s.surface_type), '^.*\.', '') = 'SLACK'
-  AND c.connector_id = 'slack'
-  AND c.config_source = 'ORG_CUSTOM'
-  AND c.name ~ ' \(A[0-9A-Z]+\)$'
-"""
+_BEHIND_A_FLAGGED_SURFACE = (
+    "EXISTS (SELECT 1 FROM agent_surfaces s JOIN pod_connectors pc "
+    "ON pc.pod_id = s.pod_id AND pc.slug = s.pod_connector_slug "
+    "WHERE pc.auth_config_id = c.id "
+    "AND regexp_replace(upper(s.surface_type), '^.*\\.', '') = 'SLACK' "
+    "AND jsonb_typeof(s.config -> 'slack') = 'object' "
+    "AND (s.config -> 'slack' ->> 'app_made_by_lemma') = 'true')"
+)
+_PENDING_LEMMA_APP = (
+    "EXISTS (SELECT 1 FROM slack_pending_app_bindings b "
+    "WHERE b.auth_config_id = c.id AND b.app_id IS NOT NULL)"
+)
+_NAMED_AFTER_AN_APP_ID = "c.name ~ ' \\(A[0-9A-Z]+\\)$'"
 
 
 def _upgrade_slack_app_made_by_lemma(conn) -> None:
+    marked = conn.execute(
+        sa.text(
+            _MARK
+            + "("
+            + " OR ".join(
+                (_BEHIND_A_FLAGGED_SURFACE, _PENDING_LEMMA_APP, _NAMED_AFTER_AN_APP_ID)
+            )
+            + ")"
+        )
+    ).rowcount
     conn.execute(
         sa.text(
-            "UPDATE agent_surfaces s SET config = jsonb_set("
-            "CASE WHEN jsonb_typeof(s.config) = 'object' THEN s.config "
-            "ELSE '{}'::jsonb END, '{slack}', "
-            "CASE WHEN jsonb_typeof(s.config -> 'slack') = 'object' "
-            "THEN s.config -> 'slack' ELSE '{}'::jsonb END "
-            "|| '{\"app_made_by_lemma\": true}'::jsonb) " + _LEMMA_MADE_SLACK_SURFACES
+            "UPDATE agent_surfaces SET config = config #- '{slack,app_made_by_lemma}' "
+            "WHERE jsonb_typeof(config -> 'slack') = 'object' "
+            "AND (config -> 'slack') ? 'app_made_by_lemma'"
         )
     )
+    _log().info("0063: marked %d Slack install(s) as apps Lemma made.", marked)
 
 
 def _downgrade_slack_app_made_by_lemma(conn) -> None:
     conn.execute(
         sa.text(
-            "UPDATE agent_surfaces s SET config = s.config #- "
-            "'{slack,app_made_by_lemma}' " + _LEMMA_MADE_SLACK_SURFACES
+            "UPDATE auth_configs SET metadata = metadata - 'app_made_by_lemma' "
+            "WHERE jsonb_typeof(metadata) = 'object' "
+            "AND metadata ? 'app_made_by_lemma'"
         )
     )
 
@@ -1036,12 +1245,14 @@ def upgrade() -> None:
     for statement in _SLUG_COLUMNS:
         op.execute(statement)
     _bindings(conn, unbacked)
+    _upgrade_pinned_pod_accounts(conn)
     op.execute("ALTER TABLE agent_surfaces DROP COLUMN account_id")
     op.execute("ALTER TABLE schedules DROP COLUMN account_id")
     _drop_permissions(conn, _REMOVED)
     _upgrade_github_installation_org(conn)
     _upgrade_record_delete_permission(conn)
     _upgrade_slack_app_made_by_lemma(conn)
+    _upgrade_slack_identity_reproof(conn)
     _upgrade_folder_share_permission(conn)
 
 
@@ -1073,12 +1284,14 @@ def _copy_grants(conn, *, from_type: str, to_type: str, rows) -> None:
 def downgrade() -> None:
     conn = op.get_bind()
     _downgrade_folder_share_permission(conn)
+    _downgrade_slack_identity_reproof(conn)
     _downgrade_slack_app_made_by_lemma(conn)
     _downgrade_record_delete_permission(conn)
     _downgrade_github_installation_org(conn)
     for statement in _ACCOUNT_COLUMNS:
         op.execute(statement)
     _unbind(conn)
+    _downgrade_pinned_pod_accounts(conn)
     # Their indexes go with the columns.
     op.execute("ALTER TABLE agent_surfaces DROP COLUMN pod_connector_slug")
     op.execute("ALTER TABLE schedules DROP COLUMN pod_connector_slug")

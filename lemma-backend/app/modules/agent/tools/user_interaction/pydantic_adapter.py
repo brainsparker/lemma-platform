@@ -354,6 +354,7 @@ async def request_approval(
         )
         if auto_approved is not None:
             return auto_approved
+        await _show_card(deps, ctx.tool_call_id, tool_name=tool_name, args=args)
         return RequestApprovalResponse(
             success=True,
             parked_tool_call_id=ctx.tool_call_id,
@@ -370,6 +371,7 @@ async def request_approval(
     )
     if auto_approved is not None:
         return auto_approved
+    await _show_card(deps, ctx.tool_call_id, tool_name=tool_name, args=args)
 
     # Pause the run for the user's decision instead of blocking the worker. The
     # harness already persisted this tool call (tool_name/args/title in its args)
@@ -379,6 +381,28 @@ async def request_approval(
     # synthesized RequestApprovalResponse back as this call's return on a fresh
     # run. request_approval therefore runs only once.
     raise AgentInputRequired(ctx.tool_call_id, "request_approval")
+
+
+async def _show_card(
+    deps: BaseAgentContext, approval_id: str, *, tool_name: str, args: JsonObject
+) -> None:
+    """Write on the approval what is pending as its card goes up: all an answer
+    to it may lend (``approval_denials.show_card``). A run with no person
+    behind it has nobody to show it to, and its answer lends nothing."""
+    from app.modules.agent.tools.approval_denials import show_card
+    from app.modules.agent.tools.authority import workload_actor_id
+
+    person = getattr(deps, "user_id", None)
+    if person is None:
+        return
+    await show_card(
+        conversation_id=deps.conversation_id,
+        approval_id=approval_id,
+        person_user_id=person,
+        workload_actor_id=workload_actor_id(deps),
+        tool_name=tool_name,
+        args=args,
+    )
 
 
 async def _run_if_exact_match_already_approved(
@@ -410,7 +434,7 @@ async def _run_if_exact_match_already_approved(
         exact_command_permission_id,
         has_session_approval,
     )
-    from app.modules.agent.tools.approval_denials import refused_permissions
+    from app.modules.agent.tools.approval_denials import pending_refusals
     from app.modules.agent.tools.authority import workload_actor_id as actor_of
 
     # The same key the agent's own delegated context carries, so an approval
@@ -435,11 +459,18 @@ async def _run_if_exact_match_already_approved(
     # And "every permission this call needs" is the server's record of what it
     # refused this call for, not the model's ``permission_ids``: requiring
     # those could only ever narrow, but the record is the one list that is
-    # actually right, and it is what the approval below will lend (H6).
-    refused = await refused_permissions(
+    # actually right (H6). For a sandbox command that includes what its
+    # session's sandbox was refused since: the person allowed `python job.py`
+    # for the conversation, the agent edited job.py to delete a table, and
+    # asking for `python job.py` again ran it -- and lent it the delete -- with
+    # no card. A refusal nobody approved yet sends the call to a card, and the
+    # run below lends nothing beyond the approvals already standing.
+    refused = await pending_refusals(
         conversation_id=deps.conversation_id,
+        person_user_id=getattr(deps, "user_id", None),
         workload_actor_id=workload_actor_id,
-        tool_args={"tool_name": tool_name, "args": args},
+        tool_name=tool_name,
+        args=args,
     )
     needed = [exact_command_permission_id(tool_name, args), *sorted(refused)]
     for permission_id in needed:

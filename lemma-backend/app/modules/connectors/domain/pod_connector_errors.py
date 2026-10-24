@@ -9,6 +9,7 @@ downstream could act on it.
 
 from __future__ import annotations
 
+from app.core.domain.errors import DomainError
 from app.modules.connectors.domain.errors import (
     ConnectorConflictError,
     ConnectorDomainError,
@@ -132,6 +133,48 @@ class ConnectorNeedsAccountError(ConnectorDomainError):
         )
 
 
+class ConnectorUseRefusedError(ConnectorDomainError):
+    """The actor may not run operations through this pod connector.
+
+    The authorization refusal, kept as it was -- its code, status and
+    ``permission_ids``, which approvals key on -- with the connector it was
+    about added, so a named agent's refusal can become a card offering it the
+    grant: which connector (``pod_connector``, ``pod_connector_id``), what it
+    is (``connector_id``) and who asked (``workload_id``, ``workload_kind``).
+    """
+
+    def __init__(
+        self,
+        refusal: DomainError,
+        *,
+        slug: str,
+        pod_connector_id: str,
+        connector_id: str | None,
+        workload_id: str | None,
+        workload_kind: str | None,
+    ):
+        details = dict(refusal.details) if isinstance(refusal.details, dict) else {}
+        details.update(
+            {
+                key: value
+                for key, value in (
+                    ("pod_connector", slug),
+                    ("pod_connector_id", pod_connector_id),
+                    ("connector_id", connector_id),
+                    ("workload_id", workload_id),
+                    ("workload_kind", workload_kind),
+                )
+                if value is not None
+            }
+        )
+        super().__init__(
+            message=refusal.message,
+            code=refusal.code or "CONNECTOR_ACCESS_DENIED",
+            status_code=refusal.status_code,
+            details=details,
+        )
+
+
 class ConnectorUnavailableError(ConnectorDomainError):
     """The installation behind a pod connector is disabled."""
 
@@ -152,6 +195,7 @@ __all__ = [
     "ConnectionRequiresPersonError",
     "ConnectorNeedsAccountError",
     "ConnectorUnavailableError",
+    "ConnectorUseRefusedError",
     "PodAccountNotFoundError",
     "PodConnectorConflictError",
     "PodConnectorNotFoundError",

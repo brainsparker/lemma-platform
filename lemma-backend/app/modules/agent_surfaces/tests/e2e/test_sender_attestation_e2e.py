@@ -11,7 +11,8 @@ Against the real ingress, tables and the fake Slack Web API:
   in, so a person holds it and can sign any sender id -- a proof made through
   Lemma's own app does not name the sender; a binding made through that same
   app does. A teammate app Lemma made is not one of those, and the Allow that
-  binds it records which it is.
+  binds it records which it is -- on the app's install, which every surface on
+  the app reads through its pod connector.
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
 )
 from app.modules.agent_surfaces.infrastructure.models import AgentSurface
+from app.modules.connectors.infrastructure.models.auth_config import AuthConfig
 from app.modules.agent_surfaces.tests.e2e.helpers import (
     _bound_through_installation,
     _create_agent,
@@ -258,8 +260,10 @@ async def test_the_allow_records_who_made_the_app_and_a_proof_follows_it(
     named,
 ):
     """Lemma knows a teammate app's id only when it made the app; one made by
-    hand arrives as three pasted values. Recorded on the surface when the
-    Allow binds it, because the pending row that knew is deleted then."""
+    hand arrives as three pasted values. Recorded on the app's install when
+    the Allow binds it, because the pending row that knew is deleted then --
+    and not on the surface, which a re-pointed connector would leave saying
+    it of another app."""
     workspace = await _bound(
         authenticated_client, db_session, test_pod, fixed_test_user, fake_slack
     )
@@ -270,6 +274,7 @@ async def test_the_allow_records_who_made_the_app_and_a_proof_follows_it(
         fixed_test_user=fixed_test_user,
         fake_slack=fake_slack,
     )
+    install_id = account.auth_config_id
     if not lemma_made_it:
         pending.app_id = None
         await db_session.commit()
@@ -288,12 +293,86 @@ async def test_the_allow_records_who_made_the_app_and_a_proof_follows_it(
         )
     )
     assert surface is not None
-    assert (surface.config.get("slack") or {}).get("app_made_by_lemma", False) is (
-        lemma_made_it
-    )
+    assert "app_made_by_lemma" not in (surface.config.get("slack") or {})
+    assert (await _install_metadata(db_session, install_id)).get(
+        "app_made_by_lemma", False
+    ) is lemma_made_it
     proven = _colleague(fake_slack)
     await _prove(workspace.team, proven, fixed_test_user["id"])
 
     context = await _prepare(_Bot(workspace, {"id": str(surface.id)}, bot).says(proven))
 
     assert _ran_as(context, fixed_test_user) is named, context
+
+
+async def test_a_lemma_made_app_whose_credentials_are_replaced_is_trusted_no_more(
+    authenticated_client,
+    db_session,
+    test_pod,
+    fixed_test_user,
+    fake_slack,
+):
+    """Whoever replaces a Lemma-made app's credentials chose them, signing
+    secret included, so the install stops saying Lemma made it -- and every
+    surface on it reads its deliveries as that person's word."""
+    from app.modules.agent_surfaces.services.customer_held_secrets import (
+        signed_with_a_customer_secret,
+    )
+
+    workspace = await _bound(
+        authenticated_client, db_session, test_pod, fixed_test_user, fake_slack
+    )
+    _, account, pending = await _awaiting_allow(
+        db_session,
+        workspace=workspace,
+        test_pod=test_pod,
+        fixed_test_user=fixed_test_user,
+        fake_slack=fake_slack,
+    )
+    install_id = account.auth_config_id
+    await _allowed(
+        db_session, pending=pending, account=account, purpose="slack_teammate_app"
+    )
+    await drain(_registry())
+
+    async def customer_held() -> bool:
+        async with async_session_maker() as session:
+            row = await session.scalar(
+                select(AgentSurface).where(
+                    AgentSurface.pod_id == UUID(test_pod["id"]),
+                    AgentSurface.pod_connector_slug.is_not(None),
+                    AgentSurface.surface_type == "SLACK",
+                )
+            )
+            return await signed_with_a_customer_secret(
+                SqlAlchemyUnitOfWork(session), row.to_entity()
+            )
+
+    assert await customer_held() is False
+    name = await db_session.scalar(
+        select(AuthConfig.name).where(AuthConfig.id == install_id)
+    )
+    replaced = await authenticated_client.patch(
+        f"/organizations/{test_pod['organization_id']}/connectors/auth-configs/{name}",
+        json={
+            "config": {
+                "client_id": "1.2",
+                "client_secret": "chosen",
+                "signing_secret": "one-a-person-chose",
+            }
+        },
+    )
+    assert replaced.status_code == 200, replaced.text
+    metadata = await _install_metadata(db_session, install_id)
+    assert "app_made_by_lemma" not in metadata
+    assert await customer_held() is True
+
+
+async def _install_metadata(db_session: AsyncSession, auth_config_id) -> dict:
+    # A column read, so it is the row as it is now, with nothing expired.
+    return (
+        await db_session.scalar(
+            select(AuthConfig.metadata_).where(AuthConfig.id == auth_config_id)
+        )
+        or {}
+    )

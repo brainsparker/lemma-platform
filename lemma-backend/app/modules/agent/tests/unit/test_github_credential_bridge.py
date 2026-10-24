@@ -199,6 +199,13 @@ async def test_ensure_github_credentials_writes_credential_file_and_marks_provis
     assert "gho_faketoken123" not in cmd
     assert "git config" not in cmd
     assert "chmod 600 /tmp/lemma-sess/session-1/gh/hosts.yml" in cmd
+    # Ended sessions' directories go, each of which held a credential any
+    # process in the sandbox could read; only ones nobody refreshed for twice
+    # the longest a live session goes between writes.
+    assert (
+        "(find /tmp/lemma-sess -mindepth 1 -maxdepth 1 -type d "
+        f"-mmin +{2 * bridge._PROVISIONED_TTL_SECONDS // 60} -exec rm -rf {{}} +"
+    ) in cmd
     assert redis.values[_MARKER_KEY] == "provisioned"
     assert ("set", _MARKER_KEY, "provisioned", bridge._PROVISIONED_TTL_SECONDS) in (
         redis.calls

@@ -38,8 +38,10 @@ from uuid import UUID
 
 from app.core.log.log import get_logger
 from app.modules.connectors.domain.auth_config import (
+    APP_MADE_BY_LEMMA,
     AuthConfigEntity,
     AuthConfigStatus,
+    app_made_by_lemma,
 )
 from app.modules.connectors.domain.connector import ConnectorEntity, ConnectorKind
 from app.modules.connectors.services.auth.mcp_install_authorization import (
@@ -159,6 +161,16 @@ def apply_updates(
     if name is not None:
         auth_config.name = name
     if config is not None:
+        if (config or None) != auth_config.config and app_made_by_lemma(
+            auth_config.metadata
+        ):
+            # Whoever replaced it chose these credentials, not Lemma: the
+            # signing secret may be theirs now.
+            auth_config.metadata = {
+                key: value
+                for key, value in (auth_config.metadata or {}).items()
+                if key != APP_MADE_BY_LEMMA
+            }
         # Already merged by the caller, which needs the merged shape to decide
         # what the change invalidates.
         auth_config.config = config or None

@@ -13,6 +13,7 @@ from app.modules.connectors.domain.pod_connector import (
     PodAccountSource,
     PodAccountVisibility,
     PodConnectorMode,
+    PodConnectorSource,
     PodConnectorStatus,
     PodConnectorVisibility,
 )
@@ -93,6 +94,8 @@ class PodConnectorResponse(BaseModel):
     required: bool
     purpose: str | None = None
     visibility: PodConnectorVisibility
+    #: How it was declared: AUTO on a person's first use of their own account.
+    source: PodConnectorSource = PodConnectorSource.MANUAL
     status: PodConnectorStatus
     created_by_user_id: UUID | None = None
     created_at: datetime

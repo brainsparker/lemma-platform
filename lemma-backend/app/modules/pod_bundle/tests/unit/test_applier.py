@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -289,9 +290,17 @@ class _FakeUow:
         self.session = object()
 
 
+#: The importer's context, which the grant write is bounded by.
+_IMPORTER_CTX = object()
+
+
 def _grant_applier(root: Path) -> BundleApplier:
     return BundleApplier(
-        uow=_FakeUow(), ctx=object(), pod_id=_UUID, user_id=_UUID, bundle_root=root
+        uow=_FakeUow(),
+        ctx=_IMPORTER_CTX,
+        pod_id=_UUID,
+        user_id=_UUID,
+        bundle_root=root,
     )
 
 
@@ -309,9 +318,18 @@ def _patch_grant_layer(monkeypatch) -> dict:
         return ["NORMALIZED"]
 
     async def _replace(
-        session, *, pod_id, grantee_type, grantee_id, grants, created_by_user_id
+        session,
+        *,
+        ctx,
+        pod_id,
+        grantee_type,
+        grantee_id,
+        grants,
+        created_by_user_id,
+        action,
     ):
         calls["replace"] = {
+            "ctx": ctx,
             "grantee_type": grantee_type,
             "grantee_id": grantee_id,
             "grants": grants,
@@ -439,6 +457,8 @@ async def test_agent_grants_step_applies_grants(tmp_path, monkeypatch):
     assert calls["replace"]["grantee_type"] == "AGENT"
     assert calls["replace"]["grantee_id"] == _AGENT_ID
     assert calls["replace"]["grants"] == ["NORMALIZED"]
+    # Bounded by the importer: the writer checks what they could confer.
+    assert calls["replace"]["ctx"] is _IMPORTER_CTX
 
 
 _FUNCTION_ID = uuid4()
@@ -817,7 +837,7 @@ async def test_a_bundled_schedule_naming_an_account_listens_through_its_connecto
 
     async def serving(_uow, _ctx, *, pod_id, account_id):
         asked.append((pod_id, account_id))
-        return "jira"
+        return SimpleNamespace(slug="jira", pod_account_id=uuid4())
 
     monkeypatch.setattr(
         "app.modules.connectors.contracts.pod_connectors.pod_connector_for_account",
@@ -1029,6 +1049,65 @@ async def test_surface_apply_binds_the_pod_connector_the_bundle_names(
     assert surface_fake.created["platform"] == "SLACK"
     assert surface_fake.created["pod_connector_slug"] == "support-slack"
     assert surface_fake.updated is None  # created, not updated
+
+
+def _account_surface(root: Path) -> None:
+    """A surface exported before pod connectors, naming its account."""
+    _write(
+        root / "surfaces" / "slack" / "slack.json",
+        {"name": "slack", "platform": "SLACK", "account_id": "${slack_account}"},
+    )
+
+
+async def test_a_bundled_surface_naming_an_account_runs_as_its_connector(
+    tmp_path, monkeypatch
+):
+    """Translated as a schedule's is: the account the importer gave becomes
+    the pod connector serving it to them, and the import says so. It used to
+    be dropped without a word, while lemma-cli's import warned."""
+    root = tmp_path / "bundle"
+    _account_surface(root)
+    account_id = uuid4()
+    asked = []
+
+    async def serving(_uow, _ctx, *, pod_id, account_id):
+        asked.append((pod_id, account_id))
+        return SimpleNamespace(slug="support-slack", pod_account_id=uuid4())
+
+    monkeypatch.setattr(
+        "app.modules.connectors.contracts.pod_connectors.pod_connector_for_account",
+        serving,
+    )
+    surface_fake = FakeSurfaceService()
+    _patch_surface_operations(monkeypatch, surface_fake)
+    warnings: list[str] = []
+    applier = _applier(
+        root, replacements={"slack_account": str(account_id)}, warnings=warnings
+    )
+
+    await applier.apply_step(_step(StepKind.SURFACE, "slack"))
+
+    assert asked == [(_UUID, account_id)]
+    assert surface_fake.created is not None
+    assert surface_fake.created["pod_connector_slug"] == "support-slack"
+    assert any("deprecated" in w and "support-slack" in w for w in warnings)
+
+
+async def test_a_bundled_surface_with_no_account_given_says_so(tmp_path, monkeypatch):
+    """Without an account the surface still imports, on the platform's own
+    bot -- and the import says that, rather than nothing."""
+    root = tmp_path / "bundle"
+    _account_surface(root)
+    surface_fake = FakeSurfaceService()
+    _patch_surface_operations(monkeypatch, surface_fake)
+    warnings: list[str] = []
+    applier = _applier(root, replacements={"slack_account": ""}, warnings=warnings)
+
+    await applier.apply_step(_step(StepKind.SURFACE, "slack"))
+
+    assert surface_fake.created is not None
+    assert surface_fake.created["pod_connector_slug"] is None
+    assert any("'slack'" in w and "own bot" in w for w in warnings)
 
 
 async def test_a_whatsapp_reengage_template_survives_export_and_import(

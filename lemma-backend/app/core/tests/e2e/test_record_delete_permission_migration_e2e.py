@@ -10,7 +10,7 @@ member's account, one connected through an install Lemma made (named after the
 app id) and one through an install a person brought (named after the client
 id). After it: both roles and every grant but the pod's carry
 `datastore.record.delete` too, and only the Lemma-made surface -- now on a pod
-connector -- says `app_made_by_lemma`. Then POD_USER holding `folder.read`, a
+connector -- has its installation say `app_made_by_lemma`. Then POD_USER holding `folder.read`, a
 custom role holding only `folder.write`, and `folder.read` granted on a folder
 to a member, a role, an agent, a function and another pod; and two public links
 to a file, one a person minted and one an agent minted for them. After it: both
@@ -291,6 +291,10 @@ def _state(plain_url: str, ids: dict[str, UUID]) -> dict:
         surfaces = run(
             "SELECT id, config FROM agent_surfaces WHERE pod_id = %s", (ids["pod"],)
         ).fetchall()
+        installs = run(
+            "SELECT id, metadata FROM auth_configs WHERE id = ANY(%s)",
+            ([ids["lemma_install"], ids["own_install"]],),
+        ).fetchall()
         links = run(
             "SELECT code FROM datastore_signed_links WHERE pod_id = %s",
             (ids["pod"],),
@@ -305,6 +309,9 @@ def _state(plain_url: str, ids: dict[str, UUID]) -> dict:
         "share_roles": {row[0] for row in share_roles},
         "share_grants": sorted(tuple(row) for row in share_grants),
         "surfaces": {row[0]: row[1] for row in surfaces},
+        "made_by_lemma": {
+            row[0]: bool((row[1] or {}).get("app_made_by_lemma")) for row in installs
+        },
         "links": sorted(row[0] for row in links),
         "workload_column": ("minted_by_workload",) in link_columns,
     }
@@ -324,10 +331,14 @@ def test_record_deletes_lemma_made_apps_and_sharing_files() -> None:
         # Everyone who could delete through the write still can; another pod
         # never could, and is not given it.
         assert after["grants"] == ["AGENT", "POD_MEMBER", "ROLE"]
-        assert after["surfaces"][ids["lemma_surface"]] == {
-            "slack": {"app_name": "crm", "app_made_by_lemma": True}
-        }
+        # Whether Lemma made the app is said by its installation, not by a
+        # surface that would outlive it.
+        assert after["surfaces"][ids["lemma_surface"]] == {"slack": {"app_name": "crm"}}
         assert after["surfaces"][ids["own_surface"]] == {"slack": {"app_name": "crm"}}
+        assert after["made_by_lemma"] == {
+            ids["lemma_install"]: True,
+            ids["own_install"]: False,
+        }
         # Whoever shared files before still does; software only by a grant,
         # and none it held is turned into one.
         assert after["share_roles"] == {"POD_USER", "FILE_KEEPER"}
@@ -354,6 +365,7 @@ def test_record_deletes_lemma_made_apps_and_sharing_files() -> None:
             config == {"slack": {"app_name": "crm"}}
             for config in before["surfaces"].values()
         )
+        assert not any(before["made_by_lemma"].values())
         assert before["workload_column"] is True
         assert before["links"] == ["agent_link", "person_link"]
 

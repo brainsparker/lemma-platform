@@ -20,7 +20,10 @@ from uuid import UUID
 from pydantic import SecretStr
 
 from app.modules.connectors.api.dependencies import get_connector_service
-from app.modules.connectors.domain.auth_config import AuthConfigSource
+from app.modules.connectors.domain.auth_config import (
+    APP_MADE_BY_LEMMA,
+    AuthConfigSource,
+)
 from app.modules.connectors.domain.errors import (
     ConnectorConflictError,
     ConnectorNotFoundError,
@@ -42,12 +45,19 @@ async def create_own_app_install(
     connector_id: str,
     name: str,
     config: dict[str, str | SecretStr],
+    made_by_lemma: bool = False,
 ) -> UUID:
     """Register the org's own app as an install, and return the install's id.
 
     Commits: ``create_auth_config`` commits before validating and again after
     inserting, so a caller that fails afterwards undoes it with
     ``delete_unauthorised_install``, not a rollback.
+
+    ``made_by_lemma``: Lemma created the app itself and the provider handed
+    its credentials to Lemma, so no person chose its signing secret. Recorded
+    on the install (``APP_MADE_BY_LEMMA``), the one thing every surface on the
+    app reaches through its pod connector -- never on a surface, which a
+    re-pointed connector would leave trusting a different app.
     """
     install = await get_connector_service(uow).create_auth_config(
         user_id=user_id,
@@ -63,7 +73,24 @@ async def create_own_app_install(
         name=name,
         is_default=False,
     )
+    if made_by_lemma:
+        await mark_install_made_by_lemma(uow, install.id)
+        await uow.commit()
     return install.id
+
+
+async def mark_install_made_by_lemma(uow, auth_config_id: UUID) -> None:
+    """Record on an install that Lemma made the app behind it. Not committed.
+
+    Only for an app whose credentials the provider handed to Lemma (a pending
+    Slack teammate app that carries the app id Lemma created). Idempotent.
+    """
+    repository = get_connector_service(uow).auth_config_repository
+    install = await repository.get(auth_config_id)
+    if install is None or (install.metadata or {}).get(APP_MADE_BY_LEMMA) is True:
+        return
+    install.metadata = {**(install.metadata or {}), APP_MADE_BY_LEMMA: True}
+    await repository.update(install)
 
 
 async def install_is_authorised(uow, auth_config_id: UUID) -> bool:

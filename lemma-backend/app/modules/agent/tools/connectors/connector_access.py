@@ -31,6 +31,9 @@ from app.modules.agent.tools.context import BaseAgentContext
 class ConnectorServices:
     #: The pod's connectors: which ones this agent may use.
     pod_connectors: object
+    #: The person's own installations the pod declares nothing for yet,
+    #: declared as their own connector on first use (``InstallationReach``).
+    reach: object
     operations: object
     ctx: Context
     uow: SqlAlchemyUnitOfWork
@@ -93,6 +96,7 @@ async def connector_services(
         try:
             yield ConnectorServices(
                 pod_connectors=dependencies.get_pod_connector_service(uow),
+                reach=dependencies.build_installation_reach(uow),
                 operations=dependencies.build_connector_operation_service(uow),
                 ctx=auth_ctx,
                 uow=uow,

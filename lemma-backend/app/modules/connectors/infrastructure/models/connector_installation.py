@@ -19,9 +19,10 @@ GitHub binds here today; Lemma's own Slack app holds the same fact in
 
 from __future__ import annotations
 
+from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import ForeignKey, Index, String, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, Index, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -44,6 +45,14 @@ class ConnectorInstallation(UUIDCreatedBase):
     #: organization's, and survives the person leaving it.
     bound_by_user_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    #: When a claimant last proved control of it: GitHub said they administer
+    #: it, and they may install apps for the organization in Lemma. NULL for
+    #: a binding migration 0063 derived from the accounts carrying it, which
+    #: nobody proved -- a proven claim from another organization takes such a
+    #: binding over, and the holder's own next proven claim stamps it.
+    proven_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
     #: What a provider records about an installation beyond who owns it.
     details: Mapped[dict[str, object]] = mapped_column(

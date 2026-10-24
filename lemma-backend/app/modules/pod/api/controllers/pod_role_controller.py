@@ -7,10 +7,7 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, status
 
 from app.core.api.dependencies import UoWDep
-from app.core.authorization.conferral import (
-    assert_can_confer,
-    assert_can_confer_grants,
-)
+from app.core.authorization.conferral import assert_can_confer
 from app.core.authorization.grants import (
     list_grantee_resource_grants,
     normalize_pod_resource_grants,
@@ -264,18 +261,18 @@ async def replace_pod_role_permissions(
         pod_id=pod_id,
         grants=data.grants,
     )
-    # And by the resource: a grant on a pod account puts its owner's credential
-    # in front of the role, which only that owner may do (audit H3).
-    await assert_can_confer_grants(
-        ctx, grants, pod_id=pod_id, action="grant access you could not give"
-    )
+    # And by the resource, in the writer: a grant on a pod account puts its
+    # owner's credential in front of the role, which only that owner may do
+    # (audit H3).
     await replace_grantee_resource_grants(
         uow.session,
+        ctx=ctx,
         pod_id=pod_id,
         grantee_type="ROLE",
         grantee_id=role.id,
         grants=grants,
         created_by_user_id=ctx.user_id,
+        action="grant access you could not give",
     )
     return await _role_permissions_response(uow, pod_id=pod_id, role=role)
 

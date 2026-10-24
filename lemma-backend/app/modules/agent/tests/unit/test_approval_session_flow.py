@@ -20,6 +20,7 @@ from app.core.domain.errors import DomainError
 from app.modules.agent.services.approval_reconciliation import (
     record_session_approvals,
 )
+from app.modules.agent.tools.approval_denials import card_lends, show_card
 from app.modules.agent.tools.tool_errors import approval_error_result
 
 
@@ -101,6 +102,21 @@ async def _refuse(conversation, *, tool_name, args, permission_ids, actor=None):
     )
 
 
+async def _show(conversation, *, person, tool_name, args, actor=None) -> str:
+    """The card going up: what is pending now is all an answer may lend."""
+    approval_id = f"call-{uuid4().hex[:8]}"
+    await show_card(
+        conversation_id=conversation.id,
+        approval_id=approval_id,
+        person_user_id=person,
+        workload_actor_id=actor
+        or f"agent:{conversation.agent_id or conversation.pod_id}",
+        tool_name=tool_name,
+        args=args,
+    )
+    return approval_id
+
+
 async def _approved_for(conversation, *, person, permission_id, actor=None) -> bool:
     return await session_approvals.has_session_approval(
         session_id=str(conversation.id),
@@ -124,6 +140,9 @@ async def test_approve_for_session_records_each_permission_the_call_was_refused_
         args=args,
         permission_ids=["datastore.table.delete", "folder.delete"],
     )
+    approval_id = await _show(
+        conversation, person=person, tool_name="pod_delete_table", args=args
+    )
 
     await record_session_approvals(
         conversation_id=conversation.id,
@@ -131,6 +150,7 @@ async def test_approve_for_session_records_each_permission_the_call_was_refused_
         pod_id=conversation.pod_id,
         tool_args={"tool_name": "pod_delete_table", "args": args},
         user_id=person,
+        approval_id=approval_id,
     )
 
     # An exact-command entry beside the refused permissions, so a later
@@ -162,6 +182,9 @@ async def test_approve_for_session_records_what_was_refused_not_what_the_model_a
         args=args,
         permission_ids=["datastore.record.write"],
     )
+    approval_id = await _show(
+        conversation, person=person, tool_name="pod_write_record", args=args
+    )
 
     await record_session_approvals(
         conversation_id=conversation.id,
@@ -173,6 +196,7 @@ async def test_approve_for_session_records_what_was_refused_not_what_the_model_a
             "permission_ids": ["datastore.record.write", "pod.delete"],
         },
         user_id=person,
+        approval_id=approval_id,
     )
 
     assert await _approved_for(
@@ -242,6 +266,12 @@ async def test_approving_a_sandbox_command_for_the_session_approves_what_it_was_
         code="DESTRUCTIVE_ACTION_REQUIRES_APPROVAL",
         details={"permission_ids": ["datastore.table.delete"]},
     )
+    approval_id = await _show(
+        conversation,
+        person=person,
+        tool_name="exec_command",
+        args={"cmd": "lemma tables delete orders"},
+    )
 
     await record_session_approvals(
         conversation_id=conversation.id,
@@ -253,6 +283,7 @@ async def test_approving_a_sandbox_command_for_the_session_approves_what_it_was_
             "permission_ids": ["datastore.table.delete", "pod.delete"],
         },
         user_id=person,
+        approval_id=approval_id,
     )
 
     assert await _approved_for(
@@ -278,6 +309,9 @@ async def test_a_session_approval_covers_only_the_person_who_gave_it(store):
         args=args,
         permission_ids=["datastore.table.delete"],
     )
+    approval_id = await _show(
+        conversation, person=owner, tool_name="pod_delete_table", args=args
+    )
 
     await record_session_approvals(
         conversation_id=conversation.id,
@@ -285,6 +319,7 @@ async def test_a_session_approval_covers_only_the_person_who_gave_it(store):
         pod_id=conversation.pod_id,
         tool_args={"tool_name": "pod_delete_table", "args": args},
         user_id=owner,
+        approval_id=approval_id,
     )
 
     assert await _approved_for(
@@ -425,6 +460,7 @@ class TestTheSecondDenialOfTheSameCall:
         granted: set[str],
         executed: list[str],
         refused: frozenset[str] = frozenset(),
+        sandbox_refused: frozenset[str] = frozenset(),
         approver=None,
     ):
         async def has_session_approval(
@@ -436,6 +472,9 @@ class TestTheSecondDenialOfTheSameCall:
 
         async def denied_permissions(**kwargs):
             return refused
+
+        async def session_refusals(**kwargs):
+            return sandbox_refused
 
         async def record_session_approval(**kwargs):  # pragma: no cover
             raise AssertionError(
@@ -454,6 +493,10 @@ class TestTheSecondDenialOfTheSameCall:
         monkeypatch.setattr(
             "app.modules.agent.tools.approval_denials.denied_permissions",
             denied_permissions,
+        )
+        monkeypatch.setattr(
+            "app.modules.agent.tools.approval_denials.session_refusals",
+            session_refusals,
         )
         monkeypatch.setattr(
             "app.core.authorization.session_approvals.record_session_approval",
@@ -569,3 +612,176 @@ class TestTheSecondDenialOfTheSameCall:
 
         assert result is not None and result.executed is True
         assert executed == ["exec_command"]
+
+
+class TestAnApprovalLendsWhatItsCardShowed:
+    """H6, reopened: what an approval lends is fixed when its card goes up.
+
+    A sandbox's refusals are recorded per session, not per call, so every
+    approvable 403 its ``lemma`` calls hit piled up there -- and approving any
+    ``exec_command``, or auto-approving one the person had allowed for the
+    conversation, lent the whole pile. The person allowed ``python job.py``;
+    the agent edited job.py to delete a table, ran it, was refused, and asked
+    for ``python job.py`` again: no card, and the delete went through.
+    """
+
+    @staticmethod
+    def _shell(conversation, person):
+        """The sandbox token of the pod assistant's run for ``person``."""
+        return SimpleNamespace(
+            session_id=str(conversation.id),
+            invoked_by_user_id=person,
+            actor_type=SimpleNamespace(value="AGENT"),
+            actor_id=conversation.pod_id,
+        )
+
+    @staticmethod
+    async def _sandbox_refused(conversation, person, *permission_ids):
+        await session_approvals.record_delegated_refusal(
+            TestAnApprovalLendsWhatItsCardShowed._shell(conversation, person),  # type: ignore[arg-type]
+            code="DESTRUCTIVE_ACTION_REQUIRES_APPROVAL",
+            details={"permission_ids": list(permission_ids)},
+        )
+
+    @staticmethod
+    def _deps(conversation, person):
+        return SimpleNamespace(
+            conversation_id=conversation.id,
+            user_id=person,
+            workload_id=conversation.pod_id,
+            agent_run_id=uuid4(),
+            supports_pause_signal=True,
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_conversation_long_yes_does_not_cover_a_refusal_it_never_saw(
+        self, store, monkeypatch
+    ):
+        """The exact scenario. The repeat must go to a new card."""
+        from app.modules.agent.tools.user_interaction import (
+            pydantic_adapter as approvals,
+        )
+
+        conversation, person = _conversation(), uuid4()
+        job = {"cmd": "python job.py"}
+        # Allowed for the conversation when nothing had been refused.
+        approval_id = await _show(
+            conversation, person=person, tool_name="exec_command", args=job
+        )
+        await record_session_approvals(
+            conversation_id=conversation.id,
+            agent_id=None,
+            pod_id=conversation.pod_id,
+            tool_args={"tool_name": "exec_command", "args": job},
+            user_id=person,
+            approval_id=approval_id,
+        )
+        # job.py now deletes a table; its run is refused.
+        await self._sandbox_refused(conversation, person, "datastore.table.delete")
+        executed: list[str] = []
+
+        async def execute_as_user(self, *, deps, tool_name, args):
+            executed.append(tool_name)
+            return {"ok": True}
+
+        monkeypatch.setattr(
+            "app.modules.agent.tools.approval.executor.ApprovalExecutor.execute_as_user",
+            execute_as_user,
+        )
+
+        result = await approvals._run_if_exact_match_already_approved(
+            deps=self._deps(conversation, person), tool_name="exec_command", args=job
+        )
+
+        assert result is None, "a refusal nobody approved must produce a card"
+        assert executed == []
+        assert not await _approved_for(
+            conversation, person=person, permission_id="datastore.table.delete"
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_refusal_recorded_after_the_card_is_not_lent(self, store):
+        conversation, person = _conversation(), uuid4()
+        await self._sandbox_refused(conversation, person, "datastore.record.delete")
+        approval_id = await _show(
+            conversation,
+            person=person,
+            tool_name="exec_command",
+            args={"cmd": "lemma records delete chores --id 1"},
+        )
+        await self._sandbox_refused(conversation, person, "datastore.table.delete")
+
+        lent = await card_lends(
+            conversation_id=conversation.id,
+            approval_id=approval_id,
+            person_user_id=person,
+            workload_actor_id=f"agent:{conversation.pod_id}",
+            tool_name="exec_command",
+        )
+
+        assert lent.permission_ids == {"datastore.record.delete"}
+
+    @pytest.mark.asyncio
+    async def test_allowing_for_the_conversation_approves_only_what_the_card_showed(
+        self, store
+    ):
+        conversation, person = _conversation(), uuid4()
+        cmd = {"cmd": "lemma records delete chores --id 1"}
+        await self._sandbox_refused(conversation, person, "datastore.record.delete")
+        approval_id = await _show(
+            conversation, person=person, tool_name="exec_command", args=cmd
+        )
+        await self._sandbox_refused(conversation, person, "datastore.table.delete")
+
+        await record_session_approvals(
+            conversation_id=conversation.id,
+            agent_id=None,
+            pod_id=conversation.pod_id,
+            tool_args={"tool_name": "exec_command", "args": cmd},
+            user_id=person,
+            approval_id=approval_id,
+        )
+
+        assert await _approved_for(
+            conversation, person=person, permission_id="datastore.record.delete"
+        )
+        assert not await _approved_for(
+            conversation, person=person, permission_id="datastore.table.delete"
+        )
+        # Still pending, so the next card names it.
+        assert await session_approvals.session_refusals(
+            session_id=str(conversation.id),
+            person_user_id=person,
+            workload_actor_id=f"agent:{conversation.pod_id}",
+        ) == {"datastore.table.delete"}
+
+    @pytest.mark.asyncio
+    async def test_a_card_lends_nothing_to_anyone_it_was_not_shown_to(self, store):
+        conversation, person = _conversation(agent_id=uuid4()), uuid4()
+        args = {"table": "orders"}
+        await _refuse(
+            conversation,
+            tool_name="pod_delete_table",
+            args=args,
+            permission_ids=["datastore.table.delete"],
+        )
+        approval_id = await _show(
+            conversation, person=person, tool_name="pod_delete_table", args=args
+        )
+        shown = {
+            "conversation_id": conversation.id,
+            "approval_id": approval_id,
+            "person_user_id": person,
+            "workload_actor_id": f"agent:{conversation.agent_id}",
+            "tool_name": "pod_delete_table",
+        }
+
+        assert (await card_lends(**shown)).permission_ids == {"datastore.table.delete"}
+        for other in (
+            {"person_user_id": uuid4()},
+            {"workload_actor_id": f"agent:{uuid4()}"},
+            {"tool_name": "exec_command"},
+            {"approval_id": "call-never-shown"},
+            {"approval_id": None},
+        ):
+            assert (await card_lends(**{**shown, **other})).permission_ids == set()

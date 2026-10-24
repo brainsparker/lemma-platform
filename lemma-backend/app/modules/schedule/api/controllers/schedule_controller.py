@@ -124,10 +124,14 @@ async def create_schedule(
 ):
     """Create a new pod schedule."""
     await ctx.require(Permissions.SCHEDULE_CREATE, ResourceRef.pod(pod_id))
+    pinned = None
     if request.account_id is not None and request.pod_connector is None:
-        request.pod_connector = await pod_connector_for_account(
+        # The account it named stays the one it listens through (pinned),
+        # not whichever of the owner's accounts is their default.
+        binding = await pod_connector_for_account(
             uow, ctx, pod_id=pod_id, account_id=request.account_id
         )
+        request.pod_connector, pinned = binding.slug, binding.pod_account_id
         note_deprecated_use(
             http_request,
             response,
@@ -145,6 +149,7 @@ async def create_schedule(
         "config": request.config,
         "instruction": request.instruction,
         "pod_connector_slug": request.pod_connector,
+        "pod_account_id": pinned,
         "connector_trigger_id": request.connector_trigger_id,
         "filter_instruction": request.filter_instruction,
         "filter_output_schema": request.filter_output_schema,

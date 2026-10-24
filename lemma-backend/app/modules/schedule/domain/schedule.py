@@ -384,6 +384,9 @@ class ScheduleEntity(Entity):
     # trigger, or an MCP server's event: the pod connector, by slug. Which
     # account that means is resolved on every use, as the schedule's owner.
     pod_connector_slug: str | None = None
+    # On a PER_MEMBER connector: which of the owner's accounts it listens
+    # through (bot B, not their default bot A), while it is still theirs.
+    pod_account_id: UUID | None = None
     connector_trigger_id: str | None = None
 
     # DATASTORE only. A row added from outside the pod -- an open table's form
@@ -469,6 +472,7 @@ class ScheduleCreateEntity(BaseModel):
     filter_instruction: str | None = None
     filter_output_schema: dict[str, Any] | None = None
     pod_connector_slug: str | None = None
+    pod_account_id: UUID | None = None
     connector_trigger_id: str | None = None
     include_outside_rows: bool = False
     # None means "caller did not specify": DATASTORE and GLOBAL-workflow

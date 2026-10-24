@@ -31,7 +31,9 @@ from app.modules.schedule.domain.schedule import (
 )
 
 TargetExecuteCheck = Callable[[ScheduleEntity, Context | None], Awaitable[None]]
-ConnectorUseCheck = Callable[[ScheduleEntity, Context | None], Awaitable[None]]
+ConnectorUseCheck = Callable[
+    [ScheduleEntity, Context | None], Awaitable[ScheduleEntity]
+]
 
 #: The columns that decide what a fire does: what it starts, what it tells the
 #: target, which events reach it and who may see it. ``name`` and
@@ -109,10 +111,16 @@ async def take_ownership_if_behaviour_changes(
         )
     if existing.pod_id is not None:
         await ctx.require(Permissions.SCHEDULE_CREATE, ResourceRef.pod(existing.pod_id))
-    candidate = existing.model_copy(update={**update_data, "user_id": ctx.user_id})
+    candidate = existing.model_copy(
+        # Not the author's pinned account: it is theirs, and the schedule is
+        # about to listen as the editor, on the editor's own.
+        update={**update_data, "user_id": ctx.user_id, "pod_account_id": None}
+    )
     await require_target_execute(candidate, ctx)
-    await require_connector_use(candidate, ctx)
+    candidate = await require_connector_use(candidate, ctx)
     update_data["user_id"] = ctx.user_id
+    if candidate.pod_connector_slug is not None:
+        update_data["pod_account_id"] = candidate.pod_account_id
 
 
 async def require_target_edit_for_row_owner_runs(

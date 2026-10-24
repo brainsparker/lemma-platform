@@ -449,15 +449,6 @@ class AgentSurfaceEntity(AggregateRoot):
         self._validate_binding(
             surface_type=self.surface_type, pod_connector_slug=next_slug
         )
-        if next_slug == self.pod_connector_slug and self.config.slack.app_made_by_lemma:
-            # Server-owned, and no input carries it: an edit to the settings is
-            # not a different app. A different connector is, so it is not
-            # carried.
-            config = config.model_copy(
-                update={
-                    "slack": config.slack.model_copy(update={"app_made_by_lemma": True})
-                }
-            )
         self.config = config
         if credential_mode is not None:
             self.credential_mode = credential_mode

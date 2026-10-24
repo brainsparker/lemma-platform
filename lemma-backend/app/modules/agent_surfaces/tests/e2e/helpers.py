@@ -508,6 +508,19 @@ async def _seed_external_user(
     phone: str | None = None,
     tenant_id: str | None = None,
 ) -> None:
+    """A sender already resolved to ``resolved_user_id``.
+
+    On Slack the cache stands only on Slack's proof of the sender in the
+    workspace (``slack_cached_identity``), so a Slack sender is seeded the way
+    ``record_proof`` leaves one: the proof, and the cache it writes through to.
+    """
+    if platform == "SLACK" and tenant_id:
+        await _seed_slack_proof(
+            db_session,
+            team=tenant_id,
+            sender=external_user_id,
+            user_id=resolved_user_id,
+        )
     db_session.add(
         AgentSurfaceExternalUser(
             platform=platform,
@@ -524,6 +537,31 @@ async def _seed_external_user(
     await db_session.commit()
 
 
+async def _seed_slack_proof(
+    db_session: AsyncSession, *, team: str, sender: str, user_id: UUID
+) -> None:
+    from sqlalchemy.dialects.postgresql import insert
+
+    from app.modules.agent_surfaces.infrastructure.slack_manager_models import (
+        SlackWorkspacePersonModel,
+    )
+
+    now = datetime.now(timezone.utc)
+    await db_session.execute(
+        insert(SlackWorkspacePersonModel)
+        .values(
+            id=uuid4(),
+            team_id=team,
+            slack_user_id=sender,
+            user_id=user_id,
+            proved_by="INSTALL",
+            created_at=now,
+            updated_at=now,
+        )
+        .on_conflict_do_nothing()
+    )
+
+
 async def _known_slack_sender(
     db_session: AsyncSession,
     *,
@@ -534,7 +572,8 @@ async def _known_slack_sender(
     """The fake workspace's sender, already known in it as ``user_id``.
 
     A Slack profile email names nobody -- a workspace admin can set anybody's --
-    so a test whose Slack sender is a member says so the way a proof leaves it.
+    so a test whose Slack sender is a member says so the way a proof leaves it
+    (``_seed_external_user`` writes the proof for a Slack sender).
     The defaults are ``platform_payloads.slack``'s ``SENDER_ID`` and ``TEAM_ID``.
     """
     await _seed_external_user(

@@ -12,6 +12,10 @@ from collections.abc import Callable
 from typing import Any
 from uuid import UUID
 
+from lemma_pod_bundle.apply_fields import SURFACE_APPLY_FIELDS
+
+from app.core.authorization.context import Context
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.pod_bundle.domain.errors import PodBundleDomainError
 from app.modules.pod_bundle.domain.state import PlanStep
 
@@ -23,6 +27,7 @@ async def apply_surface(
     ctx,
     pod_id: UUID,
     load: Callable[[str, str], dict[str, Any]],
+    warnings: list[str],
 ) -> None:
     """Create or update a pod surface, bound to the pod connector the bundle
     names by slug -- the importing pod's own, so its account is that pod's
@@ -46,7 +51,14 @@ async def apply_surface(
         update_surface,
     )
 
-    payload = load("surfaces", step.name)
+    payload = await _without_deprecated_account(
+        load("surfaces", step.name),
+        step.name,
+        uow=uow,
+        ctx=ctx,
+        pod_id=pod_id,
+        warnings=warnings,
+    )
     platform_raw = payload.get("platform")
     if not platform_raw:
         # An up-to-date exporter always writes platform explicitly; a
@@ -72,6 +84,8 @@ async def apply_surface(
     ).strip() or AgentSurfaceEntity.default_name_for(platform)
 
     # Only the create-request fields (extra='forbid'); drop export-only keys.
+    # The allow-list is the one lemma-cli's direct import builds from, so the
+    # two importers keep the same fields.
     request = SurfaceCreateRequest.model_validate(
         {
             "platform": platform.value,
@@ -79,14 +93,7 @@ async def apply_surface(
             **{
                 key: value
                 for key, value in payload.items()
-                if key
-                in {
-                    "default_agent_name",
-                    "pod_connector",
-                    "credential_mode",
-                    "config",
-                    "is_enabled",
-                }
+                if key in SURFACE_APPLY_FIELDS
             },
         }
     )
@@ -148,3 +155,51 @@ async def apply_surface(
         ),
         ctx=ctx,
     )
+
+
+async def _without_deprecated_account(
+    payload: dict[str, Any],
+    name: str,
+    *,
+    uow: SqlAlchemyUnitOfWork,
+    ctx: Context,
+    pod_id: UUID,
+    warnings: list[str],
+) -> dict[str, Any]:
+    """A surface exported before pod connectors, which named an account.
+
+    Translated as a schedule's is: an account the importer supplied becomes
+    the pod connector serving it to them, and the import says so. Without one
+    the surface is imported on the platform's own bot, and the import says
+    that. It used to be dropped here without a word, while lemma-cli's import
+    of the same bundle warned.
+    """
+    if "account_id" not in payload or payload.get("pod_connector"):
+        return payload
+    account_id = _as_uuid(payload.get("account_id"))
+    if account_id is None:
+        warnings.append(
+            f"Surface '{name}' named a connected account, which bundles no "
+            "longer carry; it runs on the platform's own bot until you name the "
+            "pod connector it should run as."
+        )
+        return payload
+    from app.modules.connectors.contracts.pod_connectors import (
+        pod_connector_for_account,
+    )
+
+    binding = await pod_connector_for_account(
+        uow, ctx, pod_id=pod_id, account_id=account_id
+    )
+    warnings.append(
+        f"Surface '{name}' named an account (deprecated); it runs as the pod "
+        f"connector '{binding.slug}' instead."
+    )
+    return {**payload, "pod_connector": binding.slug}
+
+
+def _as_uuid(value: object) -> UUID | None:
+    try:
+        return UUID(str(value)) if value else None
+    except ValueError:
+        return None

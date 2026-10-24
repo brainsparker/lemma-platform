@@ -39,10 +39,12 @@ from app.modules.agent.tools.approval.executor import ApprovalExecutor
 from app.modules.agent.tools.approval_denials import (
     lent_to_the_sandbox,
     sandbox_refusals,
+    show_card,
 )
 from app.modules.agent.tools.authority import (
     conversation_workload_actor_id,
     tool_authorization_context,
+    workload_actor_id,
 )
 from app.modules.agent.tools.context import ConversationContext
 from app.modules.agent.tools.dispatcher import AgentToolDispatcher
@@ -154,9 +156,28 @@ async def _as_the_agent(ctx: ConversationContext, args: dict[str, object]) -> di
     return result
 
 
+async def _card(
+    ctx: ConversationContext, tool_name: str, args: dict[str, object]
+) -> str:
+    """The run pausing for a card: what is pending now is what it lends."""
+    approval_id = f"call-{uuid4().hex[:12]}"
+    await show_card(
+        conversation_id=ctx.conversation_id,
+        approval_id=approval_id,
+        person_user_id=ctx.user_id,
+        workload_actor_id=workload_actor_id(ctx),
+        tool_name=tool_name,
+        args=args,
+    )
+    return approval_id
+
+
 async def _approved(ctx: ConversationContext, args: dict[str, object]) -> dict:
     result = await ApprovalExecutor(_uow_factory()).execute_as_user(
-        deps=ctx, tool_name="pod_write_record", args=args, approval_id="call-e2e"
+        deps=ctx,
+        tool_name="pod_write_record",
+        args=args,
+        approval_id=await _card(ctx, "pod_write_record", args),
     )
     assert isinstance(result, dict)
     return result
@@ -335,6 +356,9 @@ async def test_a_session_approval_lets_the_agent_repeat_it_in_that_conversation_
                 "permission_ids": sorted(missing),
             },
             user_id=UUID(pod.scenario.owner_user["id"]),
+            approval_id=await _card(
+                pod.context(), approval["tool_name"], approval["args"]
+            ),
         )
 
     assert result == {"success": True, "deleted": True}
@@ -384,17 +408,29 @@ class _AssistantShell:
 
     async def approve_for_the_session(self, *, by: UUID, permission_ids: list[str]):
         """APPROVE_FOR_SESSION of a ``lemma`` command, with whatever
-        ``permission_ids`` the model copied from the shell's output."""
+        ``permission_ids`` the model copied from the shell's output, on the
+        card shown to ``by``."""
+        command = {"cmd": "lemma tables delete chores"}
+        approval_id = f"call-{uuid4().hex[:12]}"
+        await show_card(
+            conversation_id=self.conversation_id,
+            approval_id=approval_id,
+            person_user_id=by,
+            workload_actor_id=self.actor,
+            tool_name="exec_command",
+            args=command,
+        )
         await record_session_approvals(
             conversation_id=self.conversation_id,
             agent_id=None,
             pod_id=self.pod_id,
             tool_args={
                 "tool_name": "exec_command",
-                "args": {"cmd": "lemma tables delete chores"},
+                "args": command,
                 "permission_ids": permission_ids,
             },
             user_id=by,
+            approval_id=approval_id,
         )
 
 

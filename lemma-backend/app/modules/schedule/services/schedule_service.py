@@ -159,7 +159,7 @@ class ScheduleService:
         await self._validate_target(schedule_create)
         await self._require_target_execute(schedule_create, ctx=ctx)
         await self._require_datastore_table_update(schedule_create, ctx=ctx)
-        await self._require_connector_use(schedule_create, ctx)
+        schedule_create = await self._require_connector_use(schedule_create, ctx)
         if schedule_create.schedule_type == ScheduleType.TIME:
             refuse_time_schedule_filter(
                 schedule_create.filter_instruction,
@@ -596,11 +596,9 @@ class ScheduleService:
         self,
         schedule: ScheduleCreateEntity | ScheduleEntity,
         ctx: Context | None,
-    ) -> None:
-        if self._connector_access is None:
-            await require_connector_use(schedule, ctx, self.uow)
-            return
-        await require_connector_use(
+    ) -> ScheduleCreateEntity | ScheduleEntity:
+        """Refused, or ``schedule`` pinned to the account it resolved to."""
+        return await require_connector_use(
             schedule, ctx, self.uow, resolve=self._connector_access
         )
 

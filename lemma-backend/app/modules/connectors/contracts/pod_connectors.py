@@ -22,6 +22,9 @@ them on as data rather than translating them.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -34,22 +37,27 @@ from app.modules.connectors.domain.pod_connector import (
     PodAccountVisibility,
     PodConnectorEntity,
     PodConnectorMode,
+    PodConnectorSource,
 )
 from app.modules.connectors.domain.pod_connector_errors import (
     ConnectionRequiredError,
     ConnectionRequiresPersonError,
     ConnectorNeedsAccountError,
     ConnectorUnavailableError,
+    ConnectorUseRefusedError,
     PodConnectorNotFoundError,
     ReauthRequiredError,
 )
 from app.modules.connectors.domain.errors import (
     AccountNotFoundError,
+    ConnectorAccessDeniedError,
     ConnectorDomainError,
 )
 from app.modules.connectors.services.pod_connector_resolution import (
+    PodConnectorResolver,
     ResolvedPodConnector,
     acting_person,
+    free_slug,
 )
 
 
@@ -72,12 +80,34 @@ class PodConnectorAccount:
     def account_id(self) -> UUID:
         return self.account.id
 
+    @property
+    def pinned_pod_account_id(self) -> UUID | None:
+        """What a standing binding made on this resolution should pin.
 
-def _resolver(uow: SqlAlchemyUnitOfWork):
-    # Imported here, not at module scope: the dependency builders reach the
-    # whole connectors service layer, which a contract importer should not pay
-    # for until it resolves something.
-    from app.modules.connectors.api.dependencies import build_pod_connector_resolver
+        The pod account for a PER_MEMBER connector -- that one of its person's
+        accounts, not whichever is their default later. Nothing for a SHARED
+        one: a binding to it follows the connector, re-checked on every use.
+        """
+        return self.pod_account_id if self.mode is PodConnectorMode.PER_MEMBER else None
+
+
+@dataclass(frozen=True, slots=True)
+class PodConnectorBinding:
+    """What a standing binding (a schedule, a surface) stores for a connector."""
+
+    slug: str
+    #: The pod account it pins: a PER_MEMBER binding on one of its person's
+    #: accounts. ``None`` for SHARED, which follows its connector.
+    pod_account_id: UUID | None = None
+
+
+def _resolver(uow: SqlAlchemyUnitOfWork) -> PodConnectorResolver:
+    # Imported here, not at module scope: building it reaches the connectors
+    # repositories, which a contract importer should not pay for until it
+    # resolves something.
+    from app.modules.connectors.services.pod_connector_composition import (
+        build_pod_connector_resolver,
+    )
 
     return build_pod_connector_resolver(uow)
 
@@ -96,24 +126,75 @@ def _present(resolved: ResolvedPodConnector) -> PodConnectorAccount:
 
 
 async def resolve_pod_connector(
-    uow: SqlAlchemyUnitOfWork, ctx: Context, *, pod_id: UUID, slug: str
+    uow: SqlAlchemyUnitOfWork,
+    ctx: Context,
+    *,
+    pod_id: UUID,
+    slug: str,
+    pod_account_id: UUID | None = None,
 ) -> PodConnectorAccount:
-    """The account ``slug`` runs as for whoever ``ctx`` is, authorized."""
+    """The account ``slug`` runs as for whoever ``ctx`` is, authorized.
+
+    ``pod_account_id`` is a binding's pinned account on a PER_MEMBER
+    connector, used while it is still the acting person's own.
+    """
     resolver = _resolver(uow)
     connector = await resolver.connector(pod_id, slug)
-    return _present(await resolver.resolve(ctx, connector))
+    return _present(
+        await resolver.resolve(ctx, connector, pod_account_id=pod_account_id)
+    )
+
+
+async def ensure_pod_connector_for_installation(
+    uow: SqlAlchemyUnitOfWork,
+    ctx: Context,
+    *,
+    pod_id: UUID,
+    auth_config_id: UUID,
+    source: PodConnectorSource = PodConnectorSource.AUTO,
+) -> PodConnectorEntity:
+    """The pod's PER_MEMBER connector for an installation, declared if none.
+
+    The one place a connector is declared on first use: the agent tools, the
+    deprecated execute, deprecated ``account_id`` fields, bundle import and
+    the CLI fallback all come here. Declared (slug from the installation name,
+    ``source`` AUTO) only when the acting person has an account on the
+    installation, or the caller may declare connectors (an editor importing a
+    bundle); otherwise ``PodConnectorNotFoundError``. Declaring grants
+    nothing: a named agent still needs ``connector.use`` on it.
+    """
+    resolver = _resolver(uow)
+    auth_config = await resolver.auth_configs.get(auth_config_id)
+    if auth_config is None:
+        raise PodConnectorNotFoundError(str(auth_config_id))
+    return await resolver.ensure_for_installation(
+        ctx, pod_id=pod_id, auth_config=auth_config, source=source
+    )
 
 
 async def pod_connector_for_account(
-    uow: SqlAlchemyUnitOfWork, ctx: Context, *, pod_id: UUID, account_id: UUID
-) -> str:
-    """The slug of the pod connector a deprecated ``account_id`` means.
+    uow: SqlAlchemyUnitOfWork,
+    ctx: Context,
+    *,
+    pod_id: UUID,
+    account_id: UUID,
+    mode: PodConnectorMode | None = None,
+) -> PodConnectorBinding:
+    """The pod connector, and the account to pin, a deprecated ``account_id``
+    means.
 
-    For request fields that used to take an account: they are still accepted,
-    and translated here into the pod connector that serves that account to
-    this caller -- the shared connector it is shared through, or a per-member
-    one for the caller's own account. Nothing a slug could not reach is
-    reachable this way; ``serve_installation`` refuses the rest.
+    For request fields that used to take an account: still accepted, and
+    translated here into the connector that serves that account to this
+    caller. The caller's own account goes through a PER_MEMBER connector
+    (declared on this first use when the pod has none) and is pinned, so a
+    schedule on bot B stays on bot B; somebody else's only through the SHARED
+    connector its owner shared it as. Nothing a slug could not reach is
+    reachable this way.
+
+    ``mode=SHARED`` is for a binding that runs with nobody behind it (a
+    surface): the caller's own account is then shared with the pod as a
+    SHARED connector, as binding it did before pod connectors -- their act of
+    binding their own bot is the consent.
     """
     resolver = _resolver(uow)
     account = await resolver.accounts.get(account_id)
@@ -122,10 +203,79 @@ async def pod_connector_for_account(
     )
     if account is None or auth_config is None:
         raise AccountNotFoundError(str(account_id))
-    resolved = await resolver.serve_installation(
-        ctx, pod_id=pod_id, auth_config=auth_config, account_id=account_id
+    if mode is not PodConnectorMode.SHARED:
+        resolved = _present(
+            await resolver.serve_installation(
+                ctx, pod_id=pod_id, auth_config=auth_config, account_id=account_id
+            )
+        )
+        return PodConnectorBinding(
+            slug=resolved.slug, pod_account_id=resolved.pinned_pod_account_id
+        )
+    for connector in await resolver.pod_connectors.list_for_installation(
+        pod_id, auth_config.id
+    ):
+        if connector.mode is not PodConnectorMode.SHARED:
+            continue
+        shared = (
+            await resolver.pod_accounts.get(connector.shared_pod_account_id)
+            if connector.shared_pod_account_id is not None
+            else None
+        )
+        if shared is not None and shared.account_id == account_id:
+            await resolver.resolve(ctx, connector)
+            return PodConnectorBinding(slug=connector.slug)
+    if account.user_id != acting_person(ctx):
+        raise ConnectorAccessDeniedError(
+            "That account is not shared with this pod. Its owner has to share "
+            "it, or bind it themselves.",
+            details={"reason": "account_not_served_by_pod_connector"},
+        )
+    slug = await share_own_account_as_pod_connector(
+        uow,
+        pod_id=pod_id,
+        account_id=account_id,
+        owner_user_id=account.user_id,
+        slug_base=free_slug(auth_config, set()),
     )
-    return resolved.pod_connector.slug
+    await resolver.resolve(ctx, await resolver.connector(pod_id, slug))
+    return PodConnectorBinding(slug=slug)
+
+
+async def shared_connector_for(
+    uow: SqlAlchemyUnitOfWork, ctx: Context, *, pod_id: UUID, account_id: UUID
+) -> str:
+    """The slug of the SHARED connector a surface's deprecated ``account_id``
+    means: a surface runs with nobody behind it (``pod_connector_for_account``
+    with ``mode=SHARED``)."""
+    binding = await pod_connector_for_account(
+        uow, ctx, pod_id=pod_id, account_id=account_id, mode=PodConnectorMode.SHARED
+    )
+    return binding.slug
+
+
+#: Standing resolutions already made in this scope, and their refusals.
+_STANDING_ONCE: ContextVar[
+    dict[tuple[UUID, str, UUID | None, UUID | None], object] | None
+] = ContextVar("standing_pod_connector_resolutions", default=None)
+
+
+@contextmanager
+def standing_resolutions_once() -> Iterator[None]:
+    """Resolve each standing binding once for the length of this block.
+
+    For one inbound message or one webhook delivery, whose steps -- verifying
+    it, finding credentials, the identity it binds to, each matched schedule
+    -- each ask what the same connector runs as. The answer cannot change in
+    the milliseconds a delivery takes, and asking it again cost four or five
+    queries each time. A refusal is remembered too. Nothing outlives the
+    block: it is not a cache, and the next delivery asks afresh.
+    """
+    token = _STANDING_ONCE.set(_STANDING_ONCE.get() or {})
+    try:
+        yield
+    finally:
+        _STANDING_ONCE.reset(token)
 
 
 async def resolve_standing_pod_connector(
@@ -134,22 +284,44 @@ async def resolve_standing_pod_connector(
     pod_id: UUID,
     slug: str,
     on_behalf_of: UUID | None = None,
+    pod_account_id: UUID | None = None,
     record_use: bool = True,
 ) -> PodConnectorAccount:
     """The account a standing binding to ``slug`` runs as right now.
 
-    ``record_use=False`` reads it with no write: for a caller on a request
-    path that releases its connection between reads (a surface answering a
-    webhook inside a provider's deadline), where stamping ``last_used_at`` on
-    every message would hold the connection across the provider call.
+    ``on_behalf_of`` is the person the binding runs for (a schedule's owner);
+    ``pod_account_id`` the account it pinned. ``record_use=False`` reads it
+    with no write: for a caller on a request path that releases its
+    connection between reads (a surface answering a webhook inside a
+    provider's deadline), where stamping ``last_used_at`` would hold the
+    connection across the provider call. Inside
+    ``standing_resolutions_once`` each binding is resolved once.
     """
+    memo = _STANDING_ONCE.get()
+    key = (pod_id, slug, on_behalf_of, pod_account_id)
+    known = memo.get(key) if memo is not None else None
+    if isinstance(known, ConnectorDomainError):
+        raise known
+    if isinstance(known, PodConnectorAccount):
+        return known
     resolver = _resolver(uow)
-    connector = await resolver.connector(pod_id, slug)
-    return _present(
-        await resolver.resolve_standing(
-            connector, on_behalf_of=on_behalf_of, record_use=record_use
+    try:
+        connector = await resolver.connector(pod_id, slug)
+        resolved = _present(
+            await resolver.resolve_standing(
+                connector,
+                on_behalf_of=on_behalf_of,
+                pod_account_id=pod_account_id,
+                record_use=record_use,
+            )
         )
-    )
+    except ConnectorDomainError as refusal:
+        if memo is not None:
+            memo[key] = refusal
+        raise
+    if memo is not None:
+        memo[key] = resolved
+    return resolved
 
 
 async def get_pod_connector(
@@ -298,6 +470,12 @@ PodConnectorRefusal = ConnectorDomainError
 
 __all__ = [
     "ConnectorDomainError",
+    "ConnectorUseRefusedError",
+    "PodConnectorBinding",
+    "PodConnectorSource",
+    "ensure_pod_connector_for_installation",
+    "pod_connector_for_account",
+    "standing_resolutions_once",
     "ConnectionRequiredError",
     "ConnectionRequiresPersonError",
     "ConnectorNeedsAccountError",
@@ -311,6 +489,7 @@ __all__ = [
     "get_pod_connector",
     "resolve_pod_connector",
     "resolve_standing_pod_connector",
+    "shared_connector_for",
     "share_own_account_as_pod_connector",
     "shared_account_ids",
     "shared_connectors_running_as",

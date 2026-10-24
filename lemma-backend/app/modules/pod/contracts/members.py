@@ -111,12 +111,22 @@ async def pod_administrators(uow, pod_id: UUID) -> list[PodAdministrator]:
     By permission, as the last-administrator rule counts them, so a custom role
     that manages members is as much an administrator as ``POD_ADMIN``.
     """
+    return await pod_members_who_hold(uow, pod_id, Permissions.POD_MEMBER_MANAGE)
+
+
+async def pod_members_who_hold(
+    uow, pod_id: UUID, permission_id: str
+) -> list[PodAdministrator]:
+    """The members whose roles grant ``permission_id``: whom to tell about
+    something only they can fix -- the pod's editors (``pod.connector.manage``)
+    when a shared connector lost its account. ``MAX_ADMINISTRATORS_TOLD`` at
+    most."""
     return [
         PodAdministrator(user_id=user_id, pod_member_id=member_id)
         for member_id, user_id in await members_who_can(
             uow.session,
             pod_id=pod_id,
-            permission_id=Permissions.POD_MEMBER_MANAGE,
+            permission_id=permission_id,
             limit=MAX_ADMINISTRATORS_TOLD,
         )
     ]

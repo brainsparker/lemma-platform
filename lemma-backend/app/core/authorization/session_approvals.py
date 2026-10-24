@@ -254,7 +254,8 @@ async def record_delegated_refusal(
 
     Per session rather than per call: a shell command is not the HTTP request
     it makes, so there is no exact call to key it by. An approval of a sandbox
-    command lends what that session's sandbox was refused, and clears it.
+    command lends what was pending here when its card was shown (``record_card``)
+    -- never one recorded later -- and clears it.
     """
     if code not in APPROVABLE_REFUSALS or not isinstance(details, dict):
         return
@@ -305,6 +306,109 @@ async def clear_session_refusals(
         _store_incident.record_failure(error_type=type(exc).__name__)
     else:
         _store_incident.record_success()
+
+
+#: How long what a card showed stays readable. A card waits for its person as
+#: long as it takes, so this outlives a session approval's own hour; an answer
+#: given after it lapses lends nothing, and the call is refused and asks again.
+_CARD_TTL_SECONDS = 7 * 24 * 3600
+
+
+def _card_suffix(session_id: str, approval_id: str) -> str:
+    return f"card:{session_id}:{approval_id}"
+
+
+async def record_card(
+    *, session_id: str, approval_id: str, card: dict[str, object]
+) -> None:
+    """Remember what an approval card put in front of its person.
+
+    Written by the server when the card is shown, from the refusals pending
+    then, and the only thing an answer to that card may lend. Without it the
+    answer lent whatever was refused by the time it arrived: a sandbox refusal
+    recorded after the card -- a ``job.py`` the agent had since edited to
+    delete a table -- rode along on an approval of something else (H6).
+    """
+    cache = _get_approval_cache()
+    if cache is None:
+        return
+    try:
+        await cache.set_json(
+            _card_suffix(session_id, approval_id), card, ttl_seconds=_CARD_TTL_SECONDS
+        )
+    except _STORE_ERRORS as exc:
+        _store_incident.record_failure(error_type=type(exc).__name__)
+    else:
+        _store_incident.record_success()
+
+
+async def shown_card(*, session_id: str, approval_id: str) -> dict[str, object]:
+    """What :func:`record_card` wrote for this approval, or ``{}`` -- which
+    lends nothing, the safe reading of a card nobody recorded."""
+    cache = _get_approval_cache()
+    if cache is None:
+        return {}
+    try:
+        card = await cache.get_json(_card_suffix(session_id, approval_id))
+    except _STORE_ERRORS as exc:
+        _store_incident.record_failure(error_type=type(exc).__name__)
+        return {}
+    _store_incident.record_success()
+    return card if isinstance(card, dict) else {}
+
+
+def _offer_suffix(
+    session_id: str, workload_actor_id: str, tool_name: str, args: dict | None
+) -> str:
+    return "offer:" + _denial_suffix(session_id, workload_actor_id, tool_name, args)
+
+
+async def record_grant_offer(
+    *,
+    session_id: str | None,
+    workload_actor_id: str | None,
+    tool_name: str,
+    args: dict | None,
+    offer: dict[str, object],
+) -> None:
+    """Remember that approving this exact call would add a standing grant.
+
+    Beside the denial, and keyed like it, for the same reason: what approving
+    does is the server's to say, never the model's (H6).
+    """
+    cache = _get_approval_cache()
+    if not session_id or not workload_actor_id or cache is None:
+        return
+    try:
+        await cache.set_json(
+            _offer_suffix(session_id, workload_actor_id, tool_name, args), offer
+        )
+    except _STORE_ERRORS as exc:
+        _store_incident.record_failure(error_type=type(exc).__name__)
+    else:
+        _store_incident.record_success()
+
+
+async def grant_offer(
+    *,
+    session_id: str | None,
+    workload_actor_id: str | None,
+    tool_name: str,
+    args: dict | None,
+) -> dict[str, object] | None:
+    """The standing grant approving this exact call would add, if any."""
+    cache = _get_approval_cache()
+    if not session_id or not workload_actor_id or cache is None:
+        return None
+    try:
+        offer = await cache.get_json(
+            _offer_suffix(session_id, workload_actor_id, tool_name, args)
+        )
+    except _STORE_ERRORS as exc:
+        _store_incident.record_failure(error_type=type(exc).__name__)
+        return None
+    _store_incident.record_success()
+    return offer if isinstance(offer, dict) else None
 
 
 async def revoke_session_approval(

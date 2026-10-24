@@ -445,6 +445,7 @@ _NAME_TO_MODULE = {
     'PodConnectorListResponse': 'pod_connector_list_response',
     'PodConnectorMode': 'pod_connector_mode',
     'PodConnectorResponse': 'pod_connector_response',
+    'PodConnectorSource': 'pod_connector_source',
     'PodConnectorStatus': 'pod_connector_status',
     'PodConnectorUpdateRequest': 'pod_connector_update_request',
     'PodConnectorVisibility': 'pod_connector_visibility',
@@ -1173,6 +1174,7 @@ if TYPE_CHECKING:
     from .pod_connector_list_response import PodConnectorListResponse
     from .pod_connector_mode import PodConnectorMode
     from .pod_connector_response import PodConnectorResponse
+    from .pod_connector_source import PodConnectorSource
     from .pod_connector_status import PodConnectorStatus
     from .pod_connector_update_request import PodConnectorUpdateRequest
     from .pod_connector_visibility import PodConnectorVisibility
@@ -1914,6 +1916,7 @@ __all__ = [
     'PodConnectorListResponse',
     'PodConnectorMode',
     'PodConnectorResponse',
+    'PodConnectorSource',
     'PodConnectorStatus',
     'PodConnectorUpdateRequest',
     'PodConnectorVisibility',

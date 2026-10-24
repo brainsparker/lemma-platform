@@ -29,7 +29,13 @@ binding up:
   installation is bound to (``bound_organization``), and drop an unbound one.
 
 There is no unbound path. Migration 0063 binds every existing installation
-whose organization can be derived and unbinds the accounts of the rest.
+whose organization can be derived and unbinds the accounts of the rest. A
+derived binding is *unproven* (``proven_at`` NULL): it keeps working for the
+organization holding it, but nobody showed GitHub's proof for it, so it may be
+an installation somebody squatted on before H4. A proven claim from another
+organization -- a GitHub admin of the installation who may install apps for
+their Lemma organization -- takes such a binding over, and the holder's own
+next proven claim stamps it, after which it is as final as any other.
 """
 
 from __future__ import annotations
@@ -37,7 +43,9 @@ from __future__ import annotations
 from collections.abc import Iterable
 from uuid import UUID, uuid7
 
-from sqlalchemy import delete, select
+from dataclasses import dataclass
+
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -66,6 +74,31 @@ def is_github(connector_id: str | None) -> bool:
     return (connector_id or "").strip().lower() == GITHUB
 
 
+@dataclass(frozen=True, slots=True)
+class _Binding:
+    id: UUID
+    organization_id: UUID
+    proven: bool
+
+
+async def _binding(session: AsyncSession, installation_id: str) -> _Binding | None:
+    row = (
+        await session.execute(
+            select(
+                ConnectorInstallation.id,
+                ConnectorInstallation.organization_id,
+                ConnectorInstallation.proven_at,
+            ).where(
+                ConnectorInstallation.connector_id == GITHUB,
+                ConnectorInstallation.external_id == str(installation_id),
+            )
+        )
+    ).first()
+    if row is None:
+        return None
+    return _Binding(row.id, row.organization_id, row.proven_at is not None)
+
+
 async def bound_organization(
     session: AsyncSession, installation_id: str
 ) -> UUID | None:
@@ -78,16 +111,35 @@ async def bound_organization(
     )
 
 
+async def held_proven_by(
+    session: AsyncSession, installation_id: str, organization_id: UUID
+) -> bool:
+    """Whether this organization holds the installation on a proven claim.
+
+    Anything else -- unbound, held unproven, held elsewhere -- is a claim that
+    GitHub's proof can still change, so a caller about to claim asks for it.
+    """
+    binding = await _binding(session, installation_id)
+    return (
+        binding is not None
+        and binding.organization_id == organization_id
+        and binding.proven
+    )
+
+
 async def claimable_by(
     session: AsyncSession, organization_id: UUID, installation_ids: Iterable[str]
 ) -> set[str]:
-    """Which of these an organization may bind: its own, and unbound ones."""
+    """Which of these an organization may bind: its own, unbound ones, and
+    ones another organization holds unproven (a proven claim takes those)."""
     wanted = {str(one) for one in installation_ids}
     if not wanted:
         return set()
     rows = await session.execute(
         select(
-            ConnectorInstallation.external_id, ConnectorInstallation.organization_id
+            ConnectorInstallation.external_id,
+            ConnectorInstallation.organization_id,
+            ConnectorInstallation.proven_at,
         ).where(
             ConnectorInstallation.connector_id == GITHUB,
             ConnectorInstallation.external_id.in_(wanted),
@@ -95,8 +147,8 @@ async def claimable_by(
     )
     elsewhere = {
         installation_id
-        for installation_id, owner in rows.all()
-        if owner != organization_id
+        for installation_id, owner, proven_at in rows.all()
+        if owner != organization_id and proven_at is not None
     }
     return wanted - elsewhere
 
@@ -132,17 +184,24 @@ async def claim_installation(
     """Hold an installation for this organization, or refuse.
 
     Already this organization's: nothing to do, and no proof needed -- anyone
-    in it may connect through an installation it holds. Another's: refused.
-    Nobody's: bound here only if ``administered`` -- GitHub said the claimant
-    controls it -- and the claimant may install apps for the organization in
-    Lemma (``org.installation.manage``), and then by an insert that does nothing on conflict followed
-    by a read of the winner, so two organizations racing for it cannot both
-    believe they hold it.
+    in it may connect through an installation it holds; a proven claim stamps
+    a binding the migration derived. Another's on a proven claim: refused.
+    Nobody's, or another's on a derived (unproven) binding: bound here only if
+    ``administered`` -- GitHub said the claimant controls it -- and the
+    claimant may install apps for the organization in Lemma
+    (``org.installation.manage``). A new binding is an insert that does
+    nothing on conflict followed by a read of the winner, and a takeover an
+    update conditional on the binding still being the unproven one read, so
+    two organizations racing for it cannot both believe they hold it.
     """
-    owner = await bound_organization(session, installation_id)
-    if owner == organization_id:
+    binding = await _binding(session, installation_id)
+    if binding is not None and binding.organization_id == organization_id:
+        if not binding.proven and await _proves(
+            session, administered, user_id, organization_id
+        ):
+            await _stamp(session, binding.id)
         return
-    if owner is not None:
+    if binding is not None and binding.proven:
         raise _refused_elsewhere(organization_id)
     if not administered:
         logger.warning(
@@ -156,6 +215,9 @@ async def claim_installation(
             organization_id=str(organization_id),
         )
         raise InstallationClaimNotPermittedError()
+    if binding is not None:
+        await _take_over(session, binding, organization_id, user_id)
+        return
     inserted = await session.execute(
         insert(ConnectorInstallation)
         .values(
@@ -164,6 +226,7 @@ async def claim_installation(
             external_id=str(installation_id),
             organization_id=organization_id,
             bound_by_user_id=user_id,
+            proven_at=func.now(),
         )
         .on_conflict_do_nothing(index_elements=["connector_id", "external_id"])
         .returning(ConnectorInstallation.id)
@@ -176,6 +239,64 @@ async def claim_installation(
         return
     if await bound_organization(session, installation_id) != organization_id:
         raise _refused_elsewhere(organization_id)
+
+
+async def _proves(
+    session: AsyncSession,
+    administered: bool,
+    user_id: UUID | None,
+    organization_id: UUID,
+) -> bool:
+    return administered and await _may_install(session, user_id, organization_id)
+
+
+async def _stamp(session: AsyncSession, binding_id: UUID) -> None:
+    """The holder proved a binding the migration derived: it is final now."""
+    await session.execute(
+        update(ConnectorInstallation)
+        .where(
+            ConnectorInstallation.id == binding_id,
+            ConnectorInstallation.proven_at.is_(None),
+        )
+        .values(proven_at=func.now())
+    )
+
+
+async def _take_over(
+    session: AsyncSession,
+    binding: _Binding,
+    organization_id: UUID,
+    user_id: UUID | None,
+) -> None:
+    """Move an unproven binding to the organization that proved it.
+
+    Conditional on the row still being the unproven binding read, so a holder
+    stamping it, or a third organization taking it, in between wins and this
+    claim is refused. The old holder's accounts keep naming the installation
+    but stop acting on it: ``routable_external_ref`` and webhook routing both
+    read the binding, which is no longer theirs.
+    """
+    moved = await session.execute(
+        update(ConnectorInstallation)
+        .where(
+            ConnectorInstallation.id == binding.id,
+            ConnectorInstallation.organization_id == binding.organization_id,
+            ConnectorInstallation.proven_at.is_(None),
+        )
+        .values(
+            organization_id=organization_id,
+            bound_by_user_id=user_id,
+            proven_at=func.now(),
+        )
+        .returning(ConnectorInstallation.id)
+    )
+    if moved.scalar() is None:
+        raise _refused_elsewhere(organization_id)
+    logger.warning(
+        "connectors.github_bindings.unproven_binding_taken_over.observed",
+        organization_id=str(organization_id),
+        previous_organization_id=str(binding.organization_id),
+    )
 
 
 async def claim_for_account(
@@ -272,6 +393,7 @@ __all__ = [
     "claim_for_account",
     "claim_installation",
     "claimable_by",
+    "held_proven_by",
     "is_github",
     "release_installation",
     "routable_external_ref",

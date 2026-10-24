@@ -348,6 +348,7 @@ export type { PodConnectorCreateRequest } from './models/PodConnectorCreateReque
 export type { PodConnectorListResponse } from './models/PodConnectorListResponse.js';
 export { PodConnectorMode } from './models/PodConnectorMode.js';
 export type { PodConnectorResponse } from './models/PodConnectorResponse.js';
+export { PodConnectorSource } from './models/PodConnectorSource.js';
 export { PodConnectorStatus } from './models/PodConnectorStatus.js';
 export type { PodConnectorUpdateRequest } from './models/PodConnectorUpdateRequest.js';
 export { PodConnectorVisibility } from './models/PodConnectorVisibility.js';

@@ -14,6 +14,9 @@ from app.modules.schedule.services.trigger_fire import (
     fire_trigger,
     jsonable,
 )
+from app.modules.connectors.contracts.pod_connectors import (
+    standing_resolutions_once,
+)
 from app.modules.schedule.services.schedule_connector_policy import standing_account
 from app.modules.schedule.services.webhook_event_mapper import WebhookEventMapper
 from app.modules.schedule.services.webhook_schedule_matcher import (
@@ -57,17 +60,19 @@ async def _still_bound(
     secret: only a schedule resolving to that very account may claim it.
     """
     kept: list[ScheduleEntity] = []
-    for schedule in schedules:
-        if schedule.pod_connector_slug is None:
-            if verified_by is None:
-                kept.append(schedule)
-            continue
-        account_id = await bound_account(uow, schedule)
-        if account_id is None:
-            continue
-        if verified_by is not None and str(account_id) != verified_by:
-            continue
-        kept.append(schedule)
+    # Several schedules on one connector and owner share one resolution.
+    with standing_resolutions_once():
+        for schedule in schedules:
+            if schedule.pod_connector_slug is None:
+                if verified_by is None:
+                    kept.append(schedule)
+                continue
+            account_id = await bound_account(uow, schedule)
+            if account_id is None:
+                continue
+            if verified_by is not None and str(account_id) != verified_by:
+                continue
+            kept.append(schedule)
     return kept
 
 

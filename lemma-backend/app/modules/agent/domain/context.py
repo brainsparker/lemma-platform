@@ -45,11 +45,12 @@ class ApprovedExecution(BaseModel):
     #: The ``request_approval`` call id, or ``None`` when an earlier session
     #: approval covered this exact call.
     approval_id: str | None = None
-    #: What the approval lends: the permissions the server recorded refusing
-    #: this exact call for (``tools/approval_denials``). Never the
-    #: ``permission_ids`` the model put in its ``request_approval`` -- those
-    #: are whatever it wrote. Empty when nothing was refused: the call then
-    #: runs with exactly the agent's own authority.
+    #: What the approval lends: what its card showed -- the refusals the
+    #: server had recorded when the card went up (``tools/approval_denials``).
+    #: Never the ``permission_ids`` the model put in its ``request_approval``
+    #: -- those are whatever it wrote -- nor a refusal recorded since. Empty
+    #: when nothing was pending: the call then runs with exactly the agent's
+    #: own authority.
     permission_ids: frozenset[str] = frozenset()
 
 

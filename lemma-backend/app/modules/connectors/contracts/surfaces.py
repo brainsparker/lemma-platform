@@ -38,6 +38,7 @@ from app.modules.connectors.domain.account import AccountEntity, GenericCredenti
 from app.modules.connectors.domain.auth_config import (
     AuthConfigEntity,
     AuthConfigSource,
+    app_made_by_lemma,
 )
 from app.modules.connectors.domain.connector import AuthProvider, AuthScheme
 from app.modules.connectors.domain.errors import ConnectorNotFoundError
@@ -78,6 +79,9 @@ class SurfaceAuthConfig:
     connector_id: str
     #: "SYSTEM_DEFAULT" (Lemma's own OAuth app) or "ORG_CUSTOM" (the org's own).
     config_source: str | None
+    #: An org's own app that Lemma made itself, whose secrets no person chose
+    #: (``APP_MADE_BY_LEMMA`` on the install's metadata).
+    made_by_lemma: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -311,6 +315,7 @@ async def auth_config(uow, auth_config_id: UUID) -> SurfaceAuthConfig | None:
         kind=_value_of(found.kind) or "",
         connector_id=found.connector_id,
         config_source=_value_of(found.config_source),
+        made_by_lemma=app_made_by_lemma(found.metadata),
     )
 
 

@@ -1092,8 +1092,23 @@ def _execute_operation(
         operation,
         body,
         account_id=_resolve_account(client, state, account),
-        pod_id=_pod_for_files(client, state, body),
+        # An installation run with no account names the selected pod, so the
+        # server declares it there as the caller's own connector on this first
+        # use; with no pod it runs on their own account outside any.
+        pod_id=(
+            _selected_pod_id(client, state)
+            if account is None
+            else _pod_for_files(client, state, body)
+        ),
     )
+
+
+def _selected_pod_id(client: Any, state: Any) -> str | None:
+    from ..context import selected_pod
+    from ..sdk import _ensure_pod_uuid
+
+    pod = selected_pod(state, required=False)
+    return _ensure_pod_uuid(client, state, pod) if pod else None
 
 
 def _warn_legacy_flags(
@@ -1110,6 +1125,34 @@ def _warn_legacy_flags(
     ]
     if uses:
         warn_deprecated(" and ".join(uses), _USE_POD_CONNECTOR)
+
+
+def _pod_selected(state: Any) -> bool:
+    from ..context import selected_pod
+
+    return selected_pod(state, required=False) is not None
+
+
+def _installation_named(client: Any, connector: str, *, confirmed: bool) -> str | None:
+    """The installation CONNECTOR names, for a call no pod connector can take.
+
+    Before pod connectors, CONNECTOR was an installation and the call ran on the
+    caller's own account. That still works, through the deprecated org-level
+    route: with no pod selected, or when the selected pod declares no connector
+    by that slug. ``confirmed`` asks for a real match in the installs list --
+    used when a pod's own "no such connector" error is the alternative, which
+    is more useful than a guess the server would 404 on.
+    """
+    if confirmed and _auth_config_items(client) is None:
+        return None
+    if not _looks_like_auth_config(client, connector):
+        return None
+    name = _resolve_auth_config(client, connector)
+    warn_deprecated(
+        f"running installation '{name}' rather than a pod connector",
+        _USE_POD_CONNECTOR,
+    )
+    return name
 
 
 @operations_app.command("execute")
@@ -1169,18 +1212,36 @@ def execute_operation(
     _warn_legacy_flags(payload, account=account, auth_config=auth_config)
 
     def run(client, s):  # type: ignore[no-untyped-def]
-        return _execute_operation(
-            client,
-            s,
-            connector=connector,
-            operation=operation,
-            payload=payload,
-            attach=attach,
-            account=account,
-            auth_config=(
-                _resolve_auth_config(client, auth_config) if auth_config else None
-            ),
-        )
+        from lemma_sdk.errors import LemmaAPIError
+
+        resolved = _resolve_auth_config(client, auth_config) if auth_config else None
+        pod_route = resolved is None and account is None and "account_id" not in payload
+        if pod_route and not _pod_selected(s):
+            resolved = _installation_named(client, connector, confirmed=False)
+            pod_route = resolved is None
+
+        def execute(install: str | None) -> Any:
+            return _execute_operation(
+                client,
+                s,
+                connector=connector,
+                operation=operation,
+                payload=payload,
+                attach=attach,
+                account=account,
+                auth_config=install,
+            )
+
+        try:
+            return execute(resolved)
+        except LemmaAPIError as exc:
+            if not pod_route or exc.code != "POD_CONNECTOR_NOT_FOUND":
+                raise
+            # Rejected before anything ran: the pod has no such slug.
+            fallback = _installation_named(client, connector, confirmed=True)
+            if fallback is None:
+                raise
+            return execute(fallback)
 
     result = run_with_client(ctx, run)
     if result is not None:
@@ -1448,6 +1509,10 @@ def _install_names(client: Any) -> list[str]:
     ]
 
 
+class _PodConnectorNotFound(typer.BadParameter):
+    """The selected pod declares no connector by the slug given."""
+
+
 def _resolve_operation(
     pod_connectors: Any, connector: str, selector: str
 ) -> tuple[dict[str, Any], bool]:
@@ -1470,7 +1535,7 @@ def _resolve_operation(
     except LemmaAPIError as exc:
         if exc.code == "POD_CONNECTOR_NOT_FOUND":
             declared = ", ".join(_pod_connector_slugs(pod_connectors)) or "none"
-            raise typer.BadParameter(
+            raise _PodConnectorNotFound(
                 f"This pod has no connector '{connector}'. It declares: {declared}.",
                 param_hint="CONNECTOR",
             ) from None
@@ -1570,12 +1635,29 @@ def run_connector_operation(
 
     def run(client, s):  # type: ignore[no-untyped-def]
         auth_config = _resolve_auth_config(client, connector) if legacy else None
-        source = (
-            _InstallationOperations(client, s) if legacy else _pod_connectors(client, s)
-        )
-        detail, inferred = _resolve_operation(
-            source, auth_config or connector, operation
-        )
+        if auth_config is None and not _pod_selected(s):
+            # No pod: CONNECTOR is an installation, run as the caller's own
+            # account, as it was before pod connectors (deprecated).
+            auth_config = _installation_named(client, connector, confirmed=False)
+        try:
+            detail, inferred = _resolve_operation(
+                (
+                    _InstallationOperations(client, s)
+                    if auth_config
+                    else _pod_connectors(client, s)
+                ),
+                auth_config or connector,
+                operation,
+            )
+        except _PodConnectorNotFound:
+            # Not one of the pod's slugs. An installation by that name still
+            # runs, the deprecated way; a slug always wins when both match.
+            auth_config = _installation_named(client, connector, confirmed=True)
+            if auth_config is None:
+                raise
+            detail, inferred = _resolve_operation(
+                _InstallationOperations(client, s), auth_config, operation
+            )
         name = str(detail.get("name") or operation)
         input_schema = detail.get("input_schema") or {}
         required = _required_input_fields(input_schema)

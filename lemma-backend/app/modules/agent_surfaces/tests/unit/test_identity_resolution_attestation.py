@@ -126,6 +126,35 @@ async def test_a_slack_profile_email_does_not_attest_a_cached_resolution():
     assert resolved.internal_user_id is None
 
 
+async def test_a_cached_slack_answer_no_proof_backs_is_forgotten_not_honoured():
+    """What an email match, or a forged bring-your-own delivery, wrote before
+    either was refused: the cache says who, never how, so a Slack answer
+    stands only on Slack's proof. None here, so it is forgotten and the
+    sender is nobody -- on the ordinary path, not only the binding one."""
+    cached = uuid4()
+    external = _FakeExternalRepo(cached_user_id=cached)
+
+    resolved = await _service(_FakeUsers(by_email=cached), external).resolve(
+        event=_event(platform=SurfacePlatform.SLACK, email="member@example.com")
+    )
+
+    assert resolved.internal_user_id is None
+    forgotten = [call["forget"] for call in external.calls if "forget" in call]
+    assert [one["resolved_user_id"] for one in forgotten] == [cached]
+
+
+async def test_a_cached_teams_answer_is_not_asked_for_a_slack_proof():
+    cached = uuid4()
+    external = _FakeExternalRepo(cached_user_id=cached)
+
+    resolved = await _service(_FakeUsers(), external).resolve(
+        event=_event(platform=SurfacePlatform.TEAMS)
+    )
+
+    assert resolved.internal_user_id == cached
+    assert not [call for call in external.calls if "forget" in call]
+
+
 # -- M16: a sender id signed with a secret a customer holds -------------------
 
 
@@ -174,22 +203,6 @@ async def test_a_binding_made_through_the_same_app_still_names_the_sender():
 # -- which org installs a person brought --------------------------------------
 
 
-def _slack_teammate(*, made_by_lemma: bool, pod_connector_slug: str = "slack-bot"):
-    from app.modules.agent_surfaces.domain.entities import AgentSurfaceEntity
-    from app.modules.agent_surfaces.domain.surface_config import (
-        SurfaceConfig,
-        SurfaceSlackConfig,
-    )
-
-    return AgentSurfaceEntity.create(
-        pod_id=uuid4(),
-        agent_id=uuid4(),
-        surface_type=SurfacePlatform.SLACK,
-        pod_connector_slug=pod_connector_slug,
-        config=SurfaceConfig(slack=SurfaceSlackConfig(app_made_by_lemma=made_by_lemma)),
-    )
-
-
 @pytest.mark.parametrize(
     ("platform", "behind", "config_source", "made_by_lemma", "customer_held"),
     [
@@ -224,19 +237,4 @@ def test_who_holds_the_secret_a_delivery_is_signed_with(
             app_made_by_lemma=made_by_lemma,
         )
         is customer_held
-    )
-
-
-async def test_editing_a_lemma_made_apps_settings_keeps_it_lemma_made():
-    """No input carries the mark, so an edit would otherwise erase it -- and
-    with it Slack's proof of every member on that app."""
-    from app.modules.agent_surfaces.domain.surface_config import SurfaceConfig
-
-    surface = _slack_teammate(made_by_lemma=True)
-    surface.update_config(SurfaceConfig())
-    assert surface.config.slack.app_made_by_lemma
-
-    surface.update_config(SurfaceConfig(), pod_connector_slug="another-slack-bot")
-    assert not surface.config.slack.app_made_by_lemma, (
-        "a different connector is a different app"
     )

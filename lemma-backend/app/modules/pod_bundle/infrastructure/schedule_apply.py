@@ -73,12 +73,10 @@ async def apply_schedule(
             pod_connector_for_account,
         )
 
-        payload = {
-            **payload,
-            "pod_connector": await pod_connector_for_account(
-                uow, ctx, pod_id=pod_id, account_id=account_id
-            ),
-        }
+        binding = await pod_connector_for_account(
+            uow, ctx, pod_id=pod_id, account_id=account_id
+        )
+        payload = {**payload, "pod_connector": binding.slug}
         warnings.append(
             f"Schedule '{step.name}' named an account (deprecated); it listens "
             f"through the pod connector '{payload['pod_connector']}' instead."

@@ -16,7 +16,7 @@ from app.modules.connectors.contracts.deprecations import (
     ACCOUNT_ADDRESSING_SUNSET,
     ACCOUNT_ID_REPLACEMENT,
 )
-from app.modules.connectors.contracts.pod_connectors import pod_connector_for_account
+from app.modules.connectors.contracts.pod_connectors import shared_connector_for
 from app.core.api.pagination import parse_uuid_page_token
 from app.modules.agent.contracts.agents import (
     agent_id_for_name,
@@ -223,10 +223,10 @@ async def _pod_connector_from_account(
     http_request: Request,
     response: Response,
 ) -> None:
-    """Translate a deprecated ``account_id`` into the pod connector it means."""
+    """Translate a deprecated ``account_id`` into the SHARED connector it means."""
     if request.account_id is None or request.pod_connector is not None:
         return
-    request.pod_connector = await pod_connector_for_account(
+    request.pod_connector = await shared_connector_for(
         uow, ctx, pod_id=pod_id, account_id=request.account_id
     )
     note_deprecated_use(

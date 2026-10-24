@@ -2994,11 +2994,13 @@ def test_an_account_named_schedule_is_skipped_when_no_account_is_supplied(
     out = _console_text(capsys)
     assert "'inbox-watch' named a connected account" in out
     assert "not imported" in out
-    assert "surface 'slack' names an account (deprecated)" in out
+    # Said as the server's importer says it: a surface left on its own bot.
+    assert "surface 'slack' named a connected account" in out
+    assert "platform's own bot" in out
 
 
 def test_an_account_named_schedule_sends_the_supplied_account_deprecated(
-    tmp_path: Path,
+    tmp_path: Path, capsys
 ):
     """Given an account, the schedule is created with the deprecated
     ``account_id``, which the server turns into the pod connector serving it."""
@@ -3016,6 +3018,9 @@ def test_an_account_named_schedule_sends_the_supplied_account_deprecated(
     assert created[0]["account_id"] == "11111111-2222-3333-4444-555555555555"
     assert "pod_connector" not in created[0]
     assert upserted[0]["account_id"] == "11111111-2222-3333-4444-555555555555"
+    out = _console_text(capsys)
+    assert "surface 'slack' names an account (deprecated)" in out
+    assert "pod connector serving that account" in out
 
 
 def test_variable_applier_rejects_unknown_var(tmp_path: Path):

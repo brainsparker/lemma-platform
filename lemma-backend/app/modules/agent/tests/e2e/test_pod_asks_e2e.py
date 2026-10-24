@@ -47,6 +47,8 @@ from app.modules.agent.services.pod_ask_delivery import PodAskDelivery
 from app.modules.agent.services.pod_ask_service import PodAskService
 from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
 from app.modules.agent.tests.e2e.test_agent_e2e import _create_test_pod
+from app.modules.agent.tools.approval_denials import show_card
+from app.modules.agent.tools.authority import workload_actor_id
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.test_support.e2e.scripted_model import script_text, script_tool_call
 from app.modules.test_support.e2e.waiters import eventually
@@ -354,12 +356,23 @@ async def _approve_asks(
     deps.workload_id = UUID(str(agent_id)) if agent_id else pod_id
     refused = await ask_teammate(SimpleNamespace(deps=deps), request)
     assert refused.needs_approval is True, refused
+    # The card going up, with what was refused written on it.
+    approval_id = f"call-{uuid4().hex[:12]}"
+    await show_card(
+        conversation_id=conversation_id,
+        approval_id=approval_id,
+        person_user_id=user_id,
+        workload_actor_id=workload_actor_id(deps),
+        tool_name=refused.approval["tool_name"],
+        args=refused.approval["args"],
+    )
     await record_session_approvals(
         conversation_id=conversation_id,
         agent_id=UUID(str(agent_id)) if agent_id else None,
         pod_id=pod_id,
         tool_args=refused.approval,
         user_id=user_id,
+        approval_id=approval_id,
     )
 
 

@@ -104,16 +104,12 @@ class SurfaceSlackConfig(BaseModel):
     could not say which of them it really was. One app is one agent now, so the
     question has one answer and neither field has anything left to decide.
 
-    ``app_made_by_lemma`` is not a setting: no input model carries it, so no
-    caller can set it. It records that Lemma made this app itself, through the
-    manifest flow, rather than the org bringing an app it made. Only the second
-    has a signing secret a person brought, which is what identity resolution
-    needs to know (``customer_held_secrets``) -- and nothing else records it
-    once the pending app row is gone.
+    Whether Lemma made the app is not here: it is a fact about the app, so it
+    is on the app's install (``SurfaceAuthConfig.made_by_lemma``), where a
+    surface re-pointed at another app cannot carry it along.
     """
 
     app_name: str | None = None
-    app_made_by_lemma: bool = False
 
 
 #: Meta's template names: lowercase letters, digits and underscores.

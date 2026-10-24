@@ -45,10 +45,7 @@ from app.modules.connectors.infrastructure.repositories.connector_trigger_reposi
 from app.modules.connectors.infrastructure.repositories.connect_request_repository import (
     ConnectRequestRepository,
 )
-from app.modules.connectors.infrastructure.repositories.pod_connector_repository import (
-    PodAccountRepository,
-    PodConnectorRepository,
-)
+from app.modules.connectors.services import pod_connector_composition
 from app.modules.connectors.services.pod_connector_resolution import (
     PodConnectorResolver,
 )
@@ -68,6 +65,9 @@ from app.modules.connectors.services.trigger_service import ConnectorTriggerServ
 if TYPE_CHECKING:
     from app.modules.connectors.api.schemas.connector_operation_schemas import (
         OperationExecutionResponse,
+    )
+    from app.modules.connectors.services.installation_reach import (
+        InstallationReach,
     )
     from app.modules.connectors.services.files.operation_files import (
         FoundFile,
@@ -174,23 +174,18 @@ def build_connector_operation_service(
 
 
 def build_pod_connector_resolver(uow: UoWDep) -> PodConnectorResolver:
-    return PodConnectorResolver(
-        pod_connectors=PodConnectorRepository(uow),
-        pod_accounts=PodAccountRepository(uow),
-        auth_configs=_auth_config_repository(uow),
-        accounts=_account_repository(uow),
-    )
+    return pod_connector_composition.build_pod_connector_resolver(uow)
 
 
 def get_pod_connector_service(uow: UoWDep) -> PodConnectorService:
-    return PodConnectorService(
-        uow=uow,
-        pod_connectors=PodConnectorRepository(uow),
-        pod_accounts=PodAccountRepository(uow),
-        auth_configs=_auth_config_repository(uow),
-        accounts=_account_repository(uow),
-        organization_access=SqlAlchemyOrganizationAccessAdapter(uow),
-    )
+    return pod_connector_composition.build_pod_connector_service(uow)
+
+
+def build_installation_reach(
+    uow: UoWDep,
+) -> "InstallationReach":
+    """What the agent's connector tools reach beyond the pod's connectors."""
+    return pod_connector_composition.build_installation_reach(uow)
 
 
 ConnectorServiceDep = Annotated[ConnectorService, Depends(get_connector_service)]

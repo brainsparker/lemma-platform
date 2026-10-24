@@ -58,6 +58,17 @@ class PodAccountSource(str, enum.Enum):
     MIGRATED = "MIGRATED"
 
 
+class PodConnectorSource(str, enum.Enum):
+    #: Declared on a person's first use of an installation they have an
+    #: account for (``ensure_pod_connector_for_installation``).
+    AUTO = "AUTO"
+    #: Declared by an editor.
+    MANUAL = "MANUAL"
+    IMPORT = "IMPORT"
+    #: Carried over from the grants that preceded pod connectors.
+    MIGRATED = "MIGRATED"
+
+
 class PodConnectorStatus(str, enum.Enum):
     READY = "READY"
     #: SHARED with no account its owner has shared: someone must share one.
@@ -80,6 +91,7 @@ class PodConnectorEntity(Entity):
     required: bool = False
     purpose: str | None = None
     visibility: PodConnectorVisibility = PodConnectorVisibility.POD
+    source: PodConnectorSource = PodConnectorSource.MANUAL
     created_by_user_id: UUID | None = None
 
 
@@ -123,6 +135,7 @@ __all__ = [
     "PodAccountVisibility",
     "PodConnectorEntity",
     "PodConnectorMode",
+    "PodConnectorSource",
     "PodConnectorStatus",
     "PodConnectorVisibility",
     "SLUG_PATTERN",

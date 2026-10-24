@@ -37,6 +37,10 @@ from lemma_pod_bundle.limits import (
 from app.modules.pod_bundle.domain.exportable import is_exportable_agent
 from app.core.log.log import get_logger
 from app.modules.pod_bundle.domain.errors import BundleInvalidError
+from app.modules.pod_bundle.infrastructure.connector_grants import (
+    ConnectorDirectory,
+    plan_connector_grants,
+)
 from app.modules.pod_bundle.infrastructure.grants import has_grants
 from app.modules.pod_bundle.domain.state import (
     ImportPlan,
@@ -207,8 +211,13 @@ def _names_with_grants(bundle_root: Path, resource_type: str) -> list[str]:
 
 
 class PlanBuilder:
-    def __init__(self, existing: ExistingResources):
+    def __init__(
+        self,
+        existing: ExistingResources,
+        connectors: ConnectorDirectory | None = None,
+    ):
         self._existing = existing
+        self._connectors = connectors
 
     async def build_plan(self, *, bundle_root: Path) -> ImportPlan:
         pod_manifest = self._read_pod_manifest(bundle_root)
@@ -355,6 +364,9 @@ class PlanBuilder:
                     action=StepAction.UPDATE,
                 )
             )
+
+        if self._connectors is not None:
+            warnings += await plan_connector_grants(bundle_root, self._connectors)
 
         # --- table data (after tables exist) ---------------------------------
         for name, _ in data_steps:

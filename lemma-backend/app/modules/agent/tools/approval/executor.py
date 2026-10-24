@@ -4,8 +4,9 @@ The agent restates the exact tool + args it wants run in ``request_approval``.
 On approval we dispatch that same tool, with exactly those args, through the
 shared ``AgentToolDispatcher`` under a context that carries an explicit
 ``ApprovedExecution``. Every tool runs as the agent, with exactly what the
-server refused it lent on top -- read from the server's record of the refusal
-(``approval_denials``), never from the ``permission_ids`` the model wrote:
+card showed its person lent on top -- the refusals the server had recorded when
+the card went up (``approval_denials.card_lends``), never the ``permission_ids``
+the model wrote, and never a refusal recorded after the card was shown:
 
 * in-process tools (pod data, connectors, subagents) build the agent's own
   delegated context with those permissions answered as approved
@@ -15,6 +16,10 @@ server refused it lent on top -- read from the server's record of the refusal
   session-approval store for the length of the command and withdrawn after it
   (``approval_denials.lent_to_the_sandbox``).
 
+A card can also offer a standing grant (``connectors/grant_offer``): a named
+agent refused a pod connector is given ``connector.use`` on it when its person
+approves, conferred as that person, before the call runs (``grant_outcome``).
+
 Same conversation/pod/cwd as the original run. The approver is the
 conversation's owner -- the person the agent works for. A decision from anyone
 else is refused before it is recorded (``ApprovalCoordinator``), so it never
@@ -22,7 +27,6 @@ reaches here.
 """
 
 from __future__ import annotations
-
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
@@ -32,11 +36,12 @@ from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
     ConversationRepository,
 )
+from app.core.domain.errors import DomainError
+from app.modules.agent.tools.approval.grant_outcome import confer_offered_grant
 from app.modules.agent.tools.approval_denials import (
     SANDBOX_COMMAND_TOOLS,
+    card_lends,
     lent_to_the_sandbox,
-    refused_permissions,
-    sandbox_refusals,
 )
 from app.modules.agent.tools.authority import workload_actor_id
 from app.modules.agent.tools.context import BaseAgentContext
@@ -89,17 +94,29 @@ class ApprovalExecutor:
             raise OutsiderRunRefused(_NOTHING_RUNS_AS_THE_MEMBER)
 
         actor = workload_actor_id(deps)
-        # A sandbox command's refusals were recorded per session by the API,
-        # since the shell's own call was never refused; everything else's per
-        # call, by the tool.
+        # What the card showed, and nothing else. With no card -- an earlier
+        # "allow for this conversation" covering this call -- nothing is lent:
+        # the session approvals already standing are all it may use.
+        card = await card_lends(
+            conversation_id=deps.conversation_id,
+            approval_id=approval_id,
+            person_user_id=deps.user_id,
+            workload_actor_id=actor,
+            tool_name=tool_name,
+        )
+        if card.grant is not None:
+            try:
+                await confer_offered_grant(
+                    self.uow_factory, deps=deps, offer=card.grant
+                )
+            except DomainError as refused:
+                # The approver could not give what the card offered: nothing
+                # runs, and the run hears why.
+                return format_tool_error(tool_name, refused)
+        # A sandbox command's refusals reach its shell through the store; an
+        # in-process tool's through its own context.
         sandbox_lent = (
-            await sandbox_refusals(
-                conversation_id=deps.conversation_id,
-                person_user_id=deps.user_id,
-                workload_actor_id=actor,
-            )
-            if tool_name in SANDBOX_COMMAND_TOOLS
-            else frozenset()
+            card.permission_ids if tool_name in SANDBOX_COMMAND_TOOLS else frozenset()
         )
         approved = ApprovedExecution(
             # The run's user is the conversation's owner: the person the agent
@@ -109,12 +126,7 @@ class ApprovalExecutor:
             conversation_id=deps.conversation_id,
             tool_name=tool_name,
             approval_id=approval_id,
-            permission_ids=sandbox_lent
-            | await refused_permissions(
-                conversation_id=deps.conversation_id,
-                workload_actor_id=actor,
-                tool_args={"tool_name": tool_name, "args": args or {}},
-            ),
+            permission_ids=card.permission_ids,
         )
         # The approval is explicit on the context; in-process tools read it via
         # `tool_authorization_context`. The workload identity stays: the call

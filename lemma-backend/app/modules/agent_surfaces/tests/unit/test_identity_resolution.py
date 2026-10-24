@@ -61,6 +61,12 @@ class _FakeExternalRepo:
             display_name=kwargs.get("display_name"),
         )
 
+    async def forget_resolution(self, **kwargs):
+        self.calls.append({"forget": kwargs})
+        if kwargs["resolved_user_id"] == self._cached:
+            self._cached = None
+        return 1
+
 
 class _FakeUsers:
     """The directory port: an email lookup and a phone lookup, nothing else.

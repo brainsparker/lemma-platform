@@ -40,6 +40,7 @@ from app.modules.agent.infrastructure.repositories import (
     ConversationRepository,
 )
 from app.modules.agent.services.conversation_service import ConversationService
+from app.modules.agent.tools.approval_denials import show_card
 from app.modules.test_support.e2e.builders import E2EScenario
 from app.modules.usage.contracts.execution import UsageService
 
@@ -166,6 +167,19 @@ async def pausing_call(
             metadata=metadata,
         ),
     )
+    inner = tool_args.get("tool_name")
+    if tool_name == "request_approval" and isinstance(inner, str):
+        # As the tool does when it pauses: what is pending now is written on
+        # the card, and is all an answer to it lends.
+        inner_args = tool_args.get("args")
+        await show_card(
+            conversation_id=seeded.conversation_id,
+            approval_id=tool_call_id,
+            person_user_id=seeded.user_id,
+            workload_actor_id=f"agent:{seeded.agent_id}",
+            tool_name=inner,
+            args=inner_args if isinstance(inner_args, dict) else {},
+        )
     return tool_call_id
 
 

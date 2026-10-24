@@ -22,6 +22,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from app.core.authorization.context import Context
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.connectors.api.dependencies import (
     build_connector_operation_service,
     get_connector_service,
@@ -65,6 +66,26 @@ async def resolve_account_connector(uow, account_id: UUID) -> tuple[str, str] | 
     return account.connector_id, auth_config.kind.value
 
 
+async def installation_for_bundle_name(
+    uow: SqlAlchemyUnitOfWork, *, organization_id: UUID, name: str
+) -> UUID | None:
+    """The organization's active installation a pod bundle means by ``name``.
+
+    A bundle's grant names a pod connector by slug, and a pod connector is
+    declared per pod: one exported before that, or from a pod whose connector
+    the importing pod has never declared, names it by what the exporting pod
+    called it -- the installation's name, or the catalog connector id the
+    slug was made from. The installation of that name wins; otherwise the
+    organization's default install of the catalog connector of that id.
+    ``None`` when the organization has neither.
+    """
+    auth_configs = get_connector_service(uow).auth_config_repository
+    install = await auth_configs.get_active_by_org_and_name(organization_id, name)
+    if install is None:
+        install = await auth_configs.get_active_by_org_and_app(organization_id, name)
+    return install.id if install is not None else None
+
+
 async def resolve_operation(
     uow,
     *,
@@ -100,6 +121,7 @@ __all__ = [
     "execute_resolved",
     "get_account",
     "get_account_kind",
+    "installation_for_bundle_name",
     "resolve_account_connector",
     "resolve_operation",
 ]

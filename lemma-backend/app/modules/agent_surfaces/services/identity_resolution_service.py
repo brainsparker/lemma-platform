@@ -30,6 +30,9 @@ from app.modules.agent_surfaces.domain.phone_numbers import (
 from app.modules.agent_surfaces.services.email_sender_trust import (
     email_sender_is_believable as _email_sender_is_believable,
 )
+from app.modules.agent_surfaces.services.slack_cached_identity import (
+    forgot_an_unproven_slack_answer,
+)
 
 logger = get_logger(__name__)
 
@@ -116,7 +119,8 @@ class SurfaceIdentityResolutionService:
     ----------------
     1. Cache hit — ExternalSurfaceUser row already has a resolved_user_id, and
        that user is still live. Skipped entirely when the caller asked for a
-       proven identity, unless the platform still attests the match.
+       proven identity, unless the platform still attests the match. On Slack
+       only while Slack's proof says the same (``slack_cached_identity``).
     2. Email match — profile email (fetched from platform API) matched against
        the users table. Never on Slack, whose profile email an admin can set:
        a Slack sender is matched only on a proof.
@@ -342,10 +346,14 @@ class SurfaceIdentityResolutionService:
             return None
         if not await self._live_user_lookup(external_user.resolved_user_id):
             return None
+        proven = (await self._slack_proof(event, known)).user_id
+        if await forgot_an_unproven_slack_answer(
+            self.external_user_repository, event, external_user, proven=proven
+        ):
+            return None
         if (
             require_proven_identity
-            and (await self._slack_proof(event, known)).user_id
-            != external_user.resolved_user_id
+            and proven != external_user.resolved_user_id
             and not await self._cache_is_attested(
                 event.platform, known, external_user.resolved_user_id
             )

@@ -377,6 +377,9 @@ async def _plan_from_staging(worker_ctx, store, staging, state: ImportState) -> 
                 user_id=state.user_id, pod_id=state.pod_id
             )
             async with context_scope(ctx):
+                from app.modules.pod_bundle.infrastructure.connector_grants import (
+                    ServiceConnectorDirectory,
+                )
                 from app.modules.pod_bundle.infrastructure.plan_builder import (
                     PlanBuilder,
                     ServiceExistingResources,
@@ -385,7 +388,12 @@ async def _plan_from_staging(worker_ctx, store, staging, state: ImportState) -> 
                 existing = ServiceExistingResources(
                     uow=uow, ctx=ctx, pod_id=state.pod_id, user_id=state.user_id
                 )
-                plan = await PlanBuilder(existing).build_plan(bundle_root=bundle_root)
+                connectors = ServiceConnectorDirectory(
+                    uow=uow, pod_id=state.pod_id, organization_id=ctx.organization_id
+                )
+                plan = await PlanBuilder(existing, connectors).build_plan(
+                    bundle_root=bundle_root
+                )
 
     await _raise_if_cancelled(store, import_id)
     state.plan = plan

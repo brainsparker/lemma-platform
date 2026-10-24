@@ -7,7 +7,9 @@ Slack app that a person made and pasted in, or an org's own WhatsApp Business
 app -- a person holds the secret too: whoever brought it, or anyone who can
 open the app's settings. They can sign any body they like, naming any sender,
 and it verifies. A teammate app Lemma made itself through the manifest flow is
-not counted (``SurfaceSlackConfig.app_made_by_lemma``).
+not counted: its install says so (``SurfaceAuthConfig.made_by_lemma``), and the
+surface reads it through its pod connector, so pointing that connector at a
+different app takes the answer with it.
 
 So on such a surface the sender id is the secret holder's word, and identity
 resolution has to read it that way (``SurfaceIdentityResolutionService``).
@@ -79,7 +81,7 @@ async def signed_with_a_customer_secret(
     """
     if surface is None or surface.pod_connector_slug is None:
         return False
-    config_source = None
+    config_source, made_by_lemma = None, False
     if surface.surface_type is SurfacePlatform.SLACK:
         try:
             connected = await resolve_standing_pod_connector(
@@ -93,10 +95,11 @@ async def signed_with_a_customer_secret(
             # signed reaches here through it; the answer only has to be safe.
             return True
         install = await auth_config(uow, connected.auth_config_id)
-        config_source = install.config_source if install is not None else None
+        if install is not None:
+            config_source, made_by_lemma = install.config_source, install.made_by_lemma
     return customer_holds_the_secret(
         surface.surface_type,
         runs_as_connector=True,
         config_source=config_source,
-        app_made_by_lemma=surface.config.slack.app_made_by_lemma,
+        app_made_by_lemma=made_by_lemma,
     )

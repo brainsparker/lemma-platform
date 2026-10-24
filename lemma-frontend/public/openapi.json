@@ -15550,6 +15550,10 @@
             "title": "Slug",
             "type": "string"
           },
+          "source": {
+            "$ref": "#/components/schemas/PodConnectorSource",
+            "default": "MANUAL"
+          },
           "status": {
             "$ref": "#/components/schemas/PodConnectorStatus"
           },
@@ -15576,6 +15580,16 @@
         ],
         "title": "PodConnectorResponse",
         "type": "object"
+      },
+      "PodConnectorSource": {
+        "enum": [
+          "AUTO",
+          "MANUAL",
+          "IMPORT",
+          "MIGRATED"
+        ],
+        "title": "PodConnectorSource",
+        "type": "string"
       },
       "PodConnectorStatus": {
         "enum": [

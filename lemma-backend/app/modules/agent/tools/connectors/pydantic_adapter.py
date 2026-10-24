@@ -37,6 +37,7 @@ from app.modules.agent.tools.connectors.connector_access import (
     connector_services,
     find_file_result,
 )
+from app.modules.agent.tools.connectors.grant_offer import connector_grant_offer
 from app.modules.agent.tools.connectors.models import (
     DescribeConnectorOperationRequest,
     RunConnectorOperationRequest,
@@ -122,11 +123,65 @@ def _connector_line(connector: Any) -> str:
     return f"- `{connector.slug}` ({connector.connector_id}, {mode}){purpose}"
 
 
-async def _usable(deps: BaseAgentContext) -> list[Any]:
+#: Said of an installation the person has an account on and the pod has not
+#: declared: naming it declares it, as a connector of each member's own account.
+_OFFERED = "your person's own account; added to this pod on first use"
+
+
+def _offer_line(offer: Any) -> str:
+    return f"- `{offer.name}` ({offer.connector_id}, {_OFFERED})"
+
+
+async def _usable(deps: BaseAgentContext) -> tuple[list[Any], list[Any]]:
+    """The pod's connectors this agent may use, and the person's own
+    installations the pod declares no connector of their own account for."""
     async with connector_services(deps) as services:
-        return await services.pod_connectors.usable_connectors(
+        usable = await services.pod_connectors.usable_connectors(
             services.ctx, deps.pod_id
         )
+        offered = await services.reach.offered(services.ctx, deps.pod_id)
+    return usable, offered
+
+
+async def _search_one(
+    services: Any,
+    deps: BaseAgentContext,
+    connector: str,
+    *,
+    query: str | None,
+    limit: int,
+) -> Any:
+    """Operations of a pod connector, or of one of the person's own
+    installations it names. Browsing an installation declares nothing;
+    running one does (``slug_for``)."""
+    offer = await services.reach.installation(services.ctx, deps.pod_id, connector)
+    if offer is not None:
+        return await services.operations.discover_operations(
+            offer.connector_id,
+            query=query,
+            limit=limit,
+            kind=offer.kind,
+            auth_config_id=offer.auth_config_id,
+        )
+    return await services.operations.pod_connector_operations(
+        services.ctx, pod_id=deps.pod_id, slug=connector, query=query, limit=limit
+    )
+
+
+async def _describe_one(
+    services: Any, deps: BaseAgentContext, connector: str, operation: str
+) -> Any:
+    offer = await services.reach.installation(services.ctx, deps.pod_id, connector)
+    if offer is not None:
+        return await services.operations.get_operation_details(
+            offer.connector_id,
+            operation,
+            kind=offer.kind,
+            auth_config_id=offer.auth_config_id,
+        )
+    return await services.operations.pod_connector_operation(
+        services.ctx, pod_id=deps.pod_id, slug=connector, operation_name=operation
+    )
 
 
 async def _describe_usable_connectors(
@@ -142,12 +197,14 @@ async def _describe_usable_connectors(
     if ctx.deps is None or ctx.deps.pod_id is None:
         return tool_def
     try:
-        usable = await _usable(ctx.deps)
+        usable, offered = await _usable(ctx.deps)
     except DomainError:
         return tool_def
+    lines = [_connector_line(connector) for connector in usable]
+    lines += [_offer_line(offer) for offer in offered]
     listing = (
-        "\n".join(_connector_line(connector) for connector in usable)
-        if usable
+        "\n".join(lines)
+        if lines
         else "- none: no connector in this pod is granted to you."
     )
     return replace(
@@ -168,7 +225,7 @@ async def list_connectors(ctx: RunContext[BaseAgentContext]) -> dict[str, Any]:
     if deps.pod_id is None:
         return _no_pod()
     try:
-        usable = await _usable(deps)
+        usable, offered = await _usable(deps)
     except DomainError as exc:
         # Raising here would end the agent's run over something it could
         # simply report.
@@ -182,6 +239,18 @@ async def list_connectors(ctx: RunContext[BaseAgentContext]) -> dict[str, Any]:
             "status": connector.status.value,
         }
         for connector in usable
+    ]
+    # The person's own apps the pod has not declared: they work the same way,
+    # and the first run declares them.
+    items += [
+        {
+            "connector": offer.name,
+            "connector_id": offer.connector_id,
+            "mode": "PER_MEMBER",
+            "purpose": _OFFERED,
+            "status": "READY",
+        }
+        for offer in offered
     ]
     return {"items": items, "count": len(items)}
 
@@ -212,15 +281,15 @@ async def search_connector_operations(
                         services.ctx, deps.pod_id
                     )
                 ]
+                + [
+                    offer.name
+                    for offer in await services.reach.offered(services.ctx, deps.pod_id)
+                ]
             )
             hits: list[dict[str, Any]] = []
             for slug in slugs:
-                found = await services.operations.pod_connector_operations(
-                    services.ctx,
-                    pod_id=deps.pod_id,
-                    slug=slug,
-                    query=request.query,
-                    limit=request.limit,
+                found = await _search_one(
+                    services, deps, slug, query=request.query, limit=request.limit
                 )
                 hits.extend(
                     {**to_json_value(item), "connector": slug} for item in found.items
@@ -247,16 +316,25 @@ async def describe_connector_operation(
 
     async with connector_services(deps) as services:
         try:
-            detail = await services.operations.pod_connector_operation(
-                services.ctx,
-                pod_id=deps.pod_id,
-                slug=request.connector,
-                operation_name=request.operation,
+            detail = await _describe_one(
+                services, deps, request.connector, request.operation
             )
         except DomainError as exc:
-            return _failure(
-                exc, connector=request.connector, operation=request.operation
-            )
+            refused = exc
+        else:
+            refused = None
+    if refused is not None:
+        # A named agent not yet given this connector asks to be (grant_offer).
+        offer = await connector_grant_offer(
+            deps,
+            refused,
+            connector=request.connector,
+            tool_name="describe_connector_operation",
+            args=request.model_dump(mode="json"),
+        )
+        return offer or _failure(
+            refused, connector=request.connector, operation=request.operation
+        )
     # Whole input and output schemas; some connectors publish very large ones.
     return bounded_tool_payload(to_json_value(detail), what="operation schema")
 
@@ -313,6 +391,15 @@ async def run_connector_operation(
         # the credential resolution. The scope closes -- releasing the pooled
         # connection -- before anything reaches the provider.
         async with connector_services(deps) as services:
+            # One of the person's own installations is declared as the pod's
+            # connector of their own account on its first run -- committed now,
+            # so a named agent refused it below can be offered the grant on it.
+            slug = await services.reach.slug_for(
+                services.ctx, deps.pod_id, request.connector
+            )
+            if slug != request.connector:
+                await services.uow.commit()
+                request = request.model_copy(update={"connector": slug})
             detail = await services.operations.pod_connector_operation(
                 services.ctx,
                 pod_id=deps.pod_id,
@@ -355,7 +442,17 @@ async def run_connector_operation(
                     output_path=request.output_path,
                 )
     except DomainError as exc:
+        # A named agent not yet given this connector asks to be (grant_offer).
+        offer = await connector_grant_offer(
+            deps,
+            exc,
+            connector=request.connector,
+            tool_name="run_connector_operation",
+            args=request.model_dump(mode="json"),
+        )
         # Connector failures are information for the model (wrong argument,
         # account needs connecting), not a reason to end the run.
-        return _failure(exc, connector=request.connector, operation=request.operation)
+        return offer or _failure(
+            exc, connector=request.connector, operation=request.operation
+        )
     return bounded_tool_payload(to_json_value(response), what="connector response")

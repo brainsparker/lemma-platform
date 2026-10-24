@@ -73,6 +73,9 @@ from app.modules.connectors.infrastructure.repositories.pod_connector_repository
 from app.modules.connectors.infrastructure.repositories.pod_resource_grants import (
     delete_grants_on,
 )
+from app.modules.connectors.services.pod_connector_notices import (
+    tell_editors_connectors_lost_their_account,
+)
 from app.modules.connectors.services.pod_connector_resolution import acting_person
 
 
@@ -147,7 +150,7 @@ class PodConnectorService:
         )
         if data.shared_pod_account_id is not None:
             connector = await self._with_shared_account(
-                connector, data.shared_pod_account_id
+                ctx, connector, data.shared_pod_account_id
             )
         created = await self.pod_connectors.create(connector)
         return await self._present_connector(created)
@@ -168,9 +171,9 @@ class PodConnectorService:
         if "shared_pod_account_id" in data.model_fields_set:
             if data.shared_pod_account_id is None:
                 connector = connector.model_copy(update={"shared_pod_account_id": None})
-            else:
+            elif data.shared_pod_account_id != connector.shared_pod_account_id:
                 connector = await self._with_shared_account(
-                    connector, data.shared_pod_account_id
+                    ctx, connector, data.shared_pod_account_id
                 )
         updated = await self.pod_connectors.update(connector)
         return await self._present_connector(updated)
@@ -186,14 +189,18 @@ class PodConnectorService:
         await self.pod_connectors.delete(connector.id)
 
     async def _with_shared_account(
-        self, connector: PodConnectorEntity, pod_account_id: UUID
+        self, ctx: Context, connector: PodConnectorEntity, pod_account_id: UUID
     ) -> PodConnectorEntity:
         """Point a SHARED connector at an account its owner already shared.
 
         An editor picks among shared accounts; they cannot make one shared.
         Pointing a connector at a PERSONAL pod account would be exactly the
         act of sharing somebody else's credential, so it is refused here
-        whatever authority the caller has.
+        whatever authority the caller has. And they pick only among accounts
+        shared *with them* (``connector_account.use``; the owner always
+        holds it): a RESTRICTED account is no editor's to put in front of
+        the whole pod, and every standing binding already on the connector
+        moves with it.
         """
         if connector.mode is not PodConnectorMode.SHARED:
             raise PodConnectorValidationError(
@@ -214,6 +221,10 @@ class PodConnectorService:
                 "can share it.",
                 reason="account_not_shared",
             )
+        await ctx.require(
+            Permissions.CONNECTOR_ACCOUNT_USE,
+            ResourceRef.connector_account(pod_account.pod_id, pod_account.id),
+        )
         return connector.model_copy(update={"shared_pod_account_id": pod_account.id})
 
     async def _connector(self, pod_id: UUID, slug: str) -> PodConnectorEntity:
@@ -390,10 +401,10 @@ class PodConnectorService:
         for connector in await self.pod_connectors.list_by_shared_accounts(
             [pod_account.id for pod_account in pod_accounts]
         ):
-            assert connector.shared_pod_account_id is not None
-            used_by.setdefault(connector.shared_pod_account_id, []).append(
-                connector.slug
-            )
+            if connector.shared_pod_account_id is not None:
+                used_by.setdefault(connector.shared_pod_account_id, []).append(
+                    connector.slug
+                )
         presented = []
         for pod_account in pod_accounts:
             account = await self.accounts.get(pod_account.account_id)
@@ -422,10 +433,10 @@ class PodConnectorService:
         for connector in await self.pod_connectors.list_by_shared_accounts(
             [pod_account.id for pod_account in pod_accounts]
         ):
-            assert connector.shared_pod_account_id is not None
-            used_by.setdefault(connector.shared_pod_account_id, []).append(
-                connector.slug
-            )
+            if connector.shared_pod_account_id is not None:
+                used_by.setdefault(connector.shared_pod_account_id, []).append(
+                    connector.slug
+                )
         return [
             AccountPodUsage(
                 pod_id=pod_account.pod_id,
@@ -470,11 +481,17 @@ class PodConnectorService:
 
     async def member_left(self, *, pod_id: UUID, user_id: UUID) -> None:
         """Their accounts leave the pod with them; SHARED connectors on one
-        go NEEDS_ACCOUNT."""
-        await self._remove(
-            await self.pod_accounts.ids_owned_in_pod(
-                pod_id=pod_id, owner_user_id=user_id
-            )
+        go NEEDS_ACCOUNT, and the pod's editors are told which."""
+        owned = await self.pod_accounts.ids_owned_in_pod(
+            pod_id=pod_id, owner_user_id=user_id
+        )
+        stopped = await self.pod_connectors.list_by_shared_accounts(owned)
+        await self._remove(owned)
+        await tell_editors_connectors_lost_their_account(
+            self.uow,
+            pod_id=pod_id,
+            departed_user_id=user_id,
+            slugs=[connector.slug for connector in stopped],
         )
 
     async def organization_member_left(

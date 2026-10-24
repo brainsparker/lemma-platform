@@ -5,8 +5,7 @@ from typing import Any
 from uuid import UUID
 
 
-from app.core.authorization.context import Context, ResourceRef
-from app.core.authorization.permissions import Permissions
+from app.core.authorization.context import Context
 from app.modules.connectors.api.schemas.connector_operation_schemas import (
     MAX_OPERATION_DETAILS_PER_REQUEST,
     OperationDetail,
@@ -451,9 +450,6 @@ class ConnectorOperationService:
 
     async def _usable_pod_connector(self, ctx: Context, pod_id: UUID, slug: str):
         connector = await self.pod_connector_resolver.connector(pod_id, slug)
-        await ctx.require(
-            Permissions.CONNECTOR_USE, ResourceRef.connector(pod_id, connector.id)
-        )
         if self.connector_service is None:
             raise ConnectorNotFoundError(slug)
         auth_config = await self.connector_service.auth_config_repository.get(
@@ -461,6 +457,7 @@ class ConnectorOperationService:
         )
         if auth_config is None:
             raise ConnectorNotFoundError(slug)
+        await self.pod_connector_resolver.require_use(ctx, connector, auth_config)
         return connector, auth_config
 
     async def resolve_pod_connector_execution(

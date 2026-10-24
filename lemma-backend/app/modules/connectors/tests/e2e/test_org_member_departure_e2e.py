@@ -77,7 +77,10 @@ async def test_leaving_the_org_takes_a_members_accounts_out_of_every_pod(
     world = await _world(scenario, db_session)
     alice_account = await _connect(db_session, world, world.alice, "alice-key")
 
-    # Shared with Bob alone, by grant: the grant must go with the pod account.
+    # Shared with Bob, and the admin who points a connector at it (repointing
+    # needs the account shared with whoever does it), by grant: the grants
+    # must go with the pod account.
+    admin_seat = await scenario.current_pod_member_id()
     shared = await world.call(
         "POST",
         f"/pods/{world.pod_id}/connector-accounts",
@@ -89,7 +92,8 @@ async def test_leaving_the_org_takes_a_members_accounts_out_of_every_pod(
                 {
                     "grantee_type": "POD_MEMBER",
                     "grantee_id": world.seats["bob"]["pod_member_id"],
-                }
+                },
+                {"grantee_type": "POD_MEMBER", "grantee_id": admin_seat},
             ],
         },
     )

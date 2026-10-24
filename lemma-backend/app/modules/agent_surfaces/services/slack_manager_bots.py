@@ -35,10 +35,7 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfacePlatform,
 )
 from app.modules.agent_surfaces.domain.errors import SlackAppCreationForbiddenError
-from app.modules.agent_surfaces.domain.surface_config import (
-    SurfaceConfig,
-    SurfaceSlackConfig,
-)
+from app.modules.agent_surfaces.domain.surface_config import SurfaceConfig
 from app.modules.agent_surfaces.domain.slack_manager import (
     SLACK_TEAMMATE_APP_PURPOSE,
     AddForm,
@@ -82,6 +79,7 @@ from app.modules.connectors.contracts.facts import ConnectorAccountConnected  # 
 from app.modules.connectors.contracts.own_apps import (
     create_own_app_install,
     delete_unauthorised_install,
+    mark_install_made_by_lemma,
     may_manage_installs,
     start_authorization,
 )
@@ -414,11 +412,12 @@ async def bind_allowed_app(
     row_id, organization_id = row.id, row.organization_id
     pod_id, agent_id = row.pod_id, row.agent_id
     team_id, slack_user_id = row.team_id, row.slack_user_id
-    # The pending row knows the app's id only when Lemma made the app; one made
-    # by hand arrives as three pasted values and no id. Written down now,
-    # because the row is deleted below and nothing else remembers it.
-    made_by_lemma = row.app_id is not None
     try:
+        if row.app_id is not None:
+            # Only Lemma's own create knows the app's id; one made by hand
+            # arrives as three pasted values. Said on the install, before the
+            # row that knew goes, for every surface on the app to read.
+            await mark_install_made_by_lemma(uow, fact.auth_config_id)
         name = await _free_surface_name(uow, pod_id, team_id)
         # The person whose Allow made the account set this teammate up for
         # this pod, which is the consent sharing it needs: it goes into the
@@ -436,9 +435,7 @@ async def bind_allowed_app(
             agent_id=agent_id,
             platform=SurfacePlatform.SLACK,
             name=name,
-            config=SurfaceConfig(
-                slack=SurfaceSlackConfig(app_made_by_lemma=made_by_lemma)
-            ),
+            config=SurfaceConfig(),
             credential_mode=SurfaceCredentialMode.CUSTOM,
             pod_connector_slug=pod_connector_slug,
         )

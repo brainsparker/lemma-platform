@@ -3,6 +3,7 @@
 /* tslint:disable */
 /* eslint-disable */
 import type { PodConnectorMode } from './PodConnectorMode.js';
+import type { PodConnectorSource } from './PodConnectorSource.js';
 import type { PodConnectorStatus } from './PodConnectorStatus.js';
 import type { PodConnectorVisibility } from './PodConnectorVisibility.js';
 import type { SharedAccountSummary } from './SharedAccountSummary.js';
@@ -20,6 +21,7 @@ export type PodConnectorResponse = {
     shared_account?: (SharedAccountSummary | null);
     shared_pod_account_id?: (string | null);
     slug: string;
+    source?: PodConnectorSource;
     status: PodConnectorStatus;
     updated_at: string;
     visibility: PodConnectorVisibility;

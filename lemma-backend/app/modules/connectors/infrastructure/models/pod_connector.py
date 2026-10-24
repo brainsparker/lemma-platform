@@ -31,6 +31,7 @@ from app.modules.connectors.domain.pod_connector import (
     PodAccountSource,
     PodAccountVisibility,
     PodConnectorEntity,
+    PodConnectorSource,
     PodConnectorVisibility,
 )
 
@@ -113,6 +114,12 @@ class PodConnector(UUIDAuditBase):
         nullable=False,
         default=PodConnectorVisibility.POD.value,
         server_default=PodConnectorVisibility.POD.value,
+    )
+    source: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default=PodConnectorSource.MANUAL.value,
+        server_default=PodConnectorSource.MANUAL.value,
     )
     created_by_user_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True

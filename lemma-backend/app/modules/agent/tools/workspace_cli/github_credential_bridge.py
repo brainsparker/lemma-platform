@@ -51,6 +51,7 @@ from app.modules.connectors.contracts.pod_connectors import (
     resolve_pod_connector,
 )
 from app.modules.workspace.contracts.session_config import (
+    SESSION_CONFIG_ROOT,
     session_config_dir,
     session_gh_config_dir,
     session_git_credentials_path,
@@ -129,6 +130,8 @@ _MARKER_KEY_PREFIX = "workspace:github-credentials:v1"
 # disconnected upstream, a token revoked -- neither of which changes an expiry),
 # and the actual expiry, when the provider states one, is what bounds it.
 _PROVISIONED_TTL_SECONDS = 45 * 60
+#: Twice the longest a live session goes without its credential being rewritten.
+_STALE_SESSION_MINUTES = 2 * _PROVISIONED_TTL_SECONDS // 60
 # Re-provision this far before the token dies, so a command that starts just
 # inside the window does not run past it.
 _EXPIRY_SKEW_SECONDS = 5 * 60
@@ -282,6 +285,17 @@ async def ensure_github_credentials(
                 f"chmod 700 {shlex.quote(session_gh_config_dir(session_id))}",
                 f"chmod 600 {shlex.quote(credentials_path)}",
                 f"chmod 600 {shlex.quote(gh_hosts_path)}",
+                # Other sessions' directories nobody has refreshed in
+                # `_STALE_SESSION_MINUTES` are of sessions that ended: a live
+                # one is rewritten well within that. Nothing else ever removes
+                # them, and each held a GitHub credential readable to any
+                # process in the sandbox. This one's was just written.
+                # In a subshell, so a failed sweep never hides a failed chmod.
+                (
+                    f"(find {shlex.quote(SESSION_CONFIG_ROOT)} -mindepth 1 "
+                    f"-maxdepth 1 -type d -mmin +{_STALE_SESSION_MINUTES} "
+                    "-exec rm -rf {} + 2>/dev/null || true)"
+                ),
             ]
         ),
         timeout=15,

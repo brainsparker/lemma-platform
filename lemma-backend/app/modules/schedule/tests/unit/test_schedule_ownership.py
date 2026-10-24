@@ -66,7 +66,7 @@ class _Connectors:
         self.asked: list[tuple[UUID, str]] = []
         self.refuse = refuse
 
-    async def __call__(self, _uow, ctx, *, pod_id, slug):
+    async def __call__(self, _uow, ctx, *, pod_id, slug, pod_account_id=None):
         self.asked.append((ctx.user_id, slug))
         if self.refuse is not None:
             raise self.refuse

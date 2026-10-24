@@ -7,7 +7,6 @@ from fastapi import APIRouter, Depends, Query, Request, status
 
 from app.core.api.dependencies import UoWDep, get_uow_factory
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.core.authorization.conferral import assert_can_confer_grants
 from app.core.authorization.grants import (
     normalize_pod_resource_grants,
     replace_grantee_resource_grants,
@@ -302,19 +301,15 @@ async def replace_function_permissions(
         pod_id=pod_id,
         grants=data.grants,
     )
-    await assert_can_confer_grants(
-        ctx,
-        grants,
-        pod_id=pod_id,
-        action="grant a function permissions you could not use",
-    )
     await replace_grantee_resource_grants(
         uow.session,
+        ctx=ctx,
         pod_id=pod_id,
         grantee_type="FUNCTION",
         grantee_id=function.id,
         grants=grants,
         created_by_user_id=user.id,
+        action="grant a function permissions you could not use",
     )
     # After the commit, not inside it. Inline, this held a pooled connection
     # across a Redis round trip, and ran in the wrong order besides: a

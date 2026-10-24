@@ -21,8 +21,8 @@ from app.modules.connectors.api.schemas import (
 from app.modules.connectors.contracts.github import install_state_for
 from app.modules.connectors.domain.errors import ConnectorValidationError
 from app.modules.connectors.services.auth.github_bindings import (
-    bound_organization,
     claim_for_account,
+    held_proven_by,
 )
 from app.modules.connectors.services.auth.github_installation import (
     administers,
@@ -269,9 +269,12 @@ async def bind_account_installation(
     if callable(reveal):
         token = reveal()
     session = connector_service.uow.session
-    # Nobody holds it yet: binding it needs proof this person controls it on
-    # GitHub's side, not only that they can see it (audit H4).
-    needs_proof = await bound_organization(session, data.installation_id) is None
+    # Not this organization's on a proven claim: binding it -- or taking over,
+    # or stamping, a binding migration 0063 derived -- needs proof this person
+    # controls it on GitHub's side, not only that they can see it (audit H4).
+    needs_proof = not await held_proven_by(
+        session, data.installation_id, organization_id
+    )
     proved = administered = False
     if token:
         # The write below wants the session back, so only the round trips to

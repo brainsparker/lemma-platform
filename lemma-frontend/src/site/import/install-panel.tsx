@@ -22,11 +22,24 @@ import { personalNameFor } from "@/org/arrival";
 import { forgetInstall, markInstallArrival, rememberInstall } from "./pending-install";
 import type { Pod } from "@/data/types";
 import { captureEvent } from "@/site/analytics/client";
-import type { ImportStatusResponse, VariableSpec } from "../import-types";
+import type {
+    ConnectorPlan,
+    ImportStatusResponse,
+    VariableSpec,
+} from "../import-types";
 import {
+    CREATE_INSTALLATION,
     WORKING,
     actionLabel,
+    askedConnectors,
     askedVariables,
+    blockedBy,
+    connectorChoices,
+    connectorLine,
+    declares,
+    defaultPick,
+    shareableAccounts,
+    type ConnectorPick,
     contentsLine,
     groupSteps,
     humanize,
@@ -222,6 +235,7 @@ function Journey({ repo, owner, title }: Props) {
     const [created, setCreated] = useState<Pod | null>(null);
     const [job, setJob] = useState<ImportStatusResponse | null>(null);
     const [values, setValues] = useState<Record<string, string>>({});
+    const [picks, setPicks] = useState<Record<string, ConnectorPick>>({});
     const [confirm, setConfirm] = useState(false);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState("");
@@ -347,6 +361,10 @@ function Journey({ repo, owner, title }: Props) {
                                 ]),
                             ),
                             confirm_destructive: confirm,
+                            connectors: connectorChoices(
+                                job.plan.connectors ?? [],
+                                picks,
+                            ),
                         },
                     },
                 ),
@@ -610,6 +628,13 @@ function Journey({ repo, owner, title }: Props) {
     const cancelled =
         job.status === "CANCELLED" || job.status === "PARTIALLY_CANCELLED";
     const missing = asked.some((v) => v.required && !valueOf(v));
+    /* The bundle's connectors. Asked about only where there is a choice to
+       make or a reason it cannot install; sharing an account is never
+       assumed, so a shared one installs needing an account unless picked. */
+    const connectors = plan?.connectors ?? [];
+    const askedConns = askedConnectors(connectors);
+    const pickOf = (c: ConnectorPlan) => picks[c.slug] ?? defaultPick(c);
+    const blocked = connectors.some((c) => blockedBy(c, pickOf(c)) !== null);
     /* The app this install brought, if it brought one. It decides where the
        person goes when they leave this panel — see `landingPath`. */
     const app = installedApp(plan?.steps ?? []);
@@ -805,6 +830,21 @@ function Journey({ repo, owner, title }: Props) {
                             ))}
                         </fieldset>
                     )}
+                    {askedConns.length > 0 && (
+                        <fieldset className={s.needs}>
+                            <legend>Connections</legend>
+                            {askedConns.map((c) => (
+                                <ConnectorField
+                                    key={c.slug}
+                                    connector={c}
+                                    pick={pickOf(c)}
+                                    onChange={(pick) =>
+                                        setPicks({ ...picks, [c.slug]: pick })
+                                    }
+                                />
+                            ))}
+                        </fieldset>
+                    )}
                     {plan.has_destructive_steps && (
                         <label className={s.check}>
                             <input
@@ -824,6 +864,7 @@ function Journey({ repo, owner, title }: Props) {
                             disabled={
                                 busy ||
                                 missing ||
+                                blocked ||
                                 (plan.has_destructive_steps && !confirm)
                             }
                         >
@@ -952,5 +993,80 @@ function Variable({
                 onChange={(e) => onChange(e.target.value)}
             />
         </label>
+    );
+}
+
+/** One bundled connector: which of the organization's installations it maps
+ *  to, and for a shared one whether to share one of your own accounts. */
+function ConnectorField({
+    connector: c,
+    pick,
+    onChange,
+}: {
+    connector: ConnectorPlan;
+    pick: ConnectorPick;
+    onChange: (pick: ConnectorPick) => void;
+}) {
+    const reason = blockedBy(c, pick);
+    const pickable =
+        declares(c) &&
+        (c.installations.length !== 1 || c.can_create_installation);
+    const accounts = shareableAccounts(c, pick);
+    const sharing =
+        declares(c) &&
+        c.mode === "SHARED" &&
+        pick.installation !== "" &&
+        pick.installation !== CREATE_INSTALLATION;
+    return (
+        <div className={s.field}>
+            <span>
+                {c.slug}
+                <em> {c.mode === "SHARED" ? "shared" : "per member"}</em>
+            </span>
+            <small>{connectorLine(c)}</small>
+            {pickable && (
+                <select
+                    aria-label={"Installation for " + c.slug}
+                    value={pick.installation}
+                    onChange={(e) =>
+                        onChange({ installation: e.target.value, share: "" })
+                    }
+                >
+                    {c.installations.length === 0 && (
+                        <option value="">Choose…</option>
+                    )}
+                    {c.installations.map((o) => (
+                        <option key={o.auth_config_id} value={o.auth_config_id}>
+                            {o.name}
+                            {o.is_default ? " (default)" : ""}
+                        </option>
+                    ))}
+                    {c.can_create_installation && (
+                        <option value={CREATE_INSTALLATION}>
+                            Install Lemma&apos;s {humanize(c.connector)} app
+                        </option>
+                    )}
+                </select>
+            )}
+            {sharing && (
+                <select
+                    aria-label={"Account for " + c.slug}
+                    value={pick.share}
+                    onChange={(e) =>
+                        onChange({ ...pick, share: e.target.value })
+                    }
+                >
+                    <option value="">
+                        Don&apos;t share an account now — it waits for one
+                    </option>
+                    {accounts.map((a) => (
+                        <option key={a.account_id} value={a.account_id}>
+                            Share {a.label ?? "my account"}
+                        </option>
+                    ))}
+                </select>
+            )}
+            {reason && <small className={s.stepError}>{reason}</small>}
+        </div>
     );
 }

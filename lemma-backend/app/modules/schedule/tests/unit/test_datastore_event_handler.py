@@ -65,15 +65,24 @@ def test_a_delete_is_matched_against_the_row_it_removed():
     assert change.previous is None
 
 
-def test_the_write_intent_reaches_the_trigger_and_the_row_owner_does_not():
-    """Who wrote the row is not who the run is for: a schedule runs as its
-    owner, so the row owner is not carried as anything a fire could run as."""
+def test_the_write_intent_and_the_row_owner_reach_the_trigger():
+    """The row's owner is who a row-owner schedule runs as."""
+    owner = UUID(int=5)
     change = trigger_change(
-        _change(ChangeOp.INSERT, owner_user_id=UUID(int=5), intent="bulk"),
-        table_name="t",
+        _change(ChangeOp.INSERT, owner_user_id=owner, intent="bulk"), table_name="t"
     )
     assert change.intent is WriteIntent.BULK
-    assert not hasattr(change, "owner_user_id")
+    assert change.owner_user_id == owner
+
+
+def test_an_outside_row_has_no_owner_to_run_as():
+    """An outside row is stamped with the member who opened the table, who did
+    not write it: it runs as the schedule's owner, never as them."""
+    change = trigger_change(
+        _change(ChangeOp.INSERT, owner_user_id=UUID(int=6), outside_actor="visitor:s1"),
+        table_name="t",
+    )
+    assert change.owner_user_id is None
 
 
 def test_an_outside_row_is_marked_untrusted_in_so_many_words():

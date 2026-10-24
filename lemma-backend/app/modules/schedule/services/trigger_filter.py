@@ -52,6 +52,7 @@ from app.modules.schedule.services.trigger_fire import (
     TriggerEvent,
     fire_trigger,
     jsonable,
+    run_person,
     start_after_filter,
     target_kind_of,
 )
@@ -174,8 +175,7 @@ async def _claim(
             return None
         reservation = await FireLedger(uow.session).reserve(
             schedule_id=schedule.id,
-            # The schedule's owner as of now: whoever wrote the row is input.
-            user_id=schedule.user_id,
+            user_id=run_person(schedule, payload.row_owner_user_id),
             source_event_id=payload.source_event_id,
             target_kind=target_kind_of(schedule),
             payload=payload.payload,
@@ -245,6 +245,7 @@ async def record_filter_dead_letter(
         schedule,
         source_event_id=payload.source_event_id,
         error_type=error_type,
+        user_id=run_person(schedule, payload.row_owner_user_id),
         payload=payload.payload,
         metadata=payload.metadata,
     )
@@ -271,5 +272,6 @@ def _event(payload: FilterEvent) -> TriggerEvent:
         source_event_id=payload.source_event_id,
         payload=payload.payload,
         metadata=payload.metadata,
+        row_owner_user_id=payload.row_owner_user_id,
         source_occurred_at=payload.source_occurred_at,
     )

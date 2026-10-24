@@ -1275,7 +1275,7 @@ async def test_datastore_schedule_starts_workflow_from_record_api(
 
 
 @pytest.mark.asyncio
-async def test_rls_datastore_schedule_run_and_workflow_belong_to_schedule_owner(
+async def test_rls_datastore_schedule_run_and_workflow_belong_to_row_owner(
     authenticated_client: AsyncClient,
     async_client: AsyncClient,
     fixed_test_user,
@@ -1283,8 +1283,8 @@ async def test_rls_datastore_schedule_run_and_workflow_belong_to_schedule_owner(
     db_manager,
     worker,
 ):
-    """A member's row write fires the schedule as its owner, not as them: the
-    row is the run's input, never its identity (H16)."""
+    """A member's row write runs as them: the run sees what they see, and is
+    theirs to find in the run history."""
     _ = worker
     pod_id = await _create_pod(authenticated_client, fixed_test_org["id"])
     await _create_datastore_table(authenticated_client, pod_id)
@@ -1332,7 +1332,7 @@ async def test_rls_datastore_schedule_run_and_workflow_belong_to_schedule_owner(
         workflow["name"],
         source="row-owner-record",
     )
-    assert workflow_run["user_id"] == fixed_test_user["id"]
+    assert workflow_run["user_id"] == row_owner["id"]
 
     schedule_runs = await authenticated_client.get(
         f"/pods/{pod_id}/schedules/{schedule['id']}/runs"
@@ -1340,17 +1340,15 @@ async def test_rls_datastore_schedule_run_and_workflow_belong_to_schedule_owner(
     assert schedule_runs.status_code == 200, schedule_runs.text
     run_items = schedule_runs.json()["items"]
     assert len(run_items) == 1
-    assert run_items[0]["user_id"] == fixed_test_user["id"]
+    assert run_items[0]["user_id"] == row_owner["id"]
     assert run_items[0]["target_run_id"] == workflow_run["id"]
 
-    # The row's writer cannot see every run of an RLS table's schedule, and
-    # this one is not theirs: it ran as the schedule's owner.
     owner_runs = await async_client.get(
         f"/pods/{pod_id}/schedules/{schedule['id']}/runs",
         headers=auth_headers(row_owner),
     )
     assert owner_runs.status_code == 200, owner_runs.text
-    assert owner_runs.json()["items"] == []
+    assert [item["user_id"] for item in owner_runs.json()["items"]] == [row_owner["id"]]
 
     peer = await signup_user(async_client, "schedule-run-history-peer")
     peer_org_member = await invite_org_member(
@@ -1481,8 +1479,8 @@ async def test_five_row_owner_workflow_failures_deactivate_schedule_owner_schedu
         assert persisted is not None
         assert persisted.is_active is False
         assert persisted.consecutive_failures == 5
-        # Deactivated by its own failures: the schedule's owner, whose runs
-        # these were, is who the paused notice goes to (below).
+        # Deactivated by its own owner's failures: the schedule's owner, not
+        # the row owners, is who the paused notice goes to (below).
         assert str(persisted.user_id) == schedule["user_id"]
 
     async def _matching_emails() -> list[dict]:
@@ -1525,8 +1523,7 @@ async def test_five_row_owner_workflow_failures_deactivate_schedule_owner_schedu
     workflow_runs = await _workflow_runs(authenticated_client, pod_id, workflow["name"])
     assert len(workflow_runs) == 5
     assert {run["status"] for run in workflow_runs} == {"FAILED"}
-    # Every run was the schedule owner's, whoever wrote the rows.
-    assert {run["user_id"] for run in workflow_runs} == {fixed_test_user["id"]}
+    assert {run["user_id"] for run in workflow_runs} == {row_owner["id"]}
 
     sixth = await async_client.post(
         f"/pods/{pod_id}/datastore/tables/schedule_records/records",

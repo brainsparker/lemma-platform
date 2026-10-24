@@ -47,6 +47,12 @@ logger = get_logger(__name__)
 TARGET_MISSING = "ScheduleTargetMissing"
 #: Why a run whose person has left the pod started nothing.
 OWNER_NOT_A_MEMBER = "owner_not_a_member"
+#: Why a run for someone other than the schedule's owner -- the owner of the
+#: row that fired it -- started nothing: they are not in the pod, or may not
+#: run the target. Never handed to the owner instead: that would run the
+#: row's text with the owner's access.
+RUN_PERSON_NOT_A_MEMBER = "run_person_not_a_member"
+RUN_PERSON_CANNOT_RUN = "run_person_cannot_run_target"
 
 
 async def start_reserved_run(uow: SqlAlchemyUnitOfWork, run_id: UUID) -> None:
@@ -65,13 +71,14 @@ async def start_reserved_run(uow: SqlAlchemyUnitOfWork, run_id: UUID) -> None:
         await ledger.settle_skipped(run.id, metadata={"skipped_because": "inactive"})
         return
     owner_ctx = await _run_owner_context(uow, run, schedule)
-    if owner_ctx is not None and not owner_ctx.belongs_to_its_pod():
+    skipped_because = await _why_not_startable(owner_ctx, run, schedule)
+    if skipped_because is not None:
         # The authorizer would refuse the target's execute anyway, but as a
         # dead letter saying only "DomainError", counted against the breaker
-        # and mailed to somebody no longer in the pod. A schedule runs as its
-        # owner; with no owner in the pod, it runs as nobody.
+        # and mailed to somebody no longer in the pod. A run with nobody in
+        # the pod to run it as runs as nobody.
         await ledger.settle_skipped(
-            run.id, metadata={"skipped_because": OWNER_NOT_A_MEMBER}
+            run.id, metadata={"skipped_because": skipped_because}
         )
         return
     if schedule.workflow_id is not None:
@@ -88,13 +95,41 @@ async def start_reserved_run(uow: SqlAlchemyUnitOfWork, run_id: UUID) -> None:
 async def _run_owner_context(
     uow: SqlAlchemyUnitOfWork, run: ScheduleRun, schedule: ScheduleEntity
 ) -> Context | None:
-    """Who this run is for, as of now -- the schedule's owner, or whoever
-    redrove it -- or ``None`` for a run with nobody to ask about."""
+    """Who this run is for, as of now -- the schedule's owner, the owner of
+    the row that fired it, or whoever redrove it -- or ``None`` for a run with
+    nobody to ask about."""
     if run.user_id is None or schedule.pod_id is None:
         return None
     return await create_authorization_data_service(uow).build_user_context(
         user_id=run.user_id, pod_id=schedule.pod_id
     )
+
+
+async def _why_not_startable(
+    ctx: Context | None, run: ScheduleRun, schedule: ScheduleEntity
+) -> str | None:
+    """Why this run starts nothing, or ``None`` when it may start."""
+    if ctx is None:
+        return None
+    for_the_owner = run.user_id == schedule.user_id
+    if not ctx.belongs_to_its_pod():
+        return OWNER_NOT_A_MEMBER if for_the_owner else RUN_PERSON_NOT_A_MEMBER
+    if for_the_owner or schedule.pod_id is None:
+        # The owner's execute is asked where the target starts, as before.
+        return None
+    if schedule.workflow_id is not None:
+        permission, target = (
+            Permissions.WORKFLOW_EXECUTE,
+            ResourceRef(
+                resource_type=ResourceType.WORKFLOW,
+                resource_id=schedule.workflow_id,
+                pod_id=schedule.pod_id,
+            ),
+        )
+    else:
+        permission = Permissions.AGENT_EXECUTE
+        target = _agent_ref(schedule, pod_id=schedule.pod_id)
+    return None if await ctx.can(permission, target) else RUN_PERSON_CANNOT_RUN
 
 
 async def dead_letter_run(

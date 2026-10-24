@@ -79,13 +79,20 @@ about it when it eventually cannot.
   the system shall fire that schedule.
 - The system shall carry the changed record to whatever the schedule triggers,
   so the work does not have to go looking for it.
-- The system shall run the triggered work with the authority of the schedule's
-  owner -- the person who last chose what it does -- never of whoever wrote the
-  row, so writing a row cannot run someone else's instructions with your access.
+- When a change to a row someone in the pod owns fires a schedule, the system
+  shall run the work as that person, bounded by what its target may do, so it
+  sees exactly what they would see -- unless the schedule is set to run as its
+  owner.
+- The system shall let only someone who may edit the target create or change a
+  schedule that runs as the owners of changed rows, so nobody can write
+  instructions that run with other people's access.
+- The system shall run changes to rows nobody in the pod owns, changes from
+  outside the pod, and batched changes as the schedule's owner.
 - When someone changes what a schedule does, the system shall make them its
   owner, and shall refuse the change if they could not have created it.
-- If a schedule's owner is no longer in the pod, then the system shall skip each
-  run and say why, rather than run it with authority they no longer have.
+- If the person a run is for is no longer in the pod, or may not run the
+  target, then the system shall skip the run and say why, rather than run it as
+  anyone else.
 
 **Contracts:** `schedule.create`, `record.create`, `record.update`, `record.delete`
 

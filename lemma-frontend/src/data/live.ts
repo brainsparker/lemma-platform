@@ -924,11 +924,15 @@ export const liveSource: PodSource = {
             default_model_name: key.models[0] ?? null,
             model_names: key.models,
         };
+        /* `source` is the field the backend tells the three kinds of profile
+           apart by, and a union on a discriminator refuses a body without it
+           — each kind defaulting its own does not help. The SDK types it
+           optional for that default, so nothing here would say it is gone. */
         await lemma().agentRuntime.createProfile(
             orgId,
             key.protocol === "anthropic"
-                ? { ...shared, base_url: key.baseUrl || null }
-                : { ...shared, base_url: key.baseUrl, vision_model_names: key.visionModels ?? [] },
+                ? { ...shared, source: "ANTHROPIC_COMPATIBLE", base_url: key.baseUrl || null }
+                : { ...shared, source: "OPENAI_COMPATIBLE", base_url: key.baseUrl, vision_model_names: key.visionModels ?? [] },
         );
     },
 

@@ -53,6 +53,7 @@ from app.modules.schedule.services.schedule_target_policy import (
 )
 from app.modules.schedule.services.schedule_naming import schedule_name_for
 from app.modules.schedule.services.schedule_ownership import (
+    require_target_edit_for_row_owner_runs,
     take_ownership_if_behaviour_changes,
 )
 from app.modules.schedule.services.schedule_connector_policy import (
@@ -572,12 +573,11 @@ class ScheduleService:
             return
         if ctx is None:
             raise RuntimeError("Context is required for schedule target authorization")
+        # Row-owner runs are authored like the target (H16): create and take-over.
+        await require_target_edit_for_row_owner_runs(schedule, ctx)
         if schedule.agent_id is not None:
-            # The assistant is asked about pod-scoped, the same as everywhere
-            # else it is asked about. Its row's id *is* the pod's, so both arms
-            # would name the same thing -- but the resource type is not
-            # cosmetic, and an AGENT-typed check would newly hit the
-            # resource-owner shortcut for whoever created the pod.
+            # The assistant is asked about pod-scoped: an AGENT-typed check
+            # would hit the resource-owner shortcut for the pod's creator.
             await ctx.require(
                 Permissions.AGENT_EXECUTE,
                 agent_execute_ref(schedule.agent_id, pod_id=schedule.pod_id),

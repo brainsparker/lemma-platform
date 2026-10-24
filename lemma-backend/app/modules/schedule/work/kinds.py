@@ -61,9 +61,9 @@ class FilterEvent(BaseModel):
     source_event_id: str
     payload: dict[str, JsonValue] = Field(default_factory=dict)
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
-    # No ``user_id``: a filtered fire runs as the schedule's owner, read when
-    # the filter answers. One queued with a row owner's id still validates --
-    # the extra key is ignored.
+    #: The changed row's owner, for a table change: whether the fire runs as
+    #: them is decided when the filter answers, from the schedule as it is then.
+    row_owner_user_id: UUID | None = None
     source_occurred_at: datetime | None = None
 
 

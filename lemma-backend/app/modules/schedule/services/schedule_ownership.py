@@ -17,12 +17,18 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping, MutableMapping
 
-from app.core.authorization.context import Context, ResourceRef
+from app.core.authorization.context import Context, ResourceRef, ResourceType
+from app.core.authorization.delegation import is_pod_default_agent
 from app.core.authorization.permissions import Permissions
 from app.modules.schedule.domain.errors import (
     ScheduleValidationError,
 )
-from app.modules.schedule.domain.schedule import ScheduleEntity, authored_config
+from app.modules.schedule.domain.schedule import (
+    ScheduleCreateEntity,
+    ScheduleEntity,
+    authored_config,
+    runs_as_row_owner,
+)
 
 TargetExecuteCheck = Callable[[ScheduleEntity, Context | None], Awaitable[None]]
 ConnectorUseCheck = Callable[[ScheduleEntity, Context | None], Awaitable[None]]
@@ -109,8 +115,48 @@ async def take_ownership_if_behaviour_changes(
     update_data["user_id"] = ctx.user_id
 
 
+async def require_target_edit_for_row_owner_runs(
+    schedule: ScheduleCreateEntity | ScheduleEntity, ctx: Context
+) -> None:
+    """A schedule that runs as row owners is authored like the target itself.
+
+    Its instruction runs with the access of whoever owns the changed row, so
+    writing it is writing instructions for the target that run with other
+    people's access -- what editing the agent or workflow already is. A member
+    who could only run the target would otherwise plant an instruction that an
+    admin's next row write runs with the admin's access (audit H16). The pod's
+    own assistant is edited through the pod's settings.
+    """
+    if schedule.pod_id is None or not runs_as_row_owner(schedule):
+        return
+    if schedule.workflow_id is not None:
+        await ctx.require(
+            Permissions.WORKFLOW_UPDATE,
+            ResourceRef(
+                resource_type=ResourceType.WORKFLOW,
+                resource_id=schedule.workflow_id,
+                pod_id=schedule.pod_id,
+            ),
+        )
+        return
+    if schedule.agent_id is None:
+        return
+    if is_pod_default_agent(schedule.agent_id, pod_id=schedule.pod_id):
+        await ctx.require(Permissions.POD_UPDATE, ResourceRef.pod(schedule.pod_id))
+        return
+    await ctx.require(
+        Permissions.AGENT_UPDATE,
+        ResourceRef(
+            resource_type=ResourceType.AGENT,
+            resource_id=schedule.agent_id,
+            pod_id=schedule.pod_id,
+        ),
+    )
+
+
 __all__ = [
     "BEHAVIOUR_FIELDS",
     "changes_behaviour",
+    "require_target_edit_for_row_owner_runs",
     "take_ownership_if_behaviour_changes",
 ]

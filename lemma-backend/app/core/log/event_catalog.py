@@ -1218,6 +1218,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'workspace.compute_meter.threshold_crossed.observed': EventSpec('info', frozenset({'sandbox_id', 'threshold'})),
     'workspace.disk_janitor.pruned.observed': EventSpec('info', frozenset({'fraction', 'sandbox_id', 'scope'})),
     'workspace.e2b.drift_tolerated': EventSpec('info', frozenset({'configured', 'drifted', 'recorded', 'sandbox_id'})),
+    'workspace.e2b.killed_sandbox_still_listed.degraded': EventSpec('warning', frozenset({'provider_id'})),
     'workspace.e2b.path_not_resolved.degraded': EventSpec('warning', frozenset({'error_type', 'path'})),
     'workspace.e2b.process_table_unreadable.degraded': EventSpec('warning', frozenset({'error_type', 'sandbox_id'})),
     'workspace.e2b.size_template_missing.degraded': EventSpec('warning', frozenset({'sandbox_id', 'size'})),

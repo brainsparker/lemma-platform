@@ -269,9 +269,12 @@ class SandboxService(SandboxAddressingMixin, SandboxVolumeMixin):
         # all -- the in-image credential path and the runtime's own headers
         # travel with the image -- so adopting it produces a workspace that
         # provisions successfully and then fails every operation.
+        # Not one destroyed: its sandbox is gone by our own hand, and a provider
+        # whose listing trails the kill would otherwise hand it straight back.
         if (
             instance is not None
             and instance.provider_id
+            and instance.state is not SandboxInstanceState.DESTROYED
             and not profile_is_stale(
                 kind=sandbox.kind, recorded_digest=sandbox.profile_digest
             )
@@ -406,6 +409,7 @@ class SandboxService(SandboxAddressingMixin, SandboxVolumeMixin):
             volume_name=volume_name,
             size=size,
             host_loopback=await self._host_loopback(sandbox),
+            storage_generation=storage_generation,
         )
         try:
             created = await self._provider.create(spec)

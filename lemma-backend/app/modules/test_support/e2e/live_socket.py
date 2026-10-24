@@ -69,8 +69,13 @@ class LiveClient:
 
         return await asyncio.wait_for(_next(), timeout)
 
-    async def quiet(self, seconds: float = 1.5) -> list[Frame]:
-        """Frames that arrive within ``seconds``; normally none."""
+    async def quiet(self, seconds: float = 0.6) -> list[Frame]:
+        """Frames that arrive within ``seconds``; normally none.
+
+        A negative check always waits the whole window. The default is a few
+        of the e2e hubs' authorization checks (``_shorten_live_cadences``) and
+        far more than a wake takes to deliver: long enough for a frame that was
+        coming anyway, not seconds per assertion."""
         got: list[Frame] = []
         try:
             async with asyncio.timeout(seconds):

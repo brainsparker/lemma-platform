@@ -355,6 +355,10 @@ async def test_authenticated_whatsapp_verification_api_journey(
         await close_whatsapp_mobile_verification_service()
 
 
+# Meta's retry joins the queued item. Work dedup coalesces only while an item
+# is queued, so the session worker is held: once it pooled its connections it
+# could claim the first item before the retry arrived.
+@pytest.mark.drives_work
 async def test_signed_whatsapp_webhook_is_deduplicated_and_never_becomes_surface_event(
     async_client,
     signup_user,

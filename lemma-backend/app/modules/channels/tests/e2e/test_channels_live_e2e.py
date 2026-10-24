@@ -164,7 +164,7 @@ async def test_a_private_channel_never_reaches_who_is_not_in_it(
 
         line = await say(pod, private["id"], "the secret")
         await insider.event("c", "line.created", message__id=line["id"])
-        await outsider.quiet(1.5)
+        await outsider.quiet()
         assert "the secret" not in str(outsider.frames)
         assert private["id"] not in str(outsider.frames)
 
@@ -176,7 +176,7 @@ async def test_a_private_channel_never_reaches_who_is_not_in_it(
         ended = await insider.until("unsubscribed", "c")
         assert ended["reason"] == "access_revoked"
         await say(pod, private["id"], "after they left")
-        await insider.quiet(1.5)
+        await insider.quiet()
         assert "after they left" not in str(insider.frames)
 
 
@@ -309,7 +309,7 @@ async def test_a_channel_out_of_sight_clears_from_the_inbox(
         }
         told = len(editor.events("i", "inbox.updated"))
         await say(pod, private["id"], "after they left")
-        await editor.quiet(1.5)
+        await editor.quiet()
         assert len(editor.events("i", "inbox.updated")) == told
 
 
@@ -447,7 +447,7 @@ async def test_typing_reaches_the_others_and_not_oneself(
         assert typed["type"] == "result", typed
         heard = await editor.event("c", "typing", channel_id=channel["id"])
         assert heard["user"]["id"] == pod.owner["id"]
-        await owner.quiet(1.0)
+        await owner.quiet()
         assert owner.events("c", "typing") == []
 
 
@@ -731,7 +731,7 @@ async def test_lines_arrive_once_and_never_past_their_batch_cursor(
             )
             said.extend(line["id"] for line in lines)
         await _created_or_resync(live, "c", said)
-        await live.quiet(1.0)
+        await live.quiet()
     created = _ids(live.events("c", "line.created"))
     assert len(created) == len(set(created)), "a line was created twice"
     for frame in live.frames:
@@ -764,7 +764,7 @@ async def test_a_bad_cursor_is_not_echoed_and_an_impossible_one_resyncs(
         )
         assert told["cursor"] == head
         assert (await live.until("resync", "i"))["reason"] == "cursor_expired"
-        await live.quiet(1.0)
+        await live.quiet()
         assert live.events("i", "line.edited") == []
 
 
@@ -819,10 +819,10 @@ async def test_a_change_that_moves_none_of_a_readers_counts_sends_them_nothing(
     async with live_socket(backend_server, pod.id, pod.editor["token"]) as editor:
         await editor.subscribe("i", "inbox")
         await say(pod, elsewhere["id"], "nothing to them")
-        await editor.quiet(1.0)
+        await editor.quiet()
         await say(pod, theirs["id"], "news for them")
         await editor.event("i", "inbox.updated", channel_id=theirs["id"])
-        await editor.quiet(1.0)
+        await editor.quiet()
         updates = editor.events("i", "inbox.updated")
     assert [update["channel_id"] for update in updates] == [theirs["id"]], updates
 

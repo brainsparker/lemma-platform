@@ -229,7 +229,9 @@ async def lifespan(app: FastAPI):
                 await assembly.enter_api_lifespans(module_stack, modules, app)
                 # Emit only after every core and module lifespan has entered.
                 # service.version and release.sha come from LEMMA_RELEASE_SHA.
-                ms, frozen = finish_startup(boot_started)
+                ms, frozen = finish_startup(
+                    boot_started, collect=settings.environment != "testing"
+                )
                 logger.info("service.started", startup_ms=ms, gc_frozen_objects=frozen)
                 started = True
                 yield
@@ -346,6 +348,11 @@ def _app_cors(app: ASGIApp) -> ASGIApp:
         expose_headers=[
             "X-Request-Id",
             "Retry-After",
+            # So the browser SDK can warn an app still calling a deprecated
+            # route (see app/core/api/deprecation.py).
+            "Deprecation",
+            "Sunset",
+            "X-Lemma-Deprecation",
             "front-token",
             "anti-csrf",
             "st-access-token",

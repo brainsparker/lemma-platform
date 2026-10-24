@@ -35,6 +35,7 @@ from app.modules.datastore.composition import (
 )
 from app.modules.test_support.embeddings import DeterministicTestEmbedder
 from app.modules.test_support.e2e import fixtures as e2e_fixtures
+from app.modules.test_support.e2e.worker_hold import worker_held
 from app.modules.test_support.e2e.worker_process import production_worker_process
 
 pytestmark = pytest.mark.e2e
@@ -158,14 +159,23 @@ def document_worker(
             # rather than after the production backoff.
             "DOCUMENT_PROCESSING_MAX_ATTEMPTS": "1",
         }
-        async with production_worker_process(
-            e2e_settings,
-            log_prefix=f"lemma_datastore_{processor}_worker",
-            extra_env=extra_env,
-            # Module path, not `module:attribute` — the worker is started with
-            # `python -m` so it runs every lane, matching production.
-            worker_entrypoint=("app.modules.datastore.tests.e2e.worker_entrypoint"),
-        ) as process:
+        # Hold the session's worker for as long as this one runs. Both claim from
+        # the same work table, and the session worker has no fake extractor:
+        # when it won the race for a test's upload, it found its extractor
+        # unreachable and parked the file as waiting, so the test timed out on
+        # a document its own worker never saw. Which tests that hit depended on
+        # what else in the shard had started the session worker, and when.
+        async with (
+            worker_held(),
+            production_worker_process(
+                e2e_settings,
+                log_prefix=f"lemma_datastore_{processor}_worker",
+                extra_env=extra_env,
+                # Module path, not `module:attribute` — the worker is started
+                # with `python -m` so it runs every lane, matching production.
+                worker_entrypoint=("app.modules.datastore.tests.e2e.worker_entrypoint"),
+            ) as process,
+        ):
             yield process
 
     return _start

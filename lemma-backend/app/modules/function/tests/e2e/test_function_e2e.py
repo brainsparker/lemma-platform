@@ -633,6 +633,8 @@ async def test_a_function_writes_many_rows_through_the_table_facade(
                     "datastore.table.read",
                     "datastore.record.read",
                     "datastore.record.write",
+                    # It deletes two rows too; writing no longer carries that.
+                    "datastore.record.delete",
                 ],
             },
         ],
@@ -763,6 +765,7 @@ async def test_function_record_write_requires_record_write_not_table_update(
     assert output["read_title"] == "granted", output
 
 
+@pytest.mark.slow  # prints latencies and asserts no budget: nightly, not a PR gate
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("configure_workspace_api_url")
 async def test_api_function_datastore_read_write_latency_sequence(

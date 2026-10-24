@@ -8,6 +8,7 @@ import {
     contactSubline,
     everyPage,
     outreachProblem,
+    outreachSaid,
     handleText,
     readContact,
     readOrigins,
@@ -15,6 +16,7 @@ import {
     sayCap,
     vouchedBy,
     widgetProblem,
+    writableHandles,
     type WidgetDraft,
 } from "../src/data/contacts.ts";
 
@@ -122,4 +124,20 @@ test("a list is followed to its last page, and a page that repeats ends it", asy
         return { items: [calls], next: "same" };
     });
     assert.deepEqual(looping, [1, 2]);
+});
+
+test("a visitor who left no address is written to in their chat on the website", () => {
+    const web = { kind: "WEB" as const, value: "5f0c1e2a-0000-4000-8000-000000000001", strength: "SESSION" };
+    const host = { kind: "HOST" as const, value: "host:default:cust-42", strength: "HOST" };
+    const email = { kind: "EMAIL" as const, value: "ana@shop.example", strength: "CODE" };
+    assert.deepEqual(writableHandles({ handles: [web] }), [web]);
+    // The chat their site signed them in to first, and the browser's too:
+    // either may be the one that has ended.
+    assert.deepEqual(writableHandles({ handles: [web, host] }), [host, web]);
+    // An address they confirmed is how they are written to; the chat is not offered.
+    assert.deepEqual(writableHandles({ handles: [web, email] }), [email]);
+    assert.deepEqual(writableHandles({ handles: [{ kind: "SLACK", value: "T9:U7", strength: "CHANNEL" }] }), []);
+    assert.equal(outreachSaid({ status: "SENT", platform: "WEB", reason: null }), "In their chat on your website, for when they next open it.");
+    assert.equal(outreachSaid({ status: "PENDING", platform: "WEB", reason: null }), "In their channel, on its way to their chat on your website.");
+    assert.equal(outreachSaid({ status: "SENT", platform: "RESEND", reason: null }), "Sent by email. It is in their channel.");
 });

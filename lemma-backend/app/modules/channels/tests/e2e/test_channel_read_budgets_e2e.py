@@ -42,7 +42,10 @@ from app.modules.channels.tests.e2e.channel_scale import (
     shape_of,
 )
 
-pytestmark = pytest.mark.e2e
+# Plan-shape and latency budgets need a pod at real scale -- hundreds of
+# thousands of rows seeded and ANALYZEd -- which is most of a minute per test on
+# a CI runner. Nightly, in the protected lane.
+pytestmark = [pytest.mark.e2e, pytest.mark.slow]
 
 #: A page, as the timeline and the channel list ask for one (their default).
 PAGE = 50

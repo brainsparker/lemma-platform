@@ -1231,6 +1231,9 @@ class TestPodAgentLifecycle:
         )
         assert missing.status_code == status.HTTP_404_NOT_FOUND, missing.text
 
+    # The approved tool runs in this process (patched below); the session
+    # worker must not take the queued resume first.
+    @pytest.mark.drives_work
     async def test_request_approval_approval_runs_tool_as_user_on_resume(
         self,
         authenticated_client,
@@ -1605,6 +1608,9 @@ class TestPodAgentLifecycle:
         )
         assert approvals_after.json()["items"] == []
 
+    # The approved tool runs in this process (patched below); the session
+    # worker must not take the queued resume first.
+    @pytest.mark.drives_work
     async def test_request_approval_exact_repeat_auto_executes_without_repausing(
         self,
         authenticated_client,

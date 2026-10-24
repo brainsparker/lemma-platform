@@ -507,7 +507,10 @@ async def test_a_telegram_sender_acts_only_after_sharing_a_verified_contact(
     assert asked.reply_kind == "identity_link"
     assert (
         await _conversation_by_external_thread(
-            authenticated_client, pod_id=pod_id, external_thread_id=str(sender)
+            authenticated_client,
+            pod_id=pod_id,
+            external_thread_id=str(sender),
+            timeout_seconds=0,  # answered with the link: no turn was started
         )
         is None
     )

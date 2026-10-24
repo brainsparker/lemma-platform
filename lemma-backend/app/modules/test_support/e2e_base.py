@@ -968,6 +968,8 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container, worke
     os.environ["OUTBOX_IDLE_POLL_MAX_SECONDS"] = "0.5"
     os.environ["OUTBOX_LISTEN_FALLBACK_POLL_SECONDS"] = "0.5"
     _shorten_worker_cadences()
+    _shorten_live_cadences()
+    _shorten_send_backoffs()
 
     # Pool connections instead of opening a fresh one per unit of work.
     #
@@ -1012,6 +1014,40 @@ def _shorten_worker_cadences() -> None:
     datastore_settings.datastore_change_handoff_poll_seconds = _E2E_WORKER_POLL_SECONDS
     os.environ["WORK_POLL_INTERVAL_SECONDS"] = str(_E2E_WORKER_POLL_SECONDS)
     os.environ["DATASTORE_CHANGE_HANDOFF_POLL_SECONDS"] = str(_E2E_WORKER_POLL_SECONDS)
+
+
+def _shorten_live_cadences() -> None:
+    """Shorten the live hubs' fallback timers, which run in this process.
+
+    A hub reads its pod's log on a wake, else every idle poll; it compares the
+    grants epoch every authorization check. At their production values (5s and
+    2s) a test waiting for a revocation, or proving nothing arrived, sat out
+    seconds per wait. A missed wake still shows: only later.
+
+    The idle poll stays above the sockets' quiet window: a poll can still offer
+    a reader a channel that changed just before they subscribed, and
+    ``test_a_change_that_moves_none_of_a_readers_counts_sends_them_nothing``
+    would see it.
+    """
+    from app.core.live.config import live_settings
+
+    live_settings.live_idle_poll_seconds = 2.0
+    live_settings.live_authz_check_seconds = 0.2
+    live_settings.live_run_access_check_seconds = 0.2
+
+
+def _shorten_send_backoffs() -> None:
+    """Shrink the inline retry backoff of a platform send, here and in the
+    worker subprocess (which inherits the environment).
+
+    Tests that make a fake platform fail on purpose otherwise sat out the real
+    0.5s-doubling-to-8s waits between attempts; the attempts themselves, and a
+    platform's Retry-After, are unchanged.
+    """
+    from app.modules.agent_surfaces.config import surface_settings
+
+    surface_settings.surface_send_backoff_scale = 0.02
+    os.environ["SURFACE_SEND_BACKOFF_SCALE"] = "0.02"
 
 
 def _import_e2e_models() -> None:
@@ -1198,6 +1234,12 @@ async def worker(e2e_settings, sandbox_reachable_backend):
                 ),
                 "DATABASE_URL": e2e_settings.database_url,
                 "DATASTORE_DATABASE_URL": datastore_settings.datastore_database_url,
+                # A pool, as in production: under the testing default of
+                # NullPool every unit of work the worker runs opens a new
+                # Postgres connection, which is most of a job's latency on a
+                # CI runner. One loop, one process: nothing outlives its loop.
+                "DB_POOL_IN_TESTING": "true",
+                "DB_POOL_SIZE": "5",
                 "REDIS_URL": e2e_settings.redis_url,
                 "API_URL": os.environ.get("API_URL", e2e_settings.api_url),
                 "WORKSPACE_CALLBACK_API_URL": (

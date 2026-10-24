@@ -34,10 +34,12 @@ from app.modules.agent.infrastructure.models.approval import (
 )
 from app.modules.agent.infrastructure.repositories import ConversationRepository
 from app.modules.agent.tests.e2e.lifecycle_helpers import (
+    RECORD_DELETE_REFUSALS,
     Seeded,
     finish,
     messages,
     pausing_call,
+    refused_before_asking,
     running_run,
     runs,
     seeded_conversation,
@@ -46,7 +48,10 @@ from app.modules.test_support.e2e.builders import E2EScenario
 from app.modules.test_support.e2e.function_helpers import create_table
 from app.modules.test_support.e2e.waiters import eventually
 
-pytestmark = [pytest.mark.e2e]
+# Each decision resumes the run inline, in this process. The session worker
+# must not take the same queued resume -- it raced the inline path and, once
+# it pooled its connections, sometimes won -- so it is held for each test.
+pytestmark = [pytest.mark.e2e, pytest.mark.drives_work]
 
 _TABLE = "chores"
 
@@ -60,6 +65,17 @@ async def _paused_on_a_delete(scenario: E2EScenario) -> tuple[Seeded, UUID, str]
         json={"data": {"title": "the chore"}},
     )
     assert created.status_code == status.HTTP_201_CREATED, created.text
+    delete = {
+        "action": "delete",
+        "table_name": _TABLE,
+        "record_id": created.json()["id"],
+    }
+    await refused_before_asking(
+        seeded,
+        tool_name="pod_write_record",
+        args=delete,
+        permission_ids=RECORD_DELETE_REFUSALS,
+    )
     paused = await running_run(seeded)
     approval_id = await pausing_call(
         seeded,
@@ -67,11 +83,7 @@ async def _paused_on_a_delete(scenario: E2EScenario) -> tuple[Seeded, UUID, str]
         tool_name="request_approval",
         tool_args={
             "tool_name": "pod_write_record",
-            "args": {
-                "action": "delete",
-                "table_name": _TABLE,
-                "record_id": created.json()["id"],
-            },
+            "args": delete,
             "title": "Delete the chore",
         },
     )

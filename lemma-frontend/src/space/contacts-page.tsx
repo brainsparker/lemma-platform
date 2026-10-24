@@ -11,6 +11,7 @@ import {
     outreachSaid,
     readOrigins,
     vouchedBy,
+    waitsOnTheSite,
     widgetProblem,
     writableHandles,
     type Contact,
@@ -249,7 +250,12 @@ function ContactSheet({ pod, contact, onClose }: { pod: Pod; contact: Contact; o
                                 </select>
                             </label>
                         )}
-                        <small className="csheet__fine">Email any time; WhatsApp only within a day of their last message there. It goes in their channel, where you can see whether it went.</small>
+                        <small className="csheet__fine">
+                            {waitsOnTheSite(handles[handleAt] ?? handles[0])
+                                ? "It waits in their chat on your website, and they read it when they come back."
+                                : "Email any time; WhatsApp only within a day of their last message there."}
+                            {" "}It goes in their channel, where you can see whether it went.
+                        </small>
                         <div className="csheet__actions">
                             <button type="submit" className="pill-button" disabled={followUp.isPending || !message.trim()}>
                                 {followUp.isPending ? "Sending…" : "Send"}

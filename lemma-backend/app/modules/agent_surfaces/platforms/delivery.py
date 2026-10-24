@@ -85,7 +85,10 @@ class RetryPolicy:
         """
         if retry_after is not None and retry_after > 0:
             return min(float(retry_after), self.max_retry_after)
-        return min(self.base_delay * (2 ** max(attempt - 1, 0)), self.max_delay)
+        from app.modules.agent_surfaces.config import surface_settings
+
+        exponential = min(self.base_delay * (2 ** max(attempt - 1, 0)), self.max_delay)
+        return exponential * surface_settings.surface_send_backoff_scale
 
 
 @dataclass

@@ -33,7 +33,10 @@ from sqlalchemy import text
 from app.modules.channels.tests.e2e.channel_pod import Pod, group
 from app.modules.channels.tests.e2e.channel_scale import p95_ms, shape_of
 
-pytestmark = pytest.mark.e2e
+# Plan-shape and latency budgets need a pod at real scale -- hundreds of
+# thousands of rows seeded and ANALYZEd -- which is most of a minute per test on
+# a CI runner. Nightly, in the protected lane.
+pytestmark = [pytest.mark.e2e, pytest.mark.slow]
 
 LINES = 100_000
 #: Ten minutes apart: the history spans about two years.

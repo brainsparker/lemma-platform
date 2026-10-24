@@ -16,7 +16,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi import status
@@ -34,11 +34,15 @@ from app.modules.test_support.e2e.function_helpers import (
     run_function,
     seed_connector_operation,
     seed_pod_shared_account,
-    seed_user,
     typed_function_code,
     wait_for_run_completion,
 )
 from app.modules.test_support.e2e.waiters import eventually, wait_for_status
+from app.modules.test_support.e2e_authz import (
+    add_pod_member,
+    invite_org_member,
+    signup_user,
+)
 
 # `usefixtures` is deliberately NOT here. At module scope it made every test
 # boot a uvicorn backend server and a local sandbox server, including the ones
@@ -227,6 +231,7 @@ async def test_function_runs_a_per_member_connector_as_the_invoking_member(
 @pytest.mark.usefixtures("configure_workspace_api_url")
 async def test_function_runs_a_shared_connector_as_the_account_its_owner_shared(
     authenticated_client,
+    async_client,
     test_pod,
     fixed_test_user,
     db_session,
@@ -236,12 +241,26 @@ async def test_function_runs_a_shared_connector_as_the_account_its_owner_shared(
     suffix = uuid4().hex[:8]
     connector_id = f"shared_app_{suffix}"
     function_name = f"shared_app_func_{suffix}"
-    owner = await seed_user(db_session)
+    # A colleague in the pod: a shared account serves only while its owner is
+    # still a member.
+    owner = await signup_user(async_client, "shared-account-owner")
+    owner_member = await invite_org_member(
+        authenticated_client,
+        async_client,
+        org_id=test_pod["organization_id"],
+        user=owner,
+    )
+    await add_pod_member(
+        authenticated_client,
+        pod_id=pod_id,
+        organization_member_id=owner_member["id"],
+        role="POD_USER",
+    )
     seeded = await seed_connector_operation(
         db_session,
         connector_id=connector_id,
         organization_id=test_pod["organization_id"],
-        user_id=owner.id,
+        user_id=UUID(owner["id"]),
         api_key="shared-secret",
     )
     shared = await seed_pod_shared_account(

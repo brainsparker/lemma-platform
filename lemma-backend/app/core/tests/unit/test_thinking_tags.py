@@ -10,6 +10,9 @@ reasoning in an answer bubble).
 
 from __future__ import annotations
 
+import sys
+from types import CodeType
+
 from app.core.text.thinking_tags import (
     ThinkingStreamSplitter,
     has_thinking_tokens,
@@ -40,6 +43,34 @@ def _stream(deltas: list[str]) -> list[tuple[str, str]]:
         else:
             merged.append((kind, chunk))
     return merged
+
+
+def _instructions_spent_stripping(text: str) -> int:
+    """Bytecode instructions the reader's own code runs to strip ``text``."""
+    monitoring = sys.monitoring
+    # Six tool slots, and coverage holds one of them in CI.
+    tool = next(slot for slot in range(6) if monitoring.get_tool(slot) is None)
+    # Events are process-wide: pytest's own code, another thread, or a
+    # finalizer the collector runs meanwhile is not the reader's work.
+    reader_file = strip_thinking_tokens.__code__.co_filename
+    executed = 0
+
+    def count(code: CodeType, _offset: int) -> None:
+        nonlocal executed
+        if code.co_filename == reader_file:
+            executed += 1
+
+    monitoring.use_tool_id(tool, "test_thinking_tags")
+    try:
+        monitoring.register_callback(tool, monitoring.events.INSTRUCTION, count)
+        monitoring.set_events(tool, monitoring.events.INSTRUCTION)
+        try:
+            strip_thinking_tokens(text)
+        finally:
+            monitoring.set_events(tool, monitoring.events.NO_EVENTS)
+    finally:
+        monitoring.free_tool_id(tool)
+    return executed
 
 
 # --- whole-string splitting -------------------------------------------------
@@ -265,17 +296,21 @@ def test_the_stream_and_the_saved_message_hide_the_same_text():
 
 
 def test_many_fences_and_blocks_are_read_in_linear_time():
-    """The fence check was ``any`` over every fence for every block."""
-    import time
+    """The fence check was ``any`` over every fence for every block.
 
+    Counted, not timed: a time bound on a shared runner fails whenever the
+    runner is busy, and the count is the same however busy it is. A linear
+    reader given four times the text runs at most four times the instructions,
+    a quadratic one sixteen; the bound sits just above linear.
+    """
     unit = f"```\ncode {OPEN} quoted\n```\n{OPEN}reasoning{CLOSE}answer ~~~x~~~ "
-    text = unit * (200_000 // len(unit))
-    started = time.perf_counter()
-    stripped = strip_thinking_tokens(text)
-    elapsed = time.perf_counter() - started
+    kept = f"```\ncode {OPEN} quoted\n```\nanswer ~~~x~~~ "
 
-    assert "reasoning" not in stripped
-    assert elapsed < 0.5
+    small = _instructions_spent_stripping(unit * 50)
+    large = _instructions_spent_stripping(unit * 200)
+
+    assert large < 5 * small, f"4x the text ran {large / small:.1f}x the instructions"
+    assert strip_thinking_tokens(unit * 200) == (kept * 200).strip()
 
 
 def test_the_platforms_own_context_blocks_a_model_echoed_are_dropped():

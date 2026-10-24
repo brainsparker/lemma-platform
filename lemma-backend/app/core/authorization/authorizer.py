@@ -83,6 +83,10 @@ async def _session_approval(
         return cached
     approved = await has_session_approval(
         session_id=session_id,
+        # The person the software acts for: an approval covers only the runs
+        # of the person who gave it, never another member's in the same
+        # conversation (M5).
+        person_user_id=ctx.delegating_user_id,
         workload_actor_id=workload_actor_id,
         permission_id=permission_id,
     )

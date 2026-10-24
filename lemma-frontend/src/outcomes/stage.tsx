@@ -78,7 +78,7 @@ export function RunView({ pod, runId, go, back }: { pod: Pod; runId: string; go:
 
 /** A workflow: how it starts and runs, and every run of it. Its "back" is
  *  the outcome's X-ray, where the workflows it runs are listed. */
-export function WorkflowView({ pod, workflow, orgId, go }: { pod: Pod; workflow: string; orgId: string | null; go: Go }) {
+export function WorkflowView({ pod, workflow, go }: { pod: Pod; workflow: string; go: Go }) {
     const discussion = useResourceConversation(pod.id);
     const discuss = async (name: string) => {
         const id = await discussion.open("workflow", name);
@@ -89,12 +89,10 @@ export function WorkflowView({ pod, workflow, orgId, go }: { pod: Pod; workflow:
             <div className="run-page">
                 <WorkflowPage
                     pod={pod}
-                    orgId={orgId}
                     name={workflow}
                     onBack={() => go(outcomeView(pod.id, "xray"))}
                     onOpenRun={(runId) => go({ name: "run", podId: pod.id, runId })}
                     onDiscuss={source.label === "live" ? (name) => void discuss(name) : undefined}
-                    onConnect={() => window.location.assign(classic.pod(pod.id))}
                 />
             </div>
         </Stage>

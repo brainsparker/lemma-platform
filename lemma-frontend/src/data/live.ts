@@ -9,6 +9,7 @@ import { readPodRoles } from "./pod-roles";
 import { everyPage, readCap, readContact, readContacts, readOrigins, readWidget, type OutreachSent } from "./contacts";
 import { readOpening } from "./public-rows";
 import type { OpenTableRequest, UpdateTableRequest, WebWidgetCreateRequest, WebWidgetUpdateRequest } from "lemma-sdk";
+import { PodAccountVisibility, PodConnectorMode } from "lemma-sdk";
 import {
     agentChanges,
     agentRows,
@@ -42,6 +43,7 @@ type JoinWire = NonNullable<
     NonNullable<Parameters<ReturnType<typeof lemma>["pods"]["update"]>[1]["config"]>["join_policy"]
 >;
 import { readAccount, readConnector, type Connector, type ConnectorAccount } from "./accounts";
+import { freshSlug, readPodConnectors } from "./pod-connectors";
 import { canInstallWithDefaults, freshInstallName, heldInstall, primaryKind, type CatalogEntry, type ConfigSource, type Install } from "@/connect/install";
 import {
     readChoice,
@@ -329,6 +331,34 @@ function asSurface(raw: unknown, platform: string): Surface {
         email: made.reach?.email ?? made.surface_identity_email ?? undefined,
         active: true,
     };
+}
+
+/** Share an account its owner just connected for this pod as a SHARED pod
+ *  connector, and return the slug a surface binds by.
+ *
+ *  The person connecting is the account's owner, and connecting it here, for
+ *  this teammate, is the consent sharing needs — the same step the server
+ *  takes for a bot it makes itself (`share_own_account_as_pod_connector`). The
+ *  account is brought into the pod for everyone (visibility POD), and the
+ *  connector already running as it is reused rather than a second made. */
+async function shareOwnAccount(podId: string, accountId: string): Promise<string> {
+    const pod = lemma(podId).connectors.pod;
+    const held = (await pod.accounts.list()).items.find((one) => one.account_id === accountId);
+    const shared = held ?? await pod.accounts.add({ account_id: accountId, visibility: PodAccountVisibility.POD });
+    if (shared.visibility === PodAccountVisibility.PERSONAL) {
+        await pod.accounts.update(shared.id, { visibility: PodAccountVisibility.POD });
+    }
+    const connectors = (await pod.list()).items;
+    const running = connectors.find((one) => one.mode === PodConnectorMode.SHARED && one.shared_pod_account_id === shared.id);
+    if (running) return running.slug;
+    const made = await pod.create({
+        auth_config_id: shared.auth_config_id,
+        mode: PodConnectorMode.SHARED,
+        shared_pod_account_id: shared.id,
+        slug: freshSlug(shared.connector_id ?? "account", connectors.map((one) => one.slug)),
+        purpose: "A teammate's own " + (shared.connector_id ?? "account") + (shared.display_name ? ", " + shared.display_name : ""),
+    });
+    return made.slug;
 }
 
 /** The managed-bot setup, in the shape the sheet renders. */
@@ -1253,11 +1283,20 @@ export const liveSource: PodSource = {
         return eligible.find((account) => !seen.has(account.id) && account.usable)?.id ?? "";
     },
 
-    async connectAccount(podId: string, platform: string, accountId: string): Promise<Surface> {
-        const payload = { platform, credential_mode: "CUSTOM", account_id: accountId } as unknown as Parameters<
+    async listPodConnectors(podId: string) {
+        return readPodConnectors(await lemma(podId).connectors.pod.list());
+    },
+
+    async connectPodConnector(podId: string, platform: string, podConnector: string): Promise<Surface> {
+        /* Asserted once, as `connectSystem` says why. */
+        const payload = { platform, credential_mode: "CUSTOM", pod_connector: podConnector } as unknown as Parameters<
             ReturnType<typeof lemma>["podSurfaces"]["create"]
         >[1];
         return asSurface(await lemma(podId).podSurfaces.create(podId, payload), platform);
+    },
+
+    async connectOwnAccount(podId: string, platform: string, accountId: string): Promise<Surface> {
+        return liveSource.connectPodConnector(podId, platform, await shareOwnAccount(podId, accountId));
     },
 
     async startGuided(podId: string, platform: string): Promise<GuidedSetup> {

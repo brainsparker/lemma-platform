@@ -141,7 +141,7 @@ export class LemmaClient {
     this.widgets = new WidgetsNamespace(this._http, podIdFn);
     this.workspace = new WorkspaceNamespace(this._http);
     this.webLogins = new WebLoginsNamespace(this._http);
-    this.connectors = new ConnectorsNamespace(this._generated, this._http);
+    this.connectors = new ConnectorsNamespace(this._generated, this._http, podIdFn);
     this.resourceAccess = new ResourceAccessNamespace(this._generated, podIdFn);
     this.schedules = new SchedulesNamespace(this._generated, podIdFn);
     this.decisions = new DecisionsNamespace(this._generated, podIdFn);

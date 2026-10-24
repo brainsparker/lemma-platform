@@ -340,7 +340,7 @@ export function OutcomesShell() {
     } else if (view.name === "run") {
         page = <RunView key={view.runId} pod={pod} runId={view.runId} go={go} back={back} />;
     } else if (view.name === "workflow") {
-        page = <WorkflowView key={view.workflow} pod={pod} workflow={view.workflow} orgId={orgId} go={go} />;
+        page = <WorkflowView key={view.workflow} pod={pod} workflow={view.workflow} go={go} />;
     } else if (view.name === "app") {
         page = <AppView key={view.app} pod={pod} app={view.app} go={go} />;
     } else if (view.name === "file") {

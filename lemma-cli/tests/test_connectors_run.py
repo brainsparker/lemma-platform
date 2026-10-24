@@ -98,6 +98,19 @@ def _fake_client(captured: dict):
         def get(self, auth_config, operation):
             return _OPERATIONS[operation]
 
+        def execute(
+            self, auth_config, operation, payload, *, account_id=None, pod_id=None
+        ):
+            # The deprecated org-level route (`--account`, `--auth-config`).
+            captured["deprecated_execute"] = {
+                "auth_config": auth_config,
+                "operation": operation,
+                "payload": payload,
+                "account_id": account_id,
+                "pod_id": pod_id,
+            }
+            return {"result": {"ok": True}}
+
         def search_all(self, query=None, *, limit=100):
             # The org-wide endpoint: ONE request, hits labelled with the install
             # to execute them against.
@@ -259,29 +272,6 @@ def test_run_prints_the_schema_instead_of_failing_when_input_is_missing(monkeypa
     assert result.exit_code == 0, result.stdout
     assert "execute" not in captured
     assert "to" in result.stdout  # the required field is named
-
-
-def test_run_takes_no_account(monkeypatch):
-    """The pod connector decides the account; there is nothing to pick."""
-    captured: dict = {}
-    _patch(monkeypatch, _fake_client(captured))
-
-    result = runner.invoke(
-        app,
-        [
-            "connectors",
-            "run",
-            "gmail",
-            "gmail_list_messages",
-            "-d",
-            "{}",
-            "--account",
-            "anukul@lemma.work",
-        ],
-    )
-
-    assert result.exit_code != 0
-    assert "execute" not in captured
 
 
 def test_run_reports_an_unknown_connector_with_what_the_pod_declares(monkeypatch):
@@ -616,3 +606,158 @@ def test_pod_share_brings_ones_own_account_into_the_pod_shared(monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert captured["add_account"] == ("acct-9", "POD")
+
+
+# --- Deprecated: addressing an installation and an account -----------------
+#
+# Live scripts, agents and pod functions still pass `--account`/`--auth-config`
+# or an `account_id` in the data. They keep working, through the deprecated
+# org-level route the server still serves, hidden from help and warned about.
+
+
+def _flat(text: str) -> str:
+    return " ".join(text.split())
+
+
+def test_run_with_an_account_takes_the_deprecated_route_and_warns(monkeypatch):
+    captured: dict = {}
+    _patch(monkeypatch, _fake_client(captured))
+
+    result = runner.invoke(
+        app,
+        [
+            "connectors",
+            "run",
+            "gmail",
+            "gmail_list_messages",
+            "-d",
+            "{}",
+            "--account",
+            "anukul@lemma.work",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    # The email resolved to its account; `gmail` to the default installation.
+    assert captured["deprecated_execute"] == {
+        "auth_config": "workspace-gmail",
+        "operation": "gmail_list_messages",
+        "payload": {},
+        "account_id": "acct-9",
+        "pod_id": None,
+    }
+    assert "execute" not in captured  # never the pod connector route
+    assert "op_gets" not in captured  # resolved on the installation instead
+    assert "warning: --account is deprecated" in _flat(result.stderr)
+
+
+def test_execute_with_auth_config_and_account_takes_the_deprecated_route(
+    monkeypatch,
+):
+    captured: dict = {}
+    _patch(monkeypatch, _fake_client(captured))
+
+    result = runner.invoke(
+        app,
+        [
+            "connectors",
+            "operations",
+            "execute",
+            "-c",
+            "workspace-gmail",
+            "gmail_send_email",
+            "--account-id",
+            "acct-1",
+            "-d",
+            '{"to": "a@example.com"}',
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["deprecated_execute"] == {
+        "auth_config": "workspace-gmail",
+        "operation": "gmail_send_email",
+        "payload": {"to": "a@example.com"},
+        "account_id": "acct-1",
+        "pod_id": None,
+    }
+    assert "execute" not in captured
+    assert "warning: --auth-config and --account is deprecated" in _flat(result.stderr)
+
+
+def test_execute_with_account_id_in_the_data_takes_the_deprecated_route(
+    monkeypatch,
+):
+    """`account_id` in --data was refused for a while; it is accepted again,
+    with a warning, and CONNECTOR read as an installation (or connector id)."""
+    captured: dict = {}
+    _patch(monkeypatch, _fake_client(captured))
+
+    result = runner.invoke(
+        app,
+        [
+            "connectors",
+            "operations",
+            "execute",
+            "gmail",
+            "gmail_send_email",
+            "-d",
+            json.dumps({"payload": {"to": "a@example.com"}, "account_id": "acct-1"}),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["deprecated_execute"]["auth_config"] == "workspace-gmail"
+    assert captured["deprecated_execute"]["account_id"] == "acct-1"
+    assert captured["deprecated_execute"]["payload"] == {"to": "a@example.com"}
+    assert "execute" not in captured
+    assert "account_id in --data is deprecated" in _flat(result.stderr)
+
+
+def test_a_deprecated_call_naming_a_pod_file_sends_the_pod(monkeypatch):
+    captured: dict = {}
+    _patch(monkeypatch, _fake_client(captured))
+
+    result = runner.invoke(
+        app,
+        [
+            "connectors",
+            "operations",
+            "execute",
+            "gmail",
+            "gmail_send_email",
+            "--account",
+            "acct-1",
+            "-d",
+            '{"to": "a@example.com"}',
+            "--attach",
+            "attachments=/me/a.pdf",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["deprecated_execute"]["pod_id"] == _POD
+
+
+def test_the_pod_connector_route_prints_no_deprecation(monkeypatch):
+    captured: dict = {}
+    _patch(monkeypatch, _fake_client(captured))
+
+    result = runner.invoke(
+        app, ["connectors", "operations", "execute", "gmail", "gmail_list_messages"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "deprecated" not in result.stderr
+    assert "deprecated_execute" not in captured
+
+
+def test_deprecated_connector_flags_are_hidden_from_help():
+    for command in (
+        ["connectors", "run", "--help"],
+        ["connectors", "operations", "execute", "--help"],
+    ):
+        result = runner.invoke(app, command)
+        assert result.exit_code == 0, result.output
+        assert "--account" not in result.output
+        assert "--auth-config" not in result.output

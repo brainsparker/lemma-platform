@@ -12,6 +12,11 @@ import type { SurfaceCredentialMode } from './SurfaceCredentialMode.js';
  * recreate to change either.
  */
 export type SurfaceUpdateRequest = {
+    /**
+     * Deprecated: name `pod_connector` instead. Still accepted, as the pod connector that serves this account to you.
+     * @deprecated
+     */
+    account_id?: (string | null);
     config?: SurfaceBehaviorConfigInput;
     credential_mode?: (SurfaceCredentialMode | null);
     default_agent_name?: (string | null);

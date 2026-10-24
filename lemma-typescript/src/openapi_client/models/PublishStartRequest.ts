@@ -8,6 +8,11 @@ import type { PublishMode } from './PublishMode.js';
  */
 export type PublishStartRequest = {
     /**
+     * Deprecated and ignored: the publish runs as the account the pod's `github` connector resolves to for you.
+     * @deprecated
+     */
+    account_id?: (string | null);
+    /**
      * Polish the generated README with the system model.
      */
     ai_readme?: boolean;

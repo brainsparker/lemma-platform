@@ -49,19 +49,6 @@ class OwnerOfConversation(Protocol):
     ) -> UUID | None: ...
 
 
-class WorkspaceOfConversation(Protocol):
-    """Whose browser a conversation's sign-in goes into: ``(pod, agent)``.
-
-    The browser is the one the conversation's agent runs beside -- one per
-    person, pod and actor -- so a sign-in made for it is where that agent will
-    look. ``None`` when there is no such conversation.
-    """
-
-    async def __call__(
-        self, uow: "SqlAlchemyUnitOfWork", conversation_id: UUID
-    ) -> tuple[UUID, UUID | None] | None: ...
-
-
 class ResumePause(Protocol):
     """How an answer closes the wait and hands the outcome to the agent."""
 
@@ -87,18 +74,6 @@ async def owner_through_contracts(
 
     found = await surface_conversation(uow, conversation_id)
     return None if found is None else found.user_id
-
-
-async def workspace_through_contracts(
-    uow: "SqlAlchemyUnitOfWork", conversation_id: UUID
-) -> tuple[UUID, UUID | None] | None:
-    """The conversation's pod and agent, through `agent`'s own contract."""
-    from app.modules.agent.contracts.conversations_for_surfaces import (
-        surface_conversation,
-    )
-
-    found = await surface_conversation(uow, conversation_id)
-    return None if found is None else (found.pod_id, found.agent_id)
 
 
 async def pending_through_contracts(

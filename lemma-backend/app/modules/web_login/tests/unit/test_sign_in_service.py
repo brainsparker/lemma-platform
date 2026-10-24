@@ -57,29 +57,13 @@ class _Browser:
         #: itself under a neutral title, i.e. "it let us in".
         self.landed = landed or {"url": "https://app.example.com/home", "title": "Home"}
         self.opened: list[str] = []
-        #: Whose browser each open went to: ``(pod, actor)``.
-        self.browsers: list[tuple[UUID | None, UUID | None]] = []
-        self.marked: list[tuple[UUID | None, UUID | None]] = []
         self.closed = False
 
-    async def ensure_for_sign_in(
-        self,
-        _user_id,
-        *,
-        origin,
-        report: bool = False,
-        pod_id=None,
-        actor_id=None,
-    ):
+    async def ensure_for_sign_in(self, _user_id, *, origin, report: bool = False):
         if self.fails:
             raise self.fails
         self.opened.append(origin)
-        self.browsers.append((pod_id, actor_id))
         return self.landed if report else None
-
-    async def mark_signed_in(self, _user_id, *, site, pod_id=None, actor_id=None):
-        del site
-        self.marked.append((pod_id, actor_id))
 
     async def close(self):
         self.closed = True
@@ -103,15 +87,6 @@ class _Owner:
 
     async def __call__(self, _uow, _conversation_id):
         return self.owner
-
-
-#: The conversation a sign-in link is for: in this pod, with this named agent.
-POD, AGENT = uuid4(), uuid4()
-
-
-class _Workspace:
-    async def __call__(self, _uow, _conversation_id):
-        return POD, AGENT
 
 
 class _Waiting:
@@ -177,7 +152,6 @@ def _service(
         resume=resume or _Resume(),
         read_pause=waiting if waiting is not None else _Waiting(),
         owner_of=_Owner(owner),
-        workspace_of=_Workspace(),
     )
 
 
@@ -462,63 +436,3 @@ class TestTheAddressIsReadToo:
 
     def test_a_dashboard_is_still_not_a_wall(self) -> None:
         assert not page_looks_like_a_login_wall("https://x.test/dashboard Dashboard")
-
-
-@pytest.mark.asyncio
-async def test_a_sign_in_lands_in_the_browser_of_the_agent_that_asked() -> None:
-    """Every browser is one person's in one pod as one actor. Signing in to the
-    assistant's on behalf of a named agent would leave the agent at the wall --
-    and put the person's session where the agent was never meant to reach."""
-    browser = _Browser()
-    service = _service(browser)
-
-    await service.answer(
-        conversation_id=uuid4(),
-        tool_call_id="call-1",
-        user_id=OWNER,
-        signed_in=True,
-    )
-
-    assert browser.browsers == [(POD, AGENT)]
-    assert browser.marked == [(POD, AGENT)]
-
-
-@pytest.mark.asyncio
-async def test_a_run_checks_the_browser_beside_its_own_sandbox() -> None:
-    from dataclasses import replace
-
-    from app.core.authorization.actor import Workload, WorkloadKind
-
-    pod_id, agent_id = uuid4(), uuid4()
-    run = replace(
-        allow_all_context(user_id=OWNER, pod_id=pod_id),
-        actor=Workload(kind=WorkloadKind.AGENT, workload_id=agent_id),
-    )
-    browser = _Browser()
-
-    await _service(browser).already_signed_in(origin=SITE, auth_ctx=run)
-
-    assert browser.browsers == [(pod_id, agent_id)]
-
-
-@pytest.mark.asyncio
-async def test_a_pending_sign_in_names_the_browser_it_is_for() -> None:
-    """A link opened on its own carries no pod: the page learns which
-    browser to show, and to ask about, from the pause -- the conversation's
-    pod and agent. Without them its page-url poll, its browser tab and its
-    view socket all went to the assistant's machine, which is not the one
-    the agent is waiting in."""
-    found = await _service(_Browser()).pending(conversation_id=uuid4(), user_id=OWNER)
-
-    assert found is not None
-    assert (found.pod_id, found.agent_id) == (POD, AGENT)
-
-
-@pytest.mark.asyncio
-async def test_the_pending_route_hands_the_page_its_pod_and_agent() -> None:
-    from app.modules.web_login.api.controllers.sign_in_controller import (
-        PendingSignInResponse,
-    )
-
-    fields = PendingSignInResponse.model_fields
-    assert {"pod_id", "agent_id"} <= set(fields)

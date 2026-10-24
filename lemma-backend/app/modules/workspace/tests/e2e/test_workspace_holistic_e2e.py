@@ -284,12 +284,8 @@ async def test_browser_process_and_signed_access_reach_the_sandbox(
     assert page.files["markdown"].startswith("browser-captures/")
     assert page.preview and "Example Domain" in page.preview
 
-    # For this pod's workspace, the one the commands above ran in. Without
-    # `pod_id` the route signs a URL to the person's personal workspace -- a
-    # different sandbox, with a different browser.
     browser = await authenticated_client.post(
         "/workspace/apps/browser/access",
-        params={"pod_id": str(ctx.pod_id)},
         json={"ttl_seconds": 300},
     )
     assert browser.status_code == status.HTTP_200_OK, browser.text
@@ -776,12 +772,7 @@ async def test_a_person_watches_the_agents_browser_and_then_drives_it(
     base = backend_server["host_base_url"].replace("http://", "ws://", 1)
 
     def view_socket(mode: str) -> str:
-        # The pod's, where the page was opened. A view with no `pod_id` is of
-        # the person's personal workspace, whose browser never saw this page.
-        return (
-            f"{base}/workspace/browser/view?mode={mode}"
-            f"&pod_id={ctx.pod_id}&access_token={token}"
-        )
+        return f"{base}/workspace/browser/view?mode={mode}&access_token={token}"
 
     async def find_page_point(socket, reader: _RfbReader) -> tuple[int, int, _RfbInfo]:
         """Anywhere on the real page, once Chrome has painted it.

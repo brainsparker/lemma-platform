@@ -722,30 +722,6 @@ def test_schedule_create_forwards_connector_trigger_from_payload(monkeypatch):
     }
 
 
-def test_schedule_create_refuses_an_account_and_names_the_connector_instead():
-    """A schedule listens through a pod connector; an account in the payload is
-    the old shape. It is refused before any request is built, so no client is
-    needed to see it."""
-    result = runner.invoke(
-        app,
-        [
-            "--pod",
-            "pod-1",
-            "schedules",
-            "create",
-            "--agent",
-            "triage",
-            "--webhook-source",
-            "composio",
-            "--data",
-            json.dumps({"account_id": "account-1"}),
-        ],
-    )
-
-    assert result.exit_code != 0
-    assert "--connector" in result.output
-
-
 def test_workflow_update_graph_dispatches_workflow_api(monkeypatch):
     captured: dict[str, object] = {}
     payload = json.dumps(
@@ -2021,23 +1997,6 @@ def test_connectors_operations_execute_unwraps_payload(monkeypatch):
         "operation": "messages_send",
         "payload": {"to": "a@example.com"},
     }
-
-    # An account in the data is refused, not ignored: the pod connector
-    # decides the account, so a caller naming one is mistaken about the model.
-    refused = runner.invoke(
-        app,
-        [
-            "connectors",
-            "operations",
-            "execute",
-            "gmail",
-            "messages_send",
-            "--data",
-            json.dumps({"payload": {}, "account_id": "acct-1"}),
-        ],
-    )
-    assert refused.exit_code != 0
-    assert "account_id" in refused.output
 
 
 def test_connectors_auth_config_create_uses_selected_org(monkeypatch):

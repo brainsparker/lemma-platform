@@ -559,6 +559,13 @@ class ServiceExistingResources:
             return set()
 
 
+_DEPRECATED_ACCOUNT_VARIABLE = (
+    "Deprecated: one of your connected accounts. Leave it empty and choose the "
+    "pod connector after import, or give an account id to use the connector "
+    "serving it."
+)
+
+
 def _variables_from_manifest(pod_manifest: dict[str, Any]) -> list[VariableSpec]:
     """Turn ``pod.json -> variables`` into typed specs.
 
@@ -566,30 +573,26 @@ def _variables_from_manifest(pod_manifest: dict[str, Any]) -> list[VariableSpec]
     ``free`` variable (e.g. an app slug) is required only when it has no
     default.
 
-    There is no account variable: a surface or schedule names the pod connector
-    it runs through by slug, and the importing pod's connector decides the
-    account. A bundle that still declares one predates that and is refused,
-    rather than creating resources wired to an id nothing reads."""
+    An ``account`` variable is deprecated (resources name a pod connector now)
+    but still imports, as an optional account id the schedule step turns into
+    the pod connector serving it -- so a template nobody re-exported works."""
     raw = pod_manifest.get("variables")
     if not isinstance(raw, dict):
         return []
     specs: list[VariableSpec] = []
     for name, meta in raw.items():
         vtype = str((meta or {}).get("type") or "").lower()
-        if vtype == "account":
-            raise BundleInvalidError(
-                f"Variable '{name}' asks for a connected account. Bundles name "
-                "the pod connector a resource runs through instead; re-export "
-                "this pod to get a bundle that imports."
-            )
         kind = "pod_member" if vtype in ("member", "pod_member") else "free"
         default = (meta or {}).get("default")
+        description = (meta or {}).get("description")
+        if vtype == "account":
+            default, description = None, _DEPRECATED_ACCOUNT_VARIABLE
         specs.append(
             VariableSpec(
                 name=str(name),
                 kind=kind,  # type: ignore[arg-type]
-                description=(meta or {}).get("description"),
-                required=kind == "free" and default is None,
+                description=description,
+                required=kind == "free" and default is None and vtype != "account",
                 default=str(default) if default is not None else None,
             )
         )

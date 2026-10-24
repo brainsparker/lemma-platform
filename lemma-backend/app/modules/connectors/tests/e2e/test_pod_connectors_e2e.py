@@ -62,6 +62,7 @@ async def _echo_the_credential(_self, *, third_party_credentials, **_kwargs):
 class World:
     scenario: E2EScenario
     auth_config_id: str
+    installation_name: str
     alice: dict
     bob: dict
     viewer: dict
@@ -149,6 +150,7 @@ async def _world(scenario: E2EScenario, db_session) -> World:
     return World(
         scenario=scenario,
         auth_config_id=str(install.id),
+        installation_name=install.name,
         seats=seats,
         **users,
     )
@@ -547,3 +549,125 @@ async def test_a_connect_link_completes_only_in_its_own_persons_browser(
     in_own_browser = await scenario.owner_client.get(callback, params=params)
     assert in_own_browser.status_code == 200, in_own_browser.text
     assert in_own_browser.json()["user_id"] == scenario.owner_user["id"]
+
+
+# -- the deprecated org-level execute ---------------------------------------
+#
+# Code written before pod connectors names the installation and, sometimes, an
+# account. It keeps running -- through the pod's connectors, with the same
+# checks -- and every response says it is deprecated.
+
+
+async def _run_installation(world: World, user: dict | None, *, headers=None, **body):
+    org_id = world.scenario.org_id
+    with patch(_EXECUTOR, new=_echo_the_credential):
+        return await world.scenario.async_client.post(
+            f"/organizations/{org_id}/connectors/{world.installation_name}"
+            "/operations/echo/execute",
+            headers=headers or world.headers(user),
+            json={"payload": {}, **body},
+        )
+
+
+def _says_deprecated(response) -> None:
+    assert response.headers["deprecation"] == "true"
+    assert (
+        "connector.operation.execute is deprecated"
+        in (response.headers["x-lemma-deprecation"])
+    )
+    assert response.headers["sunset"]
+
+
+async def test_the_deprecated_execute_runs_through_the_pods_connector(
+    scenario, db_session
+):
+    world = await _world(scenario, db_session)
+    alice_account = await _connect(db_session, world, world.alice, "alice-key")
+    bob_account = await _connect(db_session, world, world.bob, "bob-key")
+    assert (await world.declare("crm", "PER_MEMBER")).status_code == 201
+
+    ran = await _run_installation(world, world.alice, pod_id=world.pod_id)
+    assert ran.status_code == 200, ran.text
+    assert ran.json()["result"] == {"ran_as": "alice-key"}
+    _says_deprecated(ran)
+
+    # Her own account by id is hers to name.
+    named = await _run_installation(
+        world, world.alice, pod_id=world.pod_id, account_id=alice_account
+    )
+    assert named.json()["result"] == {"ran_as": "alice-key"}
+    # A colleague's is not, which is what an account id used to allow.
+    colleague = await _run_installation(
+        world, world.alice, pod_id=world.pod_id, account_id=bob_account
+    )
+    assert colleague.status_code == status.HTTP_403_FORBIDDEN, colleague.text
+
+    viewer = await _run_installation(world, world.viewer, pod_id=world.pod_id)
+    assert viewer.status_code == status.HTTP_403_FORBIDDEN, viewer.text
+
+
+async def test_the_deprecated_execute_reaches_a_shared_account_only_as_shared(
+    scenario, db_session
+):
+    world = await _world(scenario, db_session)
+    alice_account = await _connect(db_session, world, world.alice, "alice-key")
+    shared = await world.call(
+        "POST",
+        f"/pods/{world.pod_id}/connector-accounts",
+        world.alice,
+        json={"account_id": alice_account, "visibility": "POD"},
+    )
+    assert shared.status_code == 201, shared.text
+    declared = await world.declare(
+        "telemetry", "SHARED", shared_pod_account_id=shared.json()["id"]
+    )
+    assert declared.status_code == 201, declared.text
+
+    as_bob = await _run_installation(
+        world, world.bob, pod_id=world.pod_id, account_id=alice_account
+    )
+    assert as_bob.status_code == 200, as_bob.text
+    assert as_bob.json()["result"] == {"ran_as": "alice-key"}
+
+
+async def test_an_agent_on_the_deprecated_execute_needs_its_grant(scenario, db_session):
+    """The pod comes from the agent's token, and its grant on the pod
+    connector is what lets it run -- as on the pod route."""
+    world = await _world(scenario, db_session)
+    await _connect(db_session, world, world.alice, "alice-key")
+    assert (await world.declare("crm", "PER_MEMBER")).status_code == 201
+    agent = await scenario.create_agent()
+    headers = await scenario.delegated_agent_headers(user=world.alice, agent=agent)
+
+    ungranted = await _run_installation(world, None, headers=headers)
+    assert ungranted.status_code == status.HTTP_403_FORBIDDEN, ungranted.text
+
+    await scenario.replace_agent_resource_grants(
+        agent_name=agent["name"],
+        grants=[
+            {
+                "resource_type": "connector",
+                "resource_name": "crm",
+                "permission_ids": ["connector.use"],
+            }
+        ],
+    )
+    granted = await _run_installation(world, None, headers=headers)
+    assert granted.status_code == 200, granted.text
+    assert granted.json()["result"] == {"ran_as": "alice-key"}
+
+
+async def test_a_person_outside_any_pod_still_runs_their_own_account(
+    scenario, db_session
+):
+    world = await _world(scenario, db_session)
+    bob_account = await _connect(db_session, world, world.bob, "bob-key")
+    await _connect(db_session, world, world.alice, "alice-key")
+
+    ran = await _run_installation(world, world.alice)
+    assert ran.status_code == 200, ran.text
+    assert ran.json()["result"] == {"ran_as": "alice-key"}
+    _says_deprecated(ran)
+
+    theirs = await _run_installation(world, world.alice, account_id=bob_account)
+    assert theirs.status_code == status.HTTP_403_FORBIDDEN, theirs.text

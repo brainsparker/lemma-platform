@@ -15,6 +15,20 @@ import {
 
 type RequestParams = Record<string, string | number | boolean | undefined | null>;
 
+/** Set by the server on a response to a deprecated route or field: what was
+ *  deprecated and what to call instead (`app/core/api/deprecation.py`). */
+const DEPRECATION_HEADER = "x-lemma-deprecation";
+const warnedDeprecations = new Set<string>();
+
+/** Warn once per deprecated use, per page or process. The call succeeded; a
+ *  warning never changes that. */
+export function noteDeprecation(headers: Headers): void {
+  const message = headers.get(DEPRECATION_HEADER);
+  if (!message || warnedDeprecations.has(message)) return;
+  warnedDeprecations.add(message);
+  console.warn(`[lemma] ${message}`);
+}
+
 interface RequestOptions {
   params?: RequestParams;
   body?: unknown;
@@ -510,6 +524,7 @@ export class HttpClient {
       if (!response.ok) {
         throw await this.failure(response);
       }
+      noteDeprecation(response.headers);
 
       if (response.status === 204) {
         return undefined as unknown as T;

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, TypeVar, cast
+from uuid import UUID
 
 from attrs import define as _attrs_define
 
@@ -36,6 +37,8 @@ class SurfaceCreateRequest:
                 Graph drafts, and a signed URL the provider downloads server-side. Reaching
                 a Gmail *account* is still something an agent does, through the connector;
                 it is just not a surface.
+            account_id (None | Unset | UUID): Deprecated: name `pod_connector` instead. Still accepted, as the pod connector
+                that serves this account to you.
             config (SurfaceBehaviorConfigInput | Unset):
             credential_mode (SurfaceCredentialMode | Unset):
             default_agent_name (None | str | Unset):
@@ -46,6 +49,7 @@ class SurfaceCreateRequest:
     """
 
     platform: SurfacePlatform
+    account_id: None | Unset | UUID = UNSET
     config: SurfaceBehaviorConfigInput | Unset = UNSET
     credential_mode: SurfaceCredentialMode | Unset = UNSET
     default_agent_name: None | str | Unset = UNSET
@@ -55,6 +59,14 @@ class SurfaceCreateRequest:
 
     def to_dict(self) -> dict[str, Any]:
         platform = self.platform.value
+
+        account_id: None | str | Unset
+        if isinstance(self.account_id, Unset):
+            account_id = UNSET
+        elif isinstance(self.account_id, UUID):
+            account_id = str(self.account_id)
+        else:
+            account_id = self.account_id
 
         config: dict[str, Any] | Unset = UNSET
         if not isinstance(self.config, Unset):
@@ -91,6 +103,8 @@ class SurfaceCreateRequest:
                 "platform": platform,
             }
         )
+        if account_id is not UNSET:
+            field_dict["account_id"] = account_id
         if config is not UNSET:
             field_dict["config"] = config
         if credential_mode is not UNSET:
@@ -112,6 +126,23 @@ class SurfaceCreateRequest:
 
         d = dict(src_dict)
         platform = SurfacePlatform(d.pop("platform"))
+
+        def _parse_account_id(data: object) -> None | Unset | UUID:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                account_id_type_0 = UUID(data)
+
+                return account_id_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(None | Unset | UUID, data)
+
+        account_id = _parse_account_id(d.pop("account_id", UNSET))
 
         _config = d.pop("config", UNSET)
         config: SurfaceBehaviorConfigInput | Unset
@@ -160,6 +191,7 @@ class SurfaceCreateRequest:
 
         surface_create_request = cls(
             platform=platform,
+            account_id=account_id,
             config=config,
             credential_mode=credential_mode,
             default_agent_name=default_agent_name,

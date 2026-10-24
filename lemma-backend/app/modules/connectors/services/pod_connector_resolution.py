@@ -37,6 +37,7 @@ from app.modules.connectors.domain.auth_config import (
     AuthConfigEntity,
     AuthConfigStatus,
 )
+from app.core.domain.errors import DomainError
 from app.modules.connectors.domain.errors import ConnectorAccessDeniedError
 from app.modules.connectors.domain.pod_connector import (
     PodAccountEntity,
@@ -133,6 +134,132 @@ class PodConnectorResolver:
             pod_account,
             auth_config,
             acting_person_is_owner=acting_person(ctx) == pod_account.owner_user_id,
+        )
+
+    async def serve_installation(
+        self,
+        ctx: Context,
+        *,
+        pod_id: UUID,
+        auth_config: AuthConfigEntity,
+        account_id: UUID | None,
+    ) -> ResolvedPodConnector:
+        """The deprecated way in: an installation and, maybe, an account.
+
+        Callers written before pod connectors name the org installation and
+        sometimes an ``account_id``. They are served through the pod connectors
+        the pod declares for that installation, with the same checks as
+        ``resolve`` -- so a deprecated call can never reach an account the new
+        one could not. The named account is a request, not a choice: it has to
+        be the account a declared connector resolves to, or the acting
+        person's own account on a per-member one.
+        """
+        declared = [
+            found
+            for found in await self.pod_connectors.list_by_pod(pod_id)
+            if found.auth_config_id == auth_config.id
+        ]
+        if not declared:
+            raise PodConnectorNotFoundError(auth_config.name)
+        first_refusal: DomainError | None = None
+        for pod_connector in declared:
+            try:
+                resolved = await self.resolve(ctx, pod_connector)
+            except DomainError as refusal:
+                # A connector this caller may not use, or that has no account
+                # for them, is not the end: another declared one may serve.
+                # Anything that is not such a refusal is not ours to judge.
+                if refusal.status_code not in _UNSERVED_STATUSES:
+                    raise
+                first_refusal = first_refusal or refusal
+                continue
+            if account_id is None or resolved.account.id == account_id:
+                return resolved
+            if pod_connector.mode is PodConnectorMode.PER_MEMBER:
+                own = await self._own_pod_account(ctx, pod_connector, account_id)
+                if own is not None:
+                    return await self._resolved(
+                        pod_connector,
+                        own,
+                        resolved.auth_config,
+                        acting_person_is_owner=True,
+                    )
+        if account_id is not None or first_refusal is None:
+            raise ConnectorAccessDeniedError(
+                "That account is not one this pod's connectors let you use. "
+                f"Call the pod connector instead: {', '.join(pc.slug for pc in declared)}.",
+                details={
+                    "reason": "account_not_served_by_pod_connector",
+                    "pod_connectors": [pc.slug for pc in declared],
+                },
+            )
+        raise first_refusal
+
+    async def own_account(
+        self, ctx: Context, auth_config: AuthConfigEntity, account_id: UUID | None
+    ) -> AccountEntity:
+        """A person's own account, outside any pod connector: main's behaviour.
+
+        Only for a person acting as themselves -- on the CLI with no pod, or in
+        a pod that declares no connector for the installation. Their own
+        account was always theirs to use; nothing else is reachable this way.
+        """
+        if not isinstance(ctx.actor, Person):
+            raise PodConnectorNotFoundError(auth_config.name)
+        person = ctx.actor.user_id
+        account = (
+            await self.accounts.get(account_id)
+            if account_id is not None
+            else await self.accounts.get_by_user_org_and_auth_config(
+                person, auth_config.organization_id, auth_config.id
+            )
+        )
+        if (
+            account is None
+            or account.user_id != person
+            or account.auth_config_id != auth_config.id
+        ):
+            raise ConnectorAccessDeniedError(
+                "You can only use your own account for this installation.",
+                details={"reason": "not_your_account"},
+            )
+        if account.status is AccountStatus.REAUTH_REQUIRED:
+            raise ReauthRequiredError(
+                slug=auth_config.name,
+                connector_id=auth_config.connector_id,
+                connect_url=settings.frontend_url.rstrip("/"),
+                acting_person_is_owner=True,
+            )
+        return account
+
+    async def _own_pod_account(
+        self, ctx: Context, pod_connector: PodConnectorEntity, account_id: UUID
+    ) -> PodAccountEntity | None:
+        """The acting person's own account on a per-member connector, by id."""
+        person = acting_person(ctx)
+        account = await self.accounts.get(account_id)
+        if (
+            person is None
+            or account is None
+            or account.user_id != person
+            or account.auth_config_id != pod_connector.auth_config_id
+        ):
+            return None
+        existing = await self.pod_accounts.get_by_pod_and_account(
+            pod_connector.pod_id, account.id
+        )
+        if existing is not None:
+            return existing
+        return await self.pod_accounts.add(
+            PodAccountEntity(
+                pod_id=pod_connector.pod_id,
+                account_id=account.id,
+                auth_config_id=account.auth_config_id,
+                owner_user_id=account.user_id,
+                visibility=PodAccountVisibility.PERSONAL,
+                is_member_default=False,
+                source=PodAccountSource.AUTO,
+            )
         )
 
     async def resolve_standing(
@@ -285,6 +412,12 @@ class PodConnectorResolver:
             await self.pod_accounts.make_member_default(added)
             added = added.model_copy(update={"is_member_default": True})
         return added
+
+
+#: The statuses of a declared connector that cannot serve this caller -- not
+#: allowed (403) or no usable account (409) -- which ``serve_installation``
+#: steps past, reporting the first if none can serve.
+_UNSERVED_STATUSES = frozenset({403, 409})
 
 
 async def _require_account_use(ctx: Context, pod_account: PodAccountEntity) -> None:

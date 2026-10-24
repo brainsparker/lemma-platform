@@ -134,8 +134,8 @@ def test_grant_presets_only_use_permissions_the_backend_accepts():
             "datastore.table.update",
             "datastore.table.delete",
         },
-        "folder": {"folder.read", "folder.write", "folder.delete"},
-        "document": {"folder.read", "folder.write", "folder.delete"},
+        "folder": {"folder.read", "folder.write", "folder.delete", "folder.share"},
+        "document": {"folder.read", "folder.write", "folder.delete", "folder.share"},
         "connector": {"connector.use"},
         "function": {
             "function.read",

@@ -45,9 +45,9 @@ WORKLOAD_ROUTES: frozenset[tuple[str, str]] = frozenset(
         ("GET", "/connectors"),
         ("GET", "/connectors/{connector_id}"),
         ("GET", "/connectors/{connector_id}/skill"),
-        # Reading what the org has installed. Running an operation is not
-        # here: it goes through a pod connector under /pods/{pod_id}, where the
-        # pod pin and the workload's grants apply.
+        # Reading what the org has installed. Running an operation goes
+        # through a pod connector under /pods/{pod_id}, where the pod pin and
+        # the workload's grants apply (and the deprecated route below).
         ("GET", "/organizations/{organization_id}/connectors/status"),
         ("GET", "/organizations/{organization_id}/connectors/accounts"),
         ("GET", "/organizations/{organization_id}/connectors/accounts/{account_id}"),
@@ -85,6 +85,18 @@ WORKLOAD_ROUTES: frozenset[tuple[str, str]] = frozenset(
                 "/triggers/{trigger_name}"
             ),
         ),
+        # Deprecated, kept so code written before pod connectors keeps running:
+        # executing by installation name resolves through the token's pod and
+        # its connectors (``execute_installation_operation``), the same checks
+        # as the pod route, and searching operations across installs is a read.
+        (
+            "POST",
+            (
+                "/organizations/{organization_id}/connectors/{auth_config_name}"
+                "/operations/{operation_name}/execute"
+            ),
+        ),
+        ("GET", "/organizations/{organization_id}/connector-operations"),
         # An agent hands its person a link to connect an account; the link is
         # theirs and completes only in their browser.
         ("POST", "/organizations/{organization_id}/connectors/connect-requests"),

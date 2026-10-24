@@ -15,13 +15,10 @@ import {
     usageLine, visibilityWord,
 } from "../src/data/pod-accounts.ts";
 import { INSTALLATION_MANAGE, readOrgActions } from "../src/data/org-actions.ts";
-import { signInScope } from "../src/computer/sign-in.ts";
 import { CONNECTOR_USE, connectorGrantSlugs, grantsBody, withConnectorGrants } from "../src/data/agents.ts";
 import { connectionLine, connectionTrouble, needsRebind, readConnection, rebindChoices } from "../src/data/surface-settings.ts";
 import { readAddress, writeAddress } from "../src/shell/address.ts";
 import { legacyAddress } from "../src/site/legacy-address.ts";
-import { scopeParams } from "../src/computer/queries.ts";
-import { socketUrl } from "../src/computer/live.ts";
 import { liveSource } from "../src/data/live.ts";
 import { disconnect } from "../src/session/client.ts";
 
@@ -213,17 +210,6 @@ test("I may install as the server says, not as a copy of its role table says", (
     assert.deepEqual(readOrgActions(null), [], "nothing readable holds nothing");
 });
 
-test("a sign-in link opened on its own names the browser the pause is for", () => {
-    const pending = { tool_call_id: "t", origin: "https://x.example", reason: "", pod_id: "p1", agent_id: "ag1" };
-    assert.deepEqual(signInScope(null, pending), { podId: "p1", agentId: "ag1" }, "standalone: the pause says");
-    assert.deepEqual(signInScope({ podId: "p1", agentId: null }, { ...pending, agent_id: null }), { podId: "p1", agentId: null });
-    assert.deepEqual(signInScope({ podId: "p1", agentId: "ag1" }, { ...pending, pod_id: null, agent_id: null }), { podId: "p1", agentId: "ag1" }, "an older server: the host's");
-    assert.equal(signInScope(null, null), null, "nothing named, nothing asked");
-    const url = new URL(socketUrl("https://api.example.invalid", { mode: "control", origin: pending.origin, podId: "p1", agentId: "ag1" }));
-    assert.equal(url.searchParams.get("pod_id"), "p1");
-    assert.equal(url.searchParams.get("agent"), "ag1");
-});
-
 test("an owner can share with some of the pod's roles, not only some members", () => {
     const roles = readShareRoles({ items: [
         { id: "r-admin", name: "POD_ADMIN", is_system: true },
@@ -277,18 +263,6 @@ test("the server's connect_url lands on the teammate's Connections, opened on th
     assert.equal(read.section, "connections");
     assert.equal(writeAddress(read), "/t/p1/about/connections");
     assert.equal(readAddress("/t/p1/about/connectors").section, "connections", "an old link to the part still opens it");
-});
-
-test("the computer pane names its pod and agent on every workspace call and on the view socket", () => {
-    assert.deepEqual(scopeParams({ podId: "p1", agentId: null }), { pod_id: "p1" }, "absent agent is the pod assistant's machine");
-    assert.deepEqual(scopeParams({ podId: "p1", agentId: "ag1" }), { pod_id: "p1", agent: "ag1" });
-    const url = new URL(socketUrl("https://api.example.invalid", { mode: "control", conversationId: "c1", podId: "p1", agentId: "ag1" }));
-    assert.equal(url.protocol, "wss:");
-    assert.equal(url.searchParams.get("pod_id"), "p1");
-    assert.equal(url.searchParams.get("agent"), "ag1");
-    assert.equal(url.searchParams.get("conversation"), "c1");
-    const bare = new URL(socketUrl("https://api.example.invalid", { mode: "view", origin: "https://x.example" }));
-    assert.equal(bare.searchParams.get("pod_id"), null);
 });
 
 /* ── the live source, against a recorded API ───────────────────────── */

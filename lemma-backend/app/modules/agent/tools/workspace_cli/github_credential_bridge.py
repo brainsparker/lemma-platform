@@ -15,6 +15,13 @@ persisted profile: the token is written once per session into `/tmp` (which
 does not survive a workspace recreation, unlike the durable home
 volume), re-provisioned periodically rather than trusted forever, and never
 returned to the caller, logged, or placed in a tool-result string.
+
+Into *that session's* directory under `/tmp`, and configured through files the
+session's own environment names (see `workspace/contracts/session_config`).
+A person has one sandbox and every agent session of theirs runs in it, so a
+credential file or a `git config --global` shared by the sandbox was whichever
+session wrote last: one conversation's push went out as the account another
+had just resolved. Nothing here writes global git config any more.
 """
 
 from __future__ import annotations
@@ -97,15 +104,13 @@ class GithubRefusal:
 
 #: The pod connector slug the sandbox's git and gh run through.
 _POD_CONNECTOR_SLUG = "github"
-_CREDENTIALS_PATH = "/tmp/.git-credentials"
 # `gh` reads its own config; it does not understand git's credential file. The
 # alternative -- exporting GH_TOKEN from a shell profile -- would put the raw
 # token in the environment of every process the agent starts, so an ordinary
 # `env` would print it straight into a tool result and the transcript. Keeping
 # it in a file `gh` reads confines it to the same place git's copy already
-# lives. `GH_CONFIG_DIR` in the workspace image points here.
-_GH_CONFIG_DIR = "/tmp/lemma-gh"
-_GH_HOSTS_PATH = f"{_GH_CONFIG_DIR}/hosts.yml"
+# lives: the session's `GH_CONFIG_DIR`, which its environment points at.
+_GH_HOSTS_NAME = "hosts.yml"
 _MARKER_KEY_PREFIX = "workspace:github-credentials:v1"
 # How long a copy of the token written into the sandbox may be trusted.
 #
@@ -240,14 +245,25 @@ async def ensure_github_credentials(
         await redis.set(marker_key, "unavailable", ex=_UNAVAILABLE_TTL_SECONDS)
         return credential.notice() if credential is not None else None
 
+    # Imported here, not at module scope: the app imports this module, and
+    # only a session that runs git ever needs the paths.
+    from app.modules.workspace.contracts.session_config import (
+        session_config_dir,
+        session_gh_config_dir,
+        session_git_credentials_path,
+        session_gitconfig_path,
+    )
+
+    credentials_path = session_git_credentials_path(session_id)
+    gh_hosts_path = f"{session_gh_config_dir(session_id)}/{_GH_HOSTS_NAME}"
     await workspace_session.write_file(
-        _CREDENTIALS_PATH,
+        credentials_path,
         f"https://x-access-token:{credential.access_token}@github.com\n".encode(),
     )
     # Same credential, in the form `gh` reads. Written rather than passed
     # through a shell command so the token never appears in an argument list.
     await workspace_session.write_file(
-        _GH_HOSTS_PATH,
+        gh_hosts_path,
         (
             "github.com:\n"
             f"    oauth_token: {credential.access_token}\n"
@@ -255,17 +271,47 @@ async def ensure_github_credentials(
             "    git_protocol: https\n"
         ).encode(),
     )
+    # The helper and the commit identity, as a file this session's git
+    # includes (see `session_config_env`) rather than `git config --global`,
+    # which every session in the sandbox shares. No token in it.
+    await workspace_session.write_file(
+        session_gitconfig_path(session_id),
+        _session_gitconfig(credential, credentials_path).encode(),
+    )
 
-    setup_commands = [
-        f"git config --global credential.helper 'store --file={_CREDENTIALS_PATH}'",
-        f"chmod 600 {_CREDENTIALS_PATH}",
-        f"chmod 700 {_GH_CONFIG_DIR}",
-        f"chmod 600 {_GH_HOSTS_PATH}",
+    session_dir = session_config_dir(session_id)
+    await workspace_session.exec_command(
+        cmd=" && ".join(
+            [
+                f"chmod 700 {shlex.quote(session_dir)}",
+                f"chmod 700 {shlex.quote(session_gh_config_dir(session_id))}",
+                f"chmod 600 {shlex.quote(credentials_path)}",
+                f"chmod 600 {shlex.quote(gh_hosts_path)}",
+            ]
+        ),
+        timeout=15,
+    )
+
+    await redis.set(marker_key, "provisioned", ex=_provisioned_ttl(credential))
+    return None
+
+
+def _session_gitconfig(credential: "_GithubCredential", credentials_path: str) -> str:
+    """The session's git config: its credential helper and commit identity.
+
+    The empty helper first, because a helper is a list and every config file
+    read before this one adds to it -- an older bridge left one in the durable
+    ``~/.gitconfig`` pointing at a file another session may since have filled.
+    The empty value clears what came before, so this session's is the only one.
+    """
+    lines = [
+        "[credential]",
+        '\thelper = ""',
+        f"\thelper = {_git_config_value(f'store --file={credentials_path}')}",
     ]
+    identity = []
     if credential.login:
-        setup_commands.append(
-            f"git config --global user.name {shlex.quote(credential.login)}"
-        )
+        identity.append(f"\tname = {_git_config_value(credential.login)}")
     # GitHub commonly withholds email from the profile response when the
     # account has "keep my email address private" enabled -- not an error,
     # just no address to use, so fall back to GitHub's own noreply
@@ -274,13 +320,21 @@ async def ensure_github_credentials(
     # commit identity half-configured.
     git_email = credential.email or _noreply_email(credential)
     if git_email:
-        setup_commands.append(
-            f"git config --global user.email {shlex.quote(git_email)}"
-        )
-    await workspace_session.exec_command(cmd=" && ".join(setup_commands), timeout=15)
+        identity.append(f"\temail = {_git_config_value(git_email)}")
+    if identity:
+        lines += ["[user]", *identity]
+    return "\n".join(lines) + "\n"
 
-    await redis.set(marker_key, "provisioned", ex=_provisioned_ttl(credential))
-    return None
+
+def _git_config_value(value: str) -> str:
+    """A value quoted for a git config file, whatever it contains."""
+    escaped = (
+        value.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\n", "\\n")
+        .replace("\t", "\\t")
+    )
+    return f'"{escaped}"'
 
 
 async def _refreshed_credentials(

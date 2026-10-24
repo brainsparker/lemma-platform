@@ -462,6 +462,9 @@ async def _retire_installation(installation_id: str, *, action: str) -> None:
     from app.modules.connectors.contracts.retirement import (
         retire_accounts_for_tenant,
     )
+    from app.modules.connectors.services.auth.github_bindings import (
+        release_installation,
+    )
     from app.modules.schedule.contracts.retirement import (
         deactivate_matching_schedules,
     )
@@ -475,6 +478,8 @@ async def _retire_installation(installation_id: str, *, action: str) -> None:
             criteria={"source": "github", "installation_id": installation_id},
             reason=f"github_installation_{action}",
         )
+        if action == "deleted":
+            await release_installation(uow.session, installation_id)
         await uow.commit()
 
     logger.warning(

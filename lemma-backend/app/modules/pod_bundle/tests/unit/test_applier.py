@@ -806,11 +806,7 @@ async def test_schedule_apply_carries_its_connector_and_trigger_fields(
     assert entity.filter_output_schema == {"type": "object"}
 
 
-async def test_a_bundled_schedule_naming_an_account_is_refused(tmp_path, monkeypatch):
-    """A bundle from before pod connectors pins a raw account. Dropping it
-    would create a schedule listening through nothing; carrying it is what
-    pod connectors replaced. It is refused, saying what to do instead."""
-    root = tmp_path / "bundle"
+def _account_schedule(root: Path) -> None:
     _write(
         root / "schedules" / "on_ticket" / "on_ticket.json",
         {
@@ -821,13 +817,56 @@ async def test_a_bundled_schedule_naming_an_account_is_refused(tmp_path, monkeyp
             "connector_trigger_id": "jira_new_issue",
         },
     )
-    fake = FakeScheduleOperations().patch(monkeypatch)
-    applier = _applier(root, replacements={"on_ticket_account": str(uuid4())})
 
-    with pytest.raises(BundleInvalidError, match="pod_connector"):
-        await applier.apply_step(_step(StepKind.SCHEDULE, "on_ticket"))
+
+async def test_a_bundled_schedule_naming_an_account_listens_through_its_connector(
+    tmp_path, monkeypatch
+):
+    """A bundle from before pod connectors pins a raw account. Deprecated, and
+    still imported: the account becomes the pod connector serving it to the
+    importer, and the import says so."""
+    root = tmp_path / "bundle"
+    _account_schedule(root)
+    fake = FakeScheduleOperations().patch(monkeypatch)
+    account_id = uuid4()
+    asked = []
+
+    async def serving(_uow, _ctx, *, pod_id, account_id):
+        asked.append((pod_id, account_id))
+        return "jira"
+
+    monkeypatch.setattr(
+        "app.modules.connectors.contracts.pod_connectors.pod_connector_for_account",
+        serving,
+    )
+    warnings: list[str] = []
+    applier = _applier(
+        root, replacements={"on_ticket_account": str(account_id)}, warnings=warnings
+    )
+
+    await applier.apply_step(_step(StepKind.SCHEDULE, "on_ticket"))
+
+    assert asked == [(_UUID, account_id)]
+    [created] = fake.created
+    assert created.pod_connector_slug == "jira"
+    assert any("deprecated" in warning for warning in warnings)
+
+
+async def test_a_bundled_schedule_with_no_account_given_is_left_out(
+    tmp_path, monkeypatch
+):
+    """Without an account there is nothing for it to listen through: it is left
+    out and said so, rather than failing the whole import."""
+    root = tmp_path / "bundle"
+    _account_schedule(root)
+    fake = FakeScheduleOperations().patch(monkeypatch)
+    warnings: list[str] = []
+    applier = _applier(root, replacements={"on_ticket_account": ""}, warnings=warnings)
+
+    await applier.apply_step(_step(StepKind.SCHEDULE, "on_ticket"))
 
     assert fake.created == []
+    assert any("on_ticket" in warning for warning in warnings)
 
 
 async def test_schedule_apply_round_trips_a_pod_default_target(tmp_path, monkeypatch):

@@ -30,6 +30,7 @@ class PublishStatusResponse:
         publish_id (UUID):
         repo_name (str):
         status (PublishStatus):
+        account_id (None | Unset | UUID):
         connect_url (None | str | Unset): Where to connect the GitHub account the pod's `github` connector needs, when
             the publish failed for want of one.
         error (None | str | Unset):
@@ -47,6 +48,7 @@ class PublishStatusResponse:
     publish_id: UUID
     repo_name: str
     status: PublishStatus
+    account_id: None | Unset | UUID = UNSET
     connect_url: None | str | Unset = UNSET
     error: None | str | Unset = UNSET
     error_code: None | str | Unset = UNSET
@@ -70,6 +72,14 @@ class PublishStatusResponse:
         repo_name = self.repo_name
 
         status = self.status.value
+
+        account_id: None | str | Unset
+        if isinstance(self.account_id, Unset):
+            account_id = UNSET
+        elif isinstance(self.account_id, UUID):
+            account_id = str(self.account_id)
+        else:
+            account_id = self.account_id
 
         connect_url: None | str | Unset
         if isinstance(self.connect_url, Unset):
@@ -118,6 +128,8 @@ class PublishStatusResponse:
                 "status": status,
             }
         )
+        if account_id is not UNSET:
+            field_dict["account_id"] = account_id
         if connect_url is not UNSET:
             field_dict["connect_url"] = connect_url
         if error is not UNSET:
@@ -153,6 +165,23 @@ class PublishStatusResponse:
         repo_name = d.pop("repo_name")
 
         status = PublishStatus(d.pop("status"))
+
+        def _parse_account_id(data: object) -> None | Unset | UUID:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                account_id_type_0 = UUID(data)
+
+                return account_id_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(None | Unset | UUID, data)
+
+        account_id = _parse_account_id(d.pop("account_id", UNSET))
 
         def _parse_connect_url(data: object) -> None | str | Unset:
             if data is None:
@@ -209,6 +238,7 @@ class PublishStatusResponse:
             publish_id=publish_id,
             repo_name=repo_name,
             status=status,
+            account_id=account_id,
             connect_url=connect_url,
             error=error,
             error_code=error_code,

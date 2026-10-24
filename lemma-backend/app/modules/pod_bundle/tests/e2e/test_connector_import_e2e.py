@@ -75,12 +75,12 @@ async def test_a_bundled_schedule_names_its_pod_connector_and_asks_for_no_accoun
     assert "on_ticket" not in schedules.text
 
 
-async def test_a_bundle_asking_for_an_account_is_refused_at_planning(
+async def test_a_bundle_asking_for_an_account_still_plans(
     authenticated_client, test_pod, worker
 ):
-    """Its resources would be created wired to an account id nothing reads any
-    more, so it fails planning -- before anything is written -- and says to
-    re-export."""
+    """Exported before pod connectors: deprecated, and still imported. The
+    account variable is offered as optional, so a template nobody re-exported
+    plans instead of failing."""
     pod_id = test_pod["id"]
     zip_bytes = pack_fixture_bundle("asks_for_an_account")
 
@@ -95,7 +95,10 @@ async def test_a_bundle_asking_for_an_account_is_refused_at_planning(
     assert res.status_code == status.HTTP_202_ACCEPTED, res.text
     import_id = res.json()["import_id"]
 
-    body = await wait_import(authenticated_client, pod_id, import_id, until={"FAILED"})
-    assert body["status"] == "FAILED"
-    assert "on_ticket_account" in (body.get("error") or "")
-    assert "pod connector" in (body.get("error") or "")
+    body = await wait_import(
+        authenticated_client, pod_id, import_id, until={"AWAITING_CONFIRMATION"}
+    )
+    [variable] = body["plan"]["variables"]
+    assert variable["name"] == "on_ticket_account"
+    assert (variable["required"], variable["default"]) == (False, None)
+    assert "Deprecated" in variable["description"]

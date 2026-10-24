@@ -520,9 +520,15 @@ def _build_variable_applier(
 ):
     """Return ``apply(payload) -> payload`` that resolves the bundle's ``${name}``
     variables (and the legacy ``$POD_MEMBER`` token) and drops any that stay
-    unresolved. ``pod_member`` variables default to the importing user. There
-    are no account variables: surfaces and schedules name the pod connector they
-    run through by slug, and the importing pod's connector decides the account.
+    unresolved. ``pod_member`` variables default to the importing user.
+
+    An ``account`` variable is deprecated: surfaces and schedules name the pod
+    connector they run through by slug, and the importing pod's connector
+    decides the account. A bundle exported before that still imports, as the
+    server's importer takes it: the variable is an optional free one, resolved
+    only by ``--var`` (never by a recorded default -- that is the exporting
+    org's account), and a schedule given one listens through the pod connector
+    serving it (see ``_deprecated_schedule_account``).
     """
     from .scaffold import substitute_placeholders
 
@@ -536,10 +542,12 @@ def _build_variable_applier(
         if str((spec or {}).get("type") or "").lower() == "account"
     )
     if accounts:
-        raise ValueError(
-            f"Variable(s) {', '.join(accounts)} ask for a connected account. "
-            "Bundles name the pod connector a resource runs through instead; "
-            "re-export this pod to get a bundle that imports."
+        console.print(
+            f"[yellow]warning[/yellow] variable(s) {', '.join(accounts)} ask for "
+            "a connected account, which is deprecated: bundles name the pod "
+            "connector a resource runs through. Pass --var NAME=<account id> to "
+            "use the pod connector serving that account, or leave it out and "
+            "choose the connector after import; re-export to drop the variable."
         )
     overrides = dict(var_overrides or {})
     unknown = sorted(set(overrides) - set(declared))
@@ -2252,6 +2260,33 @@ def _schedule_update_fields(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _deprecated_schedule_account(
+    raw: dict[str, Any], payload: dict[str, Any], schedule_name: str
+) -> tuple[dict[str, Any] | None, str | None]:
+    """A schedule exported before pod connectors, which named an account.
+
+    Returns ``(payload, warning)``. The account, when the importer supplied
+    one, is sent as the deprecated ``account_id`` -- the server answers it with
+    the pod connector serving that account to them. Without one the schedule
+    cannot listen, so it is left out (``None``) and said so rather than failing
+    the import; the server's importer does the same.
+    """
+    if "account_id" not in raw or payload.get("pod_connector"):
+        return payload, None
+    account = payload.get("account_id")
+    if not account:
+        return None, (
+            f"schedule '{schedule_name}' named a connected account, which "
+            "bundles no longer carry; it was not imported. Create it with the "
+            "pod connector it should listen through (`lemma schedules create "
+            "--connector <slug>`)."
+        )
+    return payload, (
+        f"schedule '{schedule_name}' names an account (deprecated); it listens "
+        "through the pod connector serving that account instead."
+    )
+
+
 def _create_schedule_from_payload(
     client: Lemma,
     *,
@@ -2260,6 +2295,10 @@ def _create_schedule_from_payload(
 ) -> dict[str, Any]:
     pod_sdk = client.pod(pod_id)
     create_fields = _schedule_create_fields(payload)
+    if payload.get("account_id") and not create_fields.get("pod_connector"):
+        # Deprecated, and outside the shared allow-list on purpose: only an
+        # account the importer supplied (see _deprecated_schedule_account).
+        create_fields["account_id"] = payload["account_id"]
     if not create_fields.get("name"):
         raise ValueError("Schedule import requires name.")
     if not create_fields.get("schedule_type") or not create_fields.get("config"):
@@ -2771,8 +2810,9 @@ def import_pod_bundle(
     )
     for resource_dir in schedule_dirs:
         schedule_name = resource_dir.name
+        raw_schedule = load_resource_payload(resource_dir, schedule_name)
         payload, dropped_filter = without_time_schedule_filter(
-            apply_variables(load_resource_payload(resource_dir, schedule_name))
+            apply_variables(raw_schedule)
         )
         if dropped_filter:
             console.print(
@@ -2787,6 +2827,15 @@ def import_pod_bundle(
             continue
         payload.setdefault("name", schedule_name)
         existing = existing_schedules.get(schedule_name)
+        if not existing:
+            listening, account_note = _deprecated_schedule_account(
+                raw_schedule, payload, schedule_name
+            )
+            if account_note:
+                console.print(f"[yellow]warning[/yellow] {account_note}")
+            if listening is None:
+                summary["schedules"].append(f"skipped:{schedule_name}")
+                continue
         existing_id = str(existing.get("id") or "") if existing else ""
         if existing and existing_id:
             if not upsert:
@@ -2831,7 +2880,8 @@ def import_pod_bundle(
     )
     for resource_dir in surface_dirs:
         surface_name = resource_dir.name
-        payload = apply_variables(load_resource_payload(resource_dir, surface_name))
+        raw_surface = load_resource_payload(resource_dir, surface_name)
+        payload = apply_variables(raw_surface)
         platform = _surface_platform_from_payload(payload, surface_name)
         surface_key = _surface_name_from_payload(payload, surface_name)
         exists = surface_key in existing_surface_names
@@ -2841,9 +2891,21 @@ def import_pod_bundle(
             )
         action = "updated" if exists else "created"
         _progress_start("surface", surface_name, "upserting")
-        pod_sdk.surfaces.upsert(
-            surface_key, {**_surface_upsert_body(payload), "platform": platform}
-        )
+        body = _surface_upsert_body(payload)
+        if "account_id" in raw_surface and not payload.get("pod_connector"):
+            # Exported before pod connectors. An account the importer supplied
+            # is sent as the deprecated `account_id`, which the server answers
+            # with the pod connector serving it; none leaves the surface on the
+            # platform's own bot until a connector is named.
+            if payload.get("account_id"):
+                body["account_id"] = payload["account_id"]
+            console.print(
+                f"[yellow]warning[/yellow] surface '{surface_name}' names an "
+                "account (deprecated); name the pod connector it runs as "
+                f"instead (`lemma surfaces upsert {surface_key} --connector "
+                "<slug>`)."
+            )
+        pod_sdk.surfaces.upsert(surface_key, {**body, "platform": platform})
         summary["surfaces"].append(f"{action}:{surface_name}")
         _progress_done("surface", surface_name, action)
 

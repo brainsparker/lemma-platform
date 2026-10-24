@@ -16,7 +16,6 @@ from lemma_pod_bundle.apply_fields import (
     without_time_schedule_filter,
 )
 
-from app.modules.pod_bundle.domain.errors import BundleInvalidError
 from app.modules.pod_bundle.domain.state import PlanStep
 
 
@@ -57,12 +56,32 @@ async def apply_schedule(
             "was not imported."
         )
         return
-    if "account_id" in payload:
-        raise BundleInvalidError(
-            f"Schedule '{step.name}' names a connected account, which bundles "
-            "no longer carry: a schedule listens through a pod connector, by "
-            "slug. Re-export the pod, or replace `account_id` with "
-            "`pod_connector: <slug>`."
+    if "account_id" in payload and not payload.get("pod_connector"):
+        # A bundle exported before pod connectors. The account, if the
+        # importer gave one, becomes the pod connector serving it to them;
+        # without one the schedule cannot listen, and is left out and said so
+        # rather than failing the whole import.
+        account_id = _as_uuid(payload.get("account_id"))
+        if account_id is None:
+            warnings.append(
+                f"Schedule '{step.name}' named a connected account, which "
+                "bundles no longer carry; it was not imported. Create it with "
+                "the pod connector it should listen through."
+            )
+            return
+        from app.modules.connectors.contracts.pod_connectors import (
+            pod_connector_for_account,
+        )
+
+        payload = {
+            **payload,
+            "pod_connector": await pod_connector_for_account(
+                uow, ctx, pod_id=pod_id, account_id=account_id
+            ),
+        }
+        warnings.append(
+            f"Schedule '{step.name}' named an account (deprecated); it listens "
+            f"through the pod connector '{payload['pod_connector']}' instead."
         )
     existing = await get_schedule_by_name(uow, pod_id=pod_id, name=step.name, ctx=ctx)
     if existing is not None:
@@ -85,3 +104,10 @@ async def apply_schedule(
     fields["pod_connector_slug"] = fields.pop("pod_connector", None)
     entity = ScheduleCreateEntity(user_id=user_id, pod_id=pod_id, **fields)
     await create_schedule(uow, entity, ctx=ctx)
+
+
+def _as_uuid(value: object) -> UUID | None:
+    try:
+        return UUID(str(value)) if value else None
+    except ValueError:
+        return None

@@ -16,11 +16,6 @@ from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
 from app.core.api.dependencies import CurrentUser
-from app.modules.workspace.api.controllers.workspace_pod import (
-    AgentQuery,
-    PodQuery,
-    require_workspace_pod,
-)
 from app.core.log.log import get_logger
 from app.modules.workspace.services.sandbox_progress import current_phase
 from sandbox_runtime.errors import SandboxError
@@ -57,18 +52,17 @@ class WorkspaceStatusResponse(BaseModel):
     operation_id="workspace.status",
     summary="Whether your computer is ready",
 )
-async def workspace_status(
-    user: CurrentUser, pod_id: PodQuery = None, agent: AgentQuery = None
-) -> WorkspaceStatusResponse:
-    from app.modules.workspace.services.sandbox_composition import (
-        get_sandbox_service,
-        resolve_workspace,
-    )
+async def workspace_status(user: CurrentUser) -> WorkspaceStatusResponse:
+    from app.modules.workspace.domain.sandbox import SandboxKind, SandboxOwnerKind
+    from app.modules.workspace.services.sandbox_composition import get_sandbox_service
 
-    await require_workspace_pod(user.id, pod_id, agent)
     service = get_sandbox_service()
     try:
-        sandbox = await resolve_workspace(service, user.id, pod_id, actor_id=agent)
+        sandbox = await service.resolve(
+            kind=SandboxKind.WORKSPACE,
+            owner_kind=SandboxOwnerKind.USER,
+            owner_id=user.id,
+        )
         phase = await current_phase(sandbox.id)
         if phase is not None:
             return WorkspaceStatusResponse(

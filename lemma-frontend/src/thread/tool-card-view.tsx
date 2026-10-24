@@ -29,7 +29,7 @@ import { Modal } from "@/shell/modal";
 import { SignInPane } from "@/computer/sign-in-pane";
 import { requestSignIn } from "@/computer/sign-in-bridge";
 import { openSettings } from "@/desktop/open-settings";
-import { useConversationDirectory, useFileBody, useWorkspaceScope, type WorkspaceScope } from "@/computer/queries";
+import { useConversationDirectory, useFileBody } from "@/computer/queries";
 import { clockOf } from "./turns";
 import { writeAddress } from "@/shell/address";
 import { PlaceLink } from "@/shell/place-link";
@@ -326,8 +326,8 @@ function PodImage({ podId, path, name }: { podId: string; path: string; name: st
  *  reading is asking for something). Which is why nothing in this card is
  *  fetched until somebody clicks: a transcript holding thirty of these would
  *  otherwise wake a sandbox and pull thirty images on render. */
-function WorkspaceImage({ scope, path, name }: { scope: WorkspaceScope | null; path: string; name: string }) {
-    const body = useFileBody(scope, path);
+function WorkspaceImage({ path, name }: { path: string; name: string }) {
+    const body = useFileBody(path);
     const blob = body.data?.blob;
     const href = useMemo(() => (blob ? URL.createObjectURL(blob) : null), [blob]);
     useEffect(() => () => { if (href) URL.revokeObjectURL(href); }, [href]);
@@ -377,7 +377,6 @@ function WorkspaceShot({
     const askable = look.relative && live() && Boolean(conversationId);
     const home = useConversationDirectory(podId, askable ? conversationId! : null);
     /* The machine the agent wrote it on: this pod's, as the conversation's agent. */
-    const scope = useWorkspaceScope(live() ? podId : null, conversationId ?? null);
 
     const lost = (
         <p className="toolcard__fine">
@@ -388,11 +387,11 @@ function WorkspaceShot({
     if (!live()) {
         return <p className="toolcard__fine">The sample has no computer behind it, so there is nothing to read this from.</p>;
     }
-    if (!look.relative) return <WorkspaceImage scope={scope} path={look.path} name={look.name} />;
+    if (!look.relative) return <WorkspaceImage path={look.path} name={look.name} />;
     if (!askable) return lost;
     if (home.isPending) return <p className="toolcard__note" role="status">Working out where that is…</p>;
     if (!home.data) return lost;
-    return <WorkspaceImage scope={scope} path={home.data.replace(/\/+$/, "") + "/" + look.path.replace(/^\.\//, "")} name={look.name} />;
+    return <WorkspaceImage path={home.data.replace(/\/+$/, "") + "/" + look.path.replace(/^\.\//, "")} name={look.name} />;
 }
 
 /** Where the file lives, in the words this app uses for the two stores. */
@@ -959,10 +958,8 @@ function signInStatus(ask: SignInAsk): { text: string; tone?: "bad" | "wait" | "
     return { text: "could not ask", tone: "bad" };
 }
 
-export function SignInCard({ ask, podId, conversationId, toolCallId, docked }: {
+export function SignInCard({ ask, conversationId, toolCallId, docked }: {
     ask: SignInAsk;
-    /** The pod the conversation is in, for the browser that is that pod's. */
-    podId?: string;
     conversationId?: string | null;
     toolCallId?: string;
     /** On the shelf above the composer, as one line: the site, why, and the
@@ -990,7 +987,7 @@ export function SignInCard({ ask, podId, conversationId, toolCallId, docked }: {
                 the outcome is the only thing that says whether the run
                 is carrying on, and a dialog that vanished the instant
                 it landed would take that sentence with it. */}
-            <SignInPane podId={podId} conversationId={conversationId} toolCallId={toolCallId} />
+            <SignInPane conversationId={conversationId} toolCallId={toolCallId} />
         </Modal>
     );
 
@@ -1075,7 +1072,7 @@ export function ToolCardView({
 }) {
     switch (card.kind) {
         case "sign-in":
-            return <SignInCard ask={card} podId={podId} conversationId={conversationId} toolCallId={toolCallId} />;
+            return <SignInCard ask={card} conversationId={conversationId} toolCallId={toolCallId} />;
         case "browser":
             return <BrowserCard step={card} />;
         case "terminal":

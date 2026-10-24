@@ -7,8 +7,8 @@ import httpx
 import pytest
 
 from lemma_sdk.errors import (
-    LemmaConfigError,
     LemmaConflictError,
+    LemmaDeprecationWarning,
     LemmaNotFoundError,
     LemmaPermissionError,
 )
@@ -181,19 +181,148 @@ def test_execute_runs_through_the_pod_connector_named_by_slug() -> None:
     assert json.loads(request.content) == {"payload": {"to": "a@b.c"}}
 
 
-def test_execute_takes_no_account() -> None:
-    connectors = _pod_connectors_over(lambda _: httpx.Response(200, json={}))
-
-    with pytest.raises(TypeError):
-        connectors.execute("gmail", "op", {}, account_id="x")  # type: ignore[call-arg]
+# --- Deprecated: an installation and an account, as before pod connectors ---
 
 
-def test_execute_needs_a_pod() -> None:
-    transport = LemmaTransport(base_url="https://api.example.test", token="test")
-    connectors = BoundConnectors(transport, org_id=ORG_ID)
+@pytest.fixture
+def _fresh_deprecations(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The transport warns once per message per process; start each test clean.
+    monkeypatch.setattr("lemma_sdk.transport._warned_deprecations", set())
 
-    with pytest.raises(LemmaConfigError):
-        connectors.execute("gmail", "op", {})
+
+def _org_execute_path(auth_config: str, operation: str) -> str:
+    return (
+        f"/organizations/{ORG_ID}/connectors/{auth_config}/operations/"
+        f"{operation}/execute"
+    )
+
+
+def test_execute_with_an_account_takes_the_deprecated_route_and_warns() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"result": {"sent": True}})
+
+    connectors = _pod_connectors_over(handler)
+
+    with pytest.warns(LemmaDeprecationWarning, match="drop account_id"):
+        result = connectors.execute(
+            "workspace-gmail",
+            "GMAIL_SEND_EMAIL",
+            {"to": "a@b.c"},
+            account_id=ACCOUNT_ID,
+        )
+
+    assert result.result == {"sent": True}
+    [request] = seen
+    assert request.url.path == _org_execute_path("workspace-gmail", "GMAIL_SEND_EMAIL")
+    # The pod still travels: the server serves the call through its connectors.
+    assert json.loads(request.content) == {
+        "payload": {"to": "a@b.c"},
+        "account_id": ACCOUNT_ID,
+        "pod_id": POD_ID,
+    }
+
+
+def test_execute_without_a_pod_takes_the_deprecated_route_and_warns() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"result": {}})
+
+    connectors = _connectors_over(handler)
+
+    with pytest.warns(LemmaDeprecationWarning):
+        connectors.execute("workspace-gmail", "GMAIL_LIST", {})
+
+    [request] = seen
+    assert request.url.path == _org_execute_path("workspace-gmail", "GMAIL_LIST")
+    assert json.loads(request.content) == {"payload": {}}
+
+
+def test_an_installation_name_falls_back_to_the_deprecated_route(
+    _fresh_deprecations: None,
+) -> None:
+    """Code written before pod connectors passed the installation's name. The
+    pod route does not know it; the deprecated route does, and the server's
+    deprecation header is what says so -- not a guess on the client."""
+    seen: list[httpx.Request] = []
+    notice = "connector.operation.execute is deprecated: call the pod route"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if request.url.path.startswith("/pods/"):
+            return httpx.Response(
+                404,
+                json={"code": "POD_CONNECTOR_NOT_FOUND", "message": "no such slug"},
+            )
+        return httpx.Response(
+            200,
+            json={"result": {"ok": True}},
+            headers={"X-Lemma-Deprecation": notice, "Deprecation": "true"},
+        )
+
+    connectors = _pod_connectors_over(handler)
+
+    with pytest.warns(LemmaDeprecationWarning, match="call the pod route"):
+        result = connectors.execute("workspace-gmail", "GMAIL_LIST", {"n": 1})
+
+    assert result.result == {"ok": True}
+    pod_call, org_call = seen
+    assert pod_call.url.path.startswith(f"/pods/{POD_ID}/connectors/workspace-gmail/")
+    assert org_call.url.path == _org_execute_path("workspace-gmail", "GMAIL_LIST")
+    assert json.loads(org_call.content) == {"payload": {"n": 1}, "pod_id": POD_ID}
+
+
+def test_any_other_not_found_is_raised_not_retried_elsewhere() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(
+            404, json={"code": "OPERATION_NOT_FOUND", "message": "no such op"}
+        )
+
+    connectors = _pod_connectors_over(handler)
+
+    with pytest.raises(LemmaNotFoundError) as excinfo:
+        connectors.execute("gmail", "NOPE", {})
+
+    assert excinfo.value.code == "OPERATION_NOT_FOUND"
+    assert len(seen) == 1
+
+
+def test_operations_execute_sends_the_account_and_pod_it_is_given() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"result": {}})
+
+    connectors = _connectors_over(handler)
+    other_pod = "00000000-0000-0000-0000-0000000000dd"
+
+    connectors.operations.execute(
+        "workspace-gmail",
+        "GMAIL_SEND_EMAIL",
+        {"to": "a@b.c"},
+        account_id=ACCOUNT_ID,
+        pod_id=other_pod,
+    )
+    connectors.operations.execute("workspace-gmail", "GMAIL_LIST", {})
+
+    first, second = seen
+    assert first.method == "POST"
+    assert first.url.path == _org_execute_path("workspace-gmail", "GMAIL_SEND_EMAIL")
+    assert json.loads(first.content) == {
+        "payload": {"to": "a@b.c"},
+        "account_id": ACCOUNT_ID,
+        "pod_id": other_pod,
+    }
+    # Neither given, and no pod bound: only the payload is sent.
+    assert json.loads(second.content) == {"payload": {}}
 
 
 def test_a_connection_required_refusal_carries_its_connect_link() -> None:

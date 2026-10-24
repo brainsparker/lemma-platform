@@ -46,6 +46,14 @@ class SurfaceUpdateRequest(BaseModel):
             "Omit to keep the one it has."
         ),
     )
+    account_id: UUID | None = Field(
+        default=None,
+        deprecated=True,
+        description=(
+            "Deprecated: name `pod_connector` instead. Still accepted, as the "
+            "pod connector that serves this account to you."
+        ),
+    )
     credential_mode: SurfaceCredentialMode | None = None
     config: SurfaceBehaviorConfigInput = Field(
         default_factory=SurfaceBehaviorConfigInput

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import Any, TypeVar, cast
+from uuid import UUID
 
 from attrs import define as _attrs_define
 
@@ -21,6 +22,8 @@ class ImportStartRequest:
             ``URL`` covers any lemma-origin signed download URL (an export or an
             uploaded ``.zip`` staged into our object storage); ``GITHUB`` is a public
             repo fetched via the connector path.
+        account_id (None | Unset | UUID): Deprecated and ignored: a private repo is fetched through the pod's `github`
+            connector, as you.
         owner (None | str | Unset): GITHUB repo owner.
         ref (None | str | Unset): GITHUB branch/tag/sha (optional).
         repo (None | str | Unset): GITHUB repo name.
@@ -29,6 +32,7 @@ class ImportStartRequest:
     """
 
     kind: BundleSourceKind
+    account_id: None | Unset | UUID = UNSET
     owner: None | str | Unset = UNSET
     ref: None | str | Unset = UNSET
     repo: None | str | Unset = UNSET
@@ -36,6 +40,14 @@ class ImportStartRequest:
 
     def to_dict(self) -> dict[str, Any]:
         kind = self.kind.value
+
+        account_id: None | str | Unset
+        if isinstance(self.account_id, Unset):
+            account_id = UNSET
+        elif isinstance(self.account_id, UUID):
+            account_id = str(self.account_id)
+        else:
+            account_id = self.account_id
 
         owner: None | str | Unset
         if isinstance(self.owner, Unset):
@@ -68,6 +80,8 @@ class ImportStartRequest:
                 "kind": kind,
             }
         )
+        if account_id is not UNSET:
+            field_dict["account_id"] = account_id
         if owner is not UNSET:
             field_dict["owner"] = owner
         if ref is not UNSET:
@@ -83,6 +97,23 @@ class ImportStartRequest:
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         d = dict(src_dict)
         kind = BundleSourceKind(d.pop("kind"))
+
+        def _parse_account_id(data: object) -> None | Unset | UUID:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                account_id_type_0 = UUID(data)
+
+                return account_id_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(None | Unset | UUID, data)
+
+        account_id = _parse_account_id(d.pop("account_id", UNSET))
 
         def _parse_owner(data: object) -> None | str | Unset:
             if data is None:
@@ -122,6 +153,7 @@ class ImportStartRequest:
 
         import_start_request = cls(
             kind=kind,
+            account_id=account_id,
             owner=owner,
             ref=ref,
             repo=repo,

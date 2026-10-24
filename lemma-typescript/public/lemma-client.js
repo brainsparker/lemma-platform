@@ -10312,6 +10312,14 @@ var LemmaClient = (() => {
   }
 
   // src/http.ts
+  var DEPRECATION_HEADER = "x-lemma-deprecation";
+  var warnedDeprecations = /* @__PURE__ */ new Set();
+  function noteDeprecation(headers) {
+    const message = headers.get(DEPRECATION_HEADER);
+    if (!message || warnedDeprecations.has(message)) return;
+    warnedDeprecations.add(message);
+    console.warn(`[lemma] ${message}`);
+  }
   var DEFAULT_TIMEOUT_MS = 3e4;
   var DEFAULT_MAX_RETRIES = 2;
   var ApiError = class extends Error {
@@ -10665,6 +10673,7 @@ var LemmaClient = (() => {
         if (!response.ok) {
           throw await this.failure(response);
         }
+        noteDeprecation(response.headers);
         if (response.status === 204) {
           return void 0;
         }
@@ -14347,6 +14356,33 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * @deprecated
+     * Execute Connector Operation (deprecated)
+     * Deprecated: use `pod.connector.operation.execute`. Still served, through the connectors the caller's pod declares for this installation; a person outside any pod uses their own account.
+     * @param organizationId
+     * @param authConfigName
+     * @param operationName
+     * @param requestBody
+     * @returns OperationExecutionResponse Successful Response
+     * @throws ApiError
+     */
+    static connectorOperationExecute(organizationId, authConfigName, operationName, requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/organizations/{organization_id}/connectors/{auth_config_name}/operations/{operation_name}/execute",
+        path: {
+          "organization_id": organizationId,
+          "auth_config_name": authConfigName,
+          "operation_name": operationName
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * List Connector Triggers
      * @param organizationId
      * @param authConfigName
@@ -14743,6 +14779,27 @@ var LemmaClient = (() => {
             scope.authConfigName,
             body
           ));
+        },
+        /**
+         * @deprecated Use `connectors.pod.execute(slug, operationName, payload)`:
+         * the pod connector decides the account, so drop `accountId`. Still served
+         * -- through the connectors the pod declares for this installation -- and
+         * each response says so, which this client logs once as a warning.
+         */
+        execute: (scope, operationName, payload, accountId) => {
+          var _a;
+          const podId = (_a = scope.podId) != null ? _a : this.currentPodId();
+          return this.http.request(
+            "POST",
+            `/organizations/${encodePath(scope.organizationId)}/connectors/${encodePath(scope.authConfigName)}/operations/${encodePath(operationName)}/execute`,
+            {
+              body: {
+                payload,
+                ...accountId ? { account_id: accountId } : {},
+                ...podId ? { pod_id: podId } : {}
+              }
+            }
+          );
         }
       });
       /**
@@ -14910,6 +14967,14 @@ var LemmaClient = (() => {
     }
     get(connectorId) {
       return this.client.request(() => ConnectorsService.connectorGet(connectorId));
+    }
+    /** The client's pod when it has one; the deprecated execute works without. */
+    currentPodId() {
+      try {
+        return this.podId();
+      } catch {
+        return void 0;
+      }
     }
     /**
      * Every pod one of my accounts is in: its visibility there, the SHARED pod

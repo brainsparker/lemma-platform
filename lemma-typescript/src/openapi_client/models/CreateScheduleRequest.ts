@@ -8,6 +8,11 @@ import type { ScheduleType } from './ScheduleType.js';
  */
 export type CreateScheduleRequest = {
     /**
+     * Deprecated: name `pod_connector` instead. Still accepted, as the pod connector that serves this account to you.
+     * @deprecated
+     */
+    account_id?: (string | null);
+    /**
      * Pod agent to wake, by name. Pass 'POD_DEFAULT' (or 'pod_default') to wake the pod's default assistant, which has no name of its own.
      */
     agent_name?: (string | null);

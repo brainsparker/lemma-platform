@@ -8,6 +8,16 @@ class LemmaError(Exception):
     """Base exception for the Lemma SDK."""
 
 
+class LemmaDeprecationWarning(UserWarning):
+    """A call the server still serves but will stop serving.
+
+    A ``UserWarning``, not a ``DeprecationWarning``: Python hides the latter
+    outside ``__main__``, and the code calling a deprecated route is nearly
+    always a pod function or an agent's script, which is exactly who has to
+    see it. The message says what to call instead.
+    """
+
+
 class LemmaConfigError(LemmaError):
     """Raised when SDK configuration is missing or invalid."""
 

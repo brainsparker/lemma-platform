@@ -155,6 +155,7 @@ friendly verbs, or raw permission ids when you need one the presets don't cover.
 | `/knowledge:read` | `folder` → `folder.read` | a shared folder **and everything beneath it** |
 | `/me/drafts:write` | `folder` → `folder.write` | the invoking user's private area |
 | `doc:/contracts/msa.pdf:read` | `document` → `folder.read` | one specific file |
+| `/reports:read,share` | `folder` → `folder.read`, `folder.share` | read files and make public links to them |
 | `connector:gmail:use` | `connector` → `connector.use` | one of the pod's connectors, by slug (see below) |
 | `function:score_ticket:execute` | `function` → `function.execute` | expose a function as a tool (§6) |
 | `agent:researcher:execute` | `agent` → `agent.execute` | dispatch another agent (§7) |

@@ -46,7 +46,7 @@ DIRECTORY_READY_SECONDS = 60.0
 INTERACTIVE_READY_SECONDS = 15.0
 
 
-#: `(loop id, workspace, path, allocation epoch, storage generation)`. The last two
+#: `(loop id, user, path, allocation epoch, storage generation)`. The last two
 #: are what let a recreated workspace stop looking ready; when they cannot be
 #: resolved the key still identifies the work, just not its freshness.
 _CacheKey = tuple[int, UUID, str, int, str]
@@ -95,17 +95,17 @@ class WorkspaceDirectoryEnsureMixin:
         raise NotImplementedError
 
     async def get_or_create_sandbox(  # pragma: no cover
-        self, workspace_id: UUID, *, force_reconcile: bool = False
+        self, user_id: UUID, *, force_reconcile: bool = False
     ) -> SandboxInfo:
         raise NotImplementedError
 
     @classmethod
-    def forget_workspace(cls, workspace_id: UUID) -> None:  # pragma: no cover
+    def forget_workspace(cls, user_id: UUID) -> None:  # pragma: no cover
         raise NotImplementedError
 
     async def _ensure_workspace_directory(
         self,
-        workspace_id: UUID,
+        user_id: UUID,
         path: str,
         *,
         budget: ReadyBudget | None = None,
@@ -120,27 +120,21 @@ class WorkspaceDirectoryEnsureMixin:
         # `get_or_create_sandbox` before its own limit was even consulted.
         budget = budget or ReadyBudget(None)
         sandbox_info = await self._await_shared(
-            self.get_or_create_sandbox(workspace_id), budget.remaining()
+            self.get_or_create_sandbox(user_id), budget.remaining()
         )
-        resolved = self._directory_cache_key(workspace_id, path, sandbox_info)
+        resolved = self._directory_cache_key(user_id, path, sandbox_info)
         # Two separate questions.
         #
         # Whether readiness may be *remembered* needs an epoch and a storage
         # generation, so that a recreated workspace stops looking ready. When
         # those are missing there is no safe key and readiness is not cached.
         #
-        # Whether the in-flight task can be *cancelled* needs only the workspace, and
+        # Whether the in-flight task can be *cancelled* needs only the user, and
         # `stop_sandbox` cancels by prefix. A task outside that map survives the
         # stop and can re-provision the sandbox it was told to abandon, so this
         # branch still registers one -- under a sentinel key nothing reads back.
         cacheable = resolved is not None
-        cache_key = resolved or (
-            id(asyncio.get_running_loop()),
-            workspace_id,
-            path,
-            -1,
-            "",
-        )
+        cache_key = resolved or (id(asyncio.get_running_loop()), user_id, path, -1, "")
 
         if cacheable and self._directory_is_still_ready(cache_key):
             # The freshly resolved info, never the one cached alongside the
@@ -154,7 +148,7 @@ class WorkspaceDirectoryEnsureMixin:
 
         task = self._directory_task(
             cache_key,
-            workspace_id,
+            user_id,
             path,
             sandbox_info=sandbox_info,
             deadline_at=deadline_at,
@@ -177,7 +171,7 @@ class WorkspaceDirectoryEnsureMixin:
     def _directory_task(
         self,
         cache_key: _CacheKey,
-        workspace_id: UUID,
+        user_id: UUID,
         path: str,
         *,
         sandbox_info: SandboxInfo,
@@ -195,12 +189,12 @@ class WorkspaceDirectoryEnsureMixin:
 
         task = create_inherited_task(
             self._create_workspace_directory_until_ready(
-                workspace_id,
+                user_id,
                 path,
                 sandbox_info=sandbox_info,
                 deadline_at=deadline_at,
             ),
-            name=f"workspace-directory-ensure:{workspace_id}:{path}",
+            name=f"workspace-directory-ensure:{user_id}:{path}",
         )
         self._inflight_directories[cache_key] = task
 
@@ -261,7 +255,7 @@ class WorkspaceDirectoryEnsureMixin:
 
     async def _create_workspace_directory_until_ready(
         self,
-        workspace_id: UUID,
+        user_id: UUID,
         path: str,
         *,
         sandbox_info: SandboxInfo,
@@ -275,12 +269,12 @@ class WorkspaceDirectoryEnsureMixin:
             try:
                 if reconciling:
                     sandbox_info = await self.get_or_create_sandbox(
-                        workspace_id,
+                        user_id,
                         force_reconcile=True,
                     )
                     reconciling = False
                 await self._get_manager_client().create_directory(
-                    workspace_id,
+                    user_id,
                     path,
                     deadline_at=deadline_at,
                 )
@@ -303,7 +297,7 @@ class WorkspaceDirectoryEnsureMixin:
                     record_sandbox_unreachable()
                     logger.warning(
                         "workspace.sandbox_service.directory_ensure_refused.degraded",
-                        sandbox_id=str(workspace_id),
+                        user_id=str(user_id),
                         path=path,
                         reconciling=reconciling,
                         error_type=type(exc).__name__,
@@ -325,26 +319,26 @@ class WorkspaceDirectoryEnsureMixin:
         # storage -- `ProviderStorageKind.SANDBOX_NATIVE` -- so destroying the
         # instance to get a fresh one would take the user's files with it.
         # Recovery here means dropping what we think we know and asking again.
-        self.forget_workspace(workspace_id)
+        self.forget_workspace(user_id)
         # The startup probe proves only that a provider object can be built. An
         # operation that gave up is the evidence that the fabric is not usable,
         # so `/health/capabilities` has to hear about it.
         record_sandbox_unreachable()
         logger.warning(
             "workspace.sandbox_service.directory_ensure_exhausted.degraded",
-            sandbox_id=str(workspace_id),
+            user_id=str(user_id),
             path=path,
             attempts=attempts,
             reason=reason,
         )
         raise TimeoutError(
-            f"workspace sandbox {workspace_id} did not become usable "
+            f"workspace sandbox {user_id} did not become usable "
             f"after {attempts} attempts: {reason}"
         )
 
     def _directory_cache_key(
         self,
-        workspace_id: UUID,
+        user_id: UUID,
         path: str,
         sandbox_info: SandboxInfo,
     ) -> tuple[int, UUID, str, int, str] | None:
@@ -367,11 +361,11 @@ class WorkspaceDirectoryEnsureMixin:
             or sandbox_info.storage_generation is None
         ):
             return None
-        # The leading (loop id, workspace id) must stay a prefix of the ensure key:
+        # The leading (loop id, user id) must stay a prefix of the ensure key:
         # stop_sandbox cancels directory tasks by matching that prefix.
         return (
             id(asyncio.get_running_loop()),
-            workspace_id,
+            user_id,
             sandbox_info.allocation_id,
             sandbox_info.storage_generation,
             path,

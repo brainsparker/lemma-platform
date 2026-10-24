@@ -1,6 +1,5 @@
 from http import HTTPStatus
 from typing import Any
-from uuid import UUID
 
 import httpx
 
@@ -9,43 +8,18 @@ from ...client import AuthenticatedClient, Client
 from ...models.display_size_request import DisplaySizeRequest
 from ...models.display_size_response import DisplaySizeResponse
 from ...models.error_response import ErrorResponse
-from ...types import UNSET, Response, Unset
+from ...types import Response
 
 
 def _get_kwargs(
     *,
     body: DisplaySizeRequest,
-    pod_id: None | Unset | UUID = UNSET,
-    agent: None | Unset | UUID = UNSET,
 ) -> dict[str, Any]:
     headers: dict[str, Any] = {}
-
-    params: dict[str, Any] = {}
-
-    json_pod_id: None | str | Unset
-    if isinstance(pod_id, Unset):
-        json_pod_id = UNSET
-    elif isinstance(pod_id, UUID):
-        json_pod_id = str(pod_id)
-    else:
-        json_pod_id = pod_id
-    params["pod_id"] = json_pod_id
-
-    json_agent: None | str | Unset
-    if isinstance(agent, Unset):
-        json_agent = UNSET
-    elif isinstance(agent, UUID):
-        json_agent = str(agent)
-    else:
-        json_agent = agent
-    params["agent"] = json_agent
-
-    params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
     _kwargs: dict[str, Any] = {
         "method": "post",
         "url": "/workspace/browser/display-size",
-        "params": params,
     }
 
     _kwargs["json"] = body.to_dict()
@@ -90,8 +64,6 @@ def sync_detailed(
     *,
     client: AuthenticatedClient | Client,
     body: DisplaySizeRequest,
-    pod_id: None | Unset | UUID = UNSET,
-    agent: None | Unset | UUID = UNSET,
 ) -> Response[DisplaySizeResponse | ErrorResponse]:
     """Fit the workspace display to the pane showing it
 
@@ -108,10 +80,6 @@ def sync_detailed(
     than a status code the pane would have to special-case.
 
     Args:
-        pod_id (None | Unset | UUID): The pod whose workspace to use. Each pod has its own, with
-            its own files and browser. Omitted, your personal workspace.
-        agent (None | Unset | UUID): A named agent of `pod_id`, to use that agent's workspace.
-            Each agent has its own. Omitted, the pod assistant's.
         body (DisplaySizeRequest): The size the pane wants its picture to be, in CSS pixels.
 
             Bounded here because these numbers come from a browser window and decide
@@ -129,8 +97,6 @@ def sync_detailed(
 
     kwargs = _get_kwargs(
         body=body,
-        pod_id=pod_id,
-        agent=agent,
     )
 
     response = client.get_httpx_client().request(
@@ -144,8 +110,6 @@ def sync(
     *,
     client: AuthenticatedClient | Client,
     body: DisplaySizeRequest,
-    pod_id: None | Unset | UUID = UNSET,
-    agent: None | Unset | UUID = UNSET,
 ) -> DisplaySizeResponse | ErrorResponse | None:
     """Fit the workspace display to the pane showing it
 
@@ -162,10 +126,6 @@ def sync(
     than a status code the pane would have to special-case.
 
     Args:
-        pod_id (None | Unset | UUID): The pod whose workspace to use. Each pod has its own, with
-            its own files and browser. Omitted, your personal workspace.
-        agent (None | Unset | UUID): A named agent of `pod_id`, to use that agent's workspace.
-            Each agent has its own. Omitted, the pod assistant's.
         body (DisplaySizeRequest): The size the pane wants its picture to be, in CSS pixels.
 
             Bounded here because these numbers come from a browser window and decide
@@ -184,8 +144,6 @@ def sync(
     return sync_detailed(
         client=client,
         body=body,
-        pod_id=pod_id,
-        agent=agent,
     ).parsed
 
 
@@ -193,8 +151,6 @@ async def asyncio_detailed(
     *,
     client: AuthenticatedClient | Client,
     body: DisplaySizeRequest,
-    pod_id: None | Unset | UUID = UNSET,
-    agent: None | Unset | UUID = UNSET,
 ) -> Response[DisplaySizeResponse | ErrorResponse]:
     """Fit the workspace display to the pane showing it
 
@@ -211,10 +167,6 @@ async def asyncio_detailed(
     than a status code the pane would have to special-case.
 
     Args:
-        pod_id (None | Unset | UUID): The pod whose workspace to use. Each pod has its own, with
-            its own files and browser. Omitted, your personal workspace.
-        agent (None | Unset | UUID): A named agent of `pod_id`, to use that agent's workspace.
-            Each agent has its own. Omitted, the pod assistant's.
         body (DisplaySizeRequest): The size the pane wants its picture to be, in CSS pixels.
 
             Bounded here because these numbers come from a browser window and decide
@@ -232,8 +184,6 @@ async def asyncio_detailed(
 
     kwargs = _get_kwargs(
         body=body,
-        pod_id=pod_id,
-        agent=agent,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -245,8 +195,6 @@ async def asyncio(
     *,
     client: AuthenticatedClient | Client,
     body: DisplaySizeRequest,
-    pod_id: None | Unset | UUID = UNSET,
-    agent: None | Unset | UUID = UNSET,
 ) -> DisplaySizeResponse | ErrorResponse | None:
     """Fit the workspace display to the pane showing it
 
@@ -263,10 +211,6 @@ async def asyncio(
     than a status code the pane would have to special-case.
 
     Args:
-        pod_id (None | Unset | UUID): The pod whose workspace to use. Each pod has its own, with
-            its own files and browser. Omitted, your personal workspace.
-        agent (None | Unset | UUID): A named agent of `pod_id`, to use that agent's workspace.
-            Each agent has its own. Omitted, the pod assistant's.
         body (DisplaySizeRequest): The size the pane wants its picture to be, in CSS pixels.
 
             Bounded here because these numbers come from a browser window and decide
@@ -286,7 +230,5 @@ async def asyncio(
         await asyncio_detailed(
             client=client,
             body=body,
-            pod_id=pod_id,
-            agent=agent,
         )
     ).parsed

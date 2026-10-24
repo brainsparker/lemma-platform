@@ -40,17 +40,10 @@ measure it, they are absent.
 ## `workspace.files.list`
 
 Lists one directory of the caller's own workspace. A workspace is keyed by user,
-pod and actor, so the session decides whose workspace it is and there is no
-sandbox parameter to point elsewhere. `pod_id` picks the pod -- refused with the
-error a read of that pod would give when the caller cannot see it -- and `agent`
-one of its named agents, each of which runs in a workspace of its own; without
-`agent` it is the pod assistant's. An `agent` that is not the pod's is a 404, and
-one without a `pod_id` a 422. Without `pod_id` it is the caller's personal
-workspace, which is what every route here served before workspaces were split.
-The same parameters are taken, and checked the same way, by
-`workspace.files.stat`, `workspace.files.content`, `workspace.status`,
-`workspace.browser.*` and the browser view socket, which also accepts a
-`conversation` alone and opens the browser of that conversation's agent.
+so the session is the whole authorization check and there is no sandbox
+parameter to point elsewhere. There is one per person, whichever pod or agent a
+conversation is with, so these routes take no pod or agent either: what an
+agent wrote in any conversation is here.
 
 **Ambient by default.** A paused workspace is not started to answer; the response
 comes back with `sleeping: true` and no entries. `wake=true` starts it. This is

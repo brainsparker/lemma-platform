@@ -273,6 +273,7 @@ export type { InboxTotals } from './models/InboxTotals.js';
 export type { InstallationBindSchema } from './models/InstallationBindSchema.js';
 export type { InstallationChoiceSchema } from './models/InstallationChoiceSchema.js';
 export type { InstallationImpactResponse } from './models/InstallationImpactResponse.js';
+export type { InstallationOperationExecutionRequest } from './models/InstallationOperationExecutionRequest.js';
 export type { InstallationOption } from './models/InstallationOption.js';
 export type { InstalledAppSummary } from './models/InstalledAppSummary.js';
 export type { InstallRequestInitiateSchema } from './models/InstallRequestInitiateSchema.js';

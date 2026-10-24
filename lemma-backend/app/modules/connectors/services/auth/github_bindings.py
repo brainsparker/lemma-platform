@@ -8,8 +8,9 @@ read on one repository can -- and that used to be the whole check. The account
 that carried the number then got the App's token on every repository in the
 installation, and the installation's webhooks ran its organization's schedules.
 
-So an installation is bound to an organization (``github_installations``), and
-everything that acts on one looks the binding up:
+So an installation is bound to an organization (``connector_installations``,
+with ``connector_id = 'github'``), and everything that acts on one looks the
+binding up:
 
 - **claiming** -- the setup callback, reconciling an account, binding one by
   hand -- accepts an installation already bound to the claimant's
@@ -36,18 +37,24 @@ from __future__ import annotations
 from collections.abc import Iterable
 from uuid import UUID, uuid7
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.log.log import get_logger
 from app.modules.connectors.domain.account import AccountEntity
+from app.core.authorization.permissions import Permissions
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.connectors.domain.github_installation_errors import (
     GithubInstallationBoundElsewhereError,
     GithubInstallationNotAdministeredError,
+    InstallationClaimNotPermittedError,
 )
-from app.modules.connectors.infrastructure.models.github_installation import (
-    GithubInstallation,
+from app.modules.connectors.infrastructure.adapters.organization_access import (
+    SqlAlchemyOrganizationAccessAdapter,
+)
+from app.modules.connectors.infrastructure.models.connector_installation import (
+    ConnectorInstallation,
 )
 
 logger = get_logger(__name__)
@@ -64,8 +71,9 @@ async def bound_organization(
 ) -> UUID | None:
     """The organization this installation is bound to, if any."""
     return await session.scalar(
-        select(GithubInstallation.organization_id).where(
-            GithubInstallation.installation_id == str(installation_id)
+        select(ConnectorInstallation.organization_id).where(
+            ConnectorInstallation.connector_id == GITHUB,
+            ConnectorInstallation.external_id == str(installation_id),
         )
     )
 
@@ -79,8 +87,11 @@ async def claimable_by(
         return set()
     rows = await session.execute(
         select(
-            GithubInstallation.installation_id, GithubInstallation.organization_id
-        ).where(GithubInstallation.installation_id.in_(wanted))
+            ConnectorInstallation.external_id, ConnectorInstallation.organization_id
+        ).where(
+            ConnectorInstallation.connector_id == GITHUB,
+            ConnectorInstallation.external_id.in_(wanted),
+        )
     )
     elsewhere = {
         installation_id
@@ -98,6 +109,18 @@ def _refused_elsewhere(organization_id: UUID) -> GithubInstallationBoundElsewher
     return GithubInstallationBoundElsewhereError()
 
 
+async def _may_install(
+    session: AsyncSession, user_id: UUID | None, organization_id: UUID
+) -> bool:
+    """Whether the claimant may install apps for the organization in Lemma."""
+    if user_id is None:
+        return False
+    access = SqlAlchemyOrganizationAccessAdapter(SqlAlchemyUnitOfWork(session))
+    return await access.user_holds_organization_permission(
+        user_id, organization_id, Permissions.ORG_INSTALLATION_MANAGE
+    )
+
+
 async def claim_installation(
     session: AsyncSession,
     *,
@@ -111,7 +134,8 @@ async def claim_installation(
     Already this organization's: nothing to do, and no proof needed -- anyone
     in it may connect through an installation it holds. Another's: refused.
     Nobody's: bound here only if ``administered`` -- GitHub said the claimant
-    controls it -- and then by an insert that does nothing on conflict followed
+    controls it -- and the claimant may install apps for the organization in
+    Lemma (``org.installation.manage``), and then by an insert that does nothing on conflict followed
     by a read of the winner, so two organizations racing for it cannot both
     believe they hold it.
     """
@@ -126,16 +150,23 @@ async def claim_installation(
             organization_id=str(organization_id),
         )
         raise GithubInstallationNotAdministeredError()
+    if not await _may_install(session, user_id, organization_id):
+        logger.warning(
+            "connectors.github_bindings.claim_not_permitted.denied",
+            organization_id=str(organization_id),
+        )
+        raise InstallationClaimNotPermittedError()
     inserted = await session.execute(
-        insert(GithubInstallation)
+        insert(ConnectorInstallation)
         .values(
             id=uuid7(),
-            installation_id=str(installation_id),
+            connector_id=GITHUB,
+            external_id=str(installation_id),
             organization_id=organization_id,
             bound_by_user_id=user_id,
         )
-        .on_conflict_do_nothing(index_elements=["installation_id"])
-        .returning(GithubInstallation.id)
+        .on_conflict_do_nothing(index_elements=["connector_id", "external_id"])
+        .returning(ConnectorInstallation.id)
     )
     if inserted.scalar() is not None:
         logger.info(
@@ -164,6 +195,26 @@ async def claim_for_account(
         user_id=account.user_id,
         administered=administered,
     )
+
+
+async def release_installation(session: AsyncSession, installation_id: str) -> bool:
+    """Let go of an installation GitHub says was uninstalled.
+
+    Only on GitHub's own signed ``installation.deleted``: the installation no
+    longer exists upstream, so whoever installs the App again -- the same
+    organization or another -- claims it afresh, with proof. A suspended one
+    keeps its binding: suspending is undone by unsuspending it, not by a new
+    claim.
+    """
+    released = await session.execute(
+        delete(ConnectorInstallation)
+        .where(
+            ConnectorInstallation.connector_id == GITHUB,
+            ConnectorInstallation.external_id == str(installation_id),
+        )
+        .returning(ConnectorInstallation.id)
+    )
+    return released.scalar() is not None
 
 
 class InstallationBindings:
@@ -222,5 +273,6 @@ __all__ = [
     "claim_installation",
     "claimable_by",
     "is_github",
+    "release_installation",
     "routable_external_ref",
 ]

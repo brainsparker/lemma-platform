@@ -4,13 +4,19 @@ from collections.abc import Sequence
 from functools import partial
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 
 from app.core.authorization.delegation import is_pod_default_agent
 from app.core.authorization.context import ResourceRef, ResourceType
 from app.core.authorization.dependencies import PodContextDep, require_action
 from app.core.authorization.permissions import Permissions
 from app.core.api.dependencies import CurrentUser, UoWDep
+from app.core.api.deprecation import note_deprecated_use
+from app.modules.connectors.contracts.pod_connectors import (
+    ACCOUNT_ADDRESSING_SUNSET,
+    ACCOUNT_ID_REPLACEMENT,
+)
+from app.modules.connectors.contracts.pod_connectors import pod_connector_for_account
 from app.core.api.pagination import parse_uuid_page_token
 from app.modules.agent.contracts.agents import (
     agent_id_for_name,
@@ -208,6 +214,30 @@ async def list_surfaces(
     )
 
 
+async def _pod_connector_from_account(
+    request: SurfaceCreateRequest | SurfaceUpdateRequest,
+    *,
+    pod_id: UUID,
+    uow: UoWDep,
+    ctx: PodContextDep,
+    http_request: Request,
+    response: Response,
+) -> None:
+    """Translate a deprecated ``account_id`` into the pod connector it means."""
+    if request.account_id is None or request.pod_connector is not None:
+        return
+    request.pod_connector = await pod_connector_for_account(
+        uow, ctx, pod_id=pod_id, account_id=request.account_id
+    )
+    note_deprecated_use(
+        http_request,
+        response,
+        use="agent.surface.account_id",
+        replacement=ACCOUNT_ID_REPLACEMENT,
+        sunset=ACCOUNT_ADDRESSING_SUNSET,
+    )
+
+
 @router.post(
     "",
     operation_id="agent.surface.create",
@@ -220,6 +250,8 @@ async def create_surface(
     uow: UoWDep,
     ctx: PodContextDep,
     connection_resolver: SurfaceConnectionResolverDep,
+    http_request: Request,
+    response: Response,
     service: AgentSurfaceService = Depends(get_surface_service),
 ) -> AgentSurfaceResponse:
     """Create a surface. ``name`` defaults to the lowercased platform and is the
@@ -243,6 +275,14 @@ async def create_surface(
         pod_id=pod_id,
         agent_id=agent_id,
         action=Permissions.AGENT_UPDATE,
+    )
+    await _pod_connector_from_account(
+        request,
+        pod_id=pod_id,
+        uow=uow,
+        ctx=ctx,
+        http_request=http_request,
+        response=response,
     )
 
     config = await resolve_surface_config(
@@ -331,6 +371,8 @@ async def update_surface(
     uow: UoWDep,
     ctx: PodContextDep,
     connection_resolver: SurfaceConnectionResolverDep,
+    http_request: Request,
+    response: Response,
     service: AgentSurfaceService = Depends(get_surface_service),
 ) -> AgentSurfaceResponse:
     """Partially update a surface. Only fields present in the request are
@@ -364,6 +406,14 @@ async def update_surface(
             agent_id=checked_agent_id,
             action=Permissions.AGENT_UPDATE,
         )
+    await _pod_connector_from_account(
+        request,
+        pod_id=pod_id,
+        uow=uow,
+        ctx=ctx,
+        http_request=http_request,
+        response=response,
+    )
     config = await merge_surface_config(
         uow=uow,
         existing=existing.config,

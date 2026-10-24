@@ -2,17 +2,25 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
 
 from app.core.api.dependencies import CurrentUser
+from app.core.api.deprecation import deprecated_route
 from app.modules.connectors.api.dependencies import (
     ConnectorOperationServiceDep,
+    ConnectorOperationUseCasesDep,
 )
 from app.modules.connectors.api.schemas.connector_operation_schemas import (
     OperationDetail,
     OperationDetailsBatchRequest,
     OperationDetailsBatchResponse,
     OperationDiscoverResponse,
+    OperationExecutionResponse,
+    InstallationOperationExecutionRequest,
+)
+from app.modules.connectors.contracts.pod_connectors import (
+    ACCOUNT_ADDRESSING_SUNSET,
+    EXECUTE_REPLACEMENT,
 )
 
 router = APIRouter(
@@ -123,4 +131,43 @@ async def get_operation_details(
         organization_id=organization_id,
         auth_config_name=auth_config_name,
         operation_name=operation_name,
+    )
+
+
+@router.post(
+    "/{operation_name}/execute",
+    response_model=OperationExecutionResponse,
+    summary="Execute Connector Operation (deprecated)",
+    description=(
+        "Deprecated: use `pod.connector.operation.execute`. Still served, "
+        "through the connectors the caller's pod declares for this "
+        "installation; a person outside any pod uses their own account."
+    ),
+    **deprecated_route(
+        operation_id="connector.operation.execute",
+        replacement=EXECUTE_REPLACEMENT,
+        sunset=ACCOUNT_ADDRESSING_SUNSET,
+    ),
+)
+async def execute_operation(
+    organization_id: UUID,
+    auth_config_name: str,
+    operation_name: str,
+    body: InstallationOperationExecutionRequest,
+    request: Request,
+    user: CurrentUser,
+    use_cases: ConnectorOperationUseCasesDep,
+) -> OperationExecutionResponse:
+    # No request-scoped service or context: the use case authorizes and
+    # resolves in a short scope and makes the external call holding no pooled
+    # connection, the same saga as the pod route.
+    return await use_cases.execute_installation_operation(
+        organization_id=organization_id,
+        auth_config_name=auth_config_name,
+        operation_name=operation_name,
+        payload=body.payload,
+        account_id=UUID(body.account_id) if body.account_id else None,
+        pod_id=body.pod_id,
+        user_id=user.id,
+        request=request,
     )

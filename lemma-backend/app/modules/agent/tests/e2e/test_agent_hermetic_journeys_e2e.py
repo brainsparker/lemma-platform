@@ -2079,7 +2079,9 @@ async def test_scripted_pod_data_and_file_tools_cross_worker_authorization_bound
                 {
                     "resource_type": "folder",
                     "resource_name": root,
-                    "permission_ids": ["folder.read", "folder.write"],
+                    # `folder.share` for the public link: a named agent makes
+                    # one only where it was granted to (audit M22).
+                    "permission_ids": ["folder.read", "folder.write", "folder.share"],
                 },
             ]
         },
@@ -2248,6 +2250,7 @@ async def test_scripted_pod_data_and_file_tools_cross_worker_authorization_bound
         "files-tree",
         "file-read",
         "file-app-url",
+        "file-public-url",
         "files-search",
     ):
         assert returns[tool_call_id]["success"] is True, (tool_call_id, returns)
@@ -2259,10 +2262,7 @@ async def test_scripted_pod_data_and_file_tools_cross_worker_authorization_bound
     assert returns["record-delete"]["deleted"] is True
     assert returns["file-overwrite"]["created"] is False
     assert returns["file-read"]["text"] == "replacement version"
-    # A public link hands the file to anyone holding it, outside every grant:
-    # sharing is a person's act, so a named agent may not mint one (M22).
-    assert returns["file-public-url"]["success"] is False
-    assert "public link" in str(returns["file-public-url"]), returns["file-public-url"]
+    assert returns["file-public-url"]["max_hits"] == 2
 
     records = await owner.list_records(table_name)
     assert [item["title"] for item in records["items"]] == ["created by model"]

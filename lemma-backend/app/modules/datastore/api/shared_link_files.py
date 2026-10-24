@@ -1,10 +1,10 @@
 """The live half of a public link: what is at its path now, and may it go out.
 
-A link records a path and an authority — the person who shared it. It does not
-record bytes. Every fetch looks the path up again and asks, as that person,
-whether it may still be read: so an edited page is served edited, a deleted one
-stops resolving, and a person who loses access to a file stops sharing it with
-them.
+A link records a path and an authority — who shared it, and the agent that did
+it for them if one did. It does not record bytes. Every fetch looks the path up
+again and asks, as that authority, whether it may still be read: so an edited
+page is served edited, a deleted one stops resolving, and a person who loses
+access to a file stops sharing it with them.
 
 The same question decides what a shared page may carry. A reference it embeds
 is served only while the page still embeds it, only while the person who shared
@@ -26,6 +26,7 @@ import hashlib
 import json
 from contextlib import suppress
 from dataclasses import asdict, dataclass
+from uuid import UUID
 
 from redis.exceptions import RedisError
 
@@ -59,6 +60,7 @@ from app.modules.datastore.services.files.embedded_references import (
     resolve_reference,
 )
 from app.modules.datastore.services.files.projection import datastore_storage_key
+from app.modules.datastore.services.files.signed_links import ACTING_ALONE
 from app.modules.datastore.services.files.signed_url import SignedUrlClaims
 
 logger = get_logger(__name__)
@@ -117,19 +119,43 @@ class LiveFile:
 async def _authority(
     uow: SqlAlchemyUnitOfWork, claims: SignedUrlClaims
 ) -> Context | None:
-    """The person who shared the link, as they stand now. None when nobody does.
+    """The context the minter was held to, rebuilt now. None when nobody vouches.
 
-    Only a person mints a public link — the assistant mints as its person, and
-    a named agent or function is refused — so a link is re-checked as that
-    person alone. One whose person has been deleted (`created_by_user_id` is
-    nulled on delete) has nobody left to ask, and serves nothing rather than
-    everything.
+    A link whose person has been deleted (`created_by_user_id` is nulled on
+    delete) has nobody left to ask, so it serves nothing rather than everything
+    — and that holds for a link an agent minted for them too, which must not
+    fall back to the agent's own, wider, authority. Only a workload that minted
+    for nobody (``ACTING_ALONE``) is re-checked as itself.
     """
-    if claims.created_by_user_id is None:
+    authorization = create_authorization_data_service(uow)
+    user_id = claims.created_by_user_id
+    if claims.minted_by_workload:
+        workload = claims.minted_by_workload
+        alone = workload.startswith(ACTING_ALONE)
+        if alone:
+            workload = workload.removeprefix(ACTING_ALONE)
+        kind, _, raw_id = workload.partition(":")
+        try:
+            principal_id = UUID(raw_id)
+        except ValueError:
+            return None
+        if alone:
+            return await authorization.build_workload_context(
+                principal_type=kind.upper(),
+                principal_id=principal_id,
+                pod_id=claims.pod_id,
+            )
+        if user_id is None:
+            return None
+        return await authorization.build_delegated_workload_context(
+            user_id=user_id,
+            principal_type=kind.upper(),
+            principal_id=principal_id,
+            pod_id=claims.pod_id,
+        )
+    if user_id is None:
         return None
-    return await create_authorization_data_service(uow).build_user_context(
-        user_id=claims.created_by_user_id, pod_id=claims.pod_id
-    )
+    return await authorization.build_user_context(user_id=user_id, pod_id=claims.pod_id)
 
 
 async def _read_as_sharer(claims: SignedUrlClaims, path: str) -> LiveFile:

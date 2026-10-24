@@ -1,7 +1,7 @@
 """Migration 0063, its last three steps: record deletes become their own
 permission, Lemma-made Slack apps are marked as such on the surfaces bound
-before the flag existed, and the public links a named agent or function minted
-are deleted along with the column that recorded it (audit M22).
+before the flag existed, and making a public link to a file becomes its own
+permission, `folder.share`, with every existing link kept (audit M22).
 
 Seeded before it, in one pod: the system role POD_USER and a custom role, both
 holding `datastore.record.write`, and that permission granted on a table to a
@@ -10,10 +10,13 @@ member's account, one connected through an install Lemma made (named after the
 app id) and one through an install a person brought (named after the client
 id). After it: both roles and every grant but the pod's carry
 `datastore.record.delete` too, and only the Lemma-made surface -- now on a pod
-connector -- says `app_made_by_lemma`. Then two public links to a file in the
-pod, one a person minted and one an agent minted for them: after it only the
-person's is left, and `minted_by_workload` is gone. The downgrade takes the
-first two back and the column with them, empty; the agent's link stays deleted.
+connector -- says `app_made_by_lemma`. Then POD_USER holding `folder.read`, a
+custom role holding only `folder.write`, and `folder.read` granted on a folder
+to a member, a role, an agent, a function and another pod; and two public links
+to a file, one a person minted and one an agent minted for them. After it: both
+roles, and only the member's and the role's grants, carry `folder.share`; both
+links are still there, and so is `minted_by_workload`. The downgrade takes all
+three back and leaves both links alone.
 """
 
 from __future__ import annotations
@@ -39,6 +42,10 @@ REVISION = "0063_pod_connectors"
 WRITE = "datastore.record.write"
 DELETE = "datastore.record.delete"
 GRANTEES = ("POD_MEMBER", "ROLE", "AGENT", "POD")
+READ_FILES = "folder.read"
+WRITE_FILES = "folder.write"
+SHARE = "folder.share"
+FILE_GRANTEES = ("POD_MEMBER", "ROLE", "AGENT", "FUNCTION", "POD")
 
 
 def _migrate(database_url: str, direction: str, revision: str) -> None:
@@ -65,6 +72,8 @@ def _seed(plain_url: str) -> dict[str, UUID]:
             "table",
             "system_role",
             "custom_role",
+            "file_role",
+            "folder",
             "lemma_install",
             "own_install",
             "lemma_account",
@@ -134,6 +143,50 @@ def _seed(plain_url: str) -> dict[str, UUID]:
                 "INSERT INTO role_permissions (id, role_id, permission_id, "
                 "created_at) VALUES (%s, %s, %s, now())",
                 (uuid4(), ids[role], WRITE),
+            )
+        for permission, resource_type in (
+            (READ_FILES, "folder"),
+            (WRITE_FILES, "folder"),
+        ):
+            run(
+                "INSERT INTO auth_permissions (id, scope, resource_type, "
+                "description, system_only, created_at, updated_at) VALUES "
+                "(%s, 'POD', %s, 'x', false, now(), now()) ON CONFLICT DO NOTHING",
+                (permission, resource_type),
+            )
+        run(
+            "INSERT INTO role_permissions (id, role_id, permission_id, "
+            "created_at) VALUES (%s, %s, %s, now())",
+            (uuid4(), ids["system_role"], READ_FILES),
+        )
+        # A custom role that writes files reads them too (write implies read),
+        # so it shared links before and keeps doing so.
+        run(
+            "INSERT INTO roles (id, organization_id, pod_id, name, is_system, "
+            "created_at, updated_at) VALUES (%s, %s, %s, 'FILE_KEEPER', false, "
+            "now(), now())",
+            (ids["file_role"], ids["org"], ids["pod"]),
+        )
+        run(
+            "INSERT INTO role_permissions (id, role_id, permission_id, "
+            "created_at) VALUES (%s, %s, %s, now())",
+            (uuid4(), ids["file_role"], WRITE_FILES),
+        )
+        for grantee in FILE_GRANTEES:
+            run(
+                "INSERT INTO resource_permission_grants (id, pod_id, "
+                "resource_type, resource_id, grantee_type, grantee_id, "
+                "permission_id, created_by_user_id, created_at) VALUES "
+                "(%s, %s, 'folder', %s, %s, %s, %s, %s, now())",
+                (
+                    uuid4(),
+                    ids["pod"],
+                    ids["folder"],
+                    grantee,
+                    uuid4(),
+                    READ_FILES,
+                    ids["user"],
+                ),
             )
         for grantee in GRANTEES:
             run(
@@ -225,6 +278,16 @@ def _state(plain_url: str, ids: dict[str, UUID]) -> dict:
             "WHERE pod_id = %s AND permission_id = %s",
             (ids["pod"], DELETE),
         ).fetchall()
+        share_roles = run(
+            "SELECT r.name FROM role_permissions rp JOIN roles r ON r.id = "
+            "rp.role_id WHERE rp.permission_id = %s AND r.organization_id = %s",
+            (SHARE, ids["org"]),
+        ).fetchall()
+        share_grants = run(
+            "SELECT grantee_type, resource_type, resource_id FROM "
+            "resource_permission_grants WHERE pod_id = %s AND permission_id = %s",
+            (ids["pod"], SHARE),
+        ).fetchall()
         surfaces = run(
             "SELECT id, config FROM agent_surfaces WHERE pod_id = %s", (ids["pod"],)
         ).fetchall()
@@ -239,13 +302,15 @@ def _state(plain_url: str, ids: dict[str, UUID]) -> dict:
     return {
         "roles": {row[0] for row in roles},
         "grants": sorted(row[0] for row in grants),
+        "share_roles": {row[0] for row in share_roles},
+        "share_grants": sorted(tuple(row) for row in share_grants),
         "surfaces": {row[0]: row[1] for row in surfaces},
         "links": sorted(row[0] for row in links),
         "workload_column": ("minted_by_workload",) in link_columns,
     }
 
 
-def test_record_deletes_lemma_made_apps_and_agent_minted_links() -> None:
+def test_record_deletes_lemma_made_apps_and_sharing_files() -> None:
     with get_postgres_container() as postgres:
         database_url = get_postgres_url(postgres)
         plain_url = database_url.replace("postgresql+asyncpg", "postgresql")
@@ -263,26 +328,34 @@ def test_record_deletes_lemma_made_apps_and_agent_minted_links() -> None:
             "slack": {"app_name": "crm", "app_made_by_lemma": True}
         }
         assert after["surfaces"][ids["own_surface"]] == {"slack": {"app_name": "crm"}}
-        # Only a person shares now; what an agent shared is not kept working.
-        assert after["links"] == ["person_link"]
-        assert after["workload_column"] is False
+        # Whoever shared files before still does; software only by a grant,
+        # and none it held is turned into one.
+        assert after["share_roles"] == {"POD_USER", "FILE_KEEPER"}
+        assert after["share_grants"] == [
+            ("POD_MEMBER", "folder", ids["folder"]),
+            ("ROLE", "folder", ids["folder"]),
+        ]
+        # No link is revoked, an agent's included: each is still re-checked,
+        # as whoever minted it, on every fetch.
+        assert after["links"] == ["agent_link", "person_link"]
+        assert after["workload_column"] is True
 
         _migrate(database_url, "downgrade", BEFORE)
         before = _state(plain_url, ids)
         with psycopg.connect(plain_url) as connection:
             gone = connection.execute(
-                "SELECT count(*) FROM auth_permissions WHERE id = %s", (DELETE,)
+                "SELECT count(*) FROM auth_permissions WHERE id = ANY(%s)",
+                ([DELETE, SHARE],),
             ).fetchone()
         assert gone == (0,)
         assert before["roles"] == set() and before["grants"] == []
+        assert before["share_roles"] == set() and before["share_grants"] == []
         assert all(
             config == {"slack": {"app_name": "crm"}}
             for config in before["surfaces"].values()
         )
-        # The column comes back; the deleted link, whose code was the
-        # capability, does not.
         assert before["workload_column"] is True
-        assert before["links"] == ["person_link"]
+        assert before["links"] == ["agent_link", "person_link"]
 
         # And again, from where the downgrade left it.
         _migrate(database_url, "upgrade", REVISION)

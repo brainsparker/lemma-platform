@@ -27,9 +27,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from app.core.authorization.actor import Workload
 from app.core.authorization.context import Context
-from app.core.authorization.current import get_current_context
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.web_login.domain.entities import PendingSignIn, SignInOutcome
@@ -38,11 +36,9 @@ from app.modules.web_login.services.pauses import (
     OwnerOfConversation,
     ReadPause,
     ResumePause,
-    WorkspaceOfConversation,
     owner_through_contracts,
     pending_through_contracts,
     resume_through_approvals,
-    workspace_through_contracts,
 )
 from app.modules.web_login.services.resolution import resolve_owner
 from app.modules.web_login.services.sites import (
@@ -52,19 +48,6 @@ from app.modules.web_login.services.sites import (
 from sandbox_runtime.errors import SandboxCapabilityUnsupported
 
 logger = get_logger(__name__)
-
-#: Which browser: ``(pod, actor)``. Every browser is one person's in one pod as
-#: one actor -- the assistant when the actor is ``None`` -- and a sign-in is
-#: only any use in the browser of the agent that asked for it.
-BrowserWorkspace = tuple[UUID | None, UUID | None]
-
-
-def _workspace_of_run(ctx: Context | None) -> BrowserWorkspace:
-    """The browser a run's own sandbox holds: its pod, and its agent if named."""
-    if ctx is None:
-        return None, None
-    actor = ctx.actor.workload_id if isinstance(ctx.actor, Workload) else None
-    return ctx.pod_id, actor
 
 
 class SignInService:
@@ -76,7 +59,6 @@ class SignInService:
         resume: "ResumePause | None" = None,
         read_pause: "ReadPause | None" = None,
         owner_of: "OwnerOfConversation | None" = None,
-        workspace_of: "WorkspaceOfConversation | None" = None,
     ) -> None:
         self._uow_factory = uow_factory
         self._browser_override = browser
@@ -97,9 +79,6 @@ class SignInService:
         #: what site somebody else is being asked to sign in to, and answer for
         #: them.
         self._owner_of = owner_of or owner_through_contracts
-        #: Which browser a conversation's sign-in goes into. A person answering
-        #: a sign-in link carries no run, so the conversation is what says.
-        self._workspace_of = workspace_of or workspace_through_contracts
 
     @property
     def _browser(self):
@@ -155,15 +134,9 @@ class SignInService:
         # homepage loads for everybody, so "it did not look like a login
         # wall" said nothing about whether there was a session. The site
         # that prompted this whole change has exactly that shape.
-        return await self._site_is_open(
-            owner,
-            page_url or normalize_origin(origin),
-            _workspace_of_run(auth_ctx or get_current_context()),
-        )
+        return await self._site_is_open(owner, page_url or normalize_origin(origin))
 
-    async def _site_is_open(
-        self, owner: UUID, site: str, workspace: BrowserWorkspace
-    ) -> bool:
+    async def _site_is_open(self, owner: UUID, site: str) -> bool:
         """The same question, for a caller that has already been authorised.
 
         `answer` reaches this rather than the public method above: it is
@@ -173,9 +146,8 @@ class SignInService:
         carry into the service.
         """
         try:
-            pod_id, actor_id = workspace
             landed = await self._browser.ensure_for_sign_in(
-                owner, origin=site, report=True, pod_id=pod_id, actor_id=actor_id
+                owner, origin=site, report=True
             )
         except _relay_unavailable(), SandboxCapabilityUnsupported:
             logger.warning(
@@ -211,12 +183,9 @@ class SignInService:
         owner = await resolve_owner(auth_ctx=auth_ctx)
         site = normalize_origin(origin)
         del reason, tool_call_id, conversation_id  # carried by the pause
-        pod_id, actor_id = _workspace_of_run(auth_ctx or get_current_context())
 
         try:
-            await self._browser.ensure_for_sign_in(
-                owner, origin=site, pod_id=pod_id, actor_id=actor_id
-            )
+            await self._browser.ensure_for_sign_in(owner, origin=site)
         except _relay_unavailable(), SandboxCapabilityUnsupported:
             # Not fatal: the arrival opens the browser again. Logged because a
             # person landing on a cold browser waits, and knowing it started
@@ -245,11 +214,6 @@ class SignInService:
                 # would tell a stranger that the conversation exists.
                 return None
             paused = await self._read_pause(uow, conversation_id)
-            workspace = (
-                await self._workspace_of(uow, conversation_id)
-                if paused is not None
-                else None
-            )
         if paused is None:
             return None
         origin = str(paused.tool_args.get("origin") or "")
@@ -260,8 +224,6 @@ class SignInService:
             origin=normalize_origin(origin),
             reason=str(paused.tool_args.get("reason") or ""),
             page_url=str(paused.tool_args.get("page_url") or "") or None,
-            pod_id=workspace[0] if workspace else None,
-            agent_id=workspace[1] if workspace else None,
         )
 
     async def answer(
@@ -298,14 +260,9 @@ class SignInService:
         # The same page the ask was made about, for the same reason: a root
         # that always loads cannot tell us the sign-in worked either.
         checked = found.page_url or site
-        workspace = await self._conversation_workspace(conversation_id)
-        working = (
-            await self._site_is_open(user_id, checked, workspace)
-            if signed_in
-            else False
-        )
+        working = await self._site_is_open(user_id, checked) if signed_in else False
         if working:
-            await self._remember_they_signed_in(user_id, site, workspace)
+            await self._remember_they_signed_in(user_id, site)
         await self._tell_the_agent(
             conversation_id=conversation_id,
             tool_call_id=tool_call_id,
@@ -315,15 +272,7 @@ class SignInService:
         )
         return SignInOutcome(origin=site, signed_in=signed_in, working=working)
 
-    async def _conversation_workspace(self, conversation_id: UUID) -> BrowserWorkspace:
-        """The browser of the agent this conversation is with."""
-        async with self._uow_factory() as uow:
-            found = await self._workspace_of(uow, conversation_id)
-        return (None, None) if found is None else found
-
-    async def _remember_they_signed_in(
-        self, owner: UUID, site: str, workspace: BrowserWorkspace
-    ) -> None:
+    async def _remember_they_signed_in(self, owner: UUID, site: str) -> None:
         """Write down the one thing the cookies cannot say.
 
         A person has just told us they signed in here, and the browser then
@@ -343,10 +292,7 @@ class SignInService:
         """
         registrable = site_from_origin(site)
         try:
-            pod_id, actor_id = workspace
-            await self._browser.mark_signed_in(
-                owner, site=registrable, pod_id=pod_id, actor_id=actor_id
-            )
+            await self._browser.mark_signed_in(owner, site=registrable)
         except _relay_unavailable(), SandboxCapabilityUnsupported, AttributeError:
             logger.warning(
                 "web_login.sign_in.mark_failed.degraded",

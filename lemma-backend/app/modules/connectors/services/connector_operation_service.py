@@ -38,6 +38,7 @@ from app.modules.connectors.services.pod_connector_resolution import (
     PodConnectorResolver,
 )
 from app.modules.connectors.domain.account import AccountEntity
+from app.modules.connectors.domain.auth_config import AuthConfigEntity
 from app.modules.connectors.services.auth.github_bindings import routable_external_ref
 from app.modules.connectors.services.connector_service import ConnectorService
 from app.modules.connectors.domain.analytics import operation_execution_recorded
@@ -480,8 +481,25 @@ class ConnectorOperationService:
         """
         pod_connector = await self.pod_connector_resolver.connector(pod_id, slug)
         resolved = await self.pod_connector_resolver.resolve(ctx, pod_connector)
-        auth_config = resolved.auth_config
-        account = resolved.account
+        return await self.execution_for(
+            ctx,
+            auth_config=resolved.auth_config,
+            account=resolved.account,
+            operation_name=operation_name,
+            payload=payload,
+            act_as=act_as,
+        )
+
+    async def execution_for(
+        self,
+        ctx: Context,
+        *,
+        auth_config: AuthConfigEntity,
+        account: AccountEntity,
+        operation_name: str,
+        payload: dict[str, Any],
+        act_as: str,
+    ) -> ResolvedConnectorExecution:
         connector_id = auth_config.connector_id
         kind = auth_config.kind.value
 

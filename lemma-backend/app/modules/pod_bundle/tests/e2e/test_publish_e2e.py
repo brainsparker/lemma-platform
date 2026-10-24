@@ -84,12 +84,18 @@ async def test_publish_asks_the_person_to_connect_github_first(
     assert f"/pods/{test_pod['id']}/connections" in body["details"]["connect_url"]
 
 
-async def test_publish_names_no_account(authenticated_client, test_pod, worker):
+async def test_publish_ignores_a_deprecated_account_id(
+    authenticated_client, test_pod, worker
+):
+    """The account is the pod's `github` connector's decision. A client still
+    sending `account_id` is not refused for it: it is ignored, and the publish
+    goes the way any other does -- here, to the pod having no `github`."""
     res = await authenticated_client.post(
         f"/pods/{test_pod['id']}/bundle/publishes",
         json={"repo_name": "crm", "account_id": str(uuid4())},
     )
-    assert res.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY, res.text
+    assert res.status_code == status.HTTP_404_NOT_FOUND, res.text
+    assert res.json()["code"] == "POD_CONNECTOR_NOT_FOUND"
 
 
 async def test_publish_status_expired_returns_410(

@@ -2085,7 +2085,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                             ))}
                             {allTabs.filter((tab): tab is Extract<Tab, {kind: "signin"}> => tab.kind === "signin").map(tab => (
                                 <Pane className="pane signin-pane" key={pod.id + tab.id} {...paneProps(tab.id)}>
-                                    <SignInPane compact podId={pod.id} conversationId={tab.conversationId} toolCallId={tab.toolCallId} onDone={() => closeTab(tab.id)} />
+                                    <SignInPane compact conversationId={tab.conversationId} toolCallId={tab.toolCallId} onDone={() => closeTab(tab.id)} />
                                 </Pane>
                             ))}
                             {allTabs.filter((tab): tab is Extract<Tab, {kind: "file"}> => tab.kind === "file").map(tab => (

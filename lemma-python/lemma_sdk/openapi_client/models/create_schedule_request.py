@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, TypeVar, cast
+from uuid import UUID
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
@@ -25,6 +26,8 @@ class CreateScheduleRequest:
 
     Attributes:
         schedule_type (ScheduleType): Type of schedule source.
+        account_id (None | Unset | UUID): Deprecated: name `pod_connector` instead. Still accepted, as the pod connector
+            that serves this account to you.
         agent_name (None | str | Unset): Pod agent to wake, by name. Pass 'POD_DEFAULT' (or 'pod_default') to wake the
             pod's default assistant, which has no name of its own.
         config (CreateScheduleRequestConfig | Unset): Settings for the schedule's type: `cron`/`scheduled_at`/`timezone`
@@ -57,6 +60,7 @@ class CreateScheduleRequest:
     """
 
     schedule_type: ScheduleType
+    account_id: None | Unset | UUID = UNSET
     agent_name: None | str | Unset = UNSET
     config: CreateScheduleRequestConfig | Unset = UNSET
     connector_trigger_id: None | str | Unset = UNSET
@@ -78,6 +82,14 @@ class CreateScheduleRequest:
         )
 
         schedule_type = self.schedule_type.value
+
+        account_id: None | str | Unset
+        if isinstance(self.account_id, Unset):
+            account_id = UNSET
+        elif isinstance(self.account_id, UUID):
+            account_id = str(self.account_id)
+        else:
+            account_id = self.account_id
 
         agent_name: None | str | Unset
         if isinstance(self.agent_name, Unset):
@@ -150,6 +162,8 @@ class CreateScheduleRequest:
                 "schedule_type": schedule_type,
             }
         )
+        if account_id is not UNSET:
+            field_dict["account_id"] = account_id
         if agent_name is not UNSET:
             field_dict["agent_name"] = agent_name
         if config is not UNSET:
@@ -184,6 +198,23 @@ class CreateScheduleRequest:
 
         d = dict(src_dict)
         schedule_type = ScheduleType(d.pop("schedule_type"))
+
+        def _parse_account_id(data: object) -> None | Unset | UUID:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                account_id_type_0 = UUID(data)
+
+                return account_id_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(None | Unset | UUID, data)
+
+        account_id = _parse_account_id(d.pop("account_id", UNSET))
 
         def _parse_agent_name(data: object) -> None | str | Unset:
             if data is None:
@@ -297,6 +328,7 @@ class CreateScheduleRequest:
 
         create_schedule_request = cls(
             schedule_type=schedule_type,
+            account_id=account_id,
             agent_name=agent_name,
             config=config,
             connector_trigger_id=connector_trigger_id,

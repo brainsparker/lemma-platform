@@ -174,26 +174,31 @@ async def test_ensure_github_credentials_writes_credential_file_and_marks_provis
     )
 
     written = dict(session.written)
-    assert written["/tmp/.git-credentials"] == (
+    assert written["/tmp/lemma-sess/session-1/git-credentials"] == (
         b"https://x-access-token:gho_faketoken123@github.com\n"
     )
     # `gh` does not read git's credential file. Writing its own config is what
     # makes `gh` authenticate as the same account, without the token entering
     # the environment where `env` would print it into a tool result.
-    assert b"oauth_token: gho_faketoken123" in written["/tmp/lemma-gh/hosts.yml"]
-    assert b"user: octocat" in written["/tmp/lemma-gh/hosts.yml"]
+    hosts = written["/tmp/lemma-sess/session-1/gh/hosts.yml"]
+    assert b"oauth_token: gho_faketoken123" in hosts
+    assert b"user: octocat" in hosts
+    gitconfig = written["/tmp/lemma-sess/session-1/gitconfig"].decode()
+    assert (
+        'helper = "store --file=/tmp/lemma-sess/session-1/git-credentials"' in gitconfig
+    )
+    assert 'name = "octocat"' in gitconfig
+    assert 'email = "octocat@example.com"' in gitconfig
+    assert "gho_faketoken123" not in gitconfig
 
     assert len(session.commands) == 1
     cmd = session.commands[0]
-    assert "credential.helper" in cmd
-    assert "/tmp/.git-credentials" in cmd
-    assert "user.name octocat" in cmd
-    assert "user.email octocat@example.com" in cmd
     # Both credential files are delivered via write_file, never interpolated
     # into a shell string that could end up in process listings or command
     # logs. The permissions are what the command is for.
     assert "gho_faketoken123" not in cmd
-    assert "chmod 600 /tmp/lemma-gh/hosts.yml" in cmd
+    assert "git config" not in cmd
+    assert "chmod 600 /tmp/lemma-sess/session-1/gh/hosts.yml" in cmd
     assert redis.values[_MARKER_KEY] == "provisioned"
     assert ("set", _MARKER_KEY, "provisioned", bridge._PROVISIONED_TTL_SECONDS) in (
         redis.calls
@@ -248,9 +253,9 @@ async def test_ensure_github_credentials_falls_back_to_noreply_email() -> None:
         resolve_credential=_credential(email=None),
     )
 
-    cmd = session.commands[0]
-    assert "user.name octocat" in cmd
-    assert "user.email octocat@users.noreply.github.com" in cmd
+    gitconfig = dict(session.written)["/tmp/lemma-sess/session-1/gitconfig"]
+    assert b'name = "octocat"' in gitconfig
+    assert b'email = "octocat@users.noreply.github.com"' in gitconfig
 
 
 @pytest.mark.asyncio
@@ -266,9 +271,10 @@ async def test_ensure_github_credentials_skips_identity_setup_without_login() ->
         resolve_credential=_credential(login=None, email=None),
     )
 
-    cmd = session.commands[0]
-    assert "user.name" not in cmd
-    assert "user.email" not in cmd
+    written = dict(session.written)
+    assert "/tmp/lemma-sess/session-1/git-credentials" in written
+    gitconfig = written["/tmp/lemma-sess/session-1/gitconfig"]
+    assert b"[user]" not in gitconfig
 
 
 @pytest.mark.asyncio
@@ -285,6 +291,54 @@ async def test_ensure_github_credentials_noop_without_session_id() -> None:
 
     assert redis.calls == []
     assert session.written == []
+
+
+@pytest.mark.asyncio
+async def test_two_sessions_in_one_sandbox_never_share_a_credential() -> None:
+    """Every agent session of a person runs in their one sandbox. A credential
+    file or a `git config --global` the sandbox shares was whichever session
+    wrote last, so one conversation pushed as the account another resolved."""
+    from app.modules.workspace.contracts.session_config import session_config_env
+
+    first = _FakeCredentialSession(session_id="conversation-a")
+    second = _FakeCredentialSession(session_id="conversation-b")
+    for session in (first, second):
+        await bridge.ensure_github_credentials(
+            _context(), session, redis=_FakeRedis(), resolve_credential=_credential()
+        )
+
+    first_paths = {path for path, _ in first.written}
+    second_paths = {path for path, _ in second.written}
+    assert not first_paths & second_paths
+    assert all(p.startswith("/tmp/lemma-sess/conversation-a/") for p in first_paths)
+    assert all(p.startswith("/tmp/lemma-sess/conversation-b/") for p in second_paths)
+    # Nothing global: no shared file, no `git config --global`.
+    for session in (first, second):
+        assert "git config" not in " ".join(session.commands)
+        assert "/tmp/.git-credentials" not in {p for p, _ in session.written}
+
+    # Each session's environment names its own files, and so only its own.
+    env_a = session_config_env("conversation-a")
+    env_b = session_config_env("conversation-b")
+    assert env_a["GIT_CONFIG_VALUE_0"] in first_paths
+    assert env_b["GIT_CONFIG_VALUE_0"] in second_paths
+    assert env_a["GH_CONFIG_DIR"] != env_b["GH_CONFIG_DIR"]
+    assert "GIT_CONFIG_GLOBAL" not in env_a
+
+
+def test_a_session_id_cannot_climb_out_of_its_directory() -> None:
+    from app.modules.workspace.contracts.session_config import (
+        SESSION_CONFIG_ROOT,
+        session_config_dir,
+    )
+
+    hostile = session_config_dir("../../home/user")
+    lookalike = session_config_dir("..__home_user")
+
+    assert hostile.startswith(f"{SESSION_CONFIG_ROOT}/")
+    assert "/" not in hostile.removeprefix(f"{SESSION_CONFIG_ROOT}/")
+    assert ".." not in hostile
+    assert hostile != lookalike
 
 
 class _RecordingWorkspaceSession:

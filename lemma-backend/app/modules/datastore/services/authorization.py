@@ -344,6 +344,25 @@ class DatastoreAuthorization:
             ctx=ctx,
         )
 
+    async def require_document_share(
+        self,
+        *,
+        user_id: UUID,
+        pod_id: UUID,
+        resource_id: UUID | None = None,
+        resource_name: str | None = None,
+        ctx: Context | None = None,
+    ) -> None:
+        """May the caller make a public link to this file (``folder.share``)."""
+        await self._require_document_action(
+            user_id=user_id,
+            pod_id=pod_id,
+            action=Permissions.FOLDER_SHARE,
+            resource_id=resource_id,
+            resource_name=resource_name,
+            ctx=ctx,
+        )
+
     async def require_document_write(
         self,
         *,

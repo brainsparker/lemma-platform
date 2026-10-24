@@ -9,6 +9,10 @@ import type { ScheduleType } from './ScheduleType.js';
  * Schedule detail response.
  */
 export type ScheduleDetailResponse = {
+    /**
+     * @deprecated
+     */
+    account_id?: (string | null);
     agent_id: (string | null);
     agent_name?: (string | null);
     allowed_actions?: Array<string>;

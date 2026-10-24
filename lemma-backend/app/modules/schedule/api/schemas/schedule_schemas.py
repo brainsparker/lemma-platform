@@ -78,6 +78,14 @@ class CreateScheduleRequest(BaseModel):
             "again on every fire and renewal, as the schedule's owner."
         ),
     )
+    account_id: UUID | None = Field(
+        default=None,
+        deprecated=True,
+        description=(
+            "Deprecated: name `pod_connector` instead. Still accepted, as the "
+            "pod connector that serves this account to you."
+        ),
+    )
     connector_trigger_id: str | None = Field(
         default=None,
         description=(
@@ -206,6 +214,9 @@ class ScheduleResponse(BaseModel):
         validation_alias=AliasChoices("pod_connector", "pod_connector_slug"),
         description="The pod connector it listens through, by slug.",
     )
+    # Deprecated, and always null: a schedule names a pod connector now. Kept
+    # because clients generated before that read it as a required key.
+    account_id: UUID | None = Field(default=None, deprecated=True)
     connector_trigger_id: str | None
     filter_instruction: str | None
     filter_output_schema: dict | None

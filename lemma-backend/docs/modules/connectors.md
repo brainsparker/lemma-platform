@@ -29,7 +29,7 @@ a pooled database connection is not held during provider I/O.
 | `connect_requests` | Short-lived OAuth state and authorization flow metadata |
 | `pod_connectors` | A pod's declaration of one org installation under a pod-local slug, with its mode: PER_MEMBER (each caller's own account) or SHARED (one pod account). The only thing an operation is run through, so the account is the connector's decision and never an argument |
 | `pod_accounts` | One org account in use in one pod, owned by the account's owner, with a visibility only that owner may widen (PERSONAL, POD, RESTRICTED). A row rather than an inference so a pod's use of an account is recorded, authorized like any pod resource, and removed with the member. `allow_sandbox_use` is the owner's "allow use inside sandboxes": only with it may the sandbox git bridge write a shared account's token into another member's workspace; withdrawing the account clears it |
-| `github_installations` | Which organization a GitHub App installation belongs to, and who bound it. One org per installation: a first claim needs proof from GitHub that the claimant administers it, and token minting and webhook routing reach an installation only through its own org |
+| `connector_installations` | Which organization an installation of an app Lemma operates belongs to (`connector_id` + the upstream's `external_id`; GitHub today), and who bound it. Not an auth config: that is an org's app registration, this is ownership of one upstream tenant. One org per installation: a first claim needs proof from GitHub that the claimant administers it and `org.installation.manage` in Lemma; token minting and webhook routing reach an installation only through its own org; GitHub's `installation.deleted` releases it |
 
 ## API groups
 

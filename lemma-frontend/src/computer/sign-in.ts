@@ -78,19 +78,3 @@ export function outcomeSay(signedIn: boolean, working: boolean): { headline: str
         note: "It is carrying on, but the site was still showing a login form just now — so you may be asked again.",
     };
 }
-
-/** Whose browser a sign-in is about: the pod, and its agent when it is a
- *  named one.
- *
- *  The pause says, once the server has read it (`pod_id`, `agent_id` on the
- *  pending sign-in), and that is the answer every call about the browser
- *  names — the page it is on, a tab onto it, the picture. A link opened on
- *  its own has no other way to know. The host's scope stands in only for a
- *  server too old to say. */
-export function signInScope(
-    host: { podId: string; agentId: string | null } | null,
-    pending: { pod_id?: string | null; agent_id?: string | null } | null,
-): { podId: string; agentId: string | null } | null {
-    if (pending?.pod_id) return { podId: pending.pod_id, agentId: pending.agent_id || null };
-    return host;
-}

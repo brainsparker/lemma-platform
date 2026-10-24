@@ -23,6 +23,7 @@ them on as data rather than translating them.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from uuid import UUID
 
 from app.core.authorization.context import Context
@@ -50,6 +51,28 @@ from app.modules.connectors.domain.errors import (
 from app.modules.connectors.services.pod_connector_resolution import (
     ResolvedPodConnector,
     acting_person,
+)
+
+
+# -- Retiring account-addressed callers ------------------------------------
+#
+# The same retirement shows up on several routes -- execute, and the
+# ``account_id`` fields of schedules, surfaces and pod bundles -- so the date
+# and the advice live here once, beside the translation that serves them.
+
+#: When the account-addressed shapes stop being served. Until then they work,
+#: through pod connectors, and every response says what replaces them.
+ACCOUNT_ADDRESSING_SUNSET = date(2027, 1, 31)
+
+EXECUTE_REPLACEMENT = (
+    "call POST /pods/{pod_id}/connectors/{slug}/operations/{operation}/execute "
+    "with the pod connector's slug (SDK: pod.connectors.execute(slug, ...)); "
+    "the connector decides the account, so drop account_id"
+)
+
+ACCOUNT_ID_REPLACEMENT = (
+    "name the pod connector (`pod_connector`, its slug) instead of an account; "
+    "the connector decides which account runs"
 )
 
 
@@ -105,6 +128,30 @@ async def resolve_pod_connector(
     resolver = _resolver(uow)
     connector = await resolver.connector(pod_id, slug)
     return _present(await resolver.resolve(ctx, connector))
+
+
+async def pod_connector_for_account(
+    uow: SqlAlchemyUnitOfWork, ctx: Context, *, pod_id: UUID, account_id: UUID
+) -> str:
+    """The slug of the pod connector a deprecated ``account_id`` means.
+
+    For request fields that used to take an account: they are still accepted,
+    and translated here into the pod connector that serves that account to
+    this caller -- the shared connector it is shared through, or a per-member
+    one for the caller's own account. Nothing a slug could not reach is
+    reachable this way; ``serve_installation`` refuses the rest.
+    """
+    resolver = _resolver(uow)
+    account = await resolver.accounts.get(account_id)
+    auth_config = (
+        await resolver.auth_configs.get(account.auth_config_id) if account else None
+    )
+    if account is None or auth_config is None:
+        raise AccountNotFoundError(str(account_id))
+    resolved = await resolver.serve_installation(
+        ctx, pod_id=pod_id, auth_config=auth_config, account_id=account_id
+    )
+    return resolved.pod_connector.slug
 
 
 async def resolve_standing_pod_connector(

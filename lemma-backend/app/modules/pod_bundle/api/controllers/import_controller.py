@@ -17,11 +17,13 @@ from collections.abc import AsyncGenerator
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, Request, Response, status
 from fastapi.responses import StreamingResponse
 
 from app.core.api.actor_policy import refuse_named_workloads
 from app.core.api.dependencies import CurrentUser, get_uow_factory
+from app.core.api.deprecation import note_deprecated_use
+from app.modules.connectors.contracts.pod_connectors import ACCOUNT_ADDRESSING_SUNSET
 from app.core.api.streaming_multipart import (
     MultipartFileLimit,
     stream_multipart_form,
@@ -85,8 +87,20 @@ async def start_import(
     pod_id: UUID,
     data: ImportStartRequest,
     user: CurrentUser,
+    request: Request,
+    response: Response,
     use_cases: ImportUseCasesDep,
 ) -> ImportStatusResponse:
+    if data.account_id is not None:
+        note_deprecated_use(
+            request,
+            response,
+            use="pod.bundle.import.start.account_id",
+            replacement=(
+                "drop account_id; the pod's `github` connector decides the account"
+            ),
+            sunset=ACCOUNT_ADDRESSING_SUNSET,
+        )
     state = await use_cases.start_import(
         pod_id=pod_id,
         user_id=user.id,

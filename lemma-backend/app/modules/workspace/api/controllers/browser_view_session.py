@@ -16,6 +16,7 @@ it calls, the second of which survives exactly the rename it should catch.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from uuid import UUID
 
 from fastapi import WebSocket
 
@@ -111,15 +112,31 @@ def allowed_origin_pattern() -> str | None:
     return get_allowed_cors_origin_regex()
 
 
+#: What a pane may call itself. It reaches the relay inside a viewer name and
+#: ends up in its logs, so it is held to a shape that cannot forge a line.
+VIEWER_PATTERN = r"^[A-Za-z0-9-]{1,40}$"
+
+
+def viewer_name(user_id: UUID, pane: str | None) -> str | None:
+    """`<user>:<pane>`, the name the relay knows this viewer by.
+
+    Prefixed with the user here, never by the client, so one person's pane
+    can never be named as another's -- the resize lease is held by name.
+    """
+    return f"{user_id}:{pane}" if pane else None
+
+
 def user_id_resolver() -> UserIdResolver:
     """The resolver the socket route uses, as something that can be supplied."""
     return resolve_user_id
 
 
 __all__ = [
+    "VIEWER_PATTERN",
     "UserIdResolver",
     "allowed_origin_pattern",
     "allowed_origins",
     "resolve_user_id",
     "user_id_resolver",
+    "viewer_name",
 ]

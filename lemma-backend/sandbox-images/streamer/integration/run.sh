@@ -25,6 +25,7 @@ TURN_SECRET="$(openssl rand -hex 16)"
 CPUS="${CPUS:-1}"
 
 CTX="$(mktemp -d)"
+# shellcheck disable=SC2329  # invoked by the trap below
 cleanup() {
   docker rm -f "$RUN_ID-sbx" "$RUN_ID-turn" "$RUN_ID-viewer" >/dev/null 2>&1 || true
   docker network rm "$RUN_ID-a" "$RUN_ID-b" >/dev/null 2>&1 || true
@@ -135,8 +136,10 @@ done
 pid="$(sbx pgrep -x lemma-streamer)"
 sbx sh -c "streamcheck -signal $SIG -ticket '$(mint view)' -policy all -seconds 14 > /tmp/cost.json 2>&1 &"
 sleep 3
-t0="$(sbx awk '{print $14+$15}' /proc/$pid/stat)"; sleep 10
-t1="$(sbx awk '{print $14+$15}' /proc/$pid/stat)"
+# shellcheck disable=SC2016  # awk's own fields, not the shell's
+t0="$(sbx awk '{print $14+$15}' "/proc/$pid/stat")"; sleep 10
+# shellcheck disable=SC2016
+t1="$(sbx awk '{print $14+$15}' "/proc/$pid/stat")"
 sleep 2
 cost="$(sbx cat /tmp/cost.json)"
 cores="$(python3 -c "print(round(($t1-$t0)/100/10, 3))")"

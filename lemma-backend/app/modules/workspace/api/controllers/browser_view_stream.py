@@ -14,6 +14,8 @@ from uuid import UUID
 
 from fastapi import WebSocket
 
+from app.core.log.log import get_logger
+
 from app.modules.workspace.services.browser_stream_turn import IceServer
 from app.modules.workspace.services.browser_view_rtc import (
     CLOSE_USE_VNC,
@@ -22,23 +24,13 @@ from app.modules.workspace.services.browser_view_rtc import (
     ice_for,
     serve,
 )
+from app.modules.workspace.api.controllers.browser_view_session import viewer_name
 from app.modules.workspace.services.browser_view_service import (
     MODE_CONTROL,
     ViewUpstream,
 )
 
-#: What a pane may call itself. It reaches the relay inside a viewer name and
-#: ends up in its logs, so it is held to a shape that cannot forge a line.
-VIEWER_PATTERN = r"^[A-Za-z0-9-]{1,40}$"
-
-
-def viewer_name(user_id: UUID, pane: str | None) -> str | None:
-    """`<user>:<pane>`, the name the relay knows this viewer by.
-
-    Prefixed with the user here, never by the client, so one person's pane
-    can never be named as another's -- the resize lease is held by name.
-    """
-    return f"{user_id}:{pane}" if pane else None
+logger = get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -51,11 +43,11 @@ class PreparedRtc:
 
 async def prepare_rtc(
     target: ViewUpstream, *, user_id: UUID, mode: str, viewer: str | None
-) -> PreparedRtc:
+) -> PreparedRtc | None:
     """Everything a WebRTC view needs before its socket is accepted.
 
-    Raises `RtcUnavailable` when there is no relay to be had, which the
-    caller turns into `CLOSE_USE_VNC`.
+    `None`, logged, when there is no relay to be had: not a fault, and the
+    caller turns it into `CLOSE_USE_VNC`, on which the pane switches to VNC.
 
     `may_control` is true for everybody who reaches this route today: it is
     the owner's own machine, keyed by their user id. It is a field rather
@@ -68,7 +60,13 @@ async def prepare_rtc(
         mode=MODE_CONTROL if mode == MODE_CONTROL else "view",
         may_control=True,
     )
-    machine_ice, browser_ice = await ice_for(rtc_viewer)
+    try:
+        machine_ice, browser_ice = await ice_for(rtc_viewer)
+    except RtcUnavailable as exc:
+        logger.warning(
+            "workspace.browser_view.rtc_unavailable.degraded", reason=str(exc)
+        )
+        return None
     return PreparedRtc(target, rtc_viewer, machine_ice, browser_ice)
 
 
@@ -86,10 +84,7 @@ async def serve_rtc_view(websocket: WebSocket, prepared: PreparedRtc) -> int | N
 
 __all__ = [
     "CLOSE_USE_VNC",
-    "VIEWER_PATTERN",
     "PreparedRtc",
-    "RtcUnavailable",
     "prepare_rtc",
     "serve_rtc_view",
-    "viewer_name",
 ]

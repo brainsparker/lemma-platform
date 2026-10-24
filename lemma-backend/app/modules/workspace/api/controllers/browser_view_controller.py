@@ -17,6 +17,8 @@ session decides whose browser this is.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from uuid import UUID
 
 import asyncio
@@ -36,10 +38,12 @@ from app.modules.workspace.services.browser_relay_client import (
     BrowserRelayUnavailable,
 )
 from app.modules.workspace.api.controllers.browser_view_session import (
+    VIEWER_PATTERN,
     UserIdResolver,
     allowed_origin_pattern,
     allowed_origins,
     user_id_resolver,
+    viewer_name,
 )
 from app.modules.workspace.api.controllers.browser_view_hangup import (
     collect as _collect,
@@ -55,15 +59,6 @@ from app.modules.workspace.services.browser_view_service import (
     MODE_VIEW,
     BrowserViewService,
 )
-from app.modules.workspace.api.controllers.browser_view_stream import (
-    CLOSE_USE_VNC,
-    VIEWER_PATTERN,
-    PreparedRtc,
-    RtcUnavailable,
-    prepare_rtc,
-    serve_rtc_view,
-    viewer_name,
-)
 from app.modules.workspace.services.ws_bridge import (
     bridge,
     connect_upstream,
@@ -72,6 +67,10 @@ from app.modules.workspace.services.ws_bridge import (
 )
 from sandbox_runtime.errors import SandboxCapabilityUnsupported, SandboxError
 from sandbox_runtime.errors import SandboxUnavailable
+
+if TYPE_CHECKING:
+    from app.modules.workspace.api.controllers.browser_view_stream import PreparedRtc
+    from app.modules.workspace.services.browser_view_service import ViewUpstream
 
 logger = get_logger(__name__)
 
@@ -447,20 +446,17 @@ async def browser_view(
         await service.close()
         return
 
-    rtc: PreparedRtc | None = None
-    if transport == "rtc":
-        try:
-            rtc = await prepare_rtc(
-                target, user_id=UUID(user_id), mode=mode, viewer=viewer
-            )
-        except RtcUnavailable as exc:
-            # Not a fault: the pane switches to VNC on this code, silently.
-            logger.warning(
-                "workspace.browser_view.rtc_unavailable.degraded", reason=str(exc)
-            )
-            await _refuse(websocket, CLOSE_USE_VNC)
-            await service.close()
-            return
+    refused, rtc = await _setup_rtc(
+        websocket,
+        service,
+        target,
+        transport=transport,
+        user_id=user_id,
+        mode=mode,
+        viewer=viewer,
+    )
+    if refused:
+        return
 
     await websocket.accept()
     # Held awake for as long as somebody is looking. The idle sweep measures
@@ -475,14 +471,7 @@ async def browser_view(
         _keep_awake(service, watcher), name="workspace.browser_view.keep_awake"
     )
     try:
-        if rtc is not None:
-            code = await serve_rtc_view(websocket, rtc)
-        else:
-            async with await connect_upstream(
-                target.url, headers=target.headers
-            ) as upstream:
-                await bridge(websocket, upstream, name="workspace.browser_view")
-            code = getattr(upstream, "close_code", None)
+        code = await _carry(websocket, target, rtc)
         # The relay refuses with these same 44xx codes, and they mean the same
         # things on both sides of the sandbox wall -- so pass the reason on
         # rather than replacing it with 1011. Told 1011, the pane says "the
@@ -504,6 +493,55 @@ async def browser_view(
         await _collect(awake)
         watch_ended(watcher)
         await service.close()
+
+
+async def _setup_rtc(
+    websocket: WebSocket,
+    service: BrowserViewService,
+    target: ViewUpstream,
+    *,
+    transport: str,
+    user_id: str,
+    mode: str,
+    viewer: str | None,
+) -> tuple[bool, PreparedRtc | None]:
+    """WebRTC's setup, before the socket is accepted: whether it was refused.
+
+    Not at module scope: only a socket that asked needs TURN or tickets. A
+    refusal is `CLOSE_USE_VNC`, not a fault: the pane switches to VNC on it.
+    """
+    if transport != "rtc":
+        return False, None
+    from app.modules.workspace.api.controllers.browser_view_stream import (
+        CLOSE_USE_VNC,
+        prepare_rtc,
+    )
+
+    rtc = await prepare_rtc(target, user_id=UUID(user_id), mode=mode, viewer=viewer)
+    if rtc is None:
+        await _refuse(websocket, CLOSE_USE_VNC)
+        await service.close()
+        return True, None
+    return False, rtc
+
+
+async def _carry(
+    websocket: WebSocket, target: ViewUpstream, rtc: PreparedRtc | None
+) -> int | None:
+    """Carry the socket until either end stops; the relay's close code.
+
+    VNC frames through the API, or WebRTC's signalling only -- the picture
+    then goes over the peer connection and never through here.
+    """
+    if rtc is not None:
+        from app.modules.workspace.api.controllers.browser_view_stream import (
+            serve_rtc_view,
+        )
+
+        return await serve_rtc_view(websocket, rtc)
+    async with await connect_upstream(target.url, headers=target.headers) as upstream:
+        await bridge(websocket, upstream, name="workspace.browser_view")
+    return getattr(upstream, "close_code", None)
 
 
 __all__ = ["BROWSER_VIEW_WS_PATH", "router"]

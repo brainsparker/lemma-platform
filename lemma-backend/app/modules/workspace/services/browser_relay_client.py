@@ -42,12 +42,6 @@ from app.modules.workspace.services.browser_proxy import (
     browser_proxy_for,
     decision_bytes,
 )
-from app.modules.workspace.services.browser_stream import (
-    DISPLAY_DECISION_PATH,
-    STREAM_KEY_PATH,
-    display_decision,
-    stream_key_file,
-)
 from app.modules.workspace.services.browser_relay_commands import (
     ENSURE_DISPLAY as _ENSURE_DISPLAY,
 )
@@ -209,9 +203,12 @@ class BrowserRelayClient:
 
     async def deliver_stream_files(self) -> None:
         """The streamer's ticket key and the density decision, likewise."""
+        from app.modules.workspace.services import browser_stream as stream
+
+        key = stream.stream_key_file(self.provider_id)
         await asyncio.gather(
-            self._deliver(STREAM_KEY_PATH, stream_key_file(self.provider_id)),
-            self._deliver(DISPLAY_DECISION_PATH, display_decision()),
+            self._deliver(stream.STREAM_KEY_PATH, key),
+            self._deliver(stream.DISPLAY_DECISION_PATH, stream.display_decision()),
         )
 
     @property

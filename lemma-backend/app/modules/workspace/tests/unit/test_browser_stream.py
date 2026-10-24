@@ -16,7 +16,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.modules.workspace.config import workspace_settings
-from app.modules.workspace.services import browser_stream, browser_stream_turn
+from app.modules.workspace.services import browser_stream_turn
 from app.modules.workspace.services.browser_stream import (
     TICKET_TTL_SECONDS,
     display_decision,
@@ -30,7 +30,12 @@ from app.modules.workspace.services.browser_stream_turn import (
     _cloudflare_servers,
     with_tls_443,
 )
-from app.modules.workspace.services.browser_view_rtc import RtcViewer, from_browser
+from app.modules.workspace.services.browser_view_rtc import (
+    RtcViewer,
+    config_message,
+    from_browser,
+    hello_message,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -263,15 +268,19 @@ def test_giving_back_and_leaving_pass_as_themselves() -> None:
     assert json.loads(from_browser('{"t":"bye"}', _VIEWER) or "") == {"t": "bye"}
 
 
-def test_the_module_never_hands_a_ticket_to_the_browser() -> None:
-    """`config` -- the only thing this side writes to the browser itself --
-    carries ICE servers and the mode, and no ticket."""
-    import inspect
-
-    from app.modules.workspace.services import browser_view_rtc
-
-    source = inspect.getsource(browser_view_rtc.serve)
-    config = source[source.index('"t": "config"') :]
-    config = config[: config.index("}")]
-    assert "ticket" not in config
-    assert browser_stream.mint_ticket is browser_view_rtc.mint_ticket
+def test_the_browser_is_never_handed_a_ticket() -> None:
+    """`config` -- the only message this side writes to the browser itself --
+    carries ICE servers and the mode; `hello`, which goes to the streamer,
+    carries the ticket."""
+    servers = [{"urls": ["turn:t.test:3478"], "username": "u", "credential": "c"}]
+    config = json.loads(config_message(_VIEWER, servers))
+    assert config == {
+        "t": "config",
+        "ice_servers": servers,
+        "policy": "relay",
+        "mode": "view",
+        "may_control": True,
+    }
+    hello = json.loads(hello_message(_VIEWER, servers))
+    assert _verify(hello["ticket"], stream_key("sbx-1"))["mode"] == "view"
+    assert hello["policy"] == "relay"

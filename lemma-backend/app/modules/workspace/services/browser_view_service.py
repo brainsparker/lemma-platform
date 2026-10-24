@@ -35,10 +35,6 @@ from app.modules.workspace.services.workspace_sandbox_service import (
 from typing import NamedTuple
 
 from app.modules.workspace.contracts.browser import host_of
-from app.modules.workspace.services.browser_stream_status import (
-    StreamDetails,
-    stream_details,
-)
 from app.modules.workspace.providers.base import ProviderGone
 from sandbox_runtime.errors import SandboxCapabilityUnsupported, SandboxUnavailable
 
@@ -55,13 +51,6 @@ def _engine_error() -> type[Exception]:
     from app.modules.workspace.providers.docker_engine import DockerEngineError
 
     return DockerEngineError
-
-
-class BrowserStatus(StreamDetails, total=False):
-    """What a pane is told, without anything being started to find out."""
-
-    state: str
-    detail: str
 
 
 class ViewUpstream(NamedTuple):
@@ -180,7 +169,7 @@ class BrowserViewService:
             )
         return relay
 
-    async def status(self, user_id: UUID) -> BrowserStatus:
+    async def status(self, user_id: UUID) -> dict[str, object]:
         """What a pane can say without waking anything.
 
         Every failure here is a sentence rather than an exception, because this
@@ -224,11 +213,13 @@ class BrowserViewService:
             logger.warning("workspace.browser_view.relay_absent.degraded")
             return {"state": "unavailable"}
 
-        found: BrowserStatus = {
-            "state": "running" if chrome == "running" else "stopped"
-        }
-        found.update(await stream_details(relay, user_id))
-        return found
+        # Here, not at module scope: only a running browser has these to say.
+        from app.modules.workspace.services.browser_stream_status import (
+            stream_details,
+        )
+
+        details = await stream_details(relay, user_id)
+        return {"state": "running" if chrome == "running" else "stopped", **details}
 
     async def open_vnc_session(
         self,

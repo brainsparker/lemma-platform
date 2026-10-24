@@ -148,6 +148,36 @@ def _candidate(message: dict[str, object]) -> str | None:
     )
 
 
+def hello_message(viewer: RtcViewer, machine_ice: list[IceServer]) -> str:
+    """The streamer's first message: this viewer's ticket and its TURN servers."""
+    return json.dumps(
+        {
+            "t": "hello",
+            "ticket": mint_ticket(
+                provider_id=viewer.provider_id, sub=viewer.sub, mode=viewer.mode
+            ),
+            "ice_servers": machine_ice,
+            "policy": ICE_POLICY,
+        }
+    )
+
+
+def config_message(viewer: RtcViewer, browser_ice: list[IceServer]) -> str:
+    """The browser's first message: its TURN servers and what it may do.
+
+    No ticket, ever: see the module docstring.
+    """
+    return json.dumps(
+        {
+            "t": "config",
+            "ice_servers": browser_ice,
+            "policy": ICE_POLICY,
+            "mode": viewer.mode,
+            "may_control": viewer.may_control,
+        }
+    )
+
+
 async def serve(
     websocket: WebSocket,
     *,
@@ -162,27 +192,9 @@ async def serve(
     Returns the relay's close code when it refused with one the pane reads
     (44xx), so the caller can pass it on; `None` otherwise.
     """
-    hello = {
-        "t": "hello",
-        "ticket": mint_ticket(
-            provider_id=viewer.provider_id, sub=viewer.sub, mode=viewer.mode
-        ),
-        "ice_servers": machine_ice,
-        "policy": ICE_POLICY,
-    }
     async with await connect_upstream(upstream_url, headers=headers) as upstream:
-        await upstream.send(json.dumps(hello))
-        await websocket.send_text(
-            json.dumps(
-                {
-                    "t": "config",
-                    "ice_servers": browser_ice,
-                    "policy": ICE_POLICY,
-                    "mode": viewer.mode,
-                    "may_control": viewer.may_control,
-                }
-            )
-        )
+        await upstream.send(hello_message(viewer, machine_ice))
+        await websocket.send_text(config_message(viewer, browser_ice))
         await _pump(websocket, upstream, viewer)
         code = getattr(upstream, "close_code", None)
         return code if code and 4400 <= code <= 4499 else None
@@ -230,6 +242,8 @@ async def _pump(websocket: WebSocket, upstream, viewer: RtcViewer) -> None:
 __all__ = [
     "CLOSE_USE_VNC",
     "ICE_POLICY",
+    "config_message",
+    "hello_message",
     "RtcUnavailable",
     "RtcViewer",
     "from_browser",

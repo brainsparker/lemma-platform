@@ -1,12 +1,15 @@
 """The parity suite: the same machine journeys on every kind of connected machine.
 
 Each lane joins a machine the way a person does and runs ``machine_journeys``
-on it, unchanged:
+on it; the two Docker lanes also run PR 1's ``/machines`` journeys
+(``test_machines_api_e2e``) unchanged, with ``me`` meaning the connected
+machine:
 
 * **host, in process** -- the agent and runtime in this interpreter, under a
   temporary ``--root``. Fast; no Docker.
 * **host, in a throwaway container** -- the real ``lemma machine connect``
-  inside a bare ``python:3.14-slim`` container standing in for someone's VM:
+  inside a bare ``python:3.14-slim`` container standing in for someone's VM,
+  rooted at ``/home/user`` so PR 1's journeys find the paths they name:
   it pairs, builds its uv environment from the server's lockfile, installs the
   server's runtime over HTTP and serves it as that container's user.
 * **image** -- the real ``lemma machine connect --image`` on this machine,
@@ -89,6 +92,75 @@ async def _run_journeys(provider, instance, *, preview_port: int) -> None:
     await machine_journeys.preview(provider, instance, port=preview_port)
 
 
+#: PR 1's `/machines` journeys (`test_machines_api_e2e`), run unchanged against a
+#: connected machine. Two are left out because they are about the default
+#: machine itself: that it is listed as `me`, and the deprecated route alias.
+PR1_JOURNEYS = (
+    "test_a_process_runs_to_its_exit_code_and_its_output",
+    "test_a_process_takes_input_and_is_stopped",
+    "test_the_stream_socket_carries_output_out_and_input_in",
+    "test_files_are_written_read_moved_and_deleted",
+    "test_the_browser_profile_cannot_be_read_deleted_or_overwritten",
+    "test_files_sync_between_the_machine_and_the_pod",
+    "test_cleaning_up_by_scope_and_the_home_needs_a_yes",
+)
+
+
+def _at(ref: str, path: str) -> str:
+    """A `/machines/me...` path, addressed to ``ref`` instead."""
+    for tail in ("/", ":", ""):
+        prefix = f"/machines/me{tail}"
+        if path.startswith(prefix) and (tail or path == prefix):
+            return f"/machines/{ref}{tail}" + path[len(prefix) :]
+    return path
+
+
+async def _run_pr1_journeys(
+    *, ref: str, owner_client, server, fixed_test_user, fixed_test_org, monkeypatch
+) -> None:
+    """Every journey in PR 1's suite, with `me` meaning the connected machine.
+
+    The journeys are called as written; only where they address the machine
+    changes. HTTP goes through a client that rewrites `/machines/me` to
+    ``ref``; the stream socket's URL is rewritten the same way on its way
+    into `websockets.connect`.
+    """
+    import inspect
+
+    import websockets
+
+    from app.modules.workspace.tests.e2e import test_machines_api_e2e as pr1
+
+    async def readdress(request: httpx.Request) -> None:
+        request.url = request.url.copy_with(path=_at(ref, request.url.path))
+
+    connect = websockets.connect
+
+    def connect_to_ref(url: str, *args, **kwargs):
+        scheme, _, rest = url.partition("://")
+        host, slash, path = rest.partition("/")
+        return connect(f"{scheme}://{host}{_at(ref, slash + path)}", *args, **kwargs)
+
+    monkeypatch.setattr(websockets, "connect", connect_to_ref)
+    client = httpx.AsyncClient(
+        transport=owner_client._transport,
+        base_url=owner_client.base_url,
+        headers=owner_client.headers,
+        timeout=owner_client.timeout,
+        event_hooks={"request": [readdress]},
+    )
+    arguments = {
+        "machine": {"client": client, "server": server},
+        "fixed_test_user": fixed_test_user,
+        "fixed_test_org": fixed_test_org,
+    }
+    async with client:
+        for name in PR1_JOURNEYS:
+            journey = getattr(pr1, name)
+            wanted = inspect.signature(journey).parameters
+            await journey(**{key: arguments[key] for key in wanted})
+
+
 async def _wait_ready(owner_client, connection_id: UUID, *, timeout: float) -> dict:
     return await eventually(
         label="the machine is online with its runtime ready",
@@ -161,7 +233,13 @@ def laptop_image() -> str:
 @pytest.mark.workspace
 @pytest.mark.asyncio
 async def test_host_mode_in_a_throwaway_container_passes_the_machine_journeys(
-    backend_server, authenticated_client, laptop_image, serving_bundle
+    backend_server,
+    authenticated_client,
+    fixed_test_user,
+    fixed_test_org,
+    laptop_image,
+    serving_bundle,
+    monkeypatch,
 ):
     port = backend_server["host_base_url"].rsplit(":", 1)[1]
     api = f"http://host.docker.internal:{port}"
@@ -184,7 +262,7 @@ async def test_host_mode_in_a_throwaway_container_passes_the_machine_journeys(
             "--yes",
             "--no-browser",
             "--root",
-            "/root/lemma-machine",
+            "/home/user",
         ],
         check=True,
         capture_output=True,
@@ -200,11 +278,21 @@ async def test_host_mode_in_a_throwaway_container_passes_the_machine_journeys(
         connection_id = await _approve_when_shown(logs, authenticated_client, name="vm")
         # Building the environment downloads the image's whole closure.
         row = await _wait_ready(authenticated_client, connection_id, timeout=900)
-        assert row["home"] == "/root/lemma-machine"
+        # Rooted at /home/user, so PR 1's journeys -- which name that path in
+        # the commands they run -- find it on this machine too.
+        assert row["home"] == "/home/user"
         assert row["runtime_version"] == bundle_module.runtime_bundle().version
         provider = provider_for(row)
         instance = ProviderInstance(provider_id=str(connection_id), name="vm")
         await _run_journeys(provider, instance, preview_port=8765)
+        await _run_pr1_journeys(
+            ref="mine:vm",
+            owner_client=authenticated_client,
+            server=backend_server,
+            fixed_test_user=fixed_test_user,
+            fixed_test_org=fixed_test_org,
+            monkeypatch=monkeypatch,
+        )
 
         # Asynchronously: this process is also the backend the CLI talks to,
         # and a blocking wait here would stall the handshake it is waiting on.
@@ -218,7 +306,7 @@ async def test_host_mode_in_a_throwaway_container_passes_the_machine_journeys(
             "machine",
             "disconnect",
             "--root",
-            "/root/lemma-machine",
+            "/home/user",
             "--yes",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -238,7 +326,13 @@ async def test_host_mode_in_a_throwaway_container_passes_the_machine_journeys(
 @pytest.mark.workspace
 @pytest.mark.asyncio
 async def test_image_mode_passes_the_machine_journeys_and_serves_a_browser(
-    backend_server, authenticated_client, serving_bundle, tmp_path
+    backend_server,
+    authenticated_client,
+    fixed_test_user,
+    fixed_test_org,
+    serving_bundle,
+    tmp_path,
+    monkeypatch,
 ):
     image = os.getenv("WORKSPACE_E2E_IMAGE") or "lemma-workspace:pr3-machines"
     if subprocess.run(
@@ -306,6 +400,14 @@ async def test_image_mode_passes_the_machine_journeys_and_serves_a_browser(
         provider = provider_for(row)
         instance = ProviderInstance(provider_id=str(connection_id), name="box")
         await _run_journeys(provider, instance, preview_port=8765)
+        await _run_pr1_journeys(
+            ref="mine:docker-box",
+            owner_client=authenticated_client,
+            server=backend_server,
+            fixed_test_user=fixed_test_user,
+            fixed_test_org=fixed_test_org,
+            monkeypatch=monkeypatch,
+        )
 
         # The browser: the display comes up, Chrome opens a page, and the
         # relay a viewer connects to answers over the link.

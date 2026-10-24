@@ -139,6 +139,7 @@ class Lemma:
         from .resources import Machines
 
         return Machines(self._transport, pod_id=self.default_pod_id)
+
     def machine_connections(self) -> "MachineConnections":
         """Machines you joined with ``lemma machine connect``.
 

@@ -53,6 +53,7 @@ from app.modules.pod_bundle.infrastructure.connector_planning import (
 )
 from app.modules.pod_bundle.infrastructure import account_checks
 from app.modules.pod_bundle.infrastructure.grants import has_grants
+from app.modules.pod_bundle.infrastructure import machine_bundle
 from app.modules.pod_bundle.infrastructure.plan_variables import (
     variables_from_manifest,
 )
@@ -72,7 +73,7 @@ from app.modules.pod_bundle.domain.state import (
 logger = get_logger(__name__)
 
 
-class ExistingResources(Protocol):
+class ExistingResources(machine_bundle.MachineNames, Protocol):
     """The pod's current resources, by name — everything the diff needs."""
 
     async def table_names(self) -> set[str]: ...
@@ -83,7 +84,6 @@ class ExistingResources(Protocol):
     async def schedule_names(self) -> set[str]: ...
     async def app_names(self) -> set[str]: ...
     async def surface_names(self) -> set[str]: ...
-    async def machine_names(self) -> set[str]: ...
 
 
 def _resource_subdirs(bundle_root: Path, resource_type: str) -> list[Path]:
@@ -305,12 +305,7 @@ class PlanBuilder:
                 seeded_rows += _check_seed_rows(data_path, name, seeded_rows)
                 data_steps.append((name, {}))
 
-        # --- machines --------------------------------------------------------
-        # Before the agents that name one as theirs, and before every grants
-        # step: a grant of `machine.use` names the machine, which must exist.
-        existing_machines = await self._existing.machine_names()
-        for d in _resource_subdirs(bundle_root, "machines"):
-            steps.append(self._simple_step(StepKind.MACHINE, d.name, existing_machines))
+        steps.extend(await machine_bundle.machine_steps(bundle_root, self._existing))
 
         # --- functions (+ deferred grants) -----------------------------------
         existing_functions = await self._existing.function_names()
@@ -602,10 +597,4 @@ class ServiceExistingResources:
             return set()
 
     async def machine_names(self) -> set[str]:
-        """The pod's machines, by the name a bundle directory carries."""
-        from app.modules.workspace.contracts.pod_machines import (
-            list_pod_machine_names,
-        )
-
-        return await list_pod_machine_names(self._uow, pod_id=self._pod_id)
-
+        return await machine_bundle.pod_machine_names(self._uow, self._pod_id)

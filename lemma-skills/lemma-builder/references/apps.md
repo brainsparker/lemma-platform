@@ -222,8 +222,12 @@ for await (const event of run) { /* output events, then the exit */ }
 On `"me"` the app acts as the viewer, so it needs their **one-time consent** per
 app. Until they give it, the call throws `MachineConsentRequiredError`; open its
 `consentUrl` (the Lemma page that asks them), then retry. An app cannot grant
-itself consent, and the viewer can revoke it in Settings. `client.workspace` is a
-deprecated alias for `client.machines` on `"me"` — do not write new code with it.
+itself consent, and the viewer can revoke it in Settings. With consent the app
+gets processes, files and previews; the browser, its logins and a `home` reset
+stay the person's own. A pod machine the app reaches as its viewer — with
+whatever the viewer may do there — and only in the app's own pod.
+`client.workspace` is a deprecated alias for `client.machines` on `"me"` — do not
+write new code with it.
 
 ## Calling the API well — fetch once, subscribe, don't re-render the world
 

@@ -350,7 +350,7 @@ function WorkspaceImage({ path, name }: { path: string; name: string }) {
  *
  *  A relative `workspace_file_path` means two different files depending on who
  *  reads it. The agent's own manager joins it onto the conversation's working
- *  directory — `/workspace/c/{date}/{slug}` — which
+ *  directory — `~/lemma/c/{date}/{slug}` — which
  *  `test_workspace_path_resolution.py` pins; this app's route joins the same
  *  string onto the machine's workspace root (`machine_files_controller._machine_path`). So
  *  `images/output.png` fetched as written is either a 404 or, worse, somebody

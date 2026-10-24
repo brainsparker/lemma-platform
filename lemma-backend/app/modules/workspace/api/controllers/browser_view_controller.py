@@ -41,6 +41,7 @@ from app.modules.workspace.services.browser_relay_client import (
 )
 from app.modules.workspace.api.controllers.browser_view_session import (
     UserIdResolver,
+    session_user_id,
     user_id_resolver,
 )
 from app.modules.workspace.api.controllers.browser_view_hangup import (
@@ -398,17 +399,12 @@ async def browser_view(
         await _refuse(websocket, CLOSE_ORIGIN_REFUSED)
         return
 
-    try:
-        user_id = await resolve_user_id(websocket)
-    except Exception:
-        # Broad because the session library raises several unrelated types for
-        # the same fact -- expired, malformed, revoked -- and the answer to all
-        # of them is the same close code. Logged with the traceback so a
-        # genuine failure in that library is not read as somebody's token
-        # having expired.
-        logger.warning(
-            "workspace.browser_view.session_unreadable.degraded", exc_info=True
-        )
+    user_id = await session_user_id(
+        websocket,
+        resolve_user_id,
+        socket="browser_view",
+    )
+    if user_id is None:
         await _refuse(websocket, CLOSE_UNAUTHENTICATED)
         return
 

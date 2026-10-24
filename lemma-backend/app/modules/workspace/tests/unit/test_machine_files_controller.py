@@ -274,7 +274,7 @@ async def test_a_missing_file_is_still_a_404() -> None:
 def test_a_symlink_is_refused_rather_than_followed() -> None:
     """The textual clamp knows nothing about links; the runtime follows them.
 
-    So a link planted under /workspace by the agent served whatever it pointed
+    So a link planted under /home/user by the agent served whatever it pointed
     at -- including `/tmp`, which the runtime allows on purpose and which is
     where a staged git credential and the relay token live.
     """
@@ -286,7 +286,7 @@ def test_a_symlink_is_refused_rather_than_followed() -> None:
 def test_a_symlinked_parent_is_refused() -> None:
     """The case a check on the final component alone misses.
 
-    `/workspace/x -> /tmp/lemma-relay` makes `/workspace/x/token` a perfectly
+    `/home/user/x -> /tmp/lemma-relay` makes `/home/user/x/token` a perfectly
     ordinary file whose *parent* is the link. The runtime resolves the parent
     before reporting, so what comes back names `/tmp` and is refused on that.
     """

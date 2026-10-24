@@ -37,6 +37,14 @@ this module document. They belong in the canonical design set.
 | Login backup and restore | `services/login_backup.py` |
 | Paths inside a machine | `lemma-backend/sandbox_runtime/paths.py` |
 
+The pre-machines routes are deprecated shims over `/machines/me`:
+deprecated `/workspace/*` and its `/workspace/browser/view` socket, and the
+deprecated `/workspace-ports` and `/public/workspace-ports`, served by
+`workspace_shims_controller.py`, `browser_view_controller.py` and
+`port_proxy_controller.py`. Every response carries `X-Lemma-Deprecation`
+naming the replacement. Nothing new calls them, and
+`scripts/check_stale_machine_terms.py` keeps docs, skills and callers off them.
+
 ## Main data model
 
 | Table | Meaning |

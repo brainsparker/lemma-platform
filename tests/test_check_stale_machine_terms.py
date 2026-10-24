@@ -76,6 +76,31 @@ def test_the_module_and_its_log_events_are_not_stale(line: str) -> None:
     assert rules(CODE, line) == []
 
 
+def test_a_deprecated_name_may_be_documented_as_deprecated() -> None:
+    assert (
+        rules(DOC, "`/workspace/files` is deprecated; use `/machines/me/files`.") == []
+    )
+    assert (
+        rules(
+            DOC, "`lemma.workspace.status()` (deprecated) is `lemma.machines.startup`"
+        )
+        == []
+    )
+    # ...but only the shims' names: a deprecated *path* is still a path.
+    assert rules(DOC, "the deprecated `cd /workspace/repos`") == ["workspace-path"]
+
+
+def test_tests_may_exercise_the_shims() -> None:
+    test = "lemma-backend/app/modules/workspace/tests/unit/test_workspace_shims.py"
+    assert rules(test, 'client.get("/workspace/files")') == []
+    assert rules(test, '@covers("workspace.browser.status")') == []
+    assert rules(test, 'cwd="/workspace"') == ["workspace-path"]
+    assert (
+        rules("lemma-frontend/tests/computer.test.ts", '"/workspace/browser/view"')
+        == []
+    )
+
+
 def test_old_generated_clients_are_flagged() -> None:
     assert rules(CODE, "new WorkspaceAppsService(client)") == ["old-sdk"]
     assert rules(CODE, "WorkspaceService.status()") == ["old-sdk"]
@@ -89,12 +114,21 @@ def test_the_deprecated_alias_is_only_flagged_in_docs_and_skills() -> None:
 
 
 @pytest.mark.parametrize(
-    "phrase", ["your sandbox", "The sandbox", "this sandbox", "the workspace sandbox", "your workspace"]
+    "phrase",
+    [
+        "your sandbox",
+        "The sandbox",
+        "this sandbox",
+        "the workspace sandbox",
+        "your workspace",
+    ],
 )
 def test_sandbox_in_agent_facing_text_is_flagged(phrase: str) -> None:
     assert rules(PROMPT, f"Files in {phrase} persist.") == ["agent-sandbox"]
     assert rules(SKILL, f"Files in {phrase} persist.") == ["agent-sandbox"]
-    assert rules("lemma-backend/agent_tool_schemas.json", f'"{phrase}"') == ["agent-sandbox"]
+    assert rules("lemma-backend/agent_tool_schemas.json", f'"{phrase}"') == [
+        "agent-sandbox"
+    ]
 
 
 def test_sandbox_is_ordinary_prose_outside_agent_facing_text() -> None:

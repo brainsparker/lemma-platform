@@ -193,10 +193,10 @@ class ConversationResponse(BaseModel):
     def workspace_cwd(self) -> str:
         # The sibling of `pod_cwd`, and added for the same reason one filesystem
         # over. The file pane rebuilt this path itself as
-        # `/workspace/conversations/{id}` -- which is the *fallback* branch of
+        # `~/lemma/conversations/{id}` -- which is the *fallback* branch of
         # `BaseAgentContext.get_workspace_cwd()`, reached only by contexts with
         # no conversation row. Every real run resolves through the ladder below
-        # to `/workspace/c/{date}/{slug}`, so the pane asked for a directory
+        # to `~/lemma/c/{date}/{slug}`, so the pane asked for a directory
         # that has never existed and got back an empty listing, because a
         # missing directory and an empty one answer identically.
         return workspace_location_for(

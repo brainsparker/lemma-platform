@@ -31,7 +31,7 @@ export interface Roots {
  *  and it is deliberately not exported as a browsing root: a constant here can
  *  only ever be as current as the last person to remember it, and the last
  *  time these moved the hardcoded copy stayed behind. This pane asked
- *  `/workspace` for a fortnight after that path stopped existing — which the
+ *  the old project root for a fortnight after that path stopped existing — which the
  *  route answers 422 for, so the machine read as unreachable rather than as a
  *  client looking in the wrong place.
  */

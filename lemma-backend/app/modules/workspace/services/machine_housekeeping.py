@@ -65,7 +65,8 @@ async def _machine(uow_factory: UnitOfWorkFactory, machine_id: UUID) -> Machine 
 
 
 async def after_resume(uow_factory: UnitOfWorkFactory, machine_ids: list[UUID]) -> None:
-    """Services back up, Docker answering, on machines that just resumed."""
+    """Services back up, Docker answering, and the logins back if the disk
+    came up without them, on machines that just started or resumed."""
     processes = MachineProcesses()
     for machine_id in machine_ids:
         machine = await _machine(uow_factory, machine_id)
@@ -80,6 +81,13 @@ async def after_resume(uow_factory: UnitOfWorkFactory, machine_ids: list[UUID]) 
                     timeout_seconds=120,
                 )
             restarted = await processes.restart_services(machine.id, base_env={})
+            if await LoginBackups(uow_factory).restore_if_lost(
+                machine.id, acting_user=_acting_user(machine)
+            ):
+                logger.info(
+                    "workspace.machine_housekeeping.logins_restored.observed",
+                    sandbox_id=str(machine_id),
+                )
         except _PER_MACHINE_FAILURES as exc:
             logger.warning(
                 "workspace.machine_housekeeping.resume_failed.degraded",

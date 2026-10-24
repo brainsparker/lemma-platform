@@ -49,6 +49,7 @@ from app.modules.workspace.services.browser_relay_client import (
 )
 from app.modules.workspace.api.controllers.browser_view_session import (
     UserIdResolver,
+    session_user_id,
     user_id_resolver,
 )
 from app.modules.workspace.api.controllers.browser_view_hangup import (
@@ -286,6 +287,43 @@ async def _keep_awake(service: BrowserViewService, user_id: UUID) -> None:
         await service.keep_awake(user_id)
 
 
+def _speaks(mode: str, transport: str) -> bool:
+    """A mode this socket knows, over the one transport it serves today."""
+    return mode in (MODE_VIEW, MODE_CONTROL) and transport == "vnc"
+
+
+async def _refused_origin(websocket: WebSocket, origins: tuple[str, ...]) -> bool:
+    """Whether the handshake came from a page that may not open this socket;
+    if so it has been refused."""
+    sent = websocket.headers.get("origin")
+    # Read here, not taken as a handler parameter: it is deployment config, and
+    # a parameter reads to static analysis as something the caller supplied.
+    origin_pattern = allowed_origin_pattern()
+    if not origin_is_allowed(sent, allowed=origins, pattern=origin_pattern):
+        # Browsers do not apply same-origin to WebSockets but do send cookies,
+        # so without this any page could open this socket as the signed-in
+        # person and both watch their screen and type into it.
+        #
+        # The hint is parsed and scrubbed, never the raw header -- but it is
+        # *there*, which it was not. A refusal that logged nothing cost a
+        # person their sign-in and left no way to tell why from the record.
+        logger.warning(
+            "workspace.browser_view.origin_refused.denied",
+            origin_hint=origin_refusal_hint(sent, allowed=origins),
+        )
+        await _refuse(websocket, CLOSE_ORIGIN_REFUSED)
+        return True
+    if app_host_slug(websocket) is not None:
+        # An app host is an allowed CORS origin, but this is the person's own
+        # sandbox -- their saved sign-ins -- outside any pod, and an app's page
+        # acts for its viewer only in its own pod (``core/app_pin``). Refused
+        # without looking the app up: no app host has any business here.
+        logger.warning("workspace.browser_view.app_origin_refused.denied")
+        await _refuse(websocket, CLOSE_ORIGIN_REFUSED)
+        return True
+    return False
+
+
 @router.websocket("/view")
 async def browser_view(
     websocket: WebSocket,
@@ -318,48 +356,19 @@ async def browser_view(
     whole shared display, not a session-scoped tab, so there is nothing else
     here to name.
     """
-    sent = websocket.headers.get("origin")
-    # Read here, not taken as a handler parameter: it is deployment config, and
-    # a parameter reads to static analysis as something the caller supplied.
-    origin_pattern = allowed_origin_pattern()
-    if not origin_is_allowed(sent, allowed=origins, pattern=origin_pattern):
-        # Browsers do not apply same-origin to WebSockets but do send cookies,
-        # so without this any page could open this socket as the signed-in
-        # person and both watch their screen and type into it.
-        #
-        # The hint is parsed and scrubbed, never the raw header -- but it is
-        # *there*, which it was not. A refusal that logged nothing cost a
-        # person their sign-in and left no way to tell why from the record.
-        logger.warning(
-            "workspace.browser_view.origin_refused.denied",
-            origin_hint=origin_refusal_hint(sent, allowed=origins),
-        )
-        await _refuse(websocket, CLOSE_ORIGIN_REFUSED)
-        return
-    if app_host_slug(websocket) is not None:
-        # An app host is an allowed CORS origin, but this is the person's own
-        # sandbox -- their saved sign-ins -- outside any pod, and an app's page
-        # acts for its viewer only in its own pod (``core/app_pin``). Refused
-        # without looking the app up: no app host has any business here.
-        logger.warning("workspace.browser_view.app_origin_refused.denied")
-        await _refuse(websocket, CLOSE_ORIGIN_REFUSED)
+    if await _refused_origin(websocket, origins):
         return
 
-    try:
-        user_id = await resolve_user_id(websocket)
-    except Exception:
-        # Broad because the session library raises several unrelated types for
-        # the same fact -- expired, malformed, revoked -- and the answer to all
-        # of them is the same close code. Logged with the traceback so a
-        # genuine failure in that library is not read as somebody's token
-        # having expired.
-        logger.warning(
-            "workspace.browser_view.session_unreadable.degraded", exc_info=True
-        )
+    user_id = await session_user_id(
+        websocket,
+        resolve_user_id,
+        socket="machine_browser_view",
+    )
+    if user_id is None:
         await _refuse(websocket, CLOSE_UNAUTHENTICATED)
         return
 
-    if mode not in (MODE_VIEW, MODE_CONTROL) or transport != "vnc":
+    if not _speaks(mode, transport):
         await _refuse(websocket, CLOSE_ORIGIN_REFUSED)
         return
 

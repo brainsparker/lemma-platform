@@ -244,6 +244,31 @@ class LoginBackups:
         )
         return outcome.ok
 
+    async def restore_if_lost(self, sandbox_id: UUID, *, acting_user: UUID) -> bool:
+        """Put the newest copy back on a machine that came up holding no login
+        at all -- a disk the provider lost, an expired pause. True when it did.
+
+        Never over a profile that has anything: a login made since the last
+        copy is newer than the copy, and replacing it would be the loss this
+        is here to prevent.
+        """
+        if await self.latest(sandbox_id) is None:
+            return False
+        parts = " ".join(shlex.quote(part) for part in LOGIN_PARTS)
+        root = shlex.quote(BROWSER_PROFILE_ROOT)
+        held = await run_on_machine(
+            sandbox_id,
+            acting_user=acting_user,
+            command=(
+                f"cd {root} 2>/dev/null || exit 1; "
+                f'for p in {parts}; do [ -e "$p" ] && exit 0; done; exit 1'
+            ),
+            timeout_seconds=30,
+        )
+        if held.ok:
+            return False
+        return await self.restore(sandbox_id, acting_user=acting_user)
+
     async def _open(self, sandbox_id: UUID, row: MachineLoginBackupModel) -> bytes:
         result = await _store().get_async(row.object_key)
         sealed = (await result.bytes_async()).to_bytes()

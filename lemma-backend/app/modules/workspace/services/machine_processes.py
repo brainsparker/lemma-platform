@@ -63,6 +63,11 @@ class ProcessView:
     exit_code: int | None
 
 
+def _encoded(record: ProcessRecord) -> str:
+    """One process's record, a few hundred bytes; `_record` reads it back."""
+    return json.dumps(asdict(record))
+
+
 class MachineProcessRegistry:
     def __init__(self, *, redis_url: str | None = None) -> None:
         self._redis = get_redis(url=redis_url or settings.redis_url)
@@ -72,7 +77,7 @@ class MachineProcessRegistry:
 
     async def put(self, machine_id: UUID, record: ProcessRecord) -> None:
         key = self._key(machine_id)
-        await self._redis.hset(key, record.process_id, json.dumps(asdict(record)))
+        await self._redis.hset(key, record.process_id, _encoded(record))
         await self._redis.expire(key, _ENTRY_TTL_SECONDS)
 
     async def get(self, machine_id: UUID, process_id: str) -> ProcessRecord | None:

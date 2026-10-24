@@ -12,7 +12,7 @@ from collections.abc import Iterable
 from datetime import datetime, timezone
 from uuid import UUID, uuid7
 
-from sqlalchemy import and_, select, update
+from sqlalchemy import Select, and_, func, select, update
 from sqlalchemy.orm import aliased
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -95,16 +95,22 @@ class MachineRepository:
             SandboxModel.owner_id == user_id,
         )
 
-    async def count_pod_machines(self, pod_ids: Iterable[UUID]) -> int:
-        """Live machines across these pods; what an org's machine cap counts."""
-        wanted = list(pod_ids)
-        if not wanted:
-            return 0
-        machines = await self._select(
-            SandboxModel.owner_kind == SandboxOwnerKind.POD.value,
-            SandboxModel.owner_id.in_(wanted),
+    async def count_pod_machines(
+        self, pod_ids: Iterable[UUID] | Select[tuple[UUID]]
+    ) -> int:
+        """Live machines across these pods -- a list of ids, or a subquery of
+        them; what an org's machine cap counts. Counted, not loaded."""
+        count = await self.session.scalar(
+            select(func.count())
+            .select_from(SandboxModel)
+            .where(
+                SandboxModel.kind == SandboxKind.WORKSPACE.value,
+                SandboxModel.desired_state != SandboxDesiredState.DELETED.value,
+                SandboxModel.owner_kind == SandboxOwnerKind.POD.value,
+                SandboxModel.owner_id.in_(pod_ids),
+            )
         )
-        return len(machines)
+        return int(count or 0)
 
     async def count_running(
         self, *, owner_kind: SandboxOwnerKind, owner_ids: Iterable[UUID]

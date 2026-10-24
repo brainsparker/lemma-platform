@@ -21814,6 +21814,13 @@ var LemmaClient = (() => {
       );
     }
   };
+  function deprecated(use, replacement) {
+    noteDeprecation(
+      new Headers({
+        "x-lemma-deprecation": `${use} is deprecated: use ${replacement}.`
+      })
+    );
+  }
   var WorkspaceNamespace = class {
     constructor(http, machines) {
       __publicField(this, "machines");
@@ -21821,11 +21828,19 @@ var LemmaClient = (() => {
     }
     /** @deprecated Use `machines.files.list("me", options)`. */
     listFiles(options = {}) {
-      return this.machines.files.list(ME, options);
+      deprecated("workspace.listFiles", 'machines.files.list("me")');
+      return this.machines.files.list(
+        ME,
+        options
+      );
     }
     /** @deprecated Use `machines.files.stat("me", path)`. */
     statFile(path) {
-      return this.machines.files.stat(ME, path);
+      deprecated("workspace.statFile", 'machines.files.stat("me", path)');
+      return this.machines.files.stat(
+        ME,
+        path
+      );
     }
     /**
      * A signed, short-lived URL for the live browser view.
@@ -21834,8 +21849,13 @@ var LemmaClient = (() => {
      * answers without the `app` field: there is only ever the browser.
      */
     async browserAccess(ttlSeconds = 1800) {
+      deprecated("workspace.browserAccess", 'machines.browser.access("me")');
       const access = await this.machines.browser.access(ME, { ttlSeconds });
-      return { app: "browser", url: access.url, expires_at: access.expires_at };
+      return {
+        app: "browser",
+        url: access.url,
+        expires_at: access.expires_at
+      };
     }
     /**
      * Whether this person's computer is ready, without starting anything.
@@ -21844,6 +21864,7 @@ var LemmaClient = (() => {
      */
     async status() {
       var _a;
+      deprecated("workspace.status", 'machines.startup("me")');
       const startup = await this.machines.startup(ME);
       return {
         state: startup.state,
@@ -21855,23 +21876,37 @@ var LemmaClient = (() => {
     /** @deprecated Use `machines.browser.status("me")`. */
     async browserStatus() {
       var _a;
+      deprecated("workspace.browserStatus", 'machines.browser.status("me")');
       const status = await this.machines.browser.status(ME);
       return { state: status.state, detail: (_a = status.detail) != null ? _a : null };
     }
     /** @deprecated Use `machines.browser.currentPageUrl("me", origin)`. */
     browserCurrentPageUrl(origin) {
+      deprecated(
+        "workspace.browserCurrentPageUrl",
+        'machines.browser.currentPageUrl("me", origin)'
+      );
       return this.machines.browser.currentPageUrl(ME, origin);
     }
     /** @deprecated Use `machines.browser.display("me", { width, height })`. */
     browserResizeDisplay(width, height) {
+      deprecated(
+        "workspace.browserResizeDisplay",
+        'machines.browser.display("me", size)'
+      );
       return this.machines.browser.display(ME, { width, height });
     }
     /** @deprecated Use `machines.files.read("me", path, options)`. */
     readFile(path, options = {}) {
+      deprecated("workspace.readFile", 'machines.files.read("me", path)');
       return this.machines.files.read(ME, path, options);
     }
     /** @deprecated Use `machines.files.readWhole("me", path, sizeBytes, chunk)`. */
     readWholeFile(path, sizeBytes = 0, chunk) {
+      deprecated(
+        "workspace.readWholeFile",
+        'machines.files.readWhole("me", path)'
+      );
       return this.machines.files.readWhole(ME, path, sizeBytes, chunk);
     }
   };

@@ -48,6 +48,7 @@ from lemma_pod_bundle.normalize import (
 from lemma_pod_bundle.portability import _extract_portable_variables
 
 from app.modules.pod_bundle.infrastructure.exporter_agents import export_agents
+from app.modules.pod_bundle.infrastructure.machine_bundle import export_machines
 from app.modules.pod_bundle.infrastructure.exporter_connectors import (
     export_connectors,
 )
@@ -66,17 +67,7 @@ logger = get_logger(__name__)
 # Resource dirs the exporter knows how to fill, in a stable order. ``files`` is
 # out of scope for the export slice (the CLI's file/asset export is separate and
 # best-effort); we still create the empty dir for layout parity.
-_EXPORT_RESOURCE_TYPES = (
-    "connectors",
-    "tables",
-    "machines",
-    "functions",
-    "agents",
-    "workflows",
-    "schedules",
-    "surfaces",
-    "apps",
-)
+_EXPORT_RESOURCE_TYPES = tuple(d for d in RESOURCE_DIRS if d != "files")
 
 _RECORD_EXPORT_PAGE = 1_000
 
@@ -316,10 +307,8 @@ class BundleExporter:
                 await on_progress(done, total)
 
             # --- machines -----------------------------------------------------
-            if "machines" in selected:
-                await _export_machines(uow, root=root, pod_id=pod_id)
-                done += 1
-                await on_progress(done, total)
+            done += await export_machines(uow, root, pod_id, selected=selected)
+            await on_progress(done, total)
 
             # --- functions ----------------------------------------------------
             if "functions" in selected:
@@ -619,24 +608,6 @@ class BundleExporter:
             data_budget=data_budget,
             warnings=warnings,
             folder_paths=folder_paths,
-        )
-
-
-async def _export_machines(
-    uow: SqlAlchemyUnitOfWork, *, root: Path, pod_id: UUID
-) -> None:
-    """One directory per pod machine: its definition, never its disk."""
-    from dataclasses import asdict
-
-    from lemma_pod_bundle.normalize import _normalize_machine_payload
-
-    from app.modules.workspace.contracts.pod_machines import list_pod_machines
-
-    for spec in await list_pod_machines(uow, pod_id=pod_id):
-        dir_ = root / "machines" / spec.name
-        dir_.mkdir(parents=True, exist_ok=True)
-        _write_json(
-            dir_ / f"{spec.name}.json", _normalize_machine_payload(asdict(spec))
         )
 
 

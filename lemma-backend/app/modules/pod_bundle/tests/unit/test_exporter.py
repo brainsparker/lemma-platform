@@ -36,6 +36,8 @@ class _Named:
     # Export filters the pod's own assistant out by kind, so the stand-in
     # carries one. Defaulting to USER keeps every existing case exporting.
     kind: AgentKind = AgentKind.USER
+    #: An agent's `machine:` ref, when the case pins it to one.
+    machine: str | None = None
 
 
 _DATASTORE = "app.modules.datastore.contracts.provisioning"
@@ -325,6 +327,7 @@ def patched_exporter(monkeypatch):
             "name": agent.name,
             "description": "an agent",
             "instruction": "You are helpful.",
+            **({"machine": agent.machine} if agent.machine else {}),
         },
     )
     return BundleExporter()
@@ -1022,40 +1025,32 @@ async def test_a_machine_and_the_agent_on_it_round_trip_through_a_bundle(
         ]
 
     monkeypatch.setattr(f"{_MACHINES}.list_pod_machines", _machines)
-    monkeypatch.setattr(
-        exporter_mod,
-        "_agent_response_dict",
-        lambda agent: {
-            "name": agent.name,
-            "instruction": "Build things.",
-            "machine": f"pod:{source_pod}/builder",
-        },
+    pinned = _FakeNamedResource(
+        [_Named("assistant", machine=f"pod:{source_pod}/builder")]
     )
+    monkeypatch.setattr(f"{_AGENTS}.require_agent", pinned.require)
 
-    async def _grants(uow, *, pod_id, grantee_type, grantee_id, warnings, grantee_name):
-        return {
-            "grants": [
-                {
-                    "resource_type": "machine",
-                    "resource_name": "builder",
-                    "permission_ids": ["machine.use"],
-                }
-            ]
-        }
+    async def _grants(session, *, pod_id, grantee_type, grantee_id):
+        from app.core.authorization import ResourceType
 
-    monkeypatch.setattr(exporter_mod, "_resource_grants_payload", _grants)
+        return {(ResourceType.MACHINE, "builder"): ["machine.use"]}
+
+    monkeypatch.setattr(
+        "app.core.authorization.grants.list_grantee_resource_grants", _grants
+    )
 
     async def on_progress(done, total):
         return None
 
-    _name, zip_bytes, _warnings = await patched_exporter.export(
+    _name, zip_bytes, warnings = await patched_exporter.export(
         pod_id=source_pod,
         user_id=uuid4(),
         include=["machines", "agents"],
         ctx=object(),
-        uow=object(),
+        uow=SimpleNamespace(session=object()),
         on_progress=on_progress,
     )
+    assert warnings == []
     root = extract_bundle(zip_bytes, tmp_path / "out")
 
     machine = json.loads((root / "machines" / "builder" / "builder.json").read_text())

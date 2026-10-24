@@ -36,7 +36,7 @@ _GROUP_LABELS: dict[int, str] = {
     id(waiting_toolset): "Pausing and resuming later",
     id(browser_toolset): "Driving a real browser",
     id(speech_toolset): "Speaking and transcribing",
-    id(machine_toolset): "Machines: other machines, preview links, copying to pod files, cleaning up",
+    id(machine_toolset): "Other machines, previews, copies to pod files, cleanup",
 }
 
 

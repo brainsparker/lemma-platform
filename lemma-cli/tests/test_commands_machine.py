@@ -126,7 +126,9 @@ def test_exec_runs_a_single_argument_as_a_shell_line(
     machines = FakeMachines(FakeStream([("stdout", "ok\n")], 0, "succeeded"))
     _patch(patch_run, json_state, machines)
 
-    result = runner.invoke(app, ["machines", "exec", "--json", "me", "npm ci && npm test"])
+    result = runner.invoke(
+        app, ["machines", "exec", "--json", "me", "npm ci && npm test"]
+    )
 
     assert result.exit_code == 0, result.stderr
     assert machines.calls[0][1] == ("me", "npm ci && npm test")
@@ -217,15 +219,13 @@ def test_reset_of_work_losing_scopes_needs_confirm(
         ["machine", "logins", "forget", "me", "example.com"],
     ],
 )
-def test_destructive_machine_commands_require_yes(runner, monkeypatch, args) -> None:
-    calls: list[int] = []
-    monkeypatch.setattr(machine, "run_with_client", lambda ctx, fn: calls.append(1))
-
+def test_destructive_machine_commands_require_yes(runner, args) -> None:
+    """Refused before any client exists: no server is configured here, so a
+    command that went on to call one would fail with a different message."""
     refused = runner.invoke(app, args)
 
     assert refused.exit_code == 1
     assert "--yes" in refused.stderr
-    assert not calls
 
 
 def test_shell_refuses_without_a_terminal(runner) -> None:

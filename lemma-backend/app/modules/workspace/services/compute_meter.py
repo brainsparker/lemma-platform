@@ -64,8 +64,14 @@ def _units_per_hour(size: str) -> float:
         return 0.5
 
 
-async def _running(uow) -> list[RunningMachine]:
-    rows = await uow.session.execute(
+#: Running machines read per query. The meter walks all of them every tick, so
+#: it pages by id rather than holding the whole deployment in one result.
+_PAGE = 500
+
+
+async def _running(uow, *, after: UUID | None = None) -> list[RunningMachine]:
+    """One page of running, metered machines, in id order after ``after``."""
+    query = (
         select(SandboxModel, SandboxInstanceModel.ready_at)
         .join(
             SandboxInstanceModel,
@@ -80,7 +86,12 @@ async def _running(uow) -> list[RunningMachine]:
             SandboxModel.connection_id.is_(None),
             SandboxInstanceModel.state == SandboxInstanceState.READY.value,
         )
+        .order_by(SandboxModel.id)
+        .limit(_PAGE)
     )
+    if after is not None:
+        query = query.where(SandboxModel.id > after)
+    rows = await uow.session.execute(query)
     return [
         RunningMachine(
             sandbox_id=row.id,
@@ -92,6 +103,18 @@ async def _running(uow) -> list[RunningMachine]:
         )
         for row, ready_at in rows.all()
     ]
+
+
+async def _all_running(uow_factory: UnitOfWorkFactory) -> list[RunningMachine]:
+    machines: list[RunningMachine] = []
+    after: UUID | None = None
+    while True:
+        async with uow_factory() as uow:
+            page = await _running(uow, after=after)
+        machines.extend(page)
+        if len(page) < _PAGE:
+            return machines
+        after = page[-1].sandbox_id
 
 
 async def _billing(
@@ -108,7 +131,9 @@ async def _billing(
 
 async def _open_machine_session(
     uow, machine: RunningMachine, now: datetime
-) -> MachineSessionModel:
+) -> tuple[MachineSessionModel, bool]:
+    """The machine's open session, and whether it was opened just now -- a
+    machine that started or resumed since the last tick."""
     found = await uow.session.scalar(
         select(MachineSessionModel)
         .where(
@@ -176,20 +201,37 @@ async def _write_slices(uow, session: MachineSessionModel, until: datetime) -> i
     return written
 
 
+@dataclass(frozen=True, slots=True)
+class MeterTick:
+    """What one metering pass saw, for the rest of the sweep to act on."""
+
+    written: int
+    #: Every machine running now.
+    running: list[UUID]
+    #: Those that started or resumed since the last pass.
+    resumed: list[UUID]
+
+
 async def meter_running(
     uow_factory: UnitOfWorkFactory, *, now: datetime | None = None
-) -> int:
-    """Write every running machine's time up to now. Returns slices written."""
+) -> MeterTick:
+    """Write every running machine's time up to now."""
     now = now or datetime.now(timezone.utc)
-    async with uow_factory() as uow:
-        machines = await _running(uow)
+    machines = await _all_running(uow_factory)
     written = 0
+    resumed: list[UUID] = []
     for machine in machines:
         async with uow_factory() as uow:
-            session = await _open_machine_session(uow, machine, now)
+            session, opened = await _open_machine_session(uow, machine, now)
             written += await _write_slices(uow, session, now)
             await uow.commit()
-    return written
+        if opened:
+            resumed.append(machine.sandbox_id)
+    return MeterTick(
+        written=written,
+        running=[machine.sandbox_id for machine in machines],
+        resumed=resumed,
+    )
 
 
 async def close_sessions(
@@ -288,8 +330,7 @@ async def enforce(
     now = now or datetime.now(timezone.utc)
     notices = ComputeNotices()
     released: list[UUID] = []
-    async with uow_factory() as uow:
-        machines = await _running(uow)
+    machines = await _all_running(uow_factory)
     for machine in machines:
         async with uow_factory() as uow:
             verdict = await verdict_for(

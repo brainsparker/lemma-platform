@@ -339,7 +339,7 @@ three ways:
   connector operations present as the App where GitHub permits it, so a schedule
   outlives the person who set it up, while pod publish/import and the machine's
   `git`/`gh` stay the person so their name is on the commits.
-- **The sandbox's `git`/`gh` get a token only from your own account** — or from a
+- **A machine's `git`/`gh` get a token only from your own account** — or from a
   SHARED `github` connector's account whose **owner** ticked "allow use inside
   sandboxes" (`PATCH /pods/{pod}/connector-accounts/{id}` with
   `{"allow_sandbox_use": true}`, owner only, on an account already shared with the

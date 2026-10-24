@@ -176,7 +176,9 @@ def _cwd(machine: Machine, cwd: str | None) -> str:
     return target
 
 
-async def _ready_machine_for(machine: Machine, user_id: UUID, cwd: str) -> dict[str, str]:
+async def _ready_machine_for(
+    machine: Machine, user_id: UUID, cwd: str
+) -> dict[str, str]:
     """The machine up, the directory there, and the caller's credentials."""
     from app.modules.workspace.services.workspace_sandbox_service import (
         WorkspaceSandboxService,
@@ -446,23 +448,34 @@ async def stream_process(
             await websocket.close()
 
 
-async def _apply_message(
-    processes: MachineProcesses, machine_id: UUID, process_id: str, raw: str
-) -> None:
+def _message(raw: str) -> bytes | TerminalSize | None:
+    """One control message off the socket: what to type, or a new size.
+    Anything else -- not JSON, an unknown type -- is ignored."""
     try:
         message = json.loads(raw)
     except ValueError:
-        return
+        return None
     if not isinstance(message, dict):
-        return
-    if message.get("type") == "input" and isinstance(message.get("data"), str):
-        await processes.send_input(machine_id, process_id, message["data"].encode())
-    elif message.get("type") == "resize":
+        return None
+    if message.get("type") == "input":
+        data = message.get("data")
+        return data.encode() if isinstance(data, str) else None
+    if message.get("type") == "resize":
         try:
-            size = TerminalSize(cols=int(message["cols"]), rows=int(message["rows"]))
+            return TerminalSize(cols=int(message["cols"]), rows=int(message["rows"]))
         except KeyError, TypeError, ValueError:
-            return
-        await processes.resize(machine_id, process_id, size)
+            return None
+    return None
+
+
+async def _apply_message(
+    processes: MachineProcesses, machine_id: UUID, process_id: str, raw: str
+) -> None:
+    message = _message(raw)
+    if isinstance(message, bytes):
+        await processes.send_input(machine_id, process_id, message)
+    elif isinstance(message, TerminalSize):
+        await processes.resize(machine_id, process_id, message)
 
 
 async def _pump_output(
@@ -481,26 +494,22 @@ async def _pump_output(
             wait_seconds=_READ_WAIT_SECONDS,
         )
         for chunk in snapshot.chunks:
-            await websocket.send_text(
-                json.dumps(
-                    {
-                        "type": "output",
-                        "sequence": chunk.sequence,
-                        "channel": str(getattr(chunk.channel, "value", chunk.channel)),
-                        "data": chunk.data.decode("utf-8", errors="replace"),
-                    }
-                )
+            await websocket.send_json(
+                {
+                    "type": "output",
+                    "sequence": chunk.sequence,
+                    "channel": str(getattr(chunk.channel, "value", chunk.channel)),
+                    "data": chunk.data.decode("utf-8", errors="replace"),
+                }
             )
         sequence = snapshot.next_sequence
         if has_stopped(snapshot):
-            await websocket.send_text(
-                json.dumps(
-                    {
-                        "type": "exit",
-                        "state": str(getattr(snapshot.state, "value", snapshot.state)),
-                        "exit_code": snapshot.exit_code,
-                    }
-                )
+            await websocket.send_json(
+                {
+                    "type": "exit",
+                    "state": str(getattr(snapshot.state, "value", snapshot.state)),
+                    "exit_code": snapshot.exit_code,
+                }
             )
             return
 

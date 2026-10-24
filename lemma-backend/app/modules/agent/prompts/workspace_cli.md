@@ -21,7 +21,8 @@ belongs in pod files.
 pod's shared machines (`pod:<name>`), some with Docker; pass `machine` to
 `exec_command`, `manage_process` or `execute_python`. On a pod machine each run
 gets its own `~/lemma/runs/<agent>/<run>`, and what you start stops when the run
-ends. Leave the pod's services (`~/lemma/services/<name>`) running. `## Machine`
+ends. Leave the pod's services (`~/lemma/services/<name>`) running. A run
+started by a channel or a schedule never gets a person's own machine. `## Machine`
 in the run context gives size, disk and compute left.
 
 `expose_port` turns a port (a dev server on 5173) into a preview URL people can

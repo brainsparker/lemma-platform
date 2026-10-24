@@ -67,6 +67,7 @@ async def authorize_socket(
     from app.core.api.dependencies import get_uow_factory
     from app.modules.workspace.api.controllers.browser_view_session import (
         resolve_user_id,
+        session_user_id,
     )
     from app.modules.workspace.services.ws_bridge import origin_is_allowed
 
@@ -76,18 +77,15 @@ async def authorize_socket(
     ):
         await _hang_up(websocket, CLOSE_ORIGIN_REFUSED)
         return None
-    try:
-        user_id = UUID(await resolve_user_id(websocket))
-    except Exception:
-        # The session library raises several unrelated types for the same
-        # fact -- expired, malformed, revoked -- and all of them close the
-        # same way. Logged with the traceback so a real fault is not read as
-        # an expired token.
-        logger.warning(
-            "workspace.machine_socket.session_unreadable.degraded", exc_info=True
-        )
+    session_user = await session_user_id(
+        websocket,
+        resolve_user_id,
+        socket="machine",
+    )
+    if session_user is None:
         await _hang_up(websocket, CLOSE_UNAUTHENTICATED)
         return None
+    user_id = UUID(session_user)
     try:
         async with get_uow_factory()() as uow:
             caller = await _caller(websocket, user_id)

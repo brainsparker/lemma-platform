@@ -13,6 +13,8 @@ people by membership.
 
 from __future__ import annotations
 
+from sqlalchemy import Select
+
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -134,7 +136,7 @@ async def _check_count(
     from app.modules.pod.contracts.members import pod_organization_id
 
     organization_id = await pod_organization_id(uow, pod_id)
-    pod_ids = await _org_pods(uow, organization_id) if organization_id else [pod_id]
+    pod_ids = _org_pods(organization_id) if organization_id else [pod_id]
     count = await MachineRepository(uow).count_pod_machines(pod_ids)
     if count >= policy.max_pod_machines:
         raise MachinePolicyRefused(
@@ -144,10 +146,10 @@ async def _check_count(
         )
 
 
-async def _org_pods(uow: SqlAlchemyUnitOfWork, organization_id: UUID) -> list[UUID]:
-    from app.modules.pod.contracts.provisioning import organization_pod_ids
+def _org_pods(organization_id: UUID) -> Select[tuple[UUID]]:
+    from app.modules.pod.contracts.provisioning import organization_pod_ids_query
 
-    return await organization_pod_ids(uow, organization_id)
+    return organization_pod_ids_query(organization_id)
 
 
 async def update_pod_machine(

@@ -15,10 +15,8 @@ from pydantic import BaseModel, Field
 from app.core.log.log import get_logger
 from app.modules.agent.tools.context import TOOL_COMMENT_DESC, BaseAgentContext
 from app.modules.agent.tools.tool_errors import safe_described_error
-from app.modules.agent.tools.workspace_cli.workspace_cli import (
-    refuse_owner_workspace,
-    resolve_run_machine,
-)
+from app.modules.agent.tools.workspace_cli.run_machine import resolve_run_machine
+from app.modules.agent.tools.workspace_cli.workspace_cli import refuse_owner_workspace
 
 logger = get_logger(__name__)
 

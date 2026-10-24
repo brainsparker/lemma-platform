@@ -28,6 +28,7 @@ from app.modules.pod_bundle.infrastructure.connector_grants import (
 )
 from app.modules.pod_bundle.domain.connector_plan import ConnectorChoice
 from app.modules.pod_bundle.infrastructure.connector_apply import apply_connector
+from app.modules.pod_bundle.infrastructure.agent_apply import apply_agent, apply_machine
 from app.modules.pod_bundle.infrastructure.schedule_apply import apply_schedule
 from app.modules.pod_bundle.infrastructure.surface_apply import apply_surface
 from app.modules.pod_bundle.domain.state import PlanStep, StepKind
@@ -249,78 +250,28 @@ class BundleApplier:
             visibility=meta.get("visibility") or "POD",
         )
 
-    # --- machines --------------------------------------------------------
+    # --- machines and agents ---------------------------------------------
 
     async def _apply_machine(self, step: PlanStep) -> None:
-        """Create the pod machine, or bring an existing one to the bundle's
-        definition. An upsert by name, like every step: a replay converges."""
-        from app.modules.workspace.contracts.pod_machines import upsert_pod_machine
-
-        payload = self._load("machines", step.name)
-        run_slots = payload.get("run_slots")
-        await upsert_pod_machine(
-            self._uow,
+        """The dispatch table's uniform shape over `agent_apply.apply_machine`."""
+        await apply_machine(
+            step,
+            uow=self._uow,
             pod_id=self._pod_id,
             user_id=self._user_id,
-            name=step.name,
-            template=str(payload.get("template") or "workspace"),
-            size=str(payload["size"]) if payload.get("size") else None,
-            visibility=str(payload.get("visibility") or "pod"),
-            run_slots=int(run_slots) if run_slots is not None else None,
-            display_name=payload.get("display_name"),
+            load=self._load,
         )
-
-    # --- agents ----------------------------------------------------------
 
     async def _apply_agent(self, step: PlanStep) -> None:
-        from app.modules.agent.contracts.provisioning import (
-            create_agent,
-            get_agent,
-            update_agent,
+        """The dispatch table's uniform shape over `agent_apply.apply_agent`."""
+        await apply_agent(
+            step,
+            uow=self._uow,
+            ctx=self._ctx,
+            pod_id=self._pod_id,
+            user_id=self._user_id,
+            load=self._load,
         )
-
-        payload = self._load("agents", step.name)
-        runtime = _agent_runtime(payload)
-        # Toolsets are what let an imported agent actually *use* tools (POD,
-        # WEB_SEARCH, …). Without them, a granted agent still can't act — so they
-        # travel with the agent, not the deferred grants step.
-        toolsets = _agent_toolsets(payload)
-        common = {
-            "description": payload.get("description"),
-            "icon_url": payload.get("icon_url"),
-            "agent_runtime": runtime,
-            "toolsets": toolsets,
-            "input_schema": payload.get("input_schema"),
-            "output_schema": payload.get("output_schema"),
-            "metadata": payload.get("metadata"),
-            # Which machine its commands run on. Absent means its own default,
-            # and a bundle saying so clears a machine the target agent had.
-            "machine": payload.get("machine"),
-        }
-        existing = await get_agent(
-            self._uow, pod_id=self._pod_id, name=step.name, ctx=self._ctx
-        )
-        if existing is None:
-            await create_agent(
-                self._uow,
-                pod_id=self._pod_id,
-                user_id=self._user_id,
-                name=step.name,
-                instruction=str(payload.get("instruction") or ""),
-                visibility=payload.get("visibility"),
-                ctx=self._ctx,
-                **common,
-            )
-        else:
-            await update_agent(
-                self._uow,
-                pod_id=self._pod_id,
-                name=step.name,
-                instruction=payload.get("instruction"),
-                user_id=self._user_id,
-                ctx=self._ctx,
-                **common,
-            )
 
     async def _connector_step(self, step: PlanStep) -> None:
         """The dispatch table's uniform shape over `connector_apply`."""
@@ -504,33 +455,6 @@ def _is_system_column(column: dict[str, Any]) -> bool:
     from lemma_pod_bundle.diff import _is_system_table_column
 
     return _is_system_table_column(column)
-
-
-def _agent_runtime(payload: dict[str, Any]):
-    from app.core.domain.runtime import AgentRuntimeConfig
-
-    raw = payload.get("agent_runtime")
-    if isinstance(raw, dict) and raw.get("profile_id"):
-        return AgentRuntimeConfig.model_validate(raw)
-    return None
-
-
-def _agent_toolsets(payload: dict[str, Any]) -> list[Any]:
-    """Map the manifest's ``toolsets`` list to :class:`AgentToolset` values,
-    dropping any the runtime doesn't recognize (forward-compat) and the reserved
-    ``VIEW_IMAGE`` toolset, which is never persisted."""
-    from app.modules.agent.contracts import AgentToolset
-
-    toolsets: list[AgentToolset] = []
-    for raw in payload.get("toolsets") or []:
-        try:
-            toolset = AgentToolset(str(raw))
-        except ValueError:
-            continue
-        if toolset is AgentToolset.VIEW_IMAGE:
-            continue
-        toolsets.append(toolset)
-    return toolsets
 
 
 def _read_json_file(path: Path, *, label: str, warnings: list[str]) -> dict[str, Any]:

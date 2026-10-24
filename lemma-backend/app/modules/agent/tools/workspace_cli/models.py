@@ -211,7 +211,7 @@ class ViewImageRequest(BaseModel):
     workspace_file_path: Optional[str] = Field(
         default=None,
         description=(
-            "Image in the workspace sandbox, e.g. `images/output.png` — for "
+            "Image on your machine, e.g. `images/output.png` — for "
             "artifacts you just produced. Set this or `pod_file_path`, not both."
         ),
     )

@@ -252,7 +252,9 @@ class MachineFiles:
         )
 
 
-def machine_files() -> MachineFiles:
+async def machine_files() -> MachineFiles:
+    # Async on purpose: a plain function runs in a worker thread, where the
+    # sandbox service it builds finds no running loop.
     return MachineFiles()
 
 

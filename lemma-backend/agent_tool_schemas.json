@@ -1989,11 +1989,11 @@
               "type": "string"
             },
             "pod_path": {
-              "description": "Pod file path of the skill's `SKILL.md`. This is a pod file path, not a path on the workspace filesystem: nothing mounts `/skills` inside the workspace container, so `cat`/`ls` on it fail. Read it with `load_skill`, or with `lemma files cat <path>` from a workspace shell.",
+              "description": "Pod file path of the skill's `SKILL.md`. This is a pod file path, not a path on your machine: nothing mounts `/skills` on your machine, so `cat`/`ls` on it fail. Read it with `load_skill`, or with `lemma files cat <path>` from your machine's shell.",
               "type": "string"
             },
             "pod_dir": {
-              "description": "Pod file path of this skill's root directory. This is a pod file path, not a path on the workspace filesystem: nothing mounts `/skills` inside the workspace container, so `cat`/`ls` on it fail. Read it with `load_skill`, or with `lemma files cat <path>` from a workspace shell.",
+              "description": "Pod file path of this skill's root directory. This is a pod file path, not a path on your machine: nothing mounts `/skills` on your machine, so `cat`/`ls` on it fail. Read it with `load_skill`, or with `lemma files cat <path>` from your machine's shell.",
               "type": "string"
             }
           },
@@ -2385,7 +2385,7 @@
               "type": "string"
             },
             "pod_path": {
-              "description": "Pod file path of the resource. This is a pod file path, not a path on the workspace filesystem: nothing mounts `/skills` inside the workspace container, so `cat`/`ls` on it fail. Read it with `load_skill`, or with `lemma files cat <path>` from a workspace shell.",
+              "description": "Pod file path of the resource. This is a pod file path, not a path on your machine: nothing mounts `/skills` on your machine, so `cat`/`ls` on it fail. Read it with `load_skill`, or with `lemma files cat <path>` from your machine's shell.",
               "type": "string"
             },
             "kind": {
@@ -4028,7 +4028,7 @@
   {
     "tool_name": "run_connector_operation",
     "toolset": "CONNECTORS",
-    "description": "Run an operation through one of the pod's connectors.\n\n`payload` must match the operation's input schema -- fetch it with\n`describe_connector_operation` first. Whose account the call runs as is the\nconnector's decision, not yours. To send a file (an email attachment, a\nDrive upload), pass it as `{\"pod_path\": \"/me/report.pdf\"}` in the file\nargument; a file in your sandbox has to be uploaded to the pod first. A\nfile result larger than the inline limit is written to the pod datastore\nand returned as a reference; pass `output_path` to choose where it lands.\nA `CONNECTION_REQUIRED` or `REAUTH_REQUIRED` answer carries a `connect_url`\nto hand your person.",
+    "description": "Run an operation through one of the pod's connectors.\n\n`payload` must match the operation's input schema -- fetch it with\n`describe_connector_operation` first. Whose account the call runs as is the\nconnector's decision, not yours. To send a file (an email attachment, a\nDrive upload), pass it as `{\"pod_path\": \"/me/report.pdf\"}` in the file\nargument; a file on your machine has to be uploaded to the pod first. A\nfile result larger than the inline limit is written to the pod datastore\nand returned as a reference; pass `output_path` to choose where it lands.\nA `CONNECTION_REQUIRED` or `REAUTH_REQUIRED` answer carries a `connect_url`\nto hand your person.",
     "input_schema": {
       "description": "No account argument: the connector decides whose account a call runs as.\n\nA per-member connector uses the account of the person you act for; a\nshared one uses the account its owner shared with the pod. An\n``account_id`` here was a free argument a model could fill in to act as a\ncolleague.",
       "properties": {
@@ -4338,7 +4338,7 @@
             }
           ],
           "default": null,
-          "description": "Image in the workspace sandbox, e.g. `images/output.png` \u2014 for artifacts you just produced. Set this or `pod_file_path`, not both."
+          "description": "Image on your machine, e.g. `images/output.png` \u2014 for artifacts you just produced. Set this or `pod_file_path`, not both."
         },
         "instructions": {
           "anyOf": [
@@ -4361,7 +4361,7 @@
   {
     "tool_name": "wait_for",
     "toolset": "WAIT",
-    "description": "Stop here and pick this turn up when there is a reason to.\n\nName exactly one thing to wait for:\n- `seconds` \u2014 a plain gap, when there is nothing to watch.\n- `process_id` \u2014 a command from `exec_command` that is still running. You\n  wake when it exits, with its exit code.\n- `subagent_run_id` \u2014 a child from `spawn_subagent`. You wake with its result.\n\nYou come back in the same conversation with the same history. Three things\nthat bite:\n- **Waking proves nothing succeeded.** A process that ended may have ended\n  badly, and a timer elapsing says nothing at all. Check.\n- **Every wake replays the whole conversation**, so one real wait beats a\n  loop of short ones. Never call this repeatedly to poll something.\n- **Across a plain `seconds` wait the sandbox may be reclaimed** \u2014\n  your files, background processes and your shell cwd can be gone. Waiting\n  on a `process_id` holds it, because the process is what holds it. Write\n  anything you need to keep to the pod first.\n\nDon't use it to wait for a person: `ask_user` pauses for the one you are\ntalking to, and `channel_post` ends your turn and gets you a new one when\nthe answers arrive.",
+    "description": "Stop here and pick this turn up when there is a reason to.\n\nName exactly one thing to wait for:\n- `seconds` \u2014 a plain gap, when there is nothing to watch.\n- `process_id` \u2014 a command from `exec_command` that is still running. You\n  wake when it exits, with its exit code.\n- `subagent_run_id` \u2014 a child from `spawn_subagent`. You wake with its result.\n\nYou come back in the same conversation with the same history. Three things\nthat bite:\n- **Waking proves nothing succeeded.** A process that ended may have ended\n  badly, and a timer elapsing says nothing at all. Check.\n- **Every wake replays the whole conversation**, so one real wait beats a\n  loop of short ones. Never call this repeatedly to poll something.\n- **Across a plain `seconds` wait your machine may be reclaimed** \u2014\n  your files, background processes and your shell cwd can be gone. Waiting\n  on a `process_id` holds it, because the process is what holds it. Write\n  anything you need to keep to the pod first.\n\nDon't use it to wait for a person: `ask_user` pauses for the one you are\ntalking to, and `channel_post` ends your turn and gets you a new one when\nthe answers arrive.",
     "input_schema": {
       "properties": {
         "reason": {
@@ -4533,7 +4533,7 @@
   {
     "tool_name": "web_fetch",
     "toolset": "WEB_SEARCH",
-    "description": "Capture web pages into your workspace so you can read them properly.\n\nTakes a *list* of URLs \u2014 fetch everything a question needs in one call.\nEach page is saved as readable markdown (optionally also PDF and a\nfull-page screenshot) under `out_dir`, and you get back the file paths and\na short preview, not the page text: twenty articles inline would bury the\ntask you are working on.\n\nThen work with the files: `exec_command` to grep or read them, and\n`view_image` for a screenshot. Both take the workspace path you were given.\n`pod_view_document_pages` takes a path *in the pod*, so it only works on a\ncaptured PDF after you have uploaded it. If you have no `exec_command`,\neach page's text comes back in its `content` instead, clipped to a budget.\nJSON and plain-text URLs are saved as they came. This is the right way to\nread anything longer than a search snippet.",
+    "description": "Capture web pages onto your machine so you can read them properly.\n\nTakes a *list* of URLs \u2014 fetch everything a question needs in one call.\nEach page is saved as readable markdown (optionally also PDF and a\nfull-page screenshot) under `out_dir`, and you get back the file paths and\na short preview, not the page text: twenty articles inline would bury the\ntask you are working on.\n\nThen work with the files: `exec_command` to grep or read them, and\n`view_image` for a screenshot. Both take the workspace path you were given.\n`pod_view_document_pages` takes a path *in the pod*, so it only works on a\ncaptured PDF after you have uploaded it. If you have no `exec_command`,\neach page's text comes back in its `content` instead, clipped to a budget.\nJSON and plain-text URLs are saved as they came. This is the right way to\nread anything longer than a search snippet.",
     "input_schema": {
       "properties": {
         "urls": {

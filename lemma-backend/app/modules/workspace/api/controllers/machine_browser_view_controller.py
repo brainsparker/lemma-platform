@@ -73,8 +73,6 @@ from app.modules.workspace.services.browser_view_service import (
     BrowserViewService,
 )
 from app.modules.workspace.services.ws_bridge import (
-    bridge,
-    connect_upstream,
     origin_is_allowed,
     origin_refusal_hint,
 )
@@ -82,7 +80,9 @@ from sandbox_runtime.errors import SandboxCapabilityUnsupported, SandboxError
 from sandbox_runtime.errors import SandboxUnavailable
 
 if TYPE_CHECKING:
-    from app.modules.workspace.api.controllers.browser_view_stream import PreparedRtc
+    from app.modules.workspace.api.controllers.browser_view_stream import (
+        PreparedRtc,
+    )
     from app.modules.workspace.services.browser_view_service import ViewUpstream
 
 logger = get_logger(__name__)
@@ -489,7 +489,13 @@ async def browser_view(
         await service.close()
         return
 
-    refused, rtc = await _setup_rtc(
+    # Not at module scope: WebRTC's setup -- TURN, tickets -- loads only for
+    # the sockets that use this route at all.
+    from app.modules.workspace.api.controllers.browser_view_stream import (
+        setup_rtc,
+    )
+
+    refused, rtc = await setup_rtc(
         websocket,
         service,
         target,
@@ -502,6 +508,17 @@ async def browser_view(
     if refused:
         return
 
+    await _watch(websocket, service, target, rtc, machine_id)
+
+
+async def _watch(
+    websocket: WebSocket,
+    service: BrowserViewService,
+    target: ViewUpstream,
+    rtc: PreparedRtc | None,
+    machine_id: UUID,
+) -> None:
+    """Accept the socket and carry it, keeping the machine awake meanwhile."""
     await websocket.accept()
     # Held awake for as long as somebody is looking. The idle sweep measures
     # from the last time a caller asked for the sandbox, and watching is not a
@@ -515,7 +532,9 @@ async def browser_view(
         _keep_awake(service, watcher), name="workspace.browser_view.keep_awake"
     )
     try:
-        code = await _carry(websocket, target, rtc)
+        from app.modules.workspace.api.controllers.browser_view_stream import carry
+
+        code = await carry(websocket, target, rtc)
         # The relay refuses with these same 44xx codes, and they mean the same
         # things on both sides of the sandbox wall -- so pass the reason on
         # rather than replacing it with 1011. Told 1011, the pane says "the
@@ -537,64 +556,6 @@ async def browser_view(
         await _collect(awake)
         watch_ended(watcher)
         await service.close()
-
-
-async def _setup_rtc(
-    websocket: WebSocket,
-    service: BrowserViewService,
-    target: ViewUpstream,
-    *,
-    transport: str,
-    user_id: str,
-    mode: str,
-    viewer: str | None,
-    may_control: bool,
-) -> tuple[bool, PreparedRtc | None]:
-    """WebRTC's setup, before the socket is accepted: whether it was refused.
-
-    Not at module scope: only a socket that asked needs TURN or tickets. A
-    refusal is `CLOSE_USE_VNC`, not a fault: the pane switches to VNC on it.
-    `may_control` is the viewer's own access to the machine -- a watcher of a
-    pod machine is never handed a control ticket, whatever its pane asks.
-    """
-    if transport != "rtc":
-        return False, None
-    from app.modules.workspace.api.controllers.browser_view_stream import (
-        CLOSE_USE_VNC,
-        prepare_rtc,
-    )
-
-    rtc = await prepare_rtc(
-        target,
-        user_id=UUID(user_id),
-        mode=mode,
-        viewer=viewer,
-        may_control=may_control,
-    )
-    if rtc is None:
-        await _refuse(websocket, CLOSE_USE_VNC)
-        await service.close()
-        return True, None
-    return False, rtc
-
-
-async def _carry(
-    websocket: WebSocket, target: ViewUpstream, rtc: PreparedRtc | None
-) -> int | None:
-    """Carry the socket until either end stops; the relay's close code.
-
-    VNC frames through the API, or WebRTC's signalling only -- the picture
-    then goes over the peer connection and never through here.
-    """
-    if rtc is not None:
-        from app.modules.workspace.api.controllers.browser_view_stream import (
-            serve_rtc_view,
-        )
-
-        return await serve_rtc_view(websocket, rtc)
-    async with await connect_upstream(target.url, headers=target.headers) as upstream:
-        await bridge(websocket, upstream, name="workspace.browser_view")
-    return getattr(upstream, "close_code", None)
 
 
 __all__ = ["router"]

@@ -24,11 +24,14 @@ from app.modules.workspace.services.browser_view_rtc import (
     ice_for,
     serve,
 )
+from app.modules.workspace.api.controllers.browser_view_hangup import refuse
 from app.modules.workspace.api.controllers.browser_view_session import viewer_name
 from app.modules.workspace.services.browser_view_service import (
     MODE_CONTROL,
+    BrowserViewService,
     ViewUpstream,
 )
+from app.modules.workspace.services.ws_bridge import bridge, connect_upstream
 
 logger = get_logger(__name__)
 
@@ -85,9 +88,59 @@ async def serve_rtc_view(websocket: WebSocket, prepared: PreparedRtc) -> int | N
     )
 
 
+async def setup_rtc(
+    websocket: WebSocket,
+    service: BrowserViewService,
+    target: ViewUpstream,
+    *,
+    transport: str,
+    user_id: str,
+    mode: str,
+    viewer: str | None,
+    may_control: bool,
+) -> tuple[bool, PreparedRtc | None]:
+    """WebRTC's setup, before the socket is accepted: whether it was refused.
+
+    A refusal is `CLOSE_USE_VNC`, not a fault: the pane switches to VNC on it.
+    `may_control` is the viewer's own access to the machine -- a watcher of a
+    pod machine is never handed a control ticket, whatever its pane asks.
+    """
+    if transport != "rtc":
+        return False, None
+    rtc = await prepare_rtc(
+        target,
+        user_id=UUID(user_id),
+        mode=mode,
+        viewer=viewer,
+        may_control=may_control,
+    )
+    if rtc is None:
+        await refuse(websocket, CLOSE_USE_VNC)
+        await service.close()
+        return True, None
+    return False, rtc
+
+
+async def carry(
+    websocket: WebSocket, target: ViewUpstream, rtc: PreparedRtc | None
+) -> int | None:
+    """Carry the socket until either end stops; the relay's close code.
+
+    VNC frames through the API, or WebRTC's signalling only -- the picture
+    then goes over the peer connection and never through here.
+    """
+    if rtc is not None:
+        return await serve_rtc_view(websocket, rtc)
+    async with await connect_upstream(target.url, headers=target.headers) as upstream:
+        await bridge(websocket, upstream, name="workspace.browser_view")
+    return getattr(upstream, "close_code", None)
+
+
 __all__ = [
     "CLOSE_USE_VNC",
     "PreparedRtc",
     "prepare_rtc",
+    "carry",
     "serve_rtc_view",
+    "setup_rtc",
 ]

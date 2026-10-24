@@ -25,6 +25,7 @@ What each test pins:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 
 import shutil
@@ -43,7 +44,7 @@ from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.workspace_cli.models import ExecCommandRequest
 from app.modules.agent.tools.workspace_cli.workspace_cli import exec_command_internal
 from app.modules.test_support.e2e.waiters import eventually
-from app.modules.workspace.config import workspace_settings
+from app.modules.test_support.e2e.runtime import browser_stream_settings_overridden
 
 pytestmark = [pytest.mark.e2e, pytest.mark.workspace]
 
@@ -137,27 +138,30 @@ def coturn():
 
 
 @pytest.fixture
-def webrtc_for(monkeypatch, fixed_test_user, coturn):
-    """This user in the WebRTC rollout, with the e2e coturn as the relay."""
+def webrtc_for(fixed_test_user, coturn):
+    """This user in the WebRTC rollout, with the e2e coturn as the relay.
 
-    def configure(*, turn_port: int = coturn) -> None:
-        monkeypatch.setattr(workspace_settings, "turn_provider", "coturn")
-        monkeypatch.setattr(
-            workspace_settings,
-            "coturn_urls",
-            [
-                f"turn:host.docker.internal:{turn_port}?transport=udp",
-                f"turn:host.docker.internal:{turn_port}?transport=tcp",
-            ],
-        )
-        monkeypatch.setattr(workspace_settings, "coturn_secret", SecretStr(TURN_SECRET))
-        monkeypatch.setattr(workspace_settings, "browser_stream", "auto")
-        monkeypatch.setattr(
-            workspace_settings, "browser_stream_users", [fixed_test_user["id"]]
-        )
+    A function the test may call again with another TURN port, which is how
+    the forced-ICE-failure case points both ends at a relay that is not there.
+    """
+    with contextlib.ExitStack() as stack:
 
-    configure()
-    return configure
+        def configure(*, turn_port: int = coturn) -> None:
+            stack.enter_context(
+                browser_stream_settings_overridden(
+                    turn_provider="coturn",
+                    coturn_urls=[
+                        f"turn:host.docker.internal:{turn_port}?transport=udp",
+                        f"turn:host.docker.internal:{turn_port}?transport=tcp",
+                    ],
+                    coturn_secret=SecretStr(TURN_SECRET),
+                    browser_stream="auto",
+                    browser_stream_users=[fixed_test_user["id"]],
+                )
+            )
+
+        configure()
+        yield configure
 
 
 async def _workspace(authenticated_client, fixed_test_org, fixed_test_user):

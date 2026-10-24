@@ -330,7 +330,7 @@ async function openViewer(browser, { frontend, target, dpr, profile, shaper, tra
 
     const resizes = [];
     page.on("request", (request) => {
-        if (request.url().includes("/workspace/browser/display-size")) resizes.push(now());
+        if (request.url().includes("/browser:display")) resizes.push(now());
     });
     const opened = now();
     const media = transport === "webrtc" ? await shapeTurn(target, profile) : null;

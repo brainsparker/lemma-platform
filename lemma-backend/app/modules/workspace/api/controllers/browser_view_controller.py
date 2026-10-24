@@ -200,9 +200,7 @@ async def browser_status(
         found = await service.status(user.id)
     finally:
         await service.close()
-    return BrowserStatusResponse(
-        state=found.get("state", "unavailable"), detail=found.get("detail")
-    )
+    return BrowserStatusResponse.model_validate({"state": "unavailable", **found})
 
 
 class CurrentPageUrlResponse(BaseModel):

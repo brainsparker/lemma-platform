@@ -45,7 +45,7 @@ from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.workspace_cli.models import ExecCommandRequest
 from app.modules.agent.tools.workspace_cli.workspace_cli import exec_command_internal
 from app.modules.test_support.e2e.waiters import eventually
-from app.modules.workspace.api.controllers import browser_view_controller
+from app.modules.workspace.api.controllers import browser_view_stream
 from app.modules.workspace.config import workspace_settings
 from app.modules.workspace.services.workspace_sandbox_service import (
     WorkspaceSandboxService,
@@ -173,7 +173,7 @@ async def test_stream_bench_stack(
     # The API's own end of the API <-> relay leg, observed rather than changed:
     # the handshake headers of the upstream socket every view opens.
     relay_leg: list[dict[str, str | None]] = []
-    real_bridge = browser_view_controller.bridge
+    real_bridge = browser_view_stream.bridge
 
     async def observed_bridge(client, upstream, **kwargs):
         relay_leg.append(
@@ -184,7 +184,7 @@ async def test_stream_bench_stack(
         )
         return await real_bridge(client, upstream, **kwargs)
 
-    monkeypatch.setattr(browser_view_controller, "bridge", observed_bridge)
+    monkeypatch.setattr(browser_view_stream, "bridge", observed_bridge)
 
     turn_name, turn_port = _start_turn()
     try:

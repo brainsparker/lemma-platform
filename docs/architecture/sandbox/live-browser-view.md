@@ -14,7 +14,7 @@ flowchart LR
     PANE[Computer pane<br/>live-view.tsx]
   end
   subgraph API
-    VIEW[WS /workspace/browser/view<br/>?transport=vnc or rtc]
+    VIEW[WS /machines/{ref}/browser/view<br/>?transport=vnc or rtc]
     TURNP[TurnProvider<br/>Cloudflare or coturn]
   end
   subgraph Machine
@@ -133,7 +133,7 @@ CPU quota (`lemma-ensure-display`). It takes effect at the next browser start.
 
 Back, forward, reload, an address bar, the tabs, the preset, and Take control /
 Give back (`screen-toolbar.tsx`). The browser commands are a closed set
-(`POST /workspace/browser/commands`, relay `/browser:command`): navigation goes
+(`POST /machines/{ref}/browser:command`, relay `/browser:command`): navigation goes
 through `agent-browser`, which keeps the agent's tab bookkeeping right, and
 only `http`/`https` addresses open. "Agent is driving" shows while the agent's
 `agent-browser` commands are arriving (the wrapper touches
@@ -145,7 +145,7 @@ dimmed, from this browser's own storage; nothing leaves the device.
 ## Measuring it
 
 Each pane reports how its session went once it ends
-(`POST /workspace/browser/beacon`, logged as
+(`POST /machines/{ref}/browser:beacon`, logged as
 `workspace.browser_view.stream_session.observed`): transport, fallback reason,
 first frame, frame rate, latency, bitrate, codec, relay protocol.
 

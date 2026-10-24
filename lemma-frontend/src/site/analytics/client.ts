@@ -23,7 +23,7 @@
 
 import { isAnalyticsDocument } from "./document";
 
-import type { CaptureResult } from "posthog-js";
+import type { BeforeSendFn, CaptureResult, PostHogConfig } from "posthog-js";
 
 import { config, isLocalDeployment } from "@/site/config";
 import {
@@ -62,43 +62,72 @@ function analyticsAllowed(): boolean {
     return Boolean(config.ANALYTICS_KEY);
 }
 
-/** URL-shaped properties posthog-js sets itself, on every event. */
-const URL_PROPERTIES = [
-    "$current_url",
-    "$referrer",
-    "$initial_current_url",
-    "$initial_referrer",
-];
-const PATH_PROPERTIES = ["$pathname", "$initial_pathname"];
+/**
+ * Which properties are addresses, by the shape of their key.
+ *
+ * Not a list of keys, because posthog-js sets more of them than any list
+ * written against its docs: `$session_entry_url` and `$session_entry_referrer`
+ * ride on every event of a session, `$prev_pageview_pathname` on every pageview
+ * after the first, and a release can add another. A list held only the six it
+ * named and let those through with the full address, query string included.
+ * `tests/analytics-export.test.ts` runs the real SDK to keep this true.
+ */
+const URL_KEY = /(url|referrer)$/i;
+const PATH_KEY = /pathname$/i;
 
-function scrubUrlBag(bag: Record<string, unknown> | undefined): void {
-    if (!bag) return;
-    for (const key of URL_PROPERTIES) {
-        if (typeof bag[key] !== "string") continue;
-        const templated = toTemplateUrl(bag[key] as string);
-        if (templated === null) delete bag[key];
-        else bag[key] = templated;
+/** posthog-js's referrer for a visit that had none. Not an address. */
+const DIRECT = "$direct";
+
+/** A page here keeps its route template. A page on another site keeps only its
+ *  origin: its path is not one of our routes, and its query is that site's,
+ *  which for a mail client or a search engine is somebody's words. */
+function scrubUrl(raw: string): string | null {
+    if (raw === DIRECT) return raw;
+    let url: URL;
+    try {
+        url = new URL(raw);
+    } catch {
+        return null;
     }
-    for (const key of PATH_PROPERTIES) {
-        if (typeof bag[key] !== "string") continue;
-        bag[key] = toRouteTemplate(bag[key] as string);
+    if (url.origin !== window.location.origin) return url.origin;
+    return toTemplateUrl(raw);
+}
+
+function scrubBag(bag: Record<string, unknown> | undefined): void {
+    if (!bag) return;
+    // posthog-js copies `document.title` onto every pageview, and a page's title
+    // is the name of what it shows — a shared page, a contact, a file.
+    delete bag.title;
+    for (const [key, value] of Object.entries(bag)) {
+        if (typeof value !== "string") continue;
+        if (URL_KEY.test(key)) {
+            const kept = scrubUrl(value);
+            if (kept === null) delete bag[key];
+            else bag[key] = kept;
+        } else if (PATH_KEY.test(key)) {
+            bag[key] = toRouteTemplate(value);
+        }
     }
 }
 
 /**
- * Strip ids out of every URL-shaped property, including the ones inside `$set`
- * and `$set_once`.
+ * Reduce every address on an event to its route template, and drop the page
+ * title, including inside `$set` and `$set_once`.
  *
  * `$set_once` is the important half: `$initial_current_url` is written to the
  * *person* on identify, so an un-scrubbed first-touch URL persists against a
- * named human and is far harder to clean up than an event.
+ * named human and is far harder to clean up than an event. posthog-js puts both
+ * beside `properties` on the event, not inside it — reading only the inner
+ * copies is how the person's first URL went out whole.
  */
-function scrubUrls(event: CaptureResult | null): CaptureResult | null {
-    const properties = event?.properties;
-    if (!properties) return event;
-    scrubUrlBag(properties);
-    scrubUrlBag(properties.$set as Record<string, unknown> | undefined);
-    scrubUrlBag(properties.$set_once as Record<string, unknown> | undefined);
+function scrubAddresses(event: CaptureResult | null): CaptureResult | null {
+    if (!event) return event;
+    const properties = event.properties as Record<string, unknown> | undefined;
+    scrubBag(properties);
+    scrubBag(event.$set as Record<string, unknown> | undefined);
+    scrubBag(event.$set_once as Record<string, unknown> | undefined);
+    scrubBag(properties?.$set as Record<string, unknown> | undefined);
+    scrubBag(properties?.$set_once as Record<string, unknown> | undefined);
     return event;
 }
 
@@ -131,6 +160,29 @@ function dropUnknownEvents(event: CaptureResult | null): CaptureResult | null {
     return event;
 }
 
+/** What posthog-js is started with. Exported so the export-boundary test runs
+ *  the real SDK on exactly this, rather than on a copy of it that could drift. */
+export function analyticsOptions(): Partial<PostHogConfig> & { before_send: BeforeSendFn[] } {
+    return {
+        // Same-origin, so an ad blocker does not silently eat a share of
+        // the data — and the share it eats is not random, it skews toward
+        // exactly the technical users Lemma sells to.
+        api_host: "/ingest",
+        ui_host: config.ANALYTICS_HOST,
+        autocapture: false,
+        disable_session_recording: true,
+        capture_pageview: false, // App Router navigations are captured by hand.
+        capture_pageleave: true,
+        // Anonymous traffic must not mint a person record for every bot
+        // that hits the landing page.
+        person_profiles: "identified_only",
+        // Upgraded to `localStorage+cookie` by `grantAnalyticsConsent`.
+        persistence: hasAnalyticsConsent() ? "localStorage+cookie" : "memory",
+        mask_personal_data_properties: true,
+        before_send: [dropUnknownEvents, scrubAddresses],
+    };
+}
+
 export function startAnalytics(): Promise<void> {
     if (starting) return starting;
     if (!analyticsAllowed()) return Promise.resolve();
@@ -138,26 +190,7 @@ export function startAnalytics(): Promise<void> {
     starting = import("posthog-js")
         .then((mod) => {
             const client = mod.default;
-            client.init(config.ANALYTICS_KEY, {
-                // Same-origin, so an ad blocker does not silently eat a share of
-                // the data — and the share it eats is not random, it skews toward
-                // exactly the technical users Lemma sells to.
-                api_host: "/ingest",
-                ui_host: config.ANALYTICS_HOST,
-                autocapture: false,
-                disable_session_recording: true,
-                capture_pageview: false, // App Router navigations are captured by hand.
-                capture_pageleave: true,
-                // Anonymous traffic must not mint a person record for every bot
-                // that hits the landing page.
-                person_profiles: "identified_only",
-                // Upgraded to `localStorage+cookie` by `grantAnalyticsConsent`.
-                persistence: hasAnalyticsConsent()
-                    ? "localStorage+cookie"
-                    : "memory",
-                mask_personal_data_properties: true,
-                before_send: [dropUnknownEvents, scrubUrls],
-            });
+            client.init(config.ANALYTICS_KEY, analyticsOptions());
             ph = client;
             // Flags arrive after init, and again after identify reloads them.
             client.onFeatureFlags(notifyFlagListeners);
@@ -217,8 +250,8 @@ class SignInLoopError extends Error {
  * Sent as an exception rather than a catalogued event, because what the team
  * watches is error tracking: every request in such a loop succeeds, so nothing
  * else would ever raise it. Fixed text and no properties of its own. The app it
- * came from is in `$referrer`, which `scrubUrls` reduces to an origin, as it
- * does for every other event.
+ * came from is in `$referrer`, which `scrubAddresses` reduces to an origin, as
+ * it does for every other site's address.
  */
 export function captureSignInLoop(): void {
     void startAnalytics().then(() => {

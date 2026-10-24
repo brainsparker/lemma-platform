@@ -65,7 +65,7 @@ export function RunView({ pod, runId, go, back }: { pod: Pod; runId: string; go:
                     pod={pod}
                     runId={runId}
                     label="Workflow run"
-                    onBack={() => back(outcomeView(pod.id, "xray"))}
+                    onBack={() => back(outcomeView(pod.id, "automations", "history"))}
                     onOpenConversation={(id) => go(chatView({ kind: "chat", podId: pod.id, id }))}
                     onOpenRun={(next) => go({ name: "run", podId: pod.id, runId: next })}
                     onOpenWorkflow={(workflow) => go({ name: "workflow", podId: pod.id, workflow })}
@@ -91,7 +91,7 @@ export function WorkflowView({ pod, workflow, orgId, go }: { pod: Pod; workflow:
                     pod={pod}
                     orgId={orgId}
                     name={workflow}
-                    onBack={() => go(outcomeView(pod.id, "xray"))}
+                    onBack={() => go(outcomeView(pod.id, "automations"))}
                     onOpenRun={(runId) => go({ name: "run", podId: pod.id, runId })}
                     onDiscuss={source.label === "live" ? (name) => void discuss(name) : undefined}
                     onConnect={() => window.location.assign(classic.pod(pod.id))}
@@ -207,7 +207,7 @@ export function AgentView({ pod, agent, go, actions, back }: { pod: Pod; agent: 
                     onOpenConversation={(id) => go(chatView({ kind: "chat", podId: pod.id, id }))}
                     onAsk={(text, createWith) => actions.ask(pod.id, text, createWith)}
                     onOpenSchedules={() => go(outcomeView(pod.id, "settings", "schedules"))}
-                    onOpenWorkflows={() => go(outcomeView(pod.id, "xray"))}
+                    onOpenWorkflows={() => go(outcomeView(pod.id, "automations"))}
                 />
             </div>
         </Stage>

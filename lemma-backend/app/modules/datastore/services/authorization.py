@@ -3,7 +3,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from app.core.infrastructure.db.transaction_locks import safe_to_release
-from app.core.authorization.context import ActorType, Context, ResourceRef, ResourceType
+from app.core.authorization.context import Context, ResourceRef, ResourceType
 from app.core.authorization.current import get_current_context
 from app.core.authorization.permissions import Permissions
 from app.core.authorization.context import ResourceVisibility
@@ -387,15 +387,8 @@ class DatastoreAuthorization:
         user_id: UUID,
         ctx: Context | None = None,
     ) -> None:
-        # A human deleting their own file is fine via the owner shortcut. A
-        # delegated workload must route through authz — folder.delete is
-        # destructive and gated — so the owner shortcut can't let a workload
-        # bypass it for a file its delegating user happens to own.
-        is_delegated = ctx is not None and (
-            getattr(ctx, "actor_type", None) == ActorType.DELEGATED_USER_WORKLOAD
-        )
-        if file_entity.owner_user_id == user_id and not is_delegated:
-            return
+        # Always through the authorizer: its owner rule lets a person delete
+        # their own file while they are still in the pod, and gates a workload.
         await self.require_document_delete(
             user_id=user_id,
             pod_id=file_entity.pod_id,

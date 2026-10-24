@@ -13,7 +13,7 @@ from slack_sdk.web.async_client import AsyncWebClient
 
 from app.modules.test_support.channel_lines_double import RecordingChannelLines
 from app.modules.test_support.channel_seats_double import InMemoryChannelSeats
-from app.core.authorization.context import ActorType, Context
+from app.core.authorization.context import Context, Person
 from app.core.authorization.service import AuthorizationDataService
 from app.modules.agent_surfaces.tests.unit.surface_doubles import surface_conversation
 from app.modules.agent_surfaces.domain.ingress_request import (
@@ -188,7 +188,7 @@ def _build_service(*, surface, monkeypatch):
         "build_user_context",
         AsyncMock(
             return_value=Context(
-                actor_type=ActorType.USER,
+                actor=Person(user_id=surface.agent_id),
                 actor_id=str(surface.agent_id),
                 user_id=surface.agent_id,
                 pod_id=surface.pod_id,

@@ -79,6 +79,17 @@ from app.modules.connectors.services.pod_connector_notices import (
 from app.modules.connectors.services.pod_connector_resolution import acting_person
 
 
+#: Said to the owner who turns ``allow_sandbox_use`` off. The git bridge stops
+#: serving the token at once, and takes it back out of a session on that
+#: session's next git command; a sandbox that runs none keeps its copy until
+#: the stale-session sweep removes it.
+SANDBOX_USE_WITHDRAWN_NOTICE = (
+    "No sandbox is given this account's token from now on. A sandbox that "
+    "already has a copy loses it on its next git command, or when it is swept "
+    "as stale; until then it can still read it."
+)
+
+
 class PodConnectorService:
     def __init__(
         self,
@@ -108,7 +119,7 @@ class PodConnectorService:
     ) -> list[PodConnectorResponse]:
         await ctx.require(Permissions.POD_READ, ResourceRef.pod(pod_id))
         connectors = await self.pod_connectors.list_by_pod(pod_id)
-        return [await self._present_connector(c) for c in connectors]
+        return [await self._present_connector(c, ctx) for c in connectors]
 
     async def usable_connectors(
         self, ctx: Context, pod_id: UUID
@@ -121,13 +132,13 @@ class PodConnectorService:
                 Permissions.CONNECTOR_USE, ResourceRef.connector(pod_id, connector.id)
             )
         ]
-        return [await self._present_connector(c) for c in usable]
+        return [await self._present_connector(c, ctx) for c in usable]
 
     async def get_connector(
         self, ctx: Context, pod_id: UUID, slug: str
     ) -> PodConnectorResponse:
         await ctx.require(Permissions.POD_READ, ResourceRef.pod(pod_id))
-        return await self._present_connector(await self._connector(pod_id, slug))
+        return await self._present_connector(await self._connector(pod_id, slug), ctx)
 
     async def create_connector(
         self, ctx: Context, pod_id: UUID, data: PodConnectorCreateRequest
@@ -153,7 +164,7 @@ class PodConnectorService:
                 ctx, connector, data.shared_pod_account_id
             )
         created = await self.pod_connectors.create(connector)
-        return await self._present_connector(created)
+        return await self._present_connector(created, ctx)
 
     async def update_connector(
         self, ctx: Context, pod_id: UUID, slug: str, data: PodConnectorUpdateRequest
@@ -176,7 +187,7 @@ class PodConnectorService:
                     ctx, connector, data.shared_pod_account_id
                 )
         updated = await self.pod_connectors.update(connector)
-        return await self._present_connector(updated)
+        return await self._present_connector(updated, ctx)
 
     async def delete_connector(self, ctx: Context, pod_id: UUID, slug: str) -> None:
         await ctx.require(Permissions.POD_CONNECTOR_MANAGE, ResourceRef.pod(pod_id))
@@ -234,8 +245,10 @@ class PodConnectorService:
         return connector
 
     async def _present_connector(
-        self, connector: PodConnectorEntity
+        self, connector: PodConnectorEntity, ctx: Context
     ) -> PodConnectorResponse:
+        """The connector as ``ctx`` sees it, ``can_use`` included: the one
+        check the "connect yours" banner needs, asked of the caller alone."""
         auth_config = await self.auth_configs.get(connector.auth_config_id)
         shared = (
             await self.pod_accounts.get(connector.shared_pod_account_id)
@@ -256,6 +269,10 @@ class PodConnectorService:
             installation_name=auth_config.name if auth_config else None,
             connector_id=auth_config.connector_id if auth_config else None,
             shared_account=summary,
+            can_use=await ctx.can(
+                Permissions.CONNECTOR_USE,
+                ResourceRef.connector(connector.pod_id, connector.id),
+            ),
             status=connector_status(
                 connector,
                 installation_active=auth_config is not None
@@ -287,8 +304,12 @@ class PodConnectorService:
         account_id: UUID,
         visibility: PodAccountVisibility,
         share_with: list[GranteeRef],
+        source: PodAccountSource = PodAccountSource.MANUAL,
     ) -> PodAccountResponse:
-        """The owner puts one of their own accounts in the pod."""
+        """The owner puts one of their own accounts in the pod.
+
+        ``source`` records how: by hand, or by an import that shared the
+        importer's own account for a bundled SHARED connector."""
         await ctx.require(Permissions.POD_READ, ResourceRef.pod(pod_id))
         account = await self._own_account(ctx, account_id)
         pod_account = await self.pod_accounts.add(
@@ -298,7 +319,7 @@ class PodConnectorService:
                 auth_config_id=account.auth_config_id,
                 owner_user_id=account.user_id,
                 visibility=PodAccountVisibility.PERSONAL,
-                source=PodAccountSource.MANUAL,
+                source=source,
             )
         )
         if visibility is not PodAccountVisibility.PERSONAL:
@@ -314,6 +335,7 @@ class PodConnectorService:
         visibility: PodAccountVisibility | None,
         share_with: list[GranteeRef] | None,
         is_member_default: bool | None,
+        allow_sandbox_use: bool | None = None,
     ) -> PodAccountResponse:
         pod_account = await self._pod_account(pod_id, pod_account_id)
         ref = ResourceRef.connector_account(pod_id, pod_account.id)
@@ -327,7 +349,29 @@ class PodConnectorService:
         if is_member_default:
             await self.pod_accounts.make_member_default(pod_account)
             pod_account = pod_account.model_copy(update={"is_member_default": True})
-        return (await self._present_accounts([pod_account]))[0]
+        notice = None
+        if allow_sandbox_use is not None:
+            pod_account, notice = await self._set_sandbox_use(
+                pod_account, allow_sandbox_use
+            )
+        presented = (await self._present_accounts([pod_account]))[0]
+        return presented.model_copy(update={"notice": notice})
+
+    async def _set_sandbox_use(
+        self, pod_account: PodAccountEntity, allowed: bool
+    ) -> tuple[PodAccountEntity, str | None]:
+        if allowed and not pod_account.is_shared:
+            # Your own account already reaches your own sandbox; the opt-in is
+            # about everyone else's, so it needs the account shared.
+            raise PodConnectorValidationError(
+                "Share the account with the pod before allowing it inside sandboxes.",
+                reason="account_not_shared",
+            )
+        was_allowed = pod_account.allow_sandbox_use
+        pod_account = await self.pod_accounts.set_sandbox_use(pod_account.id, allowed)
+        if was_allowed and not allowed:
+            return pod_account, SANDBOX_USE_WITHDRAWN_NOTICE
+        return pod_account, None
 
     async def remove_account(
         self, ctx: Context, pod_id: UUID, pod_account_id: UUID
@@ -360,10 +404,24 @@ class PodConnectorService:
                 resource_id=pod_account.id,
             )
         if visibility is PodAccountVisibility.PERSONAL:
-            # Withdrawn: SHARED connectors on it need another account, now.
+            # Withdrawn: SHARED connectors on it need another account, now, and
+            # the sandbox opt-in does not outlive the sharing it was given for.
             await self.pod_connectors.clear_shared_account([pod_account.id])
+            if pod_account.allow_sandbox_use:
+                await self.pod_accounts.set_sandbox_use(pod_account.id, False)
         if visibility is PodAccountVisibility.RESTRICTED:
             for grantee in share_with or []:
+                # A role or member from another pod would be stored, match
+                # nobody, and stay behind as a dead grant. Imported here: only
+                # sharing with some people needs the pod's roles.
+                from app.modules.pod.contracts.grantees import require_pod_grantee
+
+                await require_pod_grantee(
+                    self._session,
+                    pod_id=pod_account.pod_id,
+                    grantee_type=grantee.grantee_type,
+                    grantee_id=grantee.grantee_id,
+                )
                 await replace_resource_grantee_grant(
                     self._session,
                     pod_id=pod_account.pod_id,

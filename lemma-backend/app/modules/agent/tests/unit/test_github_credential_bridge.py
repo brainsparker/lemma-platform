@@ -38,9 +38,9 @@ class _FakeRedis:
         self.values: dict[str, str] = {}
         self.calls: list[tuple] = []
 
-    async def exists(self, key: str) -> int:
-        self.calls.append(("exists", key))
-        return 1 if key in self.values else 0
+    async def get(self, key: str) -> str | None:
+        self.calls.append(("get", key))
+        return self.values.get(key)
 
     async def set(self, key: str, value: str, *, ex: int):
         self.calls.append(("set", key, value, ex))
@@ -513,11 +513,20 @@ async def _resolve(ctx, connector, refresh=_passthrough_refresh):
 class _Resolved:
     """The pod's `github` connector, resolving to one account."""
 
-    def __init__(self, *, owner: UUID | None = None, email: str | None = None):
+    def __init__(
+        self,
+        *,
+        owner: UUID | None = None,
+        email: str | None = None,
+        allow_sandbox_use: bool = False,
+        pod_account_id: UUID | None = None,
+    ):
         self.calls: list[dict[str, object]] = []
         self.context_while_resolving: object = "not-set"
         self._owner = owner
         self._email = email
+        self._allow_sandbox_use = allow_sandbox_use
+        self.pod_account_id = pod_account_id or uuid4()
 
     async def __call__(self, uow, auth_ctx, *, pod_id, slug):
         del uow
@@ -525,6 +534,8 @@ class _Resolved:
         self.context_while_resolving = get_current_context()
         return SimpleNamespace(
             owner_user_id=self._owner or auth_ctx.delegating_user_id,
+            pod_account_id=self.pod_account_id,
+            allow_sandbox_use=self._allow_sandbox_use,
             account=SimpleNamespace(
                 credentials=SimpleNamespace(access_token="gho_realtoken"),
                 display_name="octocat",
@@ -585,6 +596,74 @@ async def test_a_shared_account_is_never_written_into_a_sandbox() -> None:
     assert isinstance(refusal, bridge.GithubRefusal)
     assert refusal.code == "SHARED_ACCOUNT_NOT_FOR_SANDBOX"
     assert refusal.connect_url is None
+
+
+@pytest.mark.asyncio
+async def test_a_shared_account_its_owner_allowed_in_sandboxes_is_written() -> None:
+    """The owner's opt-in ("allow use inside sandboxes") is the one way a
+    borrowed account's token reaches a workspace (design §3.8), and the
+    credential remembers whose it is, for the session's marker."""
+    lent = _Resolved(owner=uuid4(), allow_sandbox_use=True)
+
+    credential = await _resolve(_context(), lent)
+
+    assert credential == bridge._GithubCredential(
+        access_token="gho_realtoken",
+        login="octocat",
+        email=None,
+        borrowed_pod_account_id=lent.pod_account_id,
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_borrowed_token_is_taken_back_once_its_owner_withdraws_it() -> None:
+    """The marker is per session, so the owner turning sandbox use off has to
+    reach sessions that already hold a copy: each later git command asks
+    again, and the first one after the change removes the token."""
+    pod_account_id = uuid4()
+    redis = _FakeRedis()
+    session = _FakeCredentialSession()
+    allowed = {"now": True}
+
+    async def _lent(ctx):
+        del ctx
+        return bridge._GithubCredential(
+            access_token="gho_lent",
+            login="alice",
+            email=None,
+            borrowed_pod_account_id=pod_account_id,
+        )
+
+    async def _still_allowed(asked: UUID) -> bool:
+        assert asked == pod_account_id
+        return allowed["now"]
+
+    async def _ensure() -> str | None:
+        return await bridge.ensure_github_credentials(
+            _context(),
+            session,
+            redis=redis,
+            resolve_credential=_lent,
+            sandbox_use_allowed=_still_allowed,
+        )
+
+    assert await _ensure() is None
+    assert redis.values[_MARKER_KEY] == f"borrowed:{pod_account_id}"
+    commands_after_provisioning = len(session.commands)
+
+    # Still allowed: nothing more happens.
+    assert await _ensure() is None
+    assert len(session.commands) == commands_after_provisioning
+
+    allowed["now"] = False
+    notice = await _ensure()
+
+    assert notice is not None and "no longer allows it" in notice
+    [take_back] = session.commands[commands_after_provisioning:]
+    assert take_back.startswith("rm -f ")
+    assert "/tmp/lemma-sess/session-1/git-credentials" in take_back
+    assert "/tmp/lemma-sess/session-1/gh/hosts.yml" in take_back
+    assert redis.values[_MARKER_KEY] == "unavailable"
 
 
 @pytest.mark.asyncio

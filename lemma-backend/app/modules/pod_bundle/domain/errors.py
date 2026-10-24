@@ -176,3 +176,24 @@ class GithubImportError(PodBundleDomainError):
             status_code=status_code,
             details=details,
         )
+
+
+class BundleGrantsRefusedError(PodBundleDomainError):
+    """The plan holds grants the importer could not make themselves.
+
+    The bundle would hand an agent or a function permissions its importer
+    does not hold -- the escalation the conferral bound exists to stop (PS-ACCESS-010) -- so the
+    apply is refused while the pod is still untouched, with the code and the
+    list the permissions routes refuse with."""
+
+    def __init__(self, refused: list[str]):
+        super().__init__(
+            "This bundle grants permissions you could not use yourself, so you "
+            "may not grant them: "
+            + "; ".join(refused)
+            + ". Ask someone who holds them to import it, or remove those "
+            "grants from the bundle.",
+            code="CONFERRAL_EXCEEDS_HOLDER",
+            status_code=403,
+            details={"refused": refused},
+        )

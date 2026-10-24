@@ -130,6 +130,20 @@ separated by host routing. Path normalization and archive extraction prevent
 asset traversal. Apps remain arbitrary user-authored HTML/JS, so isolation by
 origin and response headers is part of the security boundary.
 
+An app's page acts as its viewer, with the viewer's whole access, but only in
+its own pod (`app/core/app_pin.py`, audit H20). A cookie request whose `Origin`
+-- or, through the `/_lemma` door, whose `Host` -- is an app host may call any
+`/pods/{its pod}/...` route and the few outside it in
+`actor_policy.APP_ROUTES`: `/users/me` (phone number and date of birth left
+out), the connector catalogue, connector setup in its own pod's organization,
+the chat model catalogue, and its access ticket. Anything else, a pod route for
+another pod included, is a 403 `APP_ROUTE_NOT_ALLOWED` naming the route. An app
+host that names no app is `APP_HOST_UNKNOWN`. A cookie request with
+`Origin: null` is refused on every state-changing method
+(`ORIGIN_NULL_NOT_ALLOWED`). Bearer tokens are never read as an app. The
+authenticated asset route serves an app's files with
+`Content-Security-Policy: sandbox`, so they never run on the API's own origin.
+
 ## Tests and operations
 
 Tests cover lifecycle, host routing, public serving, storage compensation,

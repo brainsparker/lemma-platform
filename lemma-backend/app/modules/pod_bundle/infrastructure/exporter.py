@@ -48,6 +48,9 @@ from lemma_pod_bundle.normalize import (
 from lemma_pod_bundle.portability import _extract_portable_variables
 
 from app.modules.pod_bundle.infrastructure.exporter_agents import export_agents
+from app.modules.pod_bundle.infrastructure.exporter_connectors import (
+    export_connectors,
+)
 from app.modules.pod_bundle.infrastructure.exporter_surfaces import (
     export_surfaces,
 )
@@ -64,6 +67,7 @@ logger = get_logger(__name__)
 # out of scope for the export slice (the CLI's file/asset export is separate and
 # best-effort); we still create the empty dir for layout parity.
 _EXPORT_RESOURCE_TYPES = (
+    "connectors",
     "tables",
     "functions",
     "agents",
@@ -249,6 +253,12 @@ class BundleExporter:
             total = 1 + sum(1 for rtype in _EXPORT_RESOURCE_TYPES if rtype in selected)
             done = 1
             await on_progress(done, total)
+
+            # --- connectors (named by slug by everything below) --------------
+            if "connectors" in selected:
+                await export_connectors(root, uow, ctx=ctx, pod_id=pod_id)
+                done += 1
+                await on_progress(done, total)
 
             # --- tables (+ optional data) -------------------------------------
             if "tables" in selected:

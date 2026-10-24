@@ -32,6 +32,10 @@ from app.modules.pod_bundle.domain.errors import (
     BundleJobExpiredError,
     BundleTooLargeError,
 )
+from app.modules.pod_bundle.domain.connector_plan import (
+    ConnectorChoice,
+    resolve_connector_choices,
+)
 from app.modules.pod_bundle.domain.state import (
     BundleSource,
     BundleSourceKind,
@@ -84,6 +88,29 @@ def _require_import_variables(
         raise BundleConfirmationRequiredError(
             "Required variables are missing.", details={"missing": missing}
         )
+
+
+def _resolve_connector_choices(
+    state: ImportState, requested: dict[str, ConnectorChoice] | None
+) -> dict[str, ConnectorChoice]:
+    """The importer's connector choices made whole, or why the apply is held.
+
+    Checked here, before anything is queued, so a connector that cannot be
+    declared stops the import while the pod is still untouched -- rather than
+    failing at its step after nothing, or worse after half the pod, landed."""
+    if state.plan is None:
+        return {}
+    resolved, blocking = resolve_connector_choices(
+        state.plan.connectors, requested or {}
+    )
+    if blocking:
+        raise BundleConfirmationRequiredError(
+            "Some of this bundle's connectors cannot be declared yet: "
+            + "; ".join(f"'{b.slug}': {b.reason}" for b in blocking)
+            + ".",
+            details={"blocking": [b.model_dump() for b in blocking]},
+        )
+    return resolved
 
 
 logger = get_logger(__name__)
@@ -295,9 +322,11 @@ class ImportUseCases:
         user_id: UUID,
         variables: dict[str, str] | None = None,
         confirm_destructive: bool = False,
+        connectors: dict[str, ConnectorChoice] | None = None,
     ) -> ImportState:
-        """Validate the plan is ready + confirmed, persist the resolved variables,
-        and queue the apply job with them (dedup key doubles as the guard)."""
+        """Validate the plan is ready + confirmed, persist the resolved variables
+        and connector choices, and queue the apply job with them (dedup key
+        doubles as the guard)."""
         await self._authorize(
             pod_id=pod_id, user_id=user_id, action=Permissions.POD_UPDATE
         )
@@ -318,6 +347,15 @@ class ImportUseCases:
                 details={"warnings": state.plan.warnings},
             )
         _require_import_variables(state, variables)
+        state.connector_choices = _resolve_connector_choices(state, connectors)
+        # Grants the importer could not make themselves: refused here, with the
+        # pod untouched, rather than by the last step of the apply. Imported
+        # here: only an apply needs it, not every process serving the routes.
+        from app.modules.pod_bundle.infrastructure.grant_planning import (
+            refuse_unconferrable_grants,
+        )
+
+        refuse_unconferrable_grants(state.plan)
 
         retrying_failed_job = state.status is ImportStatus.FAILED
         # Reset any FAILED step back to PENDING so a re-apply retries it; DONE

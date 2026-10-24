@@ -75,6 +75,8 @@ class PodConnectorAccount:
     #: The account itself, credentials included: the caller is about to use
     #: them. Secrets on it stay ``SecretStr`` until the point of use.
     account: AccountEntity
+    #: The pod account's owner allows its credential inside sandboxes.
+    allow_sandbox_use: bool = False
 
     @property
     def account_id(self) -> UUID:
@@ -121,6 +123,7 @@ def _present(resolved: ResolvedPodConnector) -> PodConnectorAccount:
         owner_user_id=resolved.pod_account.owner_user_id,
         auth_config_id=resolved.auth_config.id,
         connector_id=resolved.auth_config.connector_id,
+        allow_sandbox_use=resolved.pod_account.allow_sandbox_use,
         account=resolved.account,
     )
 
@@ -397,6 +400,22 @@ async def share_own_account_as_pod_connector(
     return created.slug
 
 
+async def pod_account_allows_sandbox_use(
+    uow: SqlAlchemyUnitOfWork, pod_account_id: UUID
+) -> bool:
+    """Whether a pod account's owner still allows it inside sandboxes.
+
+    Asked again by the git bridge before it keeps serving a borrowed token
+    to a session that already has one: the owner turning it off has to stop
+    other members' sandboxes being given it, not only new ones.
+    """
+    from app.modules.connectors.infrastructure.repositories.pod_connector_repository import (
+        PodAccountRepository,
+    )
+
+    return await PodAccountRepository(uow).allows_sandbox_use(pod_account_id)
+
+
 async def shared_connectors_running_as(
     uow: SqlAlchemyUnitOfWork, account_ids: list[UUID]
 ) -> dict[UUID, list[tuple[UUID, str]]]:
@@ -487,6 +506,7 @@ __all__ = [
     "ReauthRequiredError",
     "acting_person",
     "get_pod_connector",
+    "pod_account_allows_sandbox_use",
     "resolve_pod_connector",
     "resolve_standing_pod_connector",
     "shared_connector_for",

@@ -84,8 +84,8 @@ def user(who=OWNER, pod=None):
     return MachineCaller(CallerKind.USER, user_id=who, pod_id=pod)
 
 
-def app(who=OWNER):
-    return MachineCaller(CallerKind.APP, user_id=who, app_id=APP)
+def app(who=OWNER, pod=POD):
+    return MachineCaller(CallerKind.APP, user_id=who, pod_id=pod, app_id=APP)
 
 
 def agent(who=OWNER, pod=POD):
@@ -155,6 +155,7 @@ MATRIX = [
     ("function with a grant", function(), POD_WIDE, facts(workload_granted=True), USE),
     ("app as a viewer", app(OTHER), POD_WIDE, VIEWER, STATUS),
     ("app as an editor", app(OTHER), POD_WIDE, EDITOR, MANAGE),
+    ("app of another pod", app(OTHER, pod=OTHER_POD), POD_WIDE, ADMIN, NONE),
     ("channel run of the pod's agent", agent(), POD_WIDE, STRANGER, USE),
     # --- pod machine, RESTRICTED -----------------------------------------------
     ("viewer cannot see it", user(OTHER), RESTRICTED, VIEWER, NONE),

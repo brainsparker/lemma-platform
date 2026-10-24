@@ -541,15 +541,19 @@ async def sync_files(
         sync_to_pod,
     )
 
+    from app.core.app_pin import app_pod_for
+
     machine_path = _machine_path(body.machine_path)
     user_id = acting_user(request, resolved)
+    # An app's page reaches only its own pod's files, whatever pod it names.
+    pod_id = app_pod_for(request, body.pod_id) or body.pod_id
     if body.direction == "from_pod":
         _refuse_protected(machine_path)
         written, size = await sync_from_pod(
             uow_factory,
             machine_id=resolved.machine.id,
             user_id=user_id,
-            pod_id=body.pod_id,
+            pod_id=pod_id,
             pod_path=body.pod_path,
             machine_path=machine_path,
         )
@@ -558,7 +562,7 @@ async def sync_files(
             uow_factory,
             machine_id=resolved.machine.id,
             user_id=user_id,
-            pod_id=body.pod_id,
+            pod_id=pod_id,
             pod_folder=body.pod_path,
             machine_path=machine_path,
             max_files=_MAX_SYNC_FILES,

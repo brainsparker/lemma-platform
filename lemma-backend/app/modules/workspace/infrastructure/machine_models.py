@@ -19,6 +19,7 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.infrastructure.db.base import UUIDAuditBase
@@ -146,3 +147,54 @@ class MachineLoginBackupModel(UUIDAuditBase):
     sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     # Why it was taken: a clean close, the daily copy, or before a reset.
     reason: Mapped[str] = mapped_column(String(32), nullable=False)
+
+
+class MachineConnectionModel(UUIDAuditBase):
+    """A person's own computer, joined to Lemma with the CLI.
+
+    The table arrives with machines so every machine table is in one
+    migration; the link that writes it, pairing and revocation, comes with
+    connected machines. A machine row (`sandboxes`) names its connection by
+    `connection_id`, deliberately without a foreign key: the machine row
+    outlives a revoked connection, as every machine row outlives its compute.
+    """
+
+    __tablename__ = "machine_connections"
+    __table_args__ = (
+        CheckConstraint(
+            "mode IN ('host', 'image')", name="ck_machine_connections_mode"
+        ),
+        UniqueConstraint("secret_hash", name="uq_machine_connections_secret_hash"),
+        Index(
+            "uq_machine_connections_live_name",
+            "user_id",
+            "name",
+            unique=True,
+            postgresql_where=text("revoked_at IS NULL"),
+        ),
+    )
+
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    organization_id: Mapped[UUID | None] = mapped_column(nullable=True)
+    #: The pod it is shared into, when its owner shared it.
+    pod_id: Mapped[UUID | None] = mapped_column(nullable=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    display_name: Mapped[str] = mapped_column(Text, nullable=False)
+    mode: Mapped[str] = mapped_column(Text, nullable=False)
+    secret_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    capabilities: Mapped[dict[str, object]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    home: Mapped[str] = mapped_column(Text, nullable=False)
+    runtime_version: Mapped[str | None] = mapped_column(Text, nullable=True)
+    link_generation: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default=text("0")
+    )
+    last_seen_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )

@@ -137,7 +137,10 @@ def _pod_machine(
 ) -> AccessDecision:
     if caller.kind in (CallerKind.AGENT, CallerKind.FUNCTION):
         return _workload_on_pod_machine(caller, machine, facts)
-    # A person, or an app acting as its viewer -- the same rule.
+    if caller.kind is CallerKind.APP and caller.pod_id != machine.pod_id:
+        # An app's page acts for its viewer only in its own pod.
+        return AccessDecision.deny()
+    # A person, or an app acting as its viewer in its own pod -- the same rule.
     restricted = machine.visibility is MachineVisibility.RESTRICTED
     if facts.standing is PodStanding.ADMIN:
         return AccessDecision(MachineAccess.MANAGE)

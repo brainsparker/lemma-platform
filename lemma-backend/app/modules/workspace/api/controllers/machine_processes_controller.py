@@ -176,7 +176,7 @@ def _cwd(machine: Machine, cwd: str | None) -> str:
     return target
 
 
-async def _prepare(machine: Machine, user_id: UUID, cwd: str) -> dict[str, str]:
+async def _ready_machine_for(machine: Machine, user_id: UUID, cwd: str) -> dict[str, str]:
     """The machine up, the directory there, and the caller's credentials."""
     from app.modules.workspace.services.workspace_sandbox_service import (
         WorkspaceSandboxService,
@@ -234,8 +234,8 @@ async def start_process(
     user_id = acting_user(request, resolved)
     cwd = _cwd(machine, body.cwd)
     await _refuse_when_out_of_compute(uow_factory, machine)
-    base_env = await _prepare(machine, user_id, cwd)
-    record = await processes.start(
+    base_env = await _ready_machine_for(machine, user_id, cwd)
+    record = await processes.start_process(
         machine.id,
         StartProcess(
             command=body.command,

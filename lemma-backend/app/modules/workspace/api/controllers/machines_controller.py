@@ -98,6 +98,9 @@ async def list_machines(
         default=None, description="Also list this pod's machines."
     ),
 ) -> MachineListResponse:
+    from app.core.app_pin import app_pod_for
+
+    pod_id = app_pod_for(request, pod_id)
     async with uow_factory() as uow:
         caller = await caller_for(request, uow, pod_id=pod_id)
         pod_ids = [pod_id] if pod_id else ([caller.pod_id] if caller.pod_id else [])

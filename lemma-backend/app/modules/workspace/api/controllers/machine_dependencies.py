@@ -1,11 +1,9 @@
 """Who is calling a `/machines` route, and which machine they named.
 
 The caller is read off what the auth middleware already decided -- the
-session, a delegated workload's claims, a person-less function run -- plus the
-page's ``Origin``: a request from ``<slug>.<app_base_domain>`` is an app's,
-made with its viewer's session, and is held to the app's rule rather than the
-person's. ``X-Lemma-App`` is not trusted for that: page script sets it, and
-the browser sets ``Origin``.
+session, a delegated workload's claims, a person-less function run, and the
+app ``core/app_pin`` recognised a page as: an app's page calls with its
+viewer's session and is held to the app's rule rather than the person's.
 
 The machine is resolved in a unit of work of its own, committed and closed
 before the route does anything slow -- every route here goes on to talk to a
@@ -67,39 +65,31 @@ def caller_from_request(
     return MachineCaller(CallerKind.USER, user_id=user.id, pod_id=pod_id)
 
 
-def app_slug_of(request: Request) -> str | None:
-    """The app whose page sent this, from the browser-set ``Origin``."""
-    origin = request.headers.get("origin")
-    if not origin:
-        return None
-    from app.modules.apps.contracts.ready_app import app_slug_from_origin
+def _as_app(caller: MachineCaller, request: Request) -> MachineCaller:
+    """The same person, held to the app's rule when an app's page sent this.
 
-    return app_slug_from_origin(origin)
+    Which app, if any, is ``core/app_pin``'s: it reads the host the browser
+    says the request came from, which the page's script cannot choose.
+    """
+    from app.core.app_pin import app_request_of
 
-
-async def caller_for(
-    request: Request, uow, *, pod_id: UUID | None = None
-) -> MachineCaller:
-    caller = caller_from_request(request, pod_id=pod_id)
-    if caller.kind is not CallerKind.USER:
+    app = app_request_of(request)
+    if app is None or caller.kind is not CallerKind.USER:
         return caller
-    slug = app_slug_of(request)
-    if slug is None:
-        return caller
-    from app.modules.apps.contracts.ready_app import app_by_public_slug
-
-    app = await app_by_public_slug(uow=uow, public_slug=slug)
-    if app is None:
-        # A page on an app host that names no app is not the person in Lemma
-        # either; it gets an app's rule with nothing consented.
-        return MachineCaller(CallerKind.APP, user_id=caller.user_id)
     return MachineCaller(
         CallerKind.APP,
         user_id=caller.user_id,
         pod_id=app.pod_id,
-        app_id=app.id,
+        app_id=app.app_id,
         app_name=app.name,
     )
+
+
+async def caller_for(
+    request: Request, uow=None, *, pod_id: UUID | None = None
+) -> MachineCaller:
+    del uow
+    return _as_app(caller_from_request(request, pod_id=pod_id), request)
 
 
 async def resolve_for_request(

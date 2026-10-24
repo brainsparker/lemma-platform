@@ -74,28 +74,6 @@ class AppIdentity:
     name: str
 
 
-async def app_by_public_slug(*, uow, public_slug: str) -> AppIdentity | None:
-    """The app served at ``<public_slug>.<app_base_domain>``, whatever its status.
-
-    How the workspace module tells a request an app's page made from one the
-    person made in Lemma: the browser names the page's origin, and the origin
-    names the app.
-    """
-    app = await AppRepository(uow).get_by_public_slug(public_slug)
-    if app is None or app.id is None:
-        return None
-    return AppIdentity(id=app.id, pod_id=app.pod_id, name=app.name)
-
-
-def app_slug_from_origin(origin: str) -> str | None:
-    """The app slug a page's ``Origin`` names, or None for any other origin."""
-    from app.modules.apps.api.host_routing import app_slug_from_host
-
-    host = origin.split("://", 1)[-1]
-    slug, _release = app_slug_from_host(host)
-    return slug
-
-
 async def app_identity(*, uow, app_id: UUID) -> AppIdentity | None:
     """One app by id, whatever its status: what a consent is granted to."""
     app = await AppRepository(uow).get(app_id)

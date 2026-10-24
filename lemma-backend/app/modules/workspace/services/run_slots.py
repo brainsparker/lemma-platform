@@ -64,7 +64,7 @@ class RunSlots:
     async def release(self, machine_id: UUID, run_id: UUID) -> None:
         await self._redis.zrem(_SLOTS.format(machine_id=machine_id), str(run_id))
 
-    async def held(self, machine_id: UUID) -> list[str]:
+    async def holders(self, machine_id: UUID) -> list[str]:
         key = _SLOTS.format(machine_id=machine_id)
         await self._redis.zremrangebyscore(key, "-inf", time.time())
         members = await self._redis.zrange(key, 0, -1)

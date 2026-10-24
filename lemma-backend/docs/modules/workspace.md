@@ -43,6 +43,7 @@ this module document. They belong in the canonical design set.
 | --- | --- |
 | `sandboxes` | A named sandbox's stable identity, independent of any running container: kind, owner, profile name/digest, desired state, epoch, storage generation, mounts, and the timestamps the idle sweep reads. A workspace row is a machine and also carries its `template`, `size`, `fabric`, `capabilities`, `visibility`, `billing_scope`, `run_slots` and `created_by`. A default machine's id is its user's id; `owner_id` is a user id for a default machine, a pod id for a pod machine or a function runtime, so it carries no foreign key |
 | `sandbox_instances` | One concrete provider object backing a sandbox at a given epoch, unique per `(sandbox_id, epoch)`. Kept as its own row rather than columns on the sandbox so the destroy of an old container can be driven to completion while a new epoch is already serving |
+| `machine_connections` | A person's own computer joined with the CLI: its owner, mode, the hash of its secret, the capabilities and home it reports, and when it was last seen or revoked. A machine row names it by `connection_id`, without a foreign key, so the row outlives a revoked connection |
 | `machine_previews` | A port on a machine reachable at `p-<label>.<MACHINE_PREVIEW_DOMAIN>`, `private` or `link`, revocable before it expires |
 | `app_machine_consents` | A person's yes to one app running code on their default machine; revoking it sets `revoked_at` |
 | `machine_sessions` | A stretch of a machine running, metered into compute-unit slices in the usage ledger |

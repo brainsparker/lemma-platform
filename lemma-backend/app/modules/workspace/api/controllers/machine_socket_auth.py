@@ -90,7 +90,7 @@ async def authorize_socket(
         return None
     try:
         async with get_uow_factory()() as uow:
-            caller = await _caller(uow, user_id, sent)
+            caller = await _caller(websocket, user_id)
             resolved = await MachineResolver(uow).resolve(ref, caller, need=need)
             await uow.commit()
     except MachineConsentRequired:
@@ -102,24 +102,25 @@ async def authorize_socket(
     return resolved
 
 
-async def _caller(uow, user_id: UUID, origin: str | None) -> MachineCaller:
-    if origin:
-        from app.modules.apps.contracts.ready_app import (
-            app_by_public_slug,
-            app_slug_from_origin,
-        )
+async def _caller(websocket: WebSocket, user_id: UUID) -> MachineCaller:
+    """A socket's caller: the person, or -- from an app's page -- the app,
+    recognised the way ``core/app_pin`` recognises a request."""
+    from app.core.app_pin import UnknownAppHost, app_of_connection
 
-        slug = app_slug_from_origin(origin)
-        if slug is not None:
-            app = await app_by_public_slug(uow=uow, public_slug=slug)
-            return MachineCaller(
-                CallerKind.APP,
-                user_id=user_id,
-                pod_id=app.pod_id if app else None,
-                app_id=app.id if app else None,
-                app_name=app.name if app else None,
-            )
-    return MachineCaller(CallerKind.USER, user_id=user_id)
+    try:
+        app = await app_of_connection(websocket)
+    except UnknownAppHost:
+        # An app host naming no app keeps nothing of its viewer's.
+        return MachineCaller(CallerKind.APP, user_id=user_id)
+    if app is None:
+        return MachineCaller(CallerKind.USER, user_id=user_id)
+    return MachineCaller(
+        CallerKind.APP,
+        user_id=user_id,
+        pod_id=app.pod_id,
+        app_id=app.app_id,
+        app_name=app.name,
+    )
 
 
 def allowed_origins() -> tuple[str, ...]:
@@ -188,7 +189,7 @@ async def machine_for_view(
 
     try:
         async with get_uow_factory()() as uow:
-            caller = await _caller(uow, user_id, websocket.headers.get("origin"))
+            caller = await _caller(websocket, user_id)
             resolved = await MachineResolver(uow).resolve(ref, caller, need=need)
             await uow.commit()
     except MachineConsentRequired:

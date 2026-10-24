@@ -457,7 +457,6 @@ class SandboxWorkspaceSession(SandboxFileOperationsMixin):
     async def __aexit__(self, *_args: object) -> None:
         await self.close()
 
-
     @property
     def cwd(self) -> str:
         """Where this session's commands start."""

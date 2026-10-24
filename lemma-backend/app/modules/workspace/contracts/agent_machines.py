@@ -122,7 +122,7 @@ async def begin_run(machine: AgentMachine, *, run_id: UUID, acting_user: UUID) -
     from app.modules.workspace.services.run_slots import RunSlots
 
     slots = RunSlots()
-    already = str(run_id) in await slots.held(machine.machine_id)
+    already = str(run_id) in await slots.holders(machine.machine_id)
     if not already:
         await keep_room(machine.machine_id, acting_user=acting_user)
     await slots.acquire(machine.machine_id, run_id, slots=machine.machine.run_slots)

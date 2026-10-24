@@ -127,7 +127,7 @@ class MachineProcesses:
 
         return build_local_client()
 
-    async def start(
+    async def start_process(
         self, machine_id: UUID, request: StartProcess, *, base_env: dict[str, str]
     ) -> ProcessRecord:
         from sandbox_runtime.protocol import WorkloadKind
@@ -315,7 +315,7 @@ class MachineProcesses:
         for record in await self.services_to_restart(machine_id):
             await self._registry.drop(machine_id, [record.process_id])
             restarted.append(
-                await self.start(
+                await self.start_process(
                     machine_id,
                     StartProcess(
                         command=record.command,

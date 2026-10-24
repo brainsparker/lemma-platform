@@ -1,17 +1,26 @@
 """Machines: what a person or a pod addresses by name, built from sandboxes.
 
-`sandboxes` gains what a caller chooses about a machine and what it is told:
-`template` and `size`, the `fabric` it was last provisioned on, the
-`capabilities` it offers, who sees it (`visibility`), whose compute window its
-time counts in (`billing_scope`), a connected machine's `connection_id`, how
-many agent runs share it at once (`run_slots`) and `created_by`. Every existing
-row is a default machine or a function runtime, and takes the defaults: a
-default machine is private, billed to its user, and reports the size it was
-built at, 1x2 -- which is how the later move to 2x4 finds the rows it has not
-moved yet.
+One migration for the whole machines effort. Each part of it -- machines,
+the browser stream, connected machines -- is a section below with its own
+``_upgrade_<part>`` / ``_downgrade_<part>`` pair and one call line in
+``upgrade`` and ``downgrade``; a later part adds its section here rather
+than a migration of its own.
 
-Four tables arrive with it:
+**Machines.** `sandboxes` gains what a caller chooses about a machine and
+what it is told: `template` and `size`, the `fabric` it was last provisioned
+on, the `capabilities` it offers, who sees it (`visibility`), whose compute
+window its time counts in (`billing_scope`), a connected machine's
+`connection_id`, how many agent runs share it at once (`run_slots`) and
+`created_by`. Every existing row is a default machine or a function runtime
+and takes the defaults: a default machine is private, billed to its user,
+and reports the size it was built at, 1x2 -- which is how the later move to
+2x4 finds the rows it has not moved yet.
 
+Five tables arrive with it:
+
+- `machine_connections`: a person's own computer joined with the CLI;
+  `connection_id` names it, without a foreign key, because a machine row
+  outlives a revoked connection;
 - `machine_previews`: a port reachable at a subdomain, revocable before it
   expires;
 - `app_machine_consents`: a person's yes to one app running code on their
@@ -23,20 +32,20 @@ Four tables arrive with it:
 default machine of whoever the run acts for.
 
 `TABLES` is each table's DDL exactly as the models compile it, pinned to them
-by ``workspace/tests/unit/test_machine_ddl_matches_models``. A connected
-machine's own table belongs to the link that creates it, so `connection_id`
-carries no foreign key here.
+by ``workspace/tests/unit/test_machine_ddl_matches_models``.
 
-Revision ID: 0062_machines
-Revises: 0061_answers_shared
+Revision ID: 0064_machines
+Revises: 0063_pod_connectors
 """
 
 from alembic import op
 
-revision = "0062_machines"
-down_revision = "0061_answers_shared"
+revision = "0064_machines"
+down_revision = "0063_pod_connectors"
 branch_labels = None
 depends_on = None
+
+# --- machines -----------------------------------------------------------------
 
 SANDBOX_COLUMNS = (
     "template VARCHAR(32) DEFAULT 'workspace' NOT NULL",
@@ -62,6 +71,10 @@ SANDBOX_CHECKS = (
 AGENT_COLUMN = "machine VARCHAR(200)"
 
 TABLES: dict[str, tuple[str, ...]] = {
+    "machine_connections": (
+        "CREATE TABLE machine_connections ( user_id UUID NOT NULL, organization_id UUID, pod_id UUID, name TEXT NOT NULL, display_name TEXT NOT NULL, mode TEXT NOT NULL, secret_hash TEXT NOT NULL, capabilities JSONB DEFAULT '{}'::jsonb NOT NULL, home TEXT NOT NULL, runtime_version TEXT, link_generation BIGINT DEFAULT 0 NOT NULL, last_seen_at TIMESTAMP WITH TIME ZONE, revoked_at TIMESTAMP WITH TIME ZONE, id UUID NOT NULL, created_at TIMESTAMP WITH TIME ZONE NOT NULL, updated_at TIMESTAMP WITH TIME ZONE NOT NULL, PRIMARY KEY (id), CONSTRAINT ck_machine_connections_mode CHECK (mode IN ('host', 'image')), CONSTRAINT uq_machine_connections_secret_hash UNIQUE (secret_hash), FOREIGN KEY(user_id) REFERENCES users (id) ON DELETE CASCADE )",
+        "CREATE UNIQUE INDEX uq_machine_connections_live_name ON machine_connections (user_id, name) WHERE revoked_at IS NULL",
+    ),
     "machine_previews": (
         "CREATE TABLE machine_previews ( sandbox_id UUID NOT NULL, label VARCHAR(32) NOT NULL, port INTEGER NOT NULL, visibility VARCHAR(16) NOT NULL, created_by UUID NOT NULL, expires_at TIMESTAMP WITH TIME ZONE, revoked_at TIMESTAMP WITH TIME ZONE, id UUID NOT NULL, created_at TIMESTAMP WITH TIME ZONE NOT NULL, updated_at TIMESTAMP WITH TIME ZONE NOT NULL, PRIMARY KEY (id), CONSTRAINT ck_machine_previews_visibility CHECK (visibility IN ('private', 'link')), CONSTRAINT ck_machine_previews_port CHECK (port BETWEEN 1 AND 65535), CONSTRAINT uq_machine_previews_label UNIQUE (label), FOREIGN KEY(sandbox_id) REFERENCES sandboxes (id) ON DELETE CASCADE )",
         "CREATE INDEX ix_machine_previews_sandbox ON machine_previews (sandbox_id)",
@@ -81,7 +94,7 @@ TABLES: dict[str, tuple[str, ...]] = {
 }
 
 
-def upgrade() -> None:
+def _upgrade_machines() -> None:
     for column in SANDBOX_COLUMNS:
         op.execute(f"ALTER TABLE sandboxes ADD COLUMN {column}")
     for check in SANDBOX_CHECKS:
@@ -92,7 +105,7 @@ def upgrade() -> None:
             op.execute(statement)
 
 
-def downgrade() -> None:
+def _downgrade_machines() -> None:
     for table in reversed(TABLES):
         op.execute(f"DROP TABLE {table}")
     op.execute("ALTER TABLE agents DROP COLUMN machine")
@@ -104,3 +117,14 @@ def downgrade() -> None:
         op.execute(f"ALTER TABLE sandboxes DROP CONSTRAINT {check}")
     for column in SANDBOX_COLUMNS:
         op.execute(f"ALTER TABLE sandboxes DROP COLUMN {column.split()[0]}")
+
+
+# --- every part ---------------------------------------------------------------
+
+
+def upgrade() -> None:
+    _upgrade_machines()
+
+
+def downgrade() -> None:
+    _downgrade_machines()

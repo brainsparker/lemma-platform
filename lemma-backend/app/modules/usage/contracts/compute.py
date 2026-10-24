@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from sqlalchemy import func, select
-from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.exc import IntegrityError
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.usage.domain.accounting import MACHINE_COMPUTE, POD_MACHINE_COMPUTE
@@ -48,41 +48,51 @@ class ComputeSlice:
 async def record_compute_slice(
     uow: SqlAlchemyUnitOfWork, entry: ComputeSlice, *, unit_usd: float | None
 ) -> bool:
-    """Write one slice. False when it was already written."""
+    """Write one slice. False when it was already written.
+
+    Added through the unit of work rather than as a bare insert: a priced
+    SYSTEM row added that way marks every spend window it falls into for
+    recounting (``models._uncount_windows_of``), so machine time reaches the
+    running totals the next admission reads. In a savepoint, because the
+    request id is what makes a second write of the slice nothing.
+    """
     request_id = uuid5(
         _SLICE_NAMESPACE, f"{entry.session_id}:{entry.slice_start.isoformat()}"
     )
-    cost = None if unit_usd is None else round(entry.compute_units * unit_usd, 9)
-    result = await uow.session.execute(
-        insert(UsageRecord)
-        .values(
-            organization_id=entry.organization_id,
-            pod_id=entry.pod_id,
-            user_id=entry.user_id,
-            source_type=POD_MACHINE_COMPUTE if entry.billed_to_org else MACHINE_COMPUTE,
-            source_id=str(entry.machine_id),
-            profile_id="machine",
-            profile_scope="SYSTEM",
-            model_name=f"machine-{entry.size}",
-            usage_kind=UsageKind.COMPUTE.value,
-            units=entry.compute_units,
-            cost_usd=cost,
-            request_id=request_id,
-            status="SUCCEEDED",
-            record_metadata={
-                "session_id": str(entry.session_id),
-                "slice_start": entry.slice_start.isoformat(),
-                "slice_end": entry.slice_end.isoformat(),
-            },
-            occurred_at=entry.slice_end,
-        )
-        .on_conflict_do_nothing(
-            index_elements=["request_id"],
-            index_where=UsageRecord.request_id.is_not(None),
-        )
-        .returning(UsageRecord.id)
+    existing = await uow.session.scalar(
+        select(UsageRecord.id).where(UsageRecord.request_id == request_id)
     )
-    return result.scalar_one_or_none() is not None
+    if existing is not None:
+        return False
+    cost = None if unit_usd is None else round(entry.compute_units * unit_usd, 9)
+    row = UsageRecord(
+        organization_id=entry.organization_id,
+        pod_id=entry.pod_id,
+        user_id=entry.user_id,
+        source_type=POD_MACHINE_COMPUTE if entry.billed_to_org else MACHINE_COMPUTE,
+        source_id=str(entry.machine_id),
+        profile_id="machine",
+        profile_scope="SYSTEM",
+        model_name=f"machine-{entry.size}",
+        usage_kind=UsageKind.COMPUTE.value,
+        units=entry.compute_units,
+        cost_usd=cost,
+        request_id=request_id,
+        status="SUCCEEDED",
+        record_metadata={
+            "session_id": str(entry.session_id),
+            "slice_start": entry.slice_start.isoformat(),
+            "slice_end": entry.slice_end.isoformat(),
+        },
+        occurred_at=entry.slice_end,
+    )
+    try:
+        async with uow.session.begin_nested():
+            uow.session.add(row)
+    except IntegrityError:
+        # Written by whoever raced this one; the slice counts once.
+        return False
+    return True
 
 
 @dataclass(frozen=True, slots=True)

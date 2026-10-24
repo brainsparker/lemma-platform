@@ -226,6 +226,7 @@ class SandboxInstanceModel(UUIDAuditBase):
 # `models` -- Alembic's env, the e2e schema builder -- gets the machine tables too.
 from app.modules.workspace.infrastructure.machine_models import (  # noqa: E402
     AppMachineConsentModel,
+    MachineConnectionModel,
     MachineLoginBackupModel,
     MachinePreviewModel,
     MachineSessionModel,
@@ -233,6 +234,7 @@ from app.modules.workspace.infrastructure.machine_models import (  # noqa: E402
 
 __all__ = [
     "AppMachineConsentModel",
+    "MachineConnectionModel",
     "MachineLoginBackupModel",
     "MachinePreviewModel",
     "MachineSessionModel",

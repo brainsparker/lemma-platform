@@ -151,7 +151,7 @@ async def _move_size(uow_factory: UnitOfWorkFactory, machine: Machine) -> bool:
 async def slot_held(machine_id: UUID) -> bool:
     from app.modules.workspace.services.run_slots import RunSlots
 
-    return bool(await RunSlots().held(machine_id))
+    return bool(await RunSlots().holders(machine_id))
 
 
 async def daily_login_copies(

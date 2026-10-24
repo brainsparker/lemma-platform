@@ -77,8 +77,8 @@ type iceServer struct {
 
 func main() {
 	var (
-		api           = flag.String("api", "", "API base URL (http[s]://host[:port]); connects through /workspace/browser/view")
-		path          = flag.String("path", "/workspace/browser/view", "the view socket's path on the API")
+		api           = flag.String("api", "", "API base URL (http[s]://host[:port]); connects through /machines/me/browser/view")
+		path          = flag.String("path", "/machines/me/browser/view", "the view socket's path on the API")
 		token         = flag.String("token", "", "bearer token for the API")
 		origin        = flag.String("origin", "", "Origin header to send to the API")
 		mode          = flag.String("mode", "view", "view or control")

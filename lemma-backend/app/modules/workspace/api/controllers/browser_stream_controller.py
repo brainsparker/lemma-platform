@@ -13,12 +13,17 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.core.api.dependencies import CurrentUser
 from app.core.log.log import get_logger
+from app.modules.workspace.api.controllers.machine_dependencies import (
+    SeeMachine,
+    UseMachine,
+    acting_user,
+)
+from app.modules.workspace.api.controllers.machines_controller import machines_enabled
 from app.modules.workspace.services.browser_relay_client import (
     BrowserRelayUnavailable,
 )
@@ -27,7 +32,11 @@ from sandbox_runtime.errors import SandboxCapabilityUnsupported
 
 logger = get_logger(__name__)
 
-router = APIRouter(prefix="/workspace/browser", tags=["Workspace Apps"])
+router = APIRouter(
+    prefix="/machines/{ref}/browser",
+    tags=["Machine Browser"],
+    dependencies=[Depends(machines_enabled)],
+)
 
 
 class _Closed(BaseModel):
@@ -77,13 +86,13 @@ def browser_view_service() -> BrowserViewService:
 
 
 @router.post(
-    "/commands",
+    ":command",
     response_model=BrowserCommandResponse,
-    operation_id="workspace.browser.command",
-    summary="Steer the workspace browser from the screen's toolbar",
+    operation_id="machine.browser.command",
+    summary="Steer a machine's browser from the screen's toolbar",
 )
 async def browser_command(
-    user: CurrentUser,
+    resolved: UseMachine,
     request: BrowserCommandRequest,
     service: Annotated[BrowserViewService, Depends(browser_view_service)],
 ) -> BrowserCommandResponse:
@@ -95,7 +104,7 @@ async def browser_command(
     """
     try:
         answer = await service.browser_command(
-            user.id, request.action.model_dump(exclude_none=True)
+            resolved.machine.id, request.action.model_dump(exclude_none=True)
         )
     except SandboxCapabilityUnsupported as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
@@ -145,15 +154,18 @@ class StreamBeacon(_Closed):
 
 
 @router.post(
-    "/beacon",
+    ":beacon",
     status_code=status.HTTP_204_NO_CONTENT,
-    operation_id="workspace.browser.beacon",
+    operation_id="machine.browser.beacon",
     summary="Report how a live screen session went",
 )
-async def stream_beacon(user: CurrentUser, beacon: StreamBeacon) -> None:
+async def stream_beacon(
+    request: Request, resolved: SeeMachine, beacon: StreamBeacon
+) -> None:
     logger.info(
         "workspace.browser_view.stream_session.observed",
-        user_id=str(user.id),
+        user_id=str(acting_user(request, resolved)),
+        machine_id=str(resolved.machine.id),
         transport=beacon.transport,
         fallback=beacon.fallback,
         seconds=beacon.seconds,

@@ -490,6 +490,8 @@ run `uv run python scripts/generate_route_inventory.py`.
 | PATCH | `/pods/{pod_id}/machines/{name}` | `machine.pod.update` | Rename, resize or change who sees a pod machine |
 | POST | `/machine-consents` | `machine.consent.grant` | Let an app run code on your machine |
 | POST | `/machines/{ref}/browser:access` | `machine.browser.access` | A signed link to a machine's browser |
+| POST | `/machines/{ref}/browser:beacon` | `machine.browser.beacon` | Report how a live screen session went |
+| POST | `/machines/{ref}/browser:command` | `machine.browser.command` | Steer a machine's browser from the screen's toolbar |
 | POST | `/machines/{ref}/browser:display` | `machine.browser.display` | Set the size of a machine's browser display |
 | POST | `/machines/{ref}/browser:navigate` | `machine.browser.navigate` | Open a page in a machine's browser |
 | POST | `/machines/{ref}/files:move` | `machine.files.move` | Move or rename a path on a machine |
@@ -503,8 +505,6 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/machines/{ref}:restart` | `machine.restart` | Stop a machine and start it again |
 | POST | `/pods/{pod_id}/machines` | `machine.pod.create` | Create a machine the pod's agents share |
 | POST | `/workspace/apps/browser/access` | `workspace.browser.access` | Create workspace browser access URL |
-| POST | `/workspace/browser/beacon` | `workspace.browser.beacon` | Report how a live screen session went |
-| POST | `/workspace/browser/commands` | `workspace.browser.command` | Steer the workspace browser from the screen's toolbar |
 | POST | `/workspace/browser/display-size` | `workspace.browser.resize_display` | Fit the workspace display to the pane showing it |
 | PUT | `/machines/{ref}/files/content` | `machine.files.write` | Write a file on a machine |
 | PUT | `/pods/{pod_id}/machines/{name}/grants` | `machine.pod.grants.set` | Replace who is granted a pod machine |

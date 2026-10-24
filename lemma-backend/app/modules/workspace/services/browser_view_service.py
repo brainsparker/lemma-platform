@@ -183,7 +183,9 @@ class BrowserViewService:
             )
         return relay
 
-    async def status(self, user_id: UUID) -> dict[str, object]:
+    async def status(
+        self, user_id: UUID, *, viewer: UUID | None = None
+    ) -> dict[str, object]:
         """What a pane can say without waking anything.
 
         Every failure here is a sentence rather than an exception, because this
@@ -232,7 +234,9 @@ class BrowserViewService:
             stream_details,
         )
 
-        details = await stream_details(relay, user_id)
+        # The rollout is the viewer's, not the machine's: two people watching
+        # one pod machine may be on different transports.
+        details = await stream_details(relay, viewer or user_id)
         return {"state": "running" if chrome == "running" else "stopped", **details}
 
     async def open_vnc_session(

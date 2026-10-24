@@ -1,25 +1,28 @@
 from http import HTTPStatus
-from typing import Any
+from typing import Any, cast
+from urllib.parse import quote
 
 import httpx
 
 from ... import errors
 from ...client import AuthenticatedClient, Client
-from ...models.browser_command_request import BrowserCommandRequest
-from ...models.browser_command_response import BrowserCommandResponse
 from ...models.error_response import ErrorResponse
+from ...models.stream_beacon import StreamBeacon
 from ...types import Response
 
 
 def _get_kwargs(
+    ref: str,
     *,
-    body: BrowserCommandRequest,
+    body: StreamBeacon,
 ) -> dict[str, Any]:
     headers: dict[str, Any] = {}
 
     _kwargs: dict[str, Any] = {
         "method": "post",
-        "url": "/workspace/browser/commands",
+        "url": "/machines/{ref}/browser:beacon".format(
+            ref=quote(str(ref), safe=""),
+        ),
     }
 
     _kwargs["json"] = body.to_dict()
@@ -32,11 +35,10 @@ def _get_kwargs(
 
 def _parse_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> BrowserCommandResponse | ErrorResponse | None:
-    if response.status_code == 200:
-        response_200 = BrowserCommandResponse.from_dict(response.json())
-
-        return response_200
+) -> Any | ErrorResponse | None:
+    if response.status_code == 204:
+        response_204 = cast(Any, None)
+        return response_204
 
     if response.status_code == 422:
         response_422 = ErrorResponse.from_dict(response.json())
@@ -51,7 +53,7 @@ def _parse_response(
 
 def _build_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> Response[BrowserCommandResponse | ErrorResponse]:
+) -> Response[Any | ErrorResponse]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -61,30 +63,30 @@ def _build_response(
 
 
 def sync_detailed(
+    ref: str,
     *,
     client: AuthenticatedClient | Client,
-    body: BrowserCommandRequest,
-) -> Response[BrowserCommandResponse | ErrorResponse]:
-    """Steer the workspace browser from the screen's toolbar
-
-     One toolbar command; the open tabs as they are afterwards.
-
-    409 with a sentence when the browser cannot do it right now -- it is not
-    running, the tab has closed -- because the toolbar shows it, and 422 for
-    an address that is not a web address.
+    body: StreamBeacon,
+) -> Response[Any | ErrorResponse]:
+    """Report how a live screen session went
 
     Args:
-        body (BrowserCommandRequest):
+        ref (str): Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in
+            context), `mine:<name>`, or its id.
+        body (StreamBeacon): What one viewing session got, from the viewer's side.
+
+            Bounded everywhere: it comes from a browser and ends up in a log line.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[BrowserCommandResponse | ErrorResponse]
+        Response[Any | ErrorResponse]
     """
 
     kwargs = _get_kwargs(
+        ref=ref,
         body=body,
     )
 
@@ -96,60 +98,60 @@ def sync_detailed(
 
 
 def sync(
+    ref: str,
     *,
     client: AuthenticatedClient | Client,
-    body: BrowserCommandRequest,
-) -> BrowserCommandResponse | ErrorResponse | None:
-    """Steer the workspace browser from the screen's toolbar
-
-     One toolbar command; the open tabs as they are afterwards.
-
-    409 with a sentence when the browser cannot do it right now -- it is not
-    running, the tab has closed -- because the toolbar shows it, and 422 for
-    an address that is not a web address.
+    body: StreamBeacon,
+) -> Any | ErrorResponse | None:
+    """Report how a live screen session went
 
     Args:
-        body (BrowserCommandRequest):
+        ref (str): Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in
+            context), `mine:<name>`, or its id.
+        body (StreamBeacon): What one viewing session got, from the viewer's side.
+
+            Bounded everywhere: it comes from a browser and ends up in a log line.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        BrowserCommandResponse | ErrorResponse
+        Any | ErrorResponse
     """
 
     return sync_detailed(
+        ref=ref,
         client=client,
         body=body,
     ).parsed
 
 
 async def asyncio_detailed(
+    ref: str,
     *,
     client: AuthenticatedClient | Client,
-    body: BrowserCommandRequest,
-) -> Response[BrowserCommandResponse | ErrorResponse]:
-    """Steer the workspace browser from the screen's toolbar
-
-     One toolbar command; the open tabs as they are afterwards.
-
-    409 with a sentence when the browser cannot do it right now -- it is not
-    running, the tab has closed -- because the toolbar shows it, and 422 for
-    an address that is not a web address.
+    body: StreamBeacon,
+) -> Response[Any | ErrorResponse]:
+    """Report how a live screen session went
 
     Args:
-        body (BrowserCommandRequest):
+        ref (str): Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in
+            context), `mine:<name>`, or its id.
+        body (StreamBeacon): What one viewing session got, from the viewer's side.
+
+            Bounded everywhere: it comes from a browser and ends up in a log line.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[BrowserCommandResponse | ErrorResponse]
+        Response[Any | ErrorResponse]
     """
 
     kwargs = _get_kwargs(
+        ref=ref,
         body=body,
     )
 
@@ -159,31 +161,31 @@ async def asyncio_detailed(
 
 
 async def asyncio(
+    ref: str,
     *,
     client: AuthenticatedClient | Client,
-    body: BrowserCommandRequest,
-) -> BrowserCommandResponse | ErrorResponse | None:
-    """Steer the workspace browser from the screen's toolbar
-
-     One toolbar command; the open tabs as they are afterwards.
-
-    409 with a sentence when the browser cannot do it right now -- it is not
-    running, the tab has closed -- because the toolbar shows it, and 422 for
-    an address that is not a web address.
+    body: StreamBeacon,
+) -> Any | ErrorResponse | None:
+    """Report how a live screen session went
 
     Args:
-        body (BrowserCommandRequest):
+        ref (str): Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in
+            context), `mine:<name>`, or its id.
+        body (StreamBeacon): What one viewing session got, from the viewer's side.
+
+            Bounded everywhere: it comes from a browser and ends up in a log line.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        BrowserCommandResponse | ErrorResponse
+        Any | ErrorResponse
     """
 
     return (
         await asyncio_detailed(
+            ref=ref,
             client=client,
             body=body,
         )

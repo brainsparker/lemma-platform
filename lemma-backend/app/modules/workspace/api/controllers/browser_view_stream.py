@@ -42,23 +42,26 @@ class PreparedRtc:
 
 
 async def prepare_rtc(
-    target: ViewUpstream, *, user_id: UUID, mode: str, viewer: str | None
+    target: ViewUpstream,
+    *,
+    user_id: UUID,
+    mode: str,
+    viewer: str | None,
+    may_control: bool,
 ) -> PreparedRtc | None:
     """Everything a WebRTC view needs before its socket is accepted.
 
     `None`, logged, when there is no relay to be had: not a fault, and the
     caller turns it into `CLOSE_USE_VNC`, on which the pane switches to VNC.
 
-    `may_control` is true for everybody who reaches this route today: it is
-    the owner's own machine, keyed by their user id. It is a field rather
-    than a constant so that a shared machine's view-only viewer is one
-    change away, and so the streamer -- not the pane -- is what enforces it.
+    `may_control` is the viewer's own access to the machine, decided by the
+    resolver; the streamer -- not the pane -- is what enforces it.
     """
     rtc_viewer = RtcViewer(
         sub=viewer_name(user_id, viewer) or str(user_id),
         provider_id=target.provider_id,
         mode=MODE_CONTROL if mode == MODE_CONTROL else "view",
-        may_control=True,
+        may_control=may_control,
     )
     try:
         machine_ice, browser_ice = await ice_for(rtc_viewer)

@@ -11,6 +11,8 @@ from uuid import uuid4
 
 import pytest
 
+from app.modules.workspace.services.browser_view_service import ViewUpstream
+
 from app.core.config import settings
 from app.modules.workspace.api.controllers import browser_view_controller as view
 from app.modules.workspace.api.controllers.browser_view_session import (
@@ -26,11 +28,18 @@ class _Service:
         self.opened: list[str] = []
 
     async def open_vnc_session(
-        self, user_id, *, mode, origin=None, conversation_id=None
+        self,
+        user_id,
+        *,
+        mode,
+        origin=None,
+        conversation_id=None,
+        viewer=None,
+        transport="vnc",
     ):
-        del mode, origin, conversation_id
+        del mode, origin, conversation_id, viewer, transport
         self.opened.append(str(user_id))
-        return "ws://sandbox.test/vnc?mode=view", {}
+        return ViewUpstream("ws://sandbox.test/vnc?mode=view", {}, "sbx-1")
 
     async def close(self) -> None:
         return None

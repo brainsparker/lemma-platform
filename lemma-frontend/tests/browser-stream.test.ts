@@ -46,7 +46,7 @@ test("the desktop app's WebView is probed, not trusted by name", () => {
 
 test("the socket names the transport and the pane", () => {
     const url = new URL(socketUrl("https://api.example.test", { mode: "view", transport: "rtc", viewer: "abc123" }));
-    assert.equal(url.pathname, "/workspace/browser/view");
+    assert.equal(url.pathname, "/machines/me/browser/view");
     assert.equal(url.searchParams.get("transport"), "rtc");
     assert.equal(url.searchParams.get("viewer"), "abc123");
     const vnc = new URL(socketUrl("https://api.example.test", { mode: "view" }));

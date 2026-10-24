@@ -1217,7 +1217,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'workspace.browser_view.sandbox_refused.degraded': EventSpec('warning', frozenset({'error_type', 'reason'})),
     'workspace.browser_view.sandbox_unavailable.degraded': EventSpec('warning', frozenset({'reason'})),
     'workspace.browser_view.status_failed.degraded': EventSpec('warning', frozenset({'error_type'})),
-    'workspace.browser_view.stream_session.observed': EventSpec('info', frozenset({'codec', 'density', 'fallback', 'first_frame_ms', 'fps', 'kbps', 'latency_ms', 'relay', 'seconds', 'transport', 'user_id'})),
+    'workspace.browser_view.stream_session.observed': EventSpec('info', frozenset({'codec', 'density', 'fallback', 'first_frame_ms', 'fps', 'kbps', 'latency_ms', 'machine_id', 'relay', 'seconds', 'transport', 'user_id'})),
     'workspace.browser_view.unsupported.denied': EventSpec('warning', frozenset()),
     'workspace.browser_view.upstream.degraded': EventSpec('warning', frozenset({'error_type'})),
     'workspace.compute_meter.released_out_of_compute.observed': EventSpec('info', frozenset({'sandbox_id'})),

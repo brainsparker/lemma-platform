@@ -193,9 +193,15 @@ async def test_stream_bench_stack(
         monkeypatch.setattr(
             workspace_settings,
             "coturn_urls",
+            # Under both names: the sandbox reaches the host as
+            # `host.docker.internal`, and the viewer -- a browser on the host
+            # itself -- only as 127.0.0.1. Each end uses the one it can
+            # resolve, and both allocate on the same coturn either way.
             [
                 f"turn:host.docker.internal:{turn_port}?transport=udp",
                 f"turn:host.docker.internal:{turn_port}?transport=tcp",
+                f"turn:127.0.0.1:{turn_port}?transport=udp",
+                f"turn:127.0.0.1:{turn_port}?transport=tcp",
             ],
         )
         monkeypatch.setattr(workspace_settings, "coturn_secret", SecretStr(TURN_SECRET))

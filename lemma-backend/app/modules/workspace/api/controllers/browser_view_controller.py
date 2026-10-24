@@ -26,7 +26,7 @@ import httpx
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, WebSocket, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from app.core.api.dependencies import CurrentUser
 from app.core.api.deprecation import deprecated_route
 from app.core.app_pin import app_host_slug
@@ -67,6 +67,15 @@ from app.modules.workspace.services.ws_bridge import (
 )
 from sandbox_runtime.errors import SandboxCapabilityUnsupported, SandboxError
 from sandbox_runtime.errors import SandboxUnavailable
+
+# One schema for the old paths and the new, so a client generated from the
+# spec sees one `BrowserStatusResponse` rather than two that differ by where
+# they were declared.
+from app.modules.workspace.api.controllers.machine_browser_view_controller import (  # noqa: E402
+    BrowserStatusResponse,
+    DisplaySizeRequest,
+    DisplaySizeResponse,
+)
 
 logger = get_logger(__name__)
 
@@ -110,20 +119,6 @@ CLOSE_UNSUPPORTED = 4422
 CLOSE_RELAY_ABSENT = 4426
 #: The computer is still starting or briefly unreachable. Worth retrying.
 CLOSE_SANDBOX_UNAVAILABLE = 4503
-
-
-class BrowserStatusResponse(BaseModel):
-    """What the pane can say without waking anything.
-
-    `asleep` the computer is paused or was never started; `stopped` it is up but
-    the browser is not (the resting state after five idle minutes); `running` a
-    browser is there now; `unavailable` the relay did not answer, which on an
-    older image is permanent until it is replaced; `unsupported` this fabric
-    cannot reach a port at all.
-    """
-
-    state: str
-    detail: str | None = None
 
 
 def allowed_origins() -> tuple[str, ...]:
@@ -242,25 +237,6 @@ async def current_page_url(
     finally:
         await service.close()
     return CurrentPageUrlResponse(url=url)
-
-
-class DisplaySizeRequest(BaseModel):
-    """The size the pane wants its picture to be, in CSS pixels.
-
-    Bounded here because these numbers come from a browser window and decide
-    how much memory a framebuffer takes. The sandbox clamps again against the
-    framebuffer it actually allocated, which is the limit that cannot be
-    argued with.
-    """
-
-    width: int = Field(ge=320, le=4096)
-    height: int = Field(ge=240, le=4096)
-
-
-class DisplaySizeResponse(BaseModel):
-    #: What the display ended up as. Not always what was asked for, and the
-    #: pane is told so rather than left to assume.
-    size: str | None = None
 
 
 @router.post(
@@ -413,7 +389,7 @@ async def browser_view(
         return
 
     try:
-        upstream_url, headers = await service.open_vnc_session(
+        upstream_url, headers, _ = await service.open_vnc_session(
             UUID(user_id), mode=mode, origin=origin, conversation_id=conversation
         )
     except SandboxCapabilityUnsupported:

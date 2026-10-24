@@ -277,7 +277,7 @@ async def test_the_vnc_path_is_tigervnc_without_deflate(
     ctx = await _workspace(authenticated_client, fixed_test_org, fixed_test_user)
     await _open_a_scrolling_page(ctx)
     token = fixed_test_user["token"]
-    url = f"{_ws_base(backend_server)}/workspace/browser/view?mode=view&viewer=e2e1&access_token={token}"
+    url = f"{_ws_base(backend_server)}/machines/me/browser/view?mode=view&viewer=e2e1&access_token={token}"
 
     # The browser's leg: offered deflate, as every browser does, and refused.
     async with websockets.connect(url, max_size=None, compression="deflate") as socket:
@@ -319,7 +319,7 @@ async def test_only_the_controller_sets_the_screen_size(
     ctx = await _workspace(authenticated_client, fixed_test_org, fixed_test_user)
     await _open_a_scrolling_page(ctx)
     token = fixed_test_user["token"]
-    base = f"{_ws_base(backend_server)}/workspace/browser/view"
+    base = f"{_ws_base(backend_server)}/machines/me/browser/view"
 
     async with (
         websockets.connect(
@@ -337,7 +337,7 @@ async def test_only_the_controller_sets_the_screen_size(
 
         async def resize(viewer: str, width: int, height: int) -> dict:
             response = await authenticated_client.post(
-                "/workspace/browser/display-size",
+                "/machines/me/browser:display",
                 json={"width": width, "height": height, "viewer": viewer},
             )
             assert response.status_code == 200, response.text
@@ -349,7 +349,7 @@ async def test_only_the_controller_sets_the_screen_size(
         assert refused["size"] is None
         assert "somebody else" in refused["reason"]
 
-        details = (await authenticated_client.get("/workspace/browser/status")).json()
+        details = (await authenticated_client.get("/machines/me/browser")).json()
         assert details["size"] == "820x1180"
         assert details["lease"].endswith(":first")
         assert details["presets"]["tablet"] == "820x1180"
@@ -357,7 +357,7 @@ async def test_only_the_controller_sets_the_screen_size(
 
     # Every viewer gone: the screen goes back to its resting size.
     async def resting():
-        return (await authenticated_client.get("/workspace/browser/status")).json()
+        return (await authenticated_client.get("/machines/me/browser")).json()
 
     await eventually(
         label="the display going back to its resting size",
@@ -386,7 +386,7 @@ async def test_webrtc_watch_drive_and_take_control_through_turn(
     api = backend_server["host_base_url"]
     token = fixed_test_user["token"]
 
-    status_now = (await authenticated_client.get("/workspace/browser/status")).json()
+    status_now = (await authenticated_client.get("/machines/me/browser")).json()
     assert status_now["transport"] == "auto"
 
     watcher = await _streamcheck(
@@ -491,7 +491,7 @@ async def test_unreachable_turn_fails_webrtc_and_vnc_still_serves(
     assert failed["frames"] == 0, failed
 
     # What the pane does next: the same machine, over VNC.
-    url = f"{_ws_base(backend_server)}/workspace/browser/view?mode=view&access_token={token}"
+    url = f"{_ws_base(backend_server)}/machines/me/browser/view?mode=view&access_token={token}"
     async with websockets.connect(url, max_size=None) as vnc:
         banner = await asyncio.wait_for(vnc.recv(), timeout=30)
         assert bytes(banner).startswith(b"RFB 003.008")
@@ -510,7 +510,7 @@ async def test_the_toolbar_steers_the_browser_and_refuses_script(
 
     async def command(action: dict) -> dict:
         response = await authenticated_client.post(
-            "/workspace/browser/commands", json={"action": action}
+            "/machines/me/browser:command", json={"action": action}
         )
         return {"status": response.status_code, **(response.json() or {})}
 
@@ -530,13 +530,13 @@ async def test_the_toolbar_steers_the_browser_and_refuses_script(
     refused = await command({"command": "navigate", "url": "javascript:alert(1)"})
     assert refused["status"] in (409, 422), refused
     unknown = await authenticated_client.post(
-        "/workspace/browser/commands",
+        "/machines/me/browser:command",
         json={"action": {"command": "evaluate", "expression": "1"}},
     )
     assert unknown.status_code == 422
 
     beacon = await authenticated_client.post(
-        "/workspace/browser/beacon",
+        "/machines/me/browser:beacon",
         json={"transport": "webrtc", "seconds": 12.5, "fps": 29.8, "codec": "h264"},
     )
     assert beacon.status_code == 204

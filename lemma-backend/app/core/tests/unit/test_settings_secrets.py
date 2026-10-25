@@ -29,6 +29,7 @@ SECRET_FIELDS = (
     "brave_search_api_key",
     "secret_encryption_key",
     "smtp_password",
+    "ydc_api_key",
 )
 
 

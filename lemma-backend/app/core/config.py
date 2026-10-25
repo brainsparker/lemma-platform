@@ -371,12 +371,16 @@ class Settings(BaseSettings):
             "server, a gateway) via LEMMA_OPENAI_BASE_URL."
         ),
     )
-    web_search_provider: Literal["auto", "duckduckgo", "searxng", "brave"] = Field(
-        default="auto",
-        description=(
-            "Web search backend. Use duckduckgo for no-key local search, searxng "
-            "for a self-hosted instance, brave for Brave Search, or auto."
-        ),
+    web_search_provider: Literal["auto", "duckduckgo", "searxng", "brave", "youcom"] = (
+        Field(
+            default="auto",
+            description=(
+                "Web search backend. Use duckduckgo for no-key local search, "
+                "searxng for a self-hosted instance, brave for Brave Search, "
+                "youcom for You.com (free without a key, YDC_API_KEY for more), "
+                "or auto."
+            ),
+        )
     )
     usage_org_limit_overrides_json: str = Field(
         default="",
@@ -394,6 +398,14 @@ class Settings(BaseSettings):
     brave_search_api_key: Optional[SecretStr] = Field(
         default=None,
         description="Brave Search API key used when WEB_SEARCH_PROVIDER=brave.",
+    )
+    ydc_api_key: Optional[SecretStr] = Field(
+        default=None,
+        description=(
+            "Optional You.com API key. Without it, WEB_SEARCH_PROVIDER=youcom uses "
+            "the keyless free tier (100 searches/day per IP); with it, `auto` "
+            "also picks You.com after SearXNG and Brave."
+        ),
     )
     authorization_role_cache_ttl_seconds: int = Field(
         default=300,

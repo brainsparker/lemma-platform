@@ -12,6 +12,7 @@ from app.core.web_search.search_client import (
     DuckDuckGoSearchClient,
     SearchClient,
     SearXNGSearchClient,
+    YouComSearchClient,
 )
 from app.core.web_search.web_search import WebSearchRequest, search_web
 
@@ -162,3 +163,148 @@ async def test_a_failed_search_says_why() -> None:
 def test_max_results_is_bounded(max_results: int) -> None:
     with pytest.raises(ValidationError):
         WebSearchRequest(query="x", max_results=max_results)
+
+
+# -- You.com ---------------------------------------------------------------------
+
+_YOUCOM_PAYLOAD = {
+    "results": {
+        "web": [
+            {"url": "https://a.test", "title": "A", "description": "desc a"},
+            {"url": "https://b.test", "title": "B", "snippets": ["one", "two"]},
+            {"url": "", "title": "no url"},
+        ]
+    }
+}
+
+
+async def test_youcom_works_without_a_key(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "ydc_api_key", None)
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json=_YOUCOM_PAYLOAD)
+
+    response = await search_web(
+        WebSearchRequest(query="lemma harness", max_results=5),
+        client=_client(YouComSearchClient(http=_http(handler))),
+    )
+
+    assert response.success is True
+    assert [r.url for r in response.results] == ["https://a.test", "https://b.test"]
+    assert response.results[1].snippet == "one two"
+    request = seen[0]
+    assert request.method == "GET"
+    assert str(request.url).startswith(YouComSearchClient.FREE_URL)
+    assert request.url.params["query"] == "lemma harness"
+    assert request.headers["user-agent"] == YouComSearchClient.USER_AGENT
+    assert "x-api-key" not in request.headers
+
+
+async def test_youcom_with_a_key_uses_the_keyed_endpoint(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "ydc_api_key", "ydc-test")
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json=_YOUCOM_PAYLOAD)
+
+    await search_web(
+        WebSearchRequest(query="x"),
+        client=_client(YouComSearchClient(http=_http(handler))),
+    )
+
+    assert seen[0].method == "POST"
+    assert str(seen[0].url) == YouComSearchClient.KEYED_URL
+    assert seen[0].headers["x-api-key"] == "ydc-test"
+
+
+@pytest.mark.parametrize(
+    ("status", "keyed", "needle"),
+    [
+        (401, True, "rejected YDC_API_KEY"),
+        (403, False, "refused the keyless request"),
+        (402, False, "free quota is used up"),
+        (402, True, "out of credits"),
+        (429, False, "rate-limited"),
+    ],
+)
+async def test_a_youcom_refusal_is_a_failed_search(
+    monkeypatch, status: int, keyed: bool, needle: str
+) -> None:
+    monkeypatch.setattr(settings, "ydc_api_key", "k" if keyed else None)
+    http = _http(lambda request: httpx.Response(status, json={}))
+
+    response = await search_web(
+        WebSearchRequest(query="x"),
+        client=_client(YouComSearchClient(http=http)),
+    )
+
+    assert response.success is False
+    assert response.error and needle in response.error
+
+
+async def test_youcom_waits_out_a_short_retry_after(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "ydc_api_key", None)
+    slept: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        slept.append(seconds)
+
+    monkeypatch.setattr("app.core.web_search.search_client.asyncio.sleep", fake_sleep)
+    answers = iter(
+        [
+            httpx.Response(429, headers={"Retry-After": "2"}, json={}),
+            httpx.Response(200, json=_YOUCOM_PAYLOAD),
+        ]
+    )
+    http = _http(lambda request: next(answers))
+
+    response = await search_web(
+        WebSearchRequest(query="x"),
+        client=_client(YouComSearchClient(http=http)),
+    )
+
+    assert slept == [2.0]
+    assert response.success is True
+
+
+async def test_youcom_does_not_wait_out_a_long_retry_after(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "ydc_api_key", None)
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(429, headers={"Retry-After": "120"}, json={})
+
+    response = await search_web(
+        WebSearchRequest(query="x"),
+        client=_client(YouComSearchClient(http=_http(handler))),
+    )
+
+    assert len(calls) == 1
+    assert response.success is False
+    assert response.error and "retry after 120s" in response.error
+
+
+def test_auto_picks_youcom_only_when_keyed(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "web_search_provider", "auto")
+    monkeypatch.setattr(settings, "searxng_url", None)
+    monkeypatch.setattr(settings, "brave_search_api_key", None)
+
+    monkeypatch.setattr(settings, "ydc_api_key", None)
+    assert isinstance(SearchClient().search_engine, DuckDuckGoSearchClient)
+
+    monkeypatch.setattr(settings, "ydc_api_key", "ydc-test")
+    assert isinstance(SearchClient().search_engine, YouComSearchClient)
+
+
+def test_pinned_youcom_without_a_key_is_configured(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "web_search_provider", "youcom")
+    monkeypatch.setattr(settings, "ydc_api_key", None)
+
+    client = SearchClient()
+
+    assert isinstance(client.search_engine, YouComSearchClient)
+    assert client.provider_is_unconfigured is False

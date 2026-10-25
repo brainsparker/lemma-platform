@@ -746,9 +746,10 @@ EMBEDDING_PROVIDER=auto       # auto | local | openai_compat
 EMBEDDING_DIMENSION=768
 RERANKER_MODE=off             # off | local | openai_compat
 
-WEB_SEARCH_PROVIDER=auto      # auto | duckduckgo | searxng | brave
+WEB_SEARCH_PROVIDER=auto      # auto | duckduckgo | searxng | brave | youcom
 BRAVE_SEARCH_API_KEY=
 SEARXNG_URL=
+YDC_API_KEY=                  # optional; youcom works without a key (100 searches/day)
 ```
 
 ### Generation settings

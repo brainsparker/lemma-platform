@@ -1,3 +1,4 @@
+import asyncio
 from dataclasses import dataclass
 from enum import Enum
 from html import unescape
@@ -71,6 +72,7 @@ class AvailableSearchEngines(str, Enum):
     DUCKDUCKGO = "duckduckgo"
     SEARXNG = "searxng"
     BRAVE = "brave"
+    YOUCOM = "youcom"
 
 
 def apply_domain_operators(
@@ -114,6 +116,10 @@ class BaseSearchClient:
 
     def is_available(self) -> bool:
         return True
+
+    def auto_eligible(self) -> bool:
+        """Whether `auto` may pick this provider; by default, when it can search."""
+        return self.is_available()
 
     def supports(self, vertical: SearchVertical) -> bool:
         return vertical in self.supported_verticals
@@ -473,15 +479,132 @@ class BraveSearchClient(BaseSearchClient):
         )
 
 
+class YouComSearchClient(BaseSearchClient):
+    """You.com web search.
+
+    Keyless by default (the free tier, 100 searches/day per IP), so pinning
+    WEB_SEARCH_PROVIDER=youcom works with nothing else set. YDC_API_KEY moves
+    to the keyed endpoint. Under `auto` it is only picked when keyed, so a
+    deployment with no keys still lands on DuckDuckGo as before.
+    """
+
+    source = "youcom"
+    FREE_URL = "https://api.you.com/v1/agents/search"
+    KEYED_URL = "https://ydc-index.io/v1/search"
+    USER_AGENT = "youdotcom-integration/lemma-work-lemma-platform"
+    #: Longest Retry-After worth waiting out inside one tool call.
+    MAX_RETRY_AFTER_SECONDS = 5.0
+
+    _FRESHNESS = {
+        SearchFreshness.DAY: "day",
+        SearchFreshness.WEEK: "week",
+        SearchFreshness.MONTH: "month",
+        SearchFreshness.YEAR: "year",
+    }
+
+    def __init__(self, http: httpx.AsyncClient | None = None) -> None:
+        super().__init__(http)
+        self.api_key = (reveal_secret(settings.ydc_api_key) or "").strip()
+
+    def auto_eligible(self) -> bool:
+        return bool(self.api_key)
+
+    async def _send(self, query: str, count: int, freshness: Optional[str]):
+        headers = {"User-Agent": self.USER_AGENT, "Accept": "application/json"}
+        body: dict[str, object] = {"query": query, "count": count}
+        if freshness:
+            body["freshness"] = freshness
+        if self.api_key:
+            headers["X-API-Key"] = self.api_key
+            return await self.http.post(
+                self.KEYED_URL, json=body, headers=headers, timeout=15
+            )
+        return await self.http.get(
+            self.FREE_URL, params=body, headers=headers, timeout=15
+        )
+
+    @staticmethod
+    def _retry_after(response: httpx.Response) -> Optional[float]:
+        try:
+            value = float(response.headers.get("retry-after", ""))
+        except ValueError:
+            return None
+        return value if value >= 0 else None
+
+    def _refusal(self, response: httpx.Response) -> Optional[SearchRefused]:
+        code = response.status_code
+        keyed = bool(self.api_key)
+        if code in (401, 403):
+            reason = "rejected YDC_API_KEY" if keyed else "refused the keyless request"
+        elif code == 402:
+            reason = (
+                "says the account is out of credits"
+                if keyed
+                else "says today's free quota is used up; set YDC_API_KEY"
+            )
+        elif code == 429:
+            wait = self._retry_after(response)
+            reason = "rate-limited this search" + (
+                f"; retry after {wait:g}s" if wait is not None else ""
+            )
+        else:
+            return None
+        return SearchRefused(
+            f"You.com {reason} (HTTP {code}), so nothing was looked at."
+        )
+
+    async def search(
+        self,
+        query: str,
+        max_results: int = 5,
+        *,
+        vertical: SearchVertical = SearchVertical.WEB,
+        freshness: Optional[SearchFreshness] = None,
+    ) -> ProviderAnswer:
+        del vertical  # web only; the caller was told already
+        count = max(1, min(max_results, 20))
+        fresh = self._FRESHNESS[freshness] if freshness is not None else None
+        response = await self._send(query, count, fresh)
+        if response.status_code == 429:
+            wait = self._retry_after(response)
+            if wait is not None and wait <= self.MAX_RETRY_AFTER_SECONDS:
+                await asyncio.sleep(wait)
+                response = await self._send(query, count, fresh)
+        refusal = self._refusal(response)
+        if refusal is not None:
+            raise refusal
+        response.raise_for_status()
+        web = (response.json().get("results") or {}).get("web") or []
+        results = []
+        for item in web:
+            url = str(item.get("url") or "")
+            if not url:
+                continue
+            snippet = item.get("description") or " ".join(item.get("snippets") or [])
+            results.append(
+                SearchResult(
+                    title=str(item.get("title") or ""),
+                    url=url,
+                    snippet=str(snippet),
+                    source=self.source,
+                    published_at=item.get("page_age"),
+                    thumbnail_url=item.get("thumbnail_url"),
+                )
+            )
+        return ProviderAnswer(results[:max_results])
+
+
 _CLIENTS: dict[AvailableSearchEngines, type[BaseSearchClient]] = {
     AvailableSearchEngines.SEARXNG: SearXNGSearchClient,
     AvailableSearchEngines.BRAVE: BraveSearchClient,
+    AvailableSearchEngines.YOUCOM: YouComSearchClient,
     AvailableSearchEngines.DUCKDUCKGO: DuckDuckGoSearchClient,
 }
 
 _AUTO_ORDER = (
     AvailableSearchEngines.SEARXNG,
     AvailableSearchEngines.BRAVE,
+    AvailableSearchEngines.YOUCOM,
     AvailableSearchEngines.DUCKDUCKGO,
 )
 
@@ -511,7 +634,7 @@ class SearchClient:
             return _CLIENTS[AvailableSearchEngines(configured_provider)]()
         for candidate in _AUTO_ORDER:
             client = _CLIENTS[candidate]()
-            if client.is_available():
+            if client.auto_eligible():
                 return client
         return DuckDuckGoSearchClient()
 
@@ -530,7 +653,7 @@ class SearchClient:
         if self._pinned is None:
             for candidate in _AUTO_ORDER:
                 client = _CLIENTS[candidate]()
-                if client.is_available() and client.supports(vertical):
+                if client.auto_eligible() and client.supports(vertical):
                     return client, True
         return self.search_engine, False
 

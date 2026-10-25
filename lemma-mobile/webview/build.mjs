@@ -5,10 +5,12 @@
      from `lemma-frontend/src`, with the few modules that reach the network or
      the desktop shell swapped for the phone's bridge (`src/editor/shim`);
    - a PDF reader: pdf.js, which Android's WebView needs to show a PDF at all;
-   - the agent's screen: noVNC, fed by a socket the app holds (`src/vnc`).
+   - the agent's screen: noVNC, fed by a socket the app holds (`src/vnc`);
+   - a call's sound: the microphone and the speaker, with PCM to and from
+     the call's socket, which the app holds (`src/call`).
 
    Run `npm ci && npm run build` here after the web's editor changes, or
-   `npm run build -- vnc` for one page. The generated files record a hash of
+   `npm run build -- vnc call` for one page. The generated files record a hash of
    every input, and the app's tests fail when one is stale. */
 
 import { createHash } from "node:crypto";
@@ -148,4 +150,9 @@ function own(entry) {
 if (wanted("vnc")) {
     const screen = await bundle("src/vnc/main.ts", { format: "esm" });
     emit(resolve(MORE, "computer"), "vnc-page.generated.ts", own(screen).replace("<script>", '<script type="module">'), [...screen.inputs, "package-lock.json"]);
+}
+
+if (wanted("call")) {
+    const sound = await bundle("src/call/main.ts");
+    emit(resolve(MORE, "call"), "call-page.generated.ts", own(sound), [...sound.inputs, "package-lock.json"]);
 }

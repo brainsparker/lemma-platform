@@ -401,7 +401,7 @@ How it is built:
 ## G. Everything else (`src/areas/more`, `(in)/search`, `(in)/new-lemma`, `welcome`, `new-org`, `invitations`, `join`, `templates`, `import`, `remix`, `computer`, `sign-in-to-site`, `call`, `guide`)
 
 A part per key in `MoreSource` (`search`, `welcome`, `begin`, `install`,
-`share`, `computer`, `tour`), each in its own folder with its own
+`share`, `computer`, `call`, `tour`), each in its own folder with its own
 source, live and sample side and hooks. Where the web has a page, the
 phone's screen sits at the same path (`invitations/{id}/accept`,
 `import/github/{owner}/{repo}`, `remix`, `templates`,
@@ -421,7 +421,7 @@ is in (`areas/more/links.ts`, `link-return.tsx`).
 | Templates, import, remix | `site/import/install-panel.tsx`, `/templates`, `/import/github`, `/remix` | done (the journey in a tall sheet over the repository's page; an install left behind is offered back) |
 | Share a Lemma, file, table or app | `space/share-sheet.tsx` | done (one sheet; a file's public links open area C's sheet over it) |
 | The agent's computer: status, live browser, files, saved logins | `computer/*` | done (one computer per person; the live screen over a socket the app holds, full screen with Keyboard and Paste; sign-in requests at the web's path) |
-| Voice call | — | not built: main moved calls onto the API (#1025), one socket the backend holds, and the phone's call, built on the web's old in-browser voice clients and gateway, was taken out; it returns on the new socket |
+| Voice call | `call/*` | done, on the call socket the backend holds (#1025): the microphone and speaker in a WebView, the socket in React Native; offered only where the server names a voice |
 | Product tour | `tour/*` | done (over Home, offered once in the first week; Help on the account screen has it again, and how each place works) |
 
 How it is built:
@@ -444,12 +444,19 @@ How it is built:
   page. The far display is fitted to the box, so a site serves its phone
   layout. The page draws its own Keyboard / Paste / Done bar, because an
   Android WebView opens the soft keyboard only for a tap inside the page.
-- **The call.** Taken out after main moved calls onto the API (#1025): the
-  web's in-browser voice clients and its `/api/live` gateway, which the
-  phone's call ran on, are gone. A call is now one socket the backend holds
-  (microphone PCM up, the voice down, captions and canvas items as JSON).
-  The phone's first call (screen, captions, the ring) is in this PR's first
-  commit, for the port to start from.
+- **The call.** A call is a conversation the backend holds (#1025): `calls.open`
+  makes it, and one socket (the web's `openCallSocket`, here with the token
+  in a header too) carries 16 kHz PCM up, the voice down at the rate `ready`
+  names, and captions, work and canvas items as JSON. The socket is React
+  Native's; the microphone and speaker are the web's `pcm-audio.ts` in an
+  invisible WebView (`webview/src/call`, loaded on a secure address that
+  reaches nothing), and PCM crosses the bridge as base64, the voice gathered
+  for 60 ms a trip. What the Lemma shows is drawn from the chat that drew
+  it, and paging to it tells the call. The voice is briefed with the Lemma
+  (`pod-brief.ts`) and the chat the call grew out of (`history-brief.ts`).
+  Afterwards the call's own chat holds what was asked and done. The mic is
+  offered only where `calls.config` names a voice. app.json declares
+  `RECORD_AUDIO` and the iOS microphone sentence.
 - **The tour.** Controls register with `TourTarget` (Home's headline and
   cards, its ask box, search and profile buttons, the tab bar's Lemmas and
   Apps); each stop lights the real control through an even-odd scrim and
@@ -459,10 +466,10 @@ How it is built:
 - **Shared files touched** (each said in its commit): Home, the tab bar, a
   Lemma's page (Share, not one of yours), the account screen (your
   computer, organizations, Help), `+native-intent.tsx`, `(in)/_layout.tsx`,
-  `ui/ask-box.tsx` and `thread/composer.tsx`,
+  `ui/ask-box.tsx` and `thread/composer.tsx` (the mic starts a call),
   `ui/framed.tsx` (a header slot), area A's sign-in card, area B's table
   screen and area C's file screen and Files menu (Share), `webview/build.mjs`
-  (one more page), app.json.
+  (two more pages), app.json.
 
 Checked on the emulator against the local stack (light) and in sample data
 (dark), with what the local stack could not show:

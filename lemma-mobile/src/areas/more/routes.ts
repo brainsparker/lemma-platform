@@ -5,7 +5,7 @@ function query(pairs: Record<string, string | null | undefined>): string {
     return said.length ? "?" + said.map(([name, value]) => name + "=" + part(value)).join("&") : "";
 }
 
-/** Search, starting out, sharing, the agent's computer and the tour.
+/** Search, starting out, sharing, the agent's computer, calls and the tour.
  *
  *  Where a place has a page on the web, the phone's screen sits at the same
  *  path (`invitations/{id}/accept`, `import/github/{owner}/{repo}`, `remix`,
@@ -32,6 +32,8 @@ export const moreRoutes = {
     computer: (at: { podId?: string | null; conversationId?: string | null } = {}) => "/computer" + query({ pod: at.podId, conversation: at.conversationId }),
     /** A site waiting on a person to sign in, by the paused call. */
     signIn: (conversationId: string, toolCallId: string) => `/sign-in-to-site/${part(conversationId)}/${part(toolCallId)}`,
+    /** A voice call with a Lemma, about the chat that was open. */
+    call: (podId: string, conversationId?: string | null) => `/call/${part(podId)}` + query({ conversation: conversationId }),
     /** How a place works: pages, workflows, tables, apps. */
     guide: (place: "pages" | "workflows" | "tables" | "apps", podId?: string | null) => `/guide/${part(place)}` + query({ pod: podId }),
 };

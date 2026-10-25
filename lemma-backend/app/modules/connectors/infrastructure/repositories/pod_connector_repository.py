@@ -9,14 +9,11 @@ from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 
-from app.core.authorization.context import ResourceType
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.connectors.domain.pod_connector import (
     PodAccountEntity,
     PodAccountVisibility,
     PodConnectorEntity,
-    PodConnectorMode,
-    PodConnectorSource,
 )
 from app.modules.connectors.domain.errors import ConnectorConflictError
 from app.modules.connectors.domain.pod_connector_errors import (
@@ -24,13 +21,9 @@ from app.modules.connectors.domain.pod_connector_errors import (
     PodConnectorConflictError,
     PodConnectorNotFoundError,
 )
-from app.modules.connectors.infrastructure.models.auth_config import AuthConfig
 from app.modules.connectors.infrastructure.models.pod_connector import (
     PodAccount,
     PodConnector,
-)
-from app.modules.connectors.infrastructure.repositories.pod_resource_grants import (
-    copy_grants_onto,
 )
 
 #: A pod declares a handful of connectors and holds one account per member per
@@ -115,49 +108,6 @@ class PodConnectorRepository:
             .limit(LIST_LIMIT)
         )
         return list((await self.session.execute(stmt)).scalars().all())
-
-    async def migrated_for_connector(
-        self, pod_id: UUID, connector_id: str, *, besides: UUID
-    ) -> list[UUID]:
-        """The pod's MIGRATED PER_MEMBER connectors on other installations of
-        ``connector_id`` than ``besides``.
-
-        Before pod connectors, a grant on a connector covered every
-        installation of it; 0063 declared it on the default one only.
-        """
-        stmt = (
-            select(PodConnector.id)
-            .join(AuthConfig, AuthConfig.id == PodConnector.auth_config_id)
-            .where(
-                PodConnector.pod_id == pod_id,
-                PodConnector.source == PodConnectorSource.MIGRATED.value,
-                PodConnector.mode == PodConnectorMode.PER_MEMBER.value,
-                PodConnector.auth_config_id != besides,
-                AuthConfig.connector_id == connector_id,
-            )
-            .limit(LIST_LIMIT)
-        )
-        return list((await self.session.execute(stmt)).scalars().all())
-
-    async def inherit_migrated_grants(
-        self, created: PodConnectorEntity, connector_id: str
-    ) -> int:
-        """Carry the grants of the pod's MIGRATED connectors of the same kind
-        onto a connector just declared for another installation.
-
-        Only at declaration, which happens once: a grant an editor later
-        revokes stays revoked.
-        """
-        siblings = await self.migrated_for_connector(
-            created.pod_id, connector_id, besides=created.auth_config_id
-        )
-        return await copy_grants_onto(
-            self.session,
-            pod_id=created.pod_id,
-            resource_type=ResourceType.CONNECTOR,
-            from_ids=siblings,
-            to_id=created.id,
-        )
 
     async def create(self, entity: PodConnectorEntity) -> PodConnectorEntity:
         row = PodConnector(

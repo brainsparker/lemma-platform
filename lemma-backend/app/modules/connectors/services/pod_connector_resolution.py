@@ -40,7 +40,6 @@ from app.core.authorization.permissions import Permissions
 from app.core.authorization.workload_authority import invoking_person_context
 from app.core.config import settings
 from app.core.domain.errors import DomainError
-from app.core.log.log import get_logger
 from app.modules.connectors.domain.account import AccountEntity, AccountStatus
 from app.modules.connectors.domain.auth_config import (
     AuthConfigEntity,
@@ -79,8 +78,6 @@ from app.modules.connectors.services.pod_account_rule import (
     connect_url,
     needs_account,
 )
-
-logger = get_logger(__name__)
 
 #: ``(user_id, pod_id) -> Context``: a person, as themselves, in a pod. For the
 #: account half of a standing binding, whose person is not the one asking.
@@ -270,11 +267,8 @@ class PodConnectorResolver:
         account on the installation (their first use of it here), or the
         caller may declare connectors anyway (an editor importing a bundle).
         Otherwise there is nothing to serve and the answer is
-        POD_CONNECTOR_NOT_FOUND. A named agent still needs ``connector.use`` on
-        it, which ``resolve`` asks; declaring grants it only what the grant
-        0063 migrated already meant. That grant covered every installation of
-        the connector and was declared on the default one, so a connector
-        declared for another installation inherits it.
+        POD_CONNECTOR_NOT_FOUND. Declaring grants nothing: a named agent still
+        needs ``connector.use`` on it, which ``resolve`` asks.
         """
         found = await self._per_member_for(pod_id, auth_config.id)
         if found is not None:
@@ -301,7 +295,7 @@ class PodConnectorResolver:
         for _ in range(_DECLARE_ATTEMPTS):
             taken = {c.slug for c in await self.pod_connectors.list_by_pod(pod_id)}
             try:
-                created = await self.pod_connectors.create(
+                return await self.pod_connectors.create(
                     PodConnectorEntity(
                         pod_id=pod_id,
                         slug=free_slug(auth_config, taken),
@@ -316,18 +310,6 @@ class PodConnectorResolver:
                 found = await self._per_member_for(pod_id, auth_config.id)
                 if found is not None:
                     return found
-                continue
-            inherited = await self.pod_connectors.inherit_migrated_grants(
-                created, auth_config.connector_id
-            )
-            if inherited:
-                logger.info(
-                    "connectors.pod_connector.migrated_grants.inherited",
-                    pod_id=str(pod_id),
-                    slug=created.slug,
-                    grants=inherited,
-                )
-            return created
         raise PodConnectorConflictError(auth_config.name)
 
     # -- outside any pod ------------------------------------------------------

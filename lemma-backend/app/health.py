@@ -145,6 +145,17 @@ async def health_ready(request: Request):
             incident.record_failure(error_type="unavailable")
         return healthy
 
+    async def _datastore_roles() -> str:
+        """Bounded like the probes above: a slow first connect to the datastore
+        must not push the whole gather past its deadline into a 503 for a
+        component that never blocks."""
+        try:
+            return await _asyncio.wait_for(
+                query_role_health.datastore_role_state(), timeout=1.0
+            )
+        except TimeoutError:
+            return query_role_health.UNKNOWN
+
     # Concurrent, each individually bounded and the set bounded by the
     # gather. SuperTokens is in here because `initialize_supertokens` makes
     # no network call while `verify_auth` calls the core on every
@@ -159,7 +170,7 @@ async def health_ready(request: Request):
             create_inherited_task(_probe("supertokens", supertokens_core_reachable)),
             create_inherited_task(worker_readiness_state(embedded=embedded)),
             create_inherited_task(schema_migration_state()),
-            create_inherited_task(query_role_health.datastore_role_state()),
+            create_inherited_task(_datastore_roles()),
         ]
         db_ok, redis_ok, auth_ok, worker, schema, roles = await _asyncio.wait_for(
             _asyncio.gather(*tasks), timeout=2.0

@@ -566,3 +566,22 @@ def test_ready_does_not_hold_a_process_out_over_a_schema_it_could_not_read(
 
     assert r.status_code == 200
     assert r.json()["components"]["migrations"] == "unknown"
+
+
+def test_ready_does_not_wait_on_a_slow_datastore_role_probe(client, monkeypatch):
+    """The role probe never blocks readiness, so it must not be able to time
+    out the whole check either: had the gather timed out, every component
+    would be dropped, this one included."""
+    import asyncio
+
+    async def _slow() -> str:
+        await asyncio.sleep(5)
+        return "ok"
+
+    monkeypatch.setattr(
+        "app.modules.datastore.contracts.query_role_health.datastore_role_state", _slow
+    )
+
+    r = client.get("/health/ready")
+
+    assert r.json()["components"]["datastore_roles"] == "unknown"

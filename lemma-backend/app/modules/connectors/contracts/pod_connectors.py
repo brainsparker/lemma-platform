@@ -163,10 +163,8 @@ async def ensure_pod_connector_for_installation(
     the CLI fallback all come here. Declared (slug from the installation name,
     ``source`` AUTO) only when the acting person has an account on the
     installation, or the caller may declare connectors (an editor importing a
-    bundle); otherwise ``PodConnectorNotFoundError``. A named agent still
-    needs ``connector.use`` on it; the only grants declaring carries over are
-    those of the pod's MIGRATED connectors on another installation of the same
-    connector, which covered this one before 0063.
+    bundle); otherwise ``PodConnectorNotFoundError``. Declaring grants
+    nothing: a named agent still needs ``connector.use`` on it.
     """
     resolver = _resolver(uow)
     auth_config = await resolver.auth_configs.get(auth_config_id)

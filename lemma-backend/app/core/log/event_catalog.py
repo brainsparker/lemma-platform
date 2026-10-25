@@ -793,7 +793,6 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'connectors.oauth_callback.installation_left_for_an_admin': EventSpec('info', frozenset({'connector_id'})),
     'connectors.oauth_callback.installation_recorded.diagnostic': EventSpec('info', frozenset({'connector_id'})),
     'connectors.openapi_http_executor.calling_http_operation.observed': EventSpec('debug', frozenset({'connector_id', 'http_method', 'mode', 'operation_name'})),
-    'connectors.pod_connector.migrated_grants.inherited': EventSpec('info', frozenset({'grants', 'pod_id', 'slug'})),
     'connectors.pod_connector.needs_account.told': EventSpec('info', frozenset({'connectors', 'editors_told', 'pod_id'})),
     'connectors.sandbox_borrowers.withdraw_failed.degraded': EventSpec('warning', frozenset()),
     'connectors.schema_compiler.rejected_connector_schema_snippet.diagnostic': EventSpec('debug', frozenset({'error_type'})),

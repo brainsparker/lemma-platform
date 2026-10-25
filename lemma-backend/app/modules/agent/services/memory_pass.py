@@ -12,10 +12,9 @@ contract the agent writes by, with the same authority, on the same model.
   lacks is one the pass lacks, and a write drops the cached memory brief just
   as the agent's would. It reaches less, not more: memory only
   (``tools/pod/memory_pass_tools``).
-* **The same model**, unless the deployment names a cheaper one
-  (``agent_memory_pass_model``). The run's own runtime, so the turn goes to no
-  provider it had not already gone to. Asked for no reasoning, because most
-  turns end in "nothing".
+* **The same model.** The run's own runtime, so the turn goes to no provider it
+  had not already gone to. Asked for no reasoning, because most turns end in
+  "nothing".
 * **Best effort.** The answer never waited on this. A pass that fails has lost
   what the turn would once have saved before answering; the work runtime logs
   each failed attempt, and a refusal that would only repeat is not retried.
@@ -23,7 +22,7 @@ contract the agent writes by, with the same authority, on the same model.
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -38,7 +37,6 @@ from pydantic_ai.models import Model
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
-from app.modules.agent.config import agent_settings
 from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.domain.agent_memory_paths import agent_memory_paths
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation
@@ -74,7 +72,6 @@ from app.modules.agent.services.runtime_profile_service import (
     ResolvedAgentRuntime,
     runtime_profile_service_for,
 )
-from app.modules.agent.services.summarization_model import resolve_system_model
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.pod.memory_pass_tools import (
     MemoryScope,
@@ -140,23 +137,6 @@ class _FinishedTurn:
     reply_before: str | None
 
 
-#: ``(run model, organization, person) -> the model the pass runs on``.
-type PassModel = Callable[[Model, UUID | None, UUID], Awaitable[Model]]
-
-
-async def configured_pass_model(
-    run_model: Model, organization_id: UUID | None, user_id: UUID
-) -> Model:
-    """``agent_memory_pass_model`` when the deployment names one, else the run's."""
-    return await resolve_system_model(
-        agent_settings.agent_memory_pass_model,
-        organization_id=organization_id,
-        user_id=user_id,
-        fallback=run_model,
-        purpose="memory_pass",
-    )
-
-
 class OutcomeCounter(Protocol):
     def add(self, amount: int, attributes: dict[str, str] | None = None) -> None: ...
 
@@ -174,12 +154,10 @@ class MemoryPass:
         uow_factory: UnitOfWorkFactory,
         *,
         model_for: Callable[[ResolvedAgentRuntime], Model] | None = None,
-        pass_model: PassModel | None = None,
         counter: OutcomeCounter = memory_pass_counter,
     ) -> None:
         self.uow_factory = uow_factory
         self._model_for = model_for
-        self._pass_model = pass_model or configured_pass_model
         self.counter = counter
 
     async def keep(
@@ -270,8 +248,7 @@ class MemoryPass:
         memory = await AgentMemoryBriefBuilder(self.uow_factory).build(
             agent=agent, pod_id=conversation.pod_id, user_id=user_id
         )
-        run_model = (self._model_for or _run_model)(resolved)
-        model = await self._pass_model(run_model, conversation.organization_id, user_id)
+        model = (self._model_for or _run_model)(resolved)
         keeper = PydanticAIAgent(
             model,
             instructions=f"{load_memory_pass_prompt()}\n{memory}",
@@ -296,14 +273,8 @@ class MemoryPass:
             memory_enabled=True,
         )
         limits = usage_limits_for(model, _PASS_USAGE_LIMITS)
-        # The run's settings are for the run's model; a configured one gets
-        # none, as a configured summarization model does.
-        asked = unreasoned_model_settings(resolved) if model is run_model else None
-        plain = (
-            unreasoned_model_settings(resolved, ask_no_reasoning=False)
-            if model is run_model
-            else None
-        )
+        asked = unreasoned_model_settings(resolved)
+        plain = unreasoned_model_settings(resolved, ask_no_reasoning=False)
         usage = UsageExecutionContext(
             user_id=user_id,
             organization_id=conversation.organization_id,

@@ -46,11 +46,10 @@ Every package workflow does the same things, in this order:
 
 1. **Triggers**: a `v*` tag push, a published release, and a dispatch with a
    version. Only the tag push is reliable: a release created by a workflow
-   raises an event GitHub will not start runs from, and that is how 0.7.2
-   shipped no packages.
+   raises an event GitHub will not start runs from.
 2. **Resolve the version** with `release_registry.py version`, from the tag on
    a push and from the input on a dispatch. A blank or malformed version fails
-   the run; v0.8.0's tag push resolved it to nothing.
+   the run.
 3. **Ask the registry** with `release_registry.py published`. If it already
    serves this exact version, every later step is skipped and the run succeeds.
    Re-running a release is a no-op, and a repair is a plain re-run. If the

@@ -330,8 +330,16 @@ def release_runs(
     for "nothing is running".
     """
     runs = []
-    query = {"created": ">=" + since.strftime("%Y-%m-%dT%H:%M:%SZ"), "per_page": "100"}
-    if not include_dispatches:
+    since_stamp = since.strftime("%Y-%m-%dT%H:%M:%SZ")
+    query = {"per_page": "100"}
+    if include_dispatches:
+        # No `created` filter: a repair is usually a re-run of the tag push's
+        # own failed run, which keeps the creation time it had before the
+        # tracker started. Its `updated_at` moves when it is re-run, so that
+        # is what is compared, below.
+        pass
+    else:
+        query["created"] = ">=" + since_stamp
         # `branch` matches the tag too, and keeps the nightly's own runs of the
         # image release from crowding this release's off the first page.
         query["branch"] = tag
@@ -348,6 +356,9 @@ def release_runs(
             ours = item.get("head_branch") == tag or (
                 include_dispatches and item.get("event") == "workflow_dispatch"
             )
+            if include_dispatches and (item.get("updated_at") or "") < since_stamp:
+                # Untouched since the tracker started: not part of this repair.
+                ours = False
             if ours:
                 runs.append(
                     Run(

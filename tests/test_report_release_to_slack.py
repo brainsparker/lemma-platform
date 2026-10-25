@@ -423,3 +423,47 @@ def test_an_incomplete_release_fails_the_job(monkeypatch, entry, capsys):
     )
     _live(monkeypatch, pypi=True, npm=True, release=True)
     assert report.main(["v9.9.9", "--require-complete"]) == 0
+
+
+def test_following_a_repair_counts_a_rerun_of_the_tag_push(monkeypatch):
+    """A repair is usually a re-run of the tag push's failed run, which keeps
+    the creation time it had before the tracker started. So a dispatched tracker
+    must not ask by creation time, and must keep only what moved since it began."""
+    from datetime import datetime, timezone
+
+    asked = []
+
+    def runs_page(url, *_args, **_kwargs):
+        asked.append(url)
+        return {
+            "workflow_runs": [
+                {
+                    "id": 1,
+                    "run_attempt": 2,
+                    "head_branch": "v0.10.0",
+                    "event": "push",
+                    "status": "in_progress",
+                    "conclusion": None,
+                    "html_url": "u1",
+                    "created_at": "2026-10-25T08:00:00Z",
+                    "updated_at": "2026-10-25T12:05:00Z",
+                },
+                {
+                    "id": 2,
+                    "run_attempt": 1,
+                    "head_branch": "v0.10.0",
+                    "event": "push",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "html_url": "u2",
+                    "created_at": "2026-10-25T08:00:00Z",
+                    "updated_at": "2026-10-25T08:30:00Z",
+                },
+            ]
+        }
+
+    monkeypatch.setattr(report, "_read", runs_page)
+    since = datetime(2026, 10, 25, 12, 0, tzinfo=timezone.utc)
+    runs = report.release_runs("v0.10.0", since, True)
+    assert all("created" not in url for url in asked)
+    assert {run.id for run in runs} == {1}

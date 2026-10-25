@@ -27,6 +27,7 @@ the steps that use it run before any toolchain is set up.
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import re
@@ -109,7 +110,10 @@ def read_json(url: str, token: str = ""):
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as error:
         return ABSENT if error.code == 404 else None
-    except (urllib.error.URLError, TimeoutError, ValueError, OSError):
+    # `http.client.HTTPException` covers a body cut short (IncompleteRead) or a
+    # garbled status line, which are neither URLError nor OSError -- and one
+    # escaping would end a tracker that polls for hours before its summary.
+    except (urllib.error.URLError, http.client.HTTPException, TimeoutError, ValueError, OSError):
         return None
 
 

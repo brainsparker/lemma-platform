@@ -57,3 +57,18 @@ async def test_a_refused_connection_is_unknown_not_a_verdict(monkeypatch) -> Non
     state = await query_role_health.datastore_role_state(recheck_after=0)
 
     assert state == "unknown"
+
+
+async def test_a_failed_check_is_not_answered_with_the_ok_before_it(
+    monkeypatch,
+) -> None:
+    """Until the next check, the answer is the last one seen: `unknown`, not an
+    `ok` the failed check could no longer confirm."""
+    engine = _Engine([True, ConnectionRefusedError(61, "refused")])
+    monkeypatch.setattr(_ENGINE, lambda: engine)
+
+    await query_role_health.datastore_role_state(recheck_after=0)
+    failed = await query_role_health.datastore_role_state(recheck_after=0)
+    cached = await query_role_health.datastore_role_state(recheck_after=3600)
+
+    assert (failed, cached) == ("unknown", "unknown")

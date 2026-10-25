@@ -58,6 +58,9 @@ async def datastore_role_state(
             ).scalar()
     except SQLAlchemyError, OSError:
         # The ``db`` component reports a database that cannot be reached.
+        # Cached, so the answer until the next check is the last one seen,
+        # not an ``ok`` that check could no longer confirm.
+        _last_state = UNKNOWN
         return UNKNOWN
     state = OK if may else MISSING_CREATEROLE
     if state == MISSING_CREATEROLE and _last_state != MISSING_CREATEROLE:

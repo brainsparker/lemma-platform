@@ -652,6 +652,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'api.deprecated_call': EventSpec('info', frozenset({'actor_kind', 'deprecated_use', 'pod_id'})),
     'api.warm_import.failed': EventSpec('warning', frozenset({'target'})),
     'api.warm_import.ready': EventSpec('debug', frozenset({'target'})),
+    'app.health_ready.datastore_roles_probe.degraded': EventSpec('warning', frozenset({'error_type'})),
     'app.health_ready.probe_failed.failed': EventSpec('error', frozenset()),
     'apps.app_asset_resolver.branding_entitlement.diagnostic': EventSpec('warning', frozenset({'error_type', 'pod_id'})),
     'apps.app_release_retention.releases_pruned': EventSpec('info', frozenset({'app_id', 'pruned_count'})),

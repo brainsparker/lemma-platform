@@ -186,8 +186,8 @@ SKEW = [
 
 @pytest.mark.parametrize("exc", SKEW)
 def test_a_missing_column_mid_rollout_waits_uncharged(exc: Exception) -> None:
-    """A release runs new code before its migration finishes: the 0063 rollout
-    lost 37 items to `UndefinedColumn` in three attempts."""
+    """A release runs new code before its migration finishes, and work queued in
+    that window used to spend all three attempts on `UndefinedColumn`."""
     decision = decide(_spec(), FRESH, exc, NOW)
 
     assert isinstance(decision, Requeue)

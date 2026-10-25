@@ -27,23 +27,21 @@ OK = "ok"
 MISSING_CREATEROLE = "missing_createrole"
 UNKNOWN = "unknown"
 
-#: Latched once it is ``ok``; re-asked while it is not, so granting the
-#: privilege is picked up without a restart.
+#: Re-asked at most this often, whatever the last answer: granting the
+#: privilege is picked up without a restart, and revoking it is noticed.
 _RECHECK_INTERVAL_SECONDS = 60.0
 
 _last_state = UNKNOWN
 _last_checked_at: float | None = None
 
 
-async def datastore_role_state() -> str:
+async def datastore_role_state(
+    *, recheck_after: float = _RECHECK_INTERVAL_SECONDS
+) -> str:
     """``ok``, ``missing_createrole``, or ``unknown`` when it could not be asked."""
     global _last_state, _last_checked_at
-    if _last_state == OK:
-        return OK
     now = time.monotonic()
-    if _last_checked_at is not None and now - _last_checked_at < (
-        _RECHECK_INTERVAL_SECONDS
-    ):
+    if _last_checked_at is not None and now - _last_checked_at < recheck_after:
         return _last_state
     _last_checked_at = now
     from app.modules.datastore.infrastructure.session import get_datastore_engine
@@ -58,7 +56,7 @@ async def datastore_role_state() -> str:
                     )
                 )
             ).scalar()
-    except SQLAlchemyError:
+    except SQLAlchemyError, OSError:
         # The ``db`` component reports a database that cannot be reached.
         return UNKNOWN
     state = OK if may else MISSING_CREATEROLE

@@ -23,6 +23,7 @@ Probe contract:
 
 from opentelemetry import metrics
 from fastapi import APIRouter, Request
+from sqlalchemy.exc import SQLAlchemyError
 from fastapi.responses import JSONResponse
 
 from app.core.config import settings
@@ -146,14 +147,19 @@ async def health_ready(request: Request):
         return healthy
 
     async def _datastore_roles() -> str:
-        """Bounded like the probes above: a slow first connect to the datastore
-        must not push the whole gather past its deadline into a 503 for a
-        component that never blocks."""
+        """Bounded like the probes above, and answering for itself: a slow or
+        unreachable datastore must not reach the gather, whose failure reports
+        every required component down -- a 503 caused by a component that
+        never blocks."""
         try:
             return await _asyncio.wait_for(
                 query_role_health.datastore_role_state(), timeout=1.0
             )
-        except TimeoutError:
+        except (TimeoutError, SQLAlchemyError, OSError) as exc:
+            logger.warning(
+                "app.health_ready.datastore_roles_probe.degraded",
+                error_type=type(exc).__name__,
+            )
             return query_role_health.UNKNOWN
 
     # Concurrent, each individually bounded and the set bounded by the

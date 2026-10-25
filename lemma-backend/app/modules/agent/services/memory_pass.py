@@ -23,7 +23,7 @@ contract the agent writes by, with the same authority, on the same model.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -140,6 +140,23 @@ class _FinishedTurn:
     reply_before: str | None
 
 
+#: ``(run model, organization, person) -> the model the pass runs on``.
+type PassModel = Callable[[Model, UUID | None, UUID], Awaitable[Model]]
+
+
+async def configured_pass_model(
+    run_model: Model, organization_id: UUID | None, user_id: UUID
+) -> Model:
+    """``agent_memory_pass_model`` when the deployment names one, else the run's."""
+    return await resolve_system_model(
+        agent_settings.agent_memory_pass_model,
+        organization_id=organization_id,
+        user_id=user_id,
+        fallback=run_model,
+        purpose="memory_pass",
+    )
+
+
 class OutcomeCounter(Protocol):
     def add(self, amount: int, attributes: dict[str, str] | None = None) -> None: ...
 
@@ -157,10 +174,12 @@ class MemoryPass:
         uow_factory: UnitOfWorkFactory,
         *,
         model_for: Callable[[ResolvedAgentRuntime], Model] | None = None,
+        pass_model: PassModel | None = None,
         counter: OutcomeCounter = memory_pass_counter,
     ) -> None:
         self.uow_factory = uow_factory
         self._model_for = model_for
+        self._pass_model = pass_model or configured_pass_model
         self.counter = counter
 
     async def keep(
@@ -252,13 +271,7 @@ class MemoryPass:
             agent=agent, pod_id=conversation.pod_id, user_id=user_id
         )
         run_model = (self._model_for or _run_model)(resolved)
-        model = await resolve_system_model(
-            agent_settings.agent_memory_pass_model,
-            organization_id=conversation.organization_id,
-            user_id=user_id,
-            fallback=run_model,
-            purpose="memory_pass",
-        )
+        model = await self._pass_model(run_model, conversation.organization_id, user_id)
         keeper = PydanticAIAgent(
             model,
             instructions=f"{load_memory_pass_prompt()}\n{memory}",

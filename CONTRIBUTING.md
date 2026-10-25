@@ -229,8 +229,11 @@ than the window, and what exhausts it is lost.
   decision for the pod's owner, made after the migration, not by it.
 - **New deployment requirements go in the deployment docs in the same pull
   request**: a database privilege, an environment variable, an external
-  service. A requirement that is missing must fail at startup or readiness at
-  error level, not at the first request that needs it.
+  service. A missing one is found at startup or by `/health/ready`, at error
+  level, not by the first request that needs it. It blocks readiness only when
+  the process can serve nothing without it; one that breaks a single feature
+  (the datastore's `CREATEROLE`) is reported there and does not take every
+  replica out of rotation.
 - Add an Alembic upgrade and downgrade test for every migration.
 
 ## Code and comments

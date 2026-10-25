@@ -585,3 +585,21 @@ def test_ready_does_not_wait_on_a_slow_datastore_role_probe(client, monkeypatch)
     r = client.get("/health/ready")
 
     assert r.json()["components"]["datastore_roles"] == "unknown"
+
+
+def test_a_failing_datastore_role_probe_takes_nothing_else_down(client, monkeypatch):
+    """A probe error reaching the gather used to report every required
+    component down; it answers `unknown` for itself instead."""
+
+    async def _broken() -> str:
+        raise ConnectionResetError(54, "reset mid-probe")
+
+    monkeypatch.setattr(
+        "app.modules.datastore.contracts.query_role_health.datastore_role_state",
+        _broken,
+    )
+
+    components = client.get("/health/ready").json()["components"]
+
+    assert components["datastore_roles"] == "unknown"
+    assert components["supertokens"] == "ok"

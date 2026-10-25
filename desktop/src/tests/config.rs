@@ -272,6 +272,7 @@ fn a_typed_server_address_is_kept_as_its_https_origin() {
         ("agentbox.work", "https://agentbox.work"),
         ("http://localhost:3000", "http://localhost:3000"),
         ("http://127.0.0.1:3000/x", "http://127.0.0.1:3000"),
+        ("http://[::1]:3000", "http://[::1]:3000"),
     ] {
         assert_eq!(normalize_server_url(typed).as_deref(), Ok(kept), "{typed}");
     }
@@ -280,6 +281,8 @@ fn a_typed_server_address_is_kept_as_its_https_origin() {
         "   ",
         "http://lemma.example.com",
         "http://app.lemma.localhost:63288",
+        "https://app.lemma.localhost:63288",
+        "https://anything.localhost",
         "ftp://lemma.example.com",
         "https://person:secret@lemma.example.com",
         "https://",

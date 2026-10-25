@@ -96,13 +96,13 @@ async fn a_probed_model_and_reasoning_level_are_applied_to_a_real_turn() {
             eprintln!("{agent}:   {name}: effort {effort:?}");
         }
         // A model other than the default that has a reasoning level to pick,
-        // so both halves of the choice are exercised in one turn.
+        // so both halves of the choice are exercised in one turn. Never the
+        // default model: a turn on it would pass without proving a choice.
         let (chosen_model, effort_id, chosen_effort) = models
             .iter()
             // `default` is a placeholder for whatever the agent picks, not a
             // model: choosing it proves nothing about honouring a choice.
             .filter(|name| **name != default_model && name.as_str() != "default")
-            .chain(std::iter::once(&default_model))
             .find_map(|name| {
                 let options = options_for_model(&probed.config_options, name);
                 let effort = effort_option(&options)?;
@@ -112,7 +112,9 @@ async fn a_probed_model_and_reasoning_level_are_applied_to_a_real_turn() {
                     .find(|value| value != current && value != "default")?;
                 Some((name.clone(), effort.id.clone(), value))
             })
-            .unwrap_or_else(|| panic!("{agent} offers no reasoning level on any model"));
+            .unwrap_or_else(|| {
+                panic!("{agent} offers no model besides its default with a reasoning level to pick")
+            });
         eprintln!("{agent}: running on {chosen_model} with {effort_id}={chosen_effort}");
 
         let callbacks = Arc::new(StreamCapture::default());

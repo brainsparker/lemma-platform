@@ -398,7 +398,7 @@ self-hosted or staging server the person connects to from the chooser is
 granted the same commands at runtime, and only after it has answered as a Lemma
 server; it then replaces Lemma Cloud as the one hosted origin, so the Agent
 Host pairs only with it or its subdomains over HTTPS. Plain http is accepted
-only for `localhost` and `127.0.0.1`: `*.localhost` is the local workspace's
+only for `localhost`, `127.0.0.1` and `[::1]`: `*.localhost` is the local workspace's
 own name, whose alias ports serve pod apps' code. A
 shared origin — the LAN address or the tunnel host — is in no capability, and
 that ACL is what keeps it out. The Agent Host commands' Rust check

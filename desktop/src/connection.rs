@@ -80,6 +80,13 @@ pub(crate) fn normalize_server_url(raw: &str) -> Result<String, String> {
             "Leave the sign-in out of the address. You sign in on the server itself.".into(),
         );
     }
+    // Refused by name, whatever the scheme: the guard above must not rest on
+    // the alias ports happening to serve plain http today.
+    if host.ends_with(".localhost") {
+        return Err(format!(
+            "{host} is this computer's own Lemma. Choose Use Local Lemma instead."
+        ));
+    }
     let loopback = matches!(host.as_str(), "localhost" | "127.0.0.1" | "[::1]");
     match url.scheme() {
         "https" => {}

@@ -142,7 +142,7 @@ describe("the sample, read as the screens read it", () => {
         const github = await run(source.signIn("sample-acme", { connectorId: "github", installId: null }));
         expect(github.kind).toBe("unfinished");
         if (github.kind !== "unfinished") return;
-        expect(github.trouble).toBe("Needs installing before it can reach anything");
+        expect(github.trouble).toBe("GitHub needs reconnecting: its triggers and actions reach nothing until it is installed");
         expect(await run(source.finishInstall("sample-acme", github.accountId))).toEqual({ kind: "installed" });
 
         const choose = await run(source.finishInstall("sample-acme", "acc-github-2"));

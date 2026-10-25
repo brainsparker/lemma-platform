@@ -72,7 +72,7 @@ $EDITOR lemma-cli/lemma_cli/__init__.py        # __version__ = "X.Y.Z"
 # 2. Build (setup.py vendors the canonical repo-root skills automatically)
 cd lemma-cli && uv build && cd ..
 
-# 3. VERIFY both commands print the same count (currently 12)
+# 3. VERIFY both commands print the same count (currently 13)
 find lemma-skills -mindepth 2 -maxdepth 2 -name SKILL.md | wc -l
 unzip -l lemma-cli/dist/lemma_terminal-*.whl | grep -c 'SKILL.md$'
 

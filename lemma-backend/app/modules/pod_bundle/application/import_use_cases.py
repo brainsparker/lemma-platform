@@ -245,15 +245,15 @@ class ImportUseCases:
 
         # Abuse guard: count this import against the user's daily cap (separate
         # bucket from exports) once POD_UPDATE is authorized. Staging an upload
-        # is not counted — only starting the plan/apply pipeline is — and nor
-        # is a template: what it carries ships with this server, so its cost is
-        # small and known, and the allowance is for bundles people author.
-        if kind is not BundleSourceKind.TEMPLATE:
-            await self._rate_limiter.check_and_increment(
-                user_id=user_id,
-                operation="import",
-                limit=pod_bundle_settings.pod_bundle_daily_import_limit,
-            )
+        # is not counted — only starting the plan/apply pipeline is. A template
+        # counts too: into an existing pod it adds tables and schedules like any
+        # bundle, and schedules start runs that cost money. A brand-new pod's
+        # start (`start_use_cases`) stages its template without coming here.
+        await self._rate_limiter.check_and_increment(
+            user_id=user_id,
+            operation="import",
+            limit=pod_bundle_settings.pod_bundle_daily_import_limit,
+        )
 
         import_id = uuid4()
 

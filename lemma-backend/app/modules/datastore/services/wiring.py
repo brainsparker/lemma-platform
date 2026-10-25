@@ -94,4 +94,5 @@ def build_outcome_standing_service(uow) -> OutcomeStandingService:
         outcomes=outcome_of,
         measures=build_outcome_measure_service(uow),
         weeks=OutcomeWeekRepository(uow.session),
+        session=uow.session,
     )

@@ -81,7 +81,11 @@ POD_TOOL_POLICIES: dict[str, ToolPolicy] = {
     # Writes the pod's config, so `pod:write`. Not destructive -- it replaces
     # only what the pod owned, which the same call can put back -- and
     # idempotent: the same outcome set twice is the same outcome.
-    "set_what_you_own": ToolPolicy("Set what the pod owns", Scope.WRITE),
+    # It replaces the outcome whole, and a new measure restarts its weeks, so a
+    # client that confirms destructive calls confirms this one.
+    "set_what_you_own": ToolPolicy(
+        "Set what the pod owns", Scope.WRITE, destructive=True
+    ),
 }
 
 _WRITE_UNLESS_KNOWN = ToolPolicy(

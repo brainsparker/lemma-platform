@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic_ai.tools import RunContext, Tool
+from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
 from app.core.authorization.permissions import Permissions
@@ -300,10 +300,12 @@ pod_toolset = FunctionToolset[BaseAgentContext](
         pod_view_document_pages,
         pod_get_file_url,
         pod_search_files,
-        # Behind ToolSearch on its own: setting what the pod owns happens in the
-        # setup chat and seldom after, so it carries no schema on every turn.
-        # In this toolset rather than one of its own so it reaches the pod MCP
-        # surface and every agent with POD, like the rest.
-        Tool(set_what_you_own, defer_loading=True),
+        # Visible, not deferred: only the pod default runs with ToolSearch, so a
+        # named agent with POD never saw a deferred tool or a hint that it was
+        # there, while the brief told it to call it. And on a provider without
+        # native tool search a reveal rewrites the tool list mid-run, which
+        # costs the cached prompt more than one stable schema does. In this
+        # toolset so it reaches the pod MCP surface and every agent with POD.
+        set_what_you_own,
     ]
 )

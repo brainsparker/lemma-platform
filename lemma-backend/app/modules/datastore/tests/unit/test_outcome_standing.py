@@ -86,12 +86,27 @@ def test_weeks_start_on_monday():
     assert week_starting(date(2026, 10, 19)) == date(2026, 10, 19)
 
 
+class _MemoryCache:
+    """Redis, as the standing cache uses it, in this process."""
+
+    def __init__(self) -> None:
+        self.values: dict[str, object] = {}
+
+    async def get_json(self, suffix: str) -> object | None:
+        return self.values.get(suffix)
+
+    async def set_json(self, suffix: str, value: object) -> None:
+        self.values[suffix] = value
+
+
 class _Measures:
     def __init__(self, result: MeasureResult) -> None:
         self.result = result
+        self.reads = 0
 
     async def read(self, *, pod_id: UUID, sql: str) -> MeasureResult:
         del pod_id, sql
+        self.reads += 1
         return self.result
 
 
@@ -132,7 +147,10 @@ class _Weeks:
 
 
 def _service(
-    outcome: PodOutcome | None, result: MeasureResult, weeks: _Weeks | None = None
+    outcome: PodOutcome | None,
+    result: MeasureResult,
+    weeks: _Weeks | None = None,
+    readings: _MemoryCache | None = None,
 ) -> OutcomeStandingService:
     async def outcome_of(pod_id: UUID) -> PodOutcome | None:
         del pod_id
@@ -143,6 +161,7 @@ def _service(
         measures=_Measures(result),  # type: ignore[arg-type]
         weeks=weeks or _Weeks(),  # type: ignore[arg-type]
         clock=lambda: NOW,
+        readings=readings or _MemoryCache(),
     )
 
 
@@ -220,3 +239,22 @@ async def test_nothing_is_read_for_a_pod_with_no_measure():
     history = await _service(None, _read(1)).history(uuid4(), weeks=3)
     assert [slot.week for slot in history] == [None, None, None]
     assert history[0].starts_on == date(2026, 10, 19) - timedelta(weeks=2)
+
+
+@pytest.mark.asyncio
+async def test_the_number_now_is_read_once_for_everyone_asking_within_the_window():
+    """Any member can ask, and a page may poll, while the measure reads every
+    row of its tables: so a pod's number is read once and served from the
+    cache to the asks that follow. A new measure is another entry at once."""
+    pod_id = uuid4()
+    readings = _MemoryCache()
+    service = _service(_owns(), _read(3), readings=readings)
+    measures = service._measures  # type: ignore[attr-defined]
+
+    first = await service.standing(pod_id)
+    again = await service.standing(pod_id)
+
+    assert measures.reads == 1
+    assert first.reading == again.reading
+    edited = _service(_owns(MEASURE + " AND true"), _read(4), readings=readings)
+    assert (await edited.standing(pod_id)).reading.value == 4

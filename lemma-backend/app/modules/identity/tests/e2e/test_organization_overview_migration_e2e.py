@@ -1,4 +1,4 @@
-"""Migration 0064 adds `organization_members.home_seen_at` and the index a
+"""Migration 0065 adds `organization_members.home_seen_at` and the index a
 pod's workflow runs are read by time through.
 
 A member already there when it runs has not looked at Home yet: the column is
@@ -24,8 +24,8 @@ from app.core.test_utils import get_postgres_container, get_postgres_url
 pytestmark = [pytest.mark.e2e, pytest.mark.slow]
 
 BACKEND = Path(__file__).resolve().parents[5]
-BEFORE = "0063_pod_connectors"
-REVISION = "0064_organization_overview"
+BEFORE = "0064_grants_every_install"
+REVISION = "0065_organization_overview"
 INDEX = "ix_workflow_flow_runs_pod_created"
 
 

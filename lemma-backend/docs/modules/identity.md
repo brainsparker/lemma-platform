@@ -96,7 +96,7 @@ twin `origin_column`, held to each other by
 `test_conversation_origin_sql_agrees_e2e`; the web client reads the same keys.
 
 The workflow runs are read by `ix_workflow_flow_runs_pod_created`, which
-migration 0064 adds; conversations by `ix_agent_conv_user_pod_roots_activity`,
+migration 0065 adds; conversations by `ix_agent_conv_user_pod_roots_activity`,
 one lateral range per pod for the chats; schedule fires by
 `ix_schedule_runs_schedule_fires`. Nothing here is cached: Needs you is what a
 person acts on, and a stale list is the failure it exists to prevent.

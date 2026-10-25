@@ -63,6 +63,12 @@ def healthy_by_default(monkeypatch):
     monkeypatch.setattr(
         healthmod, "schema_migration_state", AsyncMock(return_value="current")
     )
+    # The datastore's own probe, stubbed where it lives: a collaborator of the
+    # endpoint, which reads it through its module.
+    monkeypatch.setattr(
+        "app.modules.datastore.contracts.query_role_health.datastore_role_state",
+        AsyncMock(return_value="ok"),
+    )
     _worker_redis(monkeypatch)
 
 
@@ -153,6 +159,7 @@ def test_ready_returns_200_when_dependencies_ok(client, monkeypatch):
         "redis": "ok",
         "supertokens": "ok",
         "migrations": "current",
+        "datastore_roles": "ok",
     }
 
 

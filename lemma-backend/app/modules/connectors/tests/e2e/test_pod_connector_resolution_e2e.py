@@ -14,12 +14,15 @@ provider patched to report which account's credential reached it.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import select, update
 from starlette import status
 
+from app.core.authorization.grant_generation import AGENT_GRANTEE
+from app.core.authorization.models import ResourcePermissionGrantModel
+from app.core.authorization.permissions import Permissions
 from app.core.authorization.service import AuthorizationDataService
 from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.db.session import async_session_maker
@@ -29,6 +32,7 @@ from app.core.infrastructure.work.testing import run_until_idle
 from app.modules.channels.infrastructure.models import ChannelMessageModel
 from app.modules.connectors.contracts.pod_connectors import (
     PodConnectorMode,
+    ensure_pod_connector_for_installation,
     pod_connector_for_account,
     resolve_standing_pod_connector,
 )
@@ -112,6 +116,102 @@ async def _standing(db_session, world: World, slug: str, **kwargs):
         record_use=False,
         **kwargs,
     )
+
+
+# -- grants 0063 migrated -----------------------------------------------------
+
+
+async def _connector_grants(db_session, pod_connector_id: UUID) -> set[tuple]:
+    db_session.expire_all()
+    rows = await db_session.execute(
+        select(
+            ResourcePermissionGrantModel.grantee_type,
+            ResourcePermissionGrantModel.grantee_id,
+            ResourcePermissionGrantModel.permission_id,
+        ).where(ResourcePermissionGrantModel.resource_id == pod_connector_id)
+    )
+    return set(rows.all())
+
+
+async def test_another_installation_inherits_the_grant_0063_migrated(
+    scenario, db_session
+):
+    """A grant on a connector used to cover every installation of it; 0063
+    declared it on the default one only. A workflow that called the other
+    installation then got a new connector with no grant, and a 403 every
+    hour. Declared once, it inherits; revoked afterwards, it stays revoked."""
+    world = await _world(scenario, db_session)
+    first = await db_session.get(AuthConfig, UUID(world.auth_config_id))
+    second = AuthConfig(
+        organization_id=first.organization_id,
+        connector_id=first.connector_id,
+        kind=first.kind,
+        config_source="SYSTEM_DEFAULT",
+        status="ACTIVE",
+        name=f"{first.connector_id}-second",
+    )
+    db_session.add(second)
+    migrated = PodConnector(
+        pod_id=UUID(world.pod_id),
+        slug=first.connector_id,
+        auth_config_id=first.id,
+        mode="PER_MEMBER",
+        visibility="POD",
+        source="MIGRATED",
+    )
+    db_session.add(migrated)
+    await db_session.flush()
+    agent_id = uuid4()
+    db_session.add(
+        ResourcePermissionGrantModel(
+            pod_id=UUID(world.pod_id),
+            resource_type="connector",
+            resource_id=migrated.id,
+            grantee_type=AGENT_GRANTEE,
+            grantee_id=agent_id,
+            permission_id=Permissions.CONNECTOR_USE,
+        )
+    )
+    await AccountRepository(
+        SqlAlchemyUnitOfWork(db_session), encryption=get_secret_cipher()
+    ).create(
+        AccountEntity(
+            user_id=UUID(world.alice["id"]),
+            organization_id=second.organization_id,
+            auth_config_id=second.id,
+            connector_id=second.connector_id,
+            is_default=True,
+            credentials={"api_key": "alice-second"},
+        )
+    )
+    second_id, migrated_id = second.id, migrated.id
+    await db_session.commit()
+
+    async def declare() -> PodConnectorEntity:
+        declared = await ensure_pod_connector_for_installation(
+            SqlAlchemyUnitOfWork(db_session),
+            await _ctx(db_session, world, world.alice),
+            pod_id=UUID(world.pod_id),
+            auth_config_id=second_id,
+        )
+        await db_session.commit()
+        return declared
+
+    declared = await declare()
+
+    assert declared.id != migrated_id
+    assert await _connector_grants(db_session, declared.id) == {
+        (AGENT_GRANTEE, agent_id, Permissions.CONNECTOR_USE)
+    }
+
+    await db_session.execute(
+        ResourcePermissionGrantModel.__table__.delete().where(
+            ResourcePermissionGrantModel.resource_id == declared.id
+        )
+    )
+    await db_session.commit()
+    assert (await declare()).id == declared.id
+    assert await _connector_grants(db_session, declared.id) == set()
 
 
 # -- implicit access and the deprecated execute ------------------------------

@@ -53,10 +53,13 @@ a wheel built outside it.
    [`lemma_cli/__init__.py`](lemma_cli/__init__.py) (`__version__`); pyproject reads
    it dynamically. The release workflow also sets it from the tag, so this is
    mostly for local correctness.
-2. Push a tag and publish a GitHub Release named `vX.Y.Z`.
+2. Push the tag `vX.Y.Z`. That is the release: see
+   [Publishing](../docs/versioning.md#publishing).
 3. The [`Release Lemma Terminal CLI`](../.github/workflows/release-lemma-terminal.yml)
-   workflow then: sets the version from the tag → vendors skills → `python -m
-   build` → asserts the wheel has skills → `twine check` → `twine upload`.
+   workflow then: resolves the version → stops, successfully, if PyPI already
+   has it → sets the version from the tag → vendors skills → `python -m build`
+   → asserts the wheel has skills → `twine check` → waits for the matching
+   `lemma-sdk` → `twine upload` → confirms PyPI serves it.
 
 Requires the `PYPI_API_TOKEN` repository secret (shared with the other release
 workflows).

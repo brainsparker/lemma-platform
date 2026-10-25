@@ -284,7 +284,7 @@ describe("the list", () => {
 
     it("marks the typed letters for medium weight, nothing else", () => {
         const [hit] = rank(catalogueHits(SUPPORT, "apps", { items: [{ name: "ticket-queue" }] }), "que");
-        expect(highlight(hit.title, hit.ranges)).toEqual([{ text: "Ticket ", hit: false }, { text: "Que", hit: true }, { text: "ue", hit: false }]);
+        expect(highlight(hit.title, hit.ranges)).toEqual([{ text: "Ticket ", hit: false }, { text: "Que", hit: true }, { text: "ue", hit: false }]); // typos: ignore
     });
 
     it("asks the server only from two letters, and fewer files each when every Lemma is asked", () => {

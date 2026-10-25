@@ -54,20 +54,24 @@ export function blocksOf(tokens: readonly LexedToken[]): Block[] {
     return blocks;
 }
 
+const ENTITIES: Record<string, string> = { nbsp: " ", amp: "&", lt: "<", gt: ">", quot: "\"", "#39": "'" };
+
 /** HTML an agent wrote, as the words in it. The web renders a small
  *  sanitised subset; a phone's markdown view would print the tags, so they
- *  go and the text stays. */
+ *  go and the text stays. Tags are taken out until none is left (one split
+ *  by another, `<scr<b>ipt>`, goes too) and a stray angle bracket with them;
+ *  entities are read once, last, so `&amp;lt;` stays the text `&lt;`. */
 export function withoutTags(html: string): string {
-    return html
+    let text = html
         .replace(/<\s*br\s*\/?>/gi, "\n")
-        .replace(/<\/(p|div|li|tr|h[1-6]|summary|details)\s*>/gi, "\n")
-        .replace(/<[^>]*>/g, "")
-        .replace(/&nbsp;/g, " ")
-        .replace(/&amp;/g, "&")
-        .replace(/&lt;/g, "<")
-        .replace(/&gt;/g, ">")
-        .replace(/&quot;/g, "\"")
-        .replace(/&#39;/g, "'")
+        .replace(/<\/(p|div|li|tr|h[1-6]|summary|details)\s*>/gi, "\n");
+    for (let before = ""; before !== text;) {
+        before = text;
+        text = text.replace(/<[^<>]*>/g, "");
+    }
+    return text
+        .replace(/[<>]/g, "")
+        .replace(/&(nbsp|amp|lt|gt|quot|#39);/g, (_, name: string) => ENTITIES[name])
         .replace(/\n{3,}/g, "\n\n")
         .trim();
 }

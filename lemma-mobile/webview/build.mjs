@@ -5,9 +5,7 @@
      from `lemma-frontend/src`, with the few modules that reach the network or
      the desktop shell swapped for the phone's bridge (`src/editor/shim`);
    - a PDF reader: pdf.js, which Android's WebView needs to show a PDF at all;
-   - the agent's screen: noVNC, fed by a socket the app holds (`src/vnc`);
-   - a call's sound: the microphone, the speaker and the voice server's
-     socket (`src/call`).
+   - the agent's screen: noVNC, fed by a socket the app holds (`src/vnc`).
 
    Run `npm ci && npm run build` here after the web's editor changes, or
    `npm run build -- vnc` for one page. The generated files record a hash of
@@ -25,7 +23,7 @@ const web = resolve(mobile, "../lemma-frontend/src");
 const FILES = resolve(mobile, "src/areas/files/web");
 const MORE = resolve(mobile, "src/areas/more");
 
-/** The pages asked for (`npm run build -- vnc call`), or all of them. */
+/** The pages asked for (`npm run build -- vnc`), or all of them. */
 const asked = process.argv.slice(2);
 const wanted = (page) => asked.length === 0 || asked.includes(page);
 
@@ -150,9 +148,4 @@ function own(entry) {
 if (wanted("vnc")) {
     const screen = await bundle("src/vnc/main.ts", { format: "esm" });
     emit(resolve(MORE, "computer"), "vnc-page.generated.ts", own(screen).replace("<script>", '<script type="module">'), [...screen.inputs, "package-lock.json"]);
-}
-
-if (wanted("call")) {
-    const sound = await bundle("src/call/main.ts");
-    emit(resolve(MORE, "call"), "call-page.generated.ts", own(sound), [...sound.inputs, "package-lock.json"]);
 }

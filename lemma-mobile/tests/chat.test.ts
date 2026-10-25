@@ -199,6 +199,12 @@ describe("markdown, block by block", () => {
         expect(withoutTags("<div style=\"color:red\">Status: <b>green</b></div><br><details><summary>More</summary>Fine &amp; well</details>"))
             .toBe("Status: green\n\nMore\nFine & well");
     });
+
+    it("leaves no tag behind, and reads an entity once", () => {
+        expect(withoutTags("<scr<b>ipt>alert(1)</script>")).toBe("alert(1)");
+        expect(withoutTags("a <b and c")).toBe("a b and c");
+        expect(withoutTags("&amp;lt;b&amp;gt; &lt;i&gt;")).toBe("&lt;b&gt; <i>");
+    });
 });
 
 describe("what the thread draws", () => {

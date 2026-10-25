@@ -401,7 +401,7 @@ How it is built:
 ## G. Everything else (`src/areas/more`, `(in)/search`, `(in)/new-lemma`, `welcome`, `new-org`, `invitations`, `join`, `templates`, `import`, `remix`, `computer`, `sign-in-to-site`, `call`, `guide`)
 
 A part per key in `MoreSource` (`search`, `welcome`, `begin`, `install`,
-`share`, `computer`, `call`, `tour`), each in its own folder with its own
+`share`, `computer`, `tour`), each in its own folder with its own
 source, live and sample side and hooks. Where the web has a page, the
 phone's screen sits at the same path (`invitations/{id}/accept`,
 `import/github/{owner}/{repo}`, `remix`, `templates`,
@@ -421,7 +421,7 @@ is in (`areas/more/links.ts`, `link-return.tsx`).
 | Templates, import, remix | `site/import/install-panel.tsx`, `/templates`, `/import/github`, `/remix` | done (the journey in a tall sheet over the repository's page; an install left behind is offered back) |
 | Share a Lemma, file, table or app | `space/share-sheet.tsx` | done (one sheet; a file's public links open area C's sheet over it) |
 | The agent's computer: status, live browser, files, saved logins | `computer/*` | done (one computer per person; the live screen over a socket the app holds, full screen with Keyboard and Paste; sign-in requests at the web's path) |
-| Voice call | `call/*` | done (the call's sound in a WebView, routing on the phone's session; see below for what a device could and could not show) |
+| Voice call | — | not built: main moved calls onto the API (#1025), one socket the backend holds, and the phone's call, built on the web's old in-browser voice clients and gateway, was taken out; it returns on the new socket |
 | Product tour | `tour/*` | done (over Home, offered once in the first week; Help on the account screen has it again, and how each place works) |
 
 How it is built:
@@ -444,15 +444,12 @@ How it is built:
   page. The far display is fitted to the box, so a site serves its phone
   layout. The page draws its own Keyboard / Paste / Done bar, because an
   Android WebView opens the soft keyboard only for a tap inside the page.
-- **The call.** The web's call is not WebRTC: a WebSocket to the web
-  server's `/api/live` or `/api/voice` gateway carrying base64 PCM, with the
-  microphone and speaker in Web Audio. The phone runs the web's own voice
-  clients in an invisible WebView loaded with the web as its base URL (a
-  secure context), and only words cross the bridge; the routing (the web's
-  `ConversationRouter` and the decisions API, streaming over the pod
-  socket) runs in React Native. app.json declares `RECORD_AUDIO` and the
-  iOS microphone sentence; expo-image-picker and expo-audio had been told
-  to strip both.
+- **The call.** Taken out after main moved calls onto the API (#1025): the
+  web's in-browser voice clients and its `/api/live` gateway, which the
+  phone's call ran on, are gone. A call is now one socket the backend holds
+  (microphone PCM up, the voice down, captions and canvas items as JSON).
+  The phone's first call (screen, captions, the ring) is in this PR's first
+  commit, for the port to start from.
 - **The tour.** Controls register with `TourTarget` (Home's headline and
   cards, its ask box, search and profile buttons, the tab bar's Lemmas and
   Apps); each stop lights the real control through an even-odd scrim and
@@ -462,10 +459,10 @@ How it is built:
 - **Shared files touched** (each said in its commit): Home, the tab bar, a
   Lemma's page (Share, not one of yours), the account screen (your
   computer, organizations, Help), `+native-intent.tsx`, `(in)/_layout.tsx`,
-  `ui/ask-box.tsx` and `thread/composer.tsx` (the mic starts a call),
+  `ui/ask-box.tsx` and `thread/composer.tsx`,
   `ui/framed.tsx` (a header slot), area A's sign-in card, area B's table
   screen and area C's file screen and Files menu (Share), `webview/build.mjs`
-  (two more pages), app.json.
+  (one more page), app.json.
 
 Checked on the emulator against the local stack (light) and in sample data
 (dark), with what the local stack could not show:
@@ -486,16 +483,8 @@ Checked on the emulator against the local stack (light) and in sample data
   validation: `ScheduleCreateEntity` wants `table_name`, the bundle names
   `datastore`; Lemma GTM's app build step fails on this stack). Finishing is
   checked in sample data.
-- The call: the local stack has no voice key, and says so. Against a
-  stand-in web server running the web's own `/api/live` gateway over a
-  fake voice model (no key, no third party), the phone asked for the
-  microphone, carried about 2.9 MB of real microphone audio through its
-  WebView to the gateway over a minute, showed the live call and its
-  captions, routed what was "said" through the backend's decisions API, and
-  ended cleanly. A real spoken conversation needs a deployment with a voice
-  key. iOS was not run.
 - In sample data, dark: every screen above, from the first profile step and
-  search to the scripted call and the tour started from Help. That pass found
+  search to the tour started from Help. That pass found
   and fixed five things: a second join or invitation link kept the first's
   answer; the tour, started from Help over another screen, lit Home's
   controls through it; Arrival offered an invitation to the organization you
@@ -509,11 +498,9 @@ Not done here:
   once the web serves `assetlinks.json` (and, for iOS, an
   `apple-app-site-association` with associated domains). Until then they open
   in the browser; `lemma://` links open the app now.
-- A real spoken call needs a deployment with a voice key (above).
 - Finishing an install against a real server waits on the two backend
   failures above.
 - Sample data: Acme, with Ada; each part has its own `sample.ts`. The
   invitations, Lemmas to join (`sample-closed`, `sample-waiting`,
   `sample-open-door`, `sample-missing`), the computer and its sign-in request
-  (`sign-in-to-site/launch-press/call-s2`) and a scripted call (Support,
-  Launch) each have an id for every state.
+  (`sign-in-to-site/launch-press/call-s2`) each have an id for every state.

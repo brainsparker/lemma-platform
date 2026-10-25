@@ -1,5 +1,4 @@
 import type { BeginSource } from "./begin/source";
-import type { CallSource } from "./call/source";
 import type { ComputerSource } from "./computer/source";
 import type { InstallSource } from "./install/source";
 import type { SearchSource } from "./search/source";
@@ -7,7 +6,7 @@ import type { ShareSource } from "./share/source";
 import type { TourSource } from "./tour/source";
 import type { WelcomeSource } from "./welcome/source";
 
-/** Search, starting out, sharing, the agent's computer, calls and the tour
+/** Search, starting out, sharing, the agent's computer and the tour
  *  (PARITY.md, G).
  *
  *  Everything these screens read or change, part by part, each part in its
@@ -30,8 +29,6 @@ export interface MoreSource {
     /** The computer the Lemmas work on: its state, screen, files and logins;
      *  a site waiting on a person to sign in. */
     computer: ComputerSource;
-    /** A voice call with a Lemma. */
-    call: CallSource;
     /** The tour, and how each place works. */
     tour: TourSource;
 }

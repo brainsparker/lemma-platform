@@ -4,7 +4,7 @@ import { Image } from "expo-image";
 import Animated, { FadeOutDown, ReduceMotion, SlideInDown } from "react-native-reanimated";
 import { useIsMutating } from "@tanstack/react-query";
 import type { PickedFile } from "../data/io";
-import { MicButton, SendButton } from "../ui/ask-box";
+import { SendButton } from "../ui/ask-box";
 import { AttachToggle, AttachTray } from "../ui/files-in-chat";
 import { Icon } from "../ui/icons";
 import { spring } from "../ui/motion";
@@ -98,7 +98,6 @@ export const Composer = memo(function Composer({
     onTall,
     draftKey,
     model,
-    onCall,
     tone = color.ink,
     onTone = color.onInk,
 }: {
@@ -126,7 +125,6 @@ export const Composer = memo(function Composer({
     draftKey: string | null;
     model?: ReactNode;
     /** A voice call about this chat (area G); none where there is no call. */
-    onCall?: () => void;
     /** Send, and what is chosen in the tray, in the Lemma's colour. */
     tone?: string;
     onTone?: string;
@@ -324,7 +322,6 @@ export const Composer = memo(function Composer({
                     ) : null}
                     {actions.send ? (
                         <>
-                            {!actions.stop ? <MicButton onPress={onCall} /> : null}
                             <SendButton ready={ready && !busy && !savingModel} onPress={() => { setTray(false); void send(); }} label={canStop ? "Send. Heard as soon as the work in progress allows" : "Send"} tone={tone} onTone={onTone} />
                         </>
                     ) : null}

@@ -89,7 +89,7 @@ describe("typing on a phone, as key presses", () => {
         expect(typedKeys("abc", "abcd")).toEqual([0x64]);
         expect(typedKeys("abc", "ab")).toEqual([KEY.backspace]);
         /* An autocorrection: rub out from the first difference, type again. */
-        expect(typedKeys("__teh", "__the")).toEqual([KEY.backspace, KEY.backspace, 0x68, 0x65]);
+        expect(typedKeys("__teh", "__the")).toEqual([KEY.backspace, KEY.backspace, 0x68, 0x65]); // typos: ignore
         expect(typedKeys("__", "__\n")).toEqual([KEY.enter]);
         expect(typedKeys("__", "__")).toEqual([]);
         /* A character outside the BMP is one key, and one Backspace. */

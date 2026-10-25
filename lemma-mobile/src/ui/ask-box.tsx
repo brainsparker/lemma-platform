@@ -2,10 +2,8 @@ import { useState } from "react";
 import { Alert, Keyboard, ScrollView, TextInput, View } from "react-native";
 import { Image } from "expo-image";
 import Animated, { FadeOutDown, ReduceMotion, SlideInDown } from "react-native-reanimated";
-import { useRouter } from "expo-router";
 import type { PickedFile } from "../data/io";
 import type { Lemma } from "../data/types";
-import { moreRoutes } from "../areas/more/routes";
 import { NOTHING_TYPED, offered } from "../thread/attachments";
 import { LemmaFace } from "./face";
 import { AttachToggle, AttachTray } from "./files-in-chat";
@@ -39,17 +37,6 @@ export function SendButton({ ready, onPress, label = "Send", tone = color.ink, o
             style={{ width: 34, height: 34, borderRadius: 17, backgroundColor: ready ? tone : color.idle, alignItems: "center", justifyContent: "center" }}
         >
             <Icon name="send" size={16} width={2} tone={ready ? onTone : color.idleInk} />
-        </Press>
-    );
-}
-
-/** A voice call with the Lemma the box is for (area G, `moreRoutes.call`);
- *  nothing where the box is for no Lemma yet. */
-export function MicButton({ onPress, label = "Start a voice call" }: { onPress?: (() => void) | null; label?: string }) {
-    if (!onPress) return null;
-    return (
-        <Press label={label} onPress={onPress} style={{ width: 36, height: 36, alignItems: "center", justifyContent: "center" }}>
-            <Icon name="mic" size={20} tone={color.ink2} />
         </Press>
     );
 }
@@ -114,7 +101,6 @@ export function AskBox({ lemmas, podId, onPick, onSend, placeholder = "Ask anyth
     attach?: boolean;
     autoFocus?: boolean;
 }) {
-    const router = useRouter();
     const [text, setText] = useState("");
     const [picking, setPicking] = useState(false);
     const [tray, setTray] = useState(false);
@@ -184,7 +170,7 @@ export function AskBox({ lemmas, podId, onPick, onSend, placeholder = "Ask anyth
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
                     {lemma ? <LemmaChip lemma={lemma} onPress={() => setPicking(true)} /> : null}
                     <View style={{ flex: 1 }} />
-                    {attach ? <AttachToggle open={tray} onPress={() => { if (!tray) Keyboard.dismiss(); setTray((was) => !was); }} /> : <MicButton label={lemma ? "Call " + lemma.name : undefined} onPress={lemma ? () => router.push(moreRoutes.call(lemma.id) as never) : null} />}
+                    {attach ? <AttachToggle open={tray} onPress={() => { if (!tray) Keyboard.dismiss(); setTray((was) => !was); }} /> : null}
                     <SendButton ready={ready} onPress={send} tone={identity.ink} onTone={identity.onInk} />
                 </View>
                 <LemmaPicker lemmas={lemmas} chosen={lemma?.id ?? null} open={picking} onClose={() => setPicking(false)} onPick={onPick} />
@@ -195,7 +181,6 @@ export function AskBox({ lemmas, podId, onPick, onSend, placeholder = "Ask anyth
 
 /** One row, fixed to a Lemma: a Lemma's own page. */
 export function FixedAskBox({ name, onSend, podId }: { name: string; onSend: (text: string) => void; podId?: string | null }) {
-    const router = useRouter();
     const [text, setText] = useState("");
     const ready = Boolean(text.trim());
     const send = () => {
@@ -215,7 +200,6 @@ export function FixedAskBox({ name, onSend, podId }: { name: string; onSend: (te
                 returnKeyType="send"
                 style={{ flex: 1, minWidth: 0, fontFamily: font.regular, fontSize: 16, color: color.ink, padding: 0 }}
             />
-            <MicButton label={"Call " + name} onPress={podId ? () => router.push(moreRoutes.call(podId) as never) : null} />
             <SendButton ready={ready} onPress={send} />
         </View>
     );

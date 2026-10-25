@@ -351,7 +351,7 @@ export function viaOf(line: Pick<Line, "sourceId">, channel: Pick<ChannelDetail,
 }
 
 /** When something last happened, said after "last message": "12 min
- *  ago", "yesterday", "on 3 Oct" -- never "Yesterday ago". */
+ *  ago", "yesterday", or "on" a day and month -- never "Yesterday ago". */
 export function agoSaid(iso: string | null | undefined, now = new Date()): string {
     const short = sinceShort(iso, now);
     if (!short) return "";

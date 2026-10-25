@@ -4,7 +4,6 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { adminRoutes } from "../../../../areas/admin/routes";
 import { chatRoutes } from "../../../../areas/chat/routes";
-import { moreRoutes } from "../../../../areas/more/routes";
 import { useLemma } from "../../../../data/hooks";
 import { NEW_CHAT, routes, workspace } from "../../../../data/routes";
 import { Loading } from "../../../../ui/chrome";
@@ -202,8 +201,6 @@ function ChatBody({ adopted }: { adopted: MutableRefObject<string | null> }) {
         return send(text);
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [send]);
-    /* A voice call about this chat (area G). */
-    const call = useCallback(() => router.push(moreRoutes.call(podId, chat.conversationId) as never), [router, podId, chat.conversationId]);
     const model = useMemo(
         () => <ModelPicker podId={podId} conversationId={chat.conversationId} agentId={chat.agentId} picked={chat.pickedModel} onPicked={chat.setPickedModel} />,
         [podId, chat.conversationId, chat.agentId, chat.pickedModel, chat.setPickedModel],
@@ -349,7 +346,6 @@ function ChatBody({ adopted }: { adopted: MutableRefObject<string | null> }) {
                         onTall={setCrowded}
                         draftKey={draftKeyFor(podId, chat.conversationId)}
                         model={model}
-                        onCall={call}
                         tone={identity.ink}
                         onTone={identity.onInk}
                     />

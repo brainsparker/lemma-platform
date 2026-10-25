@@ -164,7 +164,7 @@ The pure logic is ported from the web, not reinvented:
 - The web's own pure modules run where they live, imported as `@web/<path>`
   from `lemma-frontend/src` (`web-imports.js`; Metro, vitest and TypeScript
   all resolve it): the thread's turns and approvals, the channel, table,
-  file, workflow, settings and call models. Nothing is copied:
+  file, workflow and settings models. Nothing is copied:
   `tests/web-imports.test.ts` fails on a file in `src/` that is a copy of a
   web module. A web module that cannot run on a phone gets a shim
   (`src/web-shims/`), swapped in however a web file reaches it.

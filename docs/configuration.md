@@ -750,6 +750,12 @@ LEMMA_ANTHROPIC_DEFAULT_MODEL=claude-sonnet-4-5
 EMBEDDING_PROVIDER=auto       # auto | local | openai_compat
 EMBEDDING_DIMENSION=768
 RERANKER_MODE=off             # off | local | openai_compat
+# The provider's exact model id; on Fireworks that is the full
+# `accounts/fireworks/models/...` form. A rerank slower than the timeout, or
+# one that fails, leaves search in first-stage order and logs
+# `datastore.reranker.openai_compat_failed.degraded`.
+OPENAI_COMPAT_RERANKER_MODEL=qwen3-reranker-8b
+RERANKER_TIMEOUT_SECONDS=5
 
 WEB_SEARCH_PROVIDER=auto      # auto | duckduckgo | searxng | brave
 BRAVE_SEARCH_API_KEY=

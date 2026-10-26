@@ -273,8 +273,15 @@ lemma workflows runs submit-form <run-id> --data '{"approved": true}'  # complet
 lemma workflows runs cancel <run-id>                            # cancel a running/waiting run
 
 lemma schedules list
-lemma schedules pause <id> ; lemma schedules resume <id>
+lemma schedules create --name daily-digest --agent POD_DEFAULT --cron "0 9 * * 1-5" \
+  --timezone Europe/Berlin --instruction "..."   # cron is UTC without --timezone
+lemma schedules pause <id> ; lemma schedules resume <id>   # resume resets the failure count
+lemma schedules delete <name> --yes
 ```
+
+The create reply's `next_fire_at` (UTC) and `next_fire_at_local` (in the
+schedule's zone) say when it fires — read them instead of creating a test
+schedule and waiting.
 
 **`WAITING` on a run means a person, and only a person.** A run parked on an
 agent conversation, an async function, or a timer stays `RUNNING` — so `RUNNING`

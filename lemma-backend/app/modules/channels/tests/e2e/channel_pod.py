@@ -7,6 +7,7 @@ manages channels), a user (writes in channels, sees no contacts) and a viewer
 
 from __future__ import annotations
 
+import asyncio
 from uuid import UUID, uuid4
 
 import pytest
@@ -63,12 +64,13 @@ class _As:
 async def pod(scenario) -> Pod:
     await scenario.create_org_with_pod(name_prefix="Channels v2")
     p = Pod(scenario)
-    for role, name in (
-        ("POD_EDITOR", "editor"),
-        ("POD_USER", "user"),
-        ("POD_VIEWER", "viewer"),
-    ):
-        person = await scenario.create_user(f"chv2-{name}")
+    seats = (("POD_EDITOR", "editor"), ("POD_USER", "user"), ("POD_VIEWER", "viewer"))
+    # Signed up together: three sign-ups one after another were most of this
+    # fixture's setup, and no sign-up depends on another.
+    people = await asyncio.gather(
+        *(scenario.create_user(f"chv2-{name}") for _, name in seats)
+    )
+    for (role, name), person in zip(seats, people, strict=True):
         await scenario.add_user_to_pod(user=person, role=role)
         setattr(p, name, person)
     return p

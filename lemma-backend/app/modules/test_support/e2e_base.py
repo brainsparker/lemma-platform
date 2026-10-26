@@ -305,7 +305,33 @@ async def _close_e2e_process_clients() -> None:
     await _run_cleanup_step("close_redis_json_caches", close_redis_json_caches)
     await _run_cleanup_step("channel_service.disconnect", channel_service.disconnect)
     await _run_cleanup_step("close_datastore_engine", close_datastore_engine)
-    await _run_cleanup_step("close_engine", close_engine)
+    if not _primary_engine_is_reusable():
+        await _run_cleanup_step("close_engine", close_engine)
+
+
+def _primary_engine_is_reusable() -> bool:
+    """Whether the next test can keep this process's primary engine.
+
+    Disposing it after every test made each test rebuild what an engine
+    keeps: the dialect's first-connect setup, the compiled-statement cache,
+    and -- the e2e process pools (`DB_POOL_IN_TESTING`) -- its connections
+    with their prepared statements. About a sixth of a second a test. Kept
+    only while it is still the engine `get_engine` would build: same database
+    and same pooling. Between tests its connections are idle in the pool and
+    hold no locks, so the next test's reset is not waiting on them.
+    """
+    from sqlalchemy.pool import NullPool
+
+    from app.core.config import settings
+    from app.core.infrastructure.db import session
+
+    current = session.engine
+    if current is None:
+        return True
+    unpooled = isinstance(current.pool, NullPool)
+    return unpooled == (not settings.db_pool_in_testing) and (
+        current.url.render_as_string(hide_password=False) == settings.database_url
+    )
 
 
 def _shared_context_resource(name: str, factory: Callable[[], Any]) -> Any:
@@ -1440,6 +1466,21 @@ async def _forget_cached_identity(redis_url: str, ids: tuple[str, ...]) -> None:
         await client.aclose()
 
 
+#: One manager per database for the life of the test process. A manager per
+#: test paid for a new engine each time -- connections, dialect setup and the
+#: compiled-statement cache -- in every test's setup, for an engine whose
+#: configuration never changes. Its connections sit idle in a two-slot pool
+#: between tests. The process exiting closes them.
+_DB_MANAGERS: dict[str, DatabaseManager] = {}
+
+
+def _shared_db_manager(database_url: str) -> DatabaseManager:
+    manager = _DB_MANAGERS.get(database_url)
+    if manager is None:
+        manager = _DB_MANAGERS[database_url] = DatabaseManager(database_url)
+    return manager
+
+
 @pytest_asyncio.fixture(scope="function")
 async def db_manager(e2e_settings, request) -> AsyncGenerator[DatabaseManager, None]:
     # Per-test data isolation only. The schema itself is prepared once per
@@ -1447,7 +1488,7 @@ async def db_manager(e2e_settings, request) -> AsyncGenerator[DatabaseManager, N
     # pays a filtered DELETE sweep rather than a drop/create. Keeping the schema
     # stable also lets the shared streaq worker hold its connections.
     _ensure_repo_root_on_path()
-    manager = DatabaseManager(e2e_settings.database_url)
+    manager = _shared_db_manager(e2e_settings.database_url)
 
     _import_e2e_models()
 
@@ -1513,7 +1554,6 @@ async def db_manager(e2e_settings, request) -> AsyncGenerator[DatabaseManager, N
         raise last_exc
 
     yield manager
-    await manager.close()
 
 
 # Factory for the e2e app. Defaults to the OSS app; lemma-cloud overrides this

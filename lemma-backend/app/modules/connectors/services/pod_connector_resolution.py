@@ -529,6 +529,16 @@ async def _require_account_use(ctx: Context, pod_account: PodAccountEntity) -> N
         ) from refusal
 
 
+async def may_use_shared_account(ctx: Context, pod_account: PodAccountEntity) -> bool:
+    """Whether a call made now by ``ctx`` could run as this shared account --
+    the same question ``_require_account_use`` asks, answered as a bool."""
+    try:
+        await _require_account_use(ctx, pod_account)
+    except ConnectorAccessDeniedError:
+        return False
+    return True
+
+
 def _restricted_without_person() -> ConnectorAccessDeniedError:
     return ConnectorAccessDeniedError(
         "This shared account is restricted to some members, and this run "
@@ -544,5 +554,6 @@ __all__ = [
     "acting_person",
     "connect_url",
     "free_slug",
+    "may_use_shared_account",
     "needs_account",
 ]

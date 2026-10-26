@@ -104,8 +104,12 @@ lemma connectors run gmail "list recent emails" --dry-run   # resolve + print th
 lemma connectors run gmail GMAIL_FETCH_EMAILS -d '{"max_results": 5}'
 ```
 
-- The first argument is the **pod connector's slug**. An unknown slug lists the
-  slugs the pod declares.
+- The first argument is the **pod connector's slug**, your own installation's
+  name, or a catalog id. Nothing has to be declared first: the first run adds
+  your installation to the pod as your own account (a refused call adds
+  nothing), and an app you have not connected answers `CONNECTION_REQUIRED`
+  with a `connect_url` to open — then run it again. `--pod` runs it in another
+  pod.
 - The second is an **operation id** or a plain-English intent. The resolved id is
   always printed, so the next run can name it exactly.
 - `--dry-run` stops after resolving and prints the input schema. Omitting `--data`
@@ -147,14 +151,15 @@ README so anyone can reconnect after import.
 lemma connectors list
 lemma connectors get gmail
 
-# 2. Create the org auth config (required before any operation/trigger command)
-lemma connectors auth-configs create gmail --name workspace-gmail --kind http   # composio | http | sql | mcp
-lemma connectors auth-configs list
-lemma connectors auth-configs get workspace-gmail
+# 2. OAuth app: a connect link. With no install yet, this installs Lemma's own
+#    app for the organization (if you may install connectors) and returns the
+#    link; asking again within a few minutes returns the same link.
+lemma connectors connect-requests create gmail          # → authorization_url
+lemma connectors accounts list --app gmail              # confirm an account appears
 
-# 3a. OAuth app: open a connect-request link, user completes it in the browser
+# Your own OAuth app, or a second install: create it explicitly
+lemma connectors auth-configs create gmail --name workspace-gmail --kind http   # composio | http | sql | mcp
 lemma connectors connect-requests create gmail --auth-config-id <auth-config-id>
-lemma connectors accounts list --app gmail            # confirm an account appears
 
 # 3b. Token / API-key app: create the account directly with credentials
 lemma connectors accounts create --auth-config workspace-gmail --file payloads/account.json
@@ -172,9 +177,13 @@ from the catalog.
 
 ### Declare it in the pod
 
-An installation does nothing in a pod until the pod declares it:
+A person's own installation is declared on its first run (above), so this is
+for choosing the slug, sharing one account, or asking everyone to connect. A
+catalog id works where an installation does — the org default, or Lemma's own
+app installed now:
 
 ```bash
+lemma connectors pod-add gmail gmail                       # catalog id: installs if needed
 # Each member's own account (the usual case)
 lemma connectors pod-add gmail workspace-gmail --mode PER_MEMBER --required \
   --purpose "Triage reads your inbox"
@@ -357,18 +366,21 @@ The discovery loop is non-negotiable: operation ids and payload keys are
 kind-specific, so **search by intent, read the schema, then execute**.
 
 ```bash
-# 1. Search by intent — returns ranked matches for THIS auth config's kind
+# 1. Search by intent, through the pod connector (or your app, or a catalog id)
+lemma connectors pod-operations gmail "send email"
+
+# 2. Execute through the pod connector — `run` does both in one call
+lemma connectors run gmail gmail_send_email \
+  -d '{"recipient_email": "anukul@lemma.work", "subject": "Hi", "body": "Test"}'
+
+# Org-level discovery, by installation name, when you are setting one up
 lemma connectors operations search workspace-gmail "send email" --limit 5
-
-# 2. Read the input schema (one or more ops; --details for the whole batch)
-lemma connectors operations get workspace-gmail gmail_send_email
 lemma connectors operations details workspace-gmail gmail_send_email slack_chat_post_message
-
-# 3. Execute through the pod connector — payload goes under "payload"
-lemma connectors operations execute gmail gmail_send_email \
-  --data '{"payload": {"recipient_email": "anukul@lemma.work", "subject": "Hi", "body": "Test"}}'
-lemma connectors pod-operations gmail "send email"   # the same search, through the pod connector
 ```
+
+Never pass `--auth-config` or `--account` to `execute`/`run`: that is the
+deprecated org-level route, kept only for old scripts. It prints a warning and
+skips the pod's choice of account.
 
 - `operations search` scans names + descriptions and returns ranked hits **for the
   auth config's kind only**. `operations list` is the same with no query.
@@ -498,10 +510,14 @@ whole thing, but only half of it is its own: **the agent creates the install, a
 person supplies the credentials.** There is no way around that second half and no
 reason to want one — the credential is theirs.
 
-**What the `CONNECTORS` toolset can do.** Four tools, all execution-only:
-`list_connectors`, `search_connector_operations`, `describe_connector_operation`,
-`run_connector_operation`. **None of them creates anything.** An agent that needs
-a new connector needs the `WORKSPACE_CLI` toolset and runs `lemma` itself.
+**What the `CONNECTORS` toolset can do.** `list_connectors`,
+`search_connector_operations`, `describe_connector_operation`,
+`run_connector_operation` and `connect_connector`. A **catalog** app (Gmail,
+Notion, Slack…) needs nothing more: running it before anyone connected it
+answers `CONNECTION_REQUIRED` with a `connect_url` for the person, and the run
+after they connect adds it to the pod as their own account. An app **outside
+the catalog** — an API, MCP server or database of the organization's own —
+needs the `WORKSPACE_CLI` toolset and the loop below.
 
 The loop, in full:
 

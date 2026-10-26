@@ -30,6 +30,9 @@ class ResolvedConnectorExecution:
     execution: dict[str, Any] | None = None
     operation_name: str | None = None
     input_schema: dict[str, Any] | None = None
+    #: The operation's stored output schema. An MCP call seeds the session with
+    #: it so the SDK's result validation does not list every tool per call.
+    output_schema: dict[str, Any] | None = None
     # Plain identifiers (never session-bound) so the execute phase can flag the
     # account for re-auth on an unauthorized failure without re-resolving it.
     account_id: UUID | None = None

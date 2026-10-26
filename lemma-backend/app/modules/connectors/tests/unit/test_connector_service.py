@@ -130,7 +130,9 @@ def _service(**overrides) -> ConnectorService:
         "connector_repository": AsyncMock(get=AsyncMock(return_value=_connector())),
         "auth_config_repository": _auth_config_repo(),
         "account_repository": AsyncMock(),
-        "connect_request_repository": AsyncMock(),
+        "connect_request_repository": AsyncMock(
+            get_reusable_pending=AsyncMock(return_value=None)
+        ),
         "auth_provider_registry": Mock(get=Mock(return_value=_auth_provider())),
         "redirect_uri_builder": Mock(),
         "organization_access": _org_access(),
@@ -247,6 +249,7 @@ async def test_initiate_connect_request_allowed_when_account_exists():
     uow = AsyncMock()
     connect_repo = AsyncMock()
     connect_repo.create.side_effect = lambda req: req
+    connect_repo.get_reusable_pending.return_value = None
     redirect_builder = Mock()
     redirect_builder.build.return_value = "https://callback"
 
@@ -281,6 +284,7 @@ async def test_initiate_connect_request_success():
     uow = AsyncMock()
     connect_repo = AsyncMock()
     connect_repo.create.side_effect = lambda req: req
+    connect_repo.get_reusable_pending.return_value = None
     redirect_builder = Mock()
     redirect_builder.build.return_value = "https://callback"
 
@@ -442,6 +446,7 @@ async def test_initiate_connect_request_allows_reauth_for_unusable_account():
     registry.get.return_value = auth_provider
     connect_repo = AsyncMock()
     connect_repo.create.side_effect = lambda req: req
+    connect_repo.get_reusable_pending.return_value = None
     redirect_builder = Mock()
     redirect_builder.build.return_value = "https://callback"
 

@@ -90,6 +90,13 @@ from app.modules.connectors.services.auth_install_resolver import (
 from app.modules.connectors.services.connect_request_lifecycle import (
     pkce_verifier_for,
     request_attributes,
+    safe_return_path,
+)
+from app.modules.connectors.services.connector_status import connector_status
+from app.modules.connectors.services.install_on_connect import (
+    install_to_connect,
+    missing_install,
+    open_connect_request,
 )
 from app.modules.connectors.services.install_provisioning import (
     DiscoveryOutcome,
@@ -533,8 +540,11 @@ class ConnectorService:
                 organization_id, connector_id
             )
         if not auth_config:
-            raise ConnectorNotFoundError(
-                connector_id or auth_config_name or str(auth_config_id)
+            raise await missing_install(
+                self,
+                connector_id=connector_id,
+                auth_config_name=auth_config_name,
+                auth_config_id=auth_config_id,
             )
         if require_active:
             reject_if_disabled(auth_config)
@@ -574,46 +584,7 @@ class ConnectorService:
         organization_id: UUID,
     ) -> dict:
         await self._require_org_member(user_id=user_id, organization_id=organization_id)
-
-        configs, _ = await self.auth_config_repository.list_by_org(
-            organization_id, limit=200
-        )
-        accounts, _ = await self.account_repository.list_by_user_and_org(
-            user_id, organization_id, limit=200
-        )
-
-        # One query for every title, not one per distinct connector: this is
-        # the connectors landing page's single call, and an org with installs
-        # of a dozen connectors was paying a round trip each on every load.
-        app_ids = {c.connector_id for c in configs} | {a.connector_id for a in accounts}
-        app_titles = await self.connector_repository.titles_for(sorted(app_ids))
-
-        return {
-            "installed": [
-                {
-                    "name": c.name,
-                    "connector_id": c.connector_id,
-                    "title": app_titles.get(c.connector_id),
-                    "status": c.status.value
-                    if hasattr(c.status, "value")
-                    else str(c.status),
-                    "kind": c.kind.value if hasattr(c.kind, "value") else str(c.kind),
-                }
-                for c in configs
-            ],
-            "accounts": [
-                {
-                    "id": str(a.id),
-                    "connector_id": a.connector_id,
-                    "title": app_titles.get(a.connector_id),
-                    "email": a.email,
-                    "status": a.status.value
-                    if hasattr(a.status, "value")
-                    else str(a.status),
-                }
-                for a in accounts
-            ],
-        }
+        return await connector_status(self, user_id, organization_id)
 
     async def initiate_connect_request(
         self,
@@ -627,11 +598,23 @@ class ConnectorService:
         omit_authorize_params: frozenset[str] = frozenset(),
     ) -> ConnectRequestEntity:
         await self._require_org_member(user_id=user_id, organization_id=organization_id)
-        auth_config = await self._resolve_auth_config(
+        auth_config = await install_to_connect(
+            self,
+            user_id=user_id,
             organization_id=organization_id,
             connector_id=connector_id,
             auth_config_id=auth_config_id,
         )
+        reused = await open_connect_request(
+            self,
+            user_id=user_id,
+            auth_config_id=auth_config.id,
+            return_to=safe_return_path(return_to),
+            purpose=purpose,
+            reusable=not connection_fields and not omit_authorize_params,
+        )
+        if reused is not None:
+            return reused
         connector = await self.get_connector(auth_config.connector_id)
         provider_value = self._provider_value(auth_config)
         auth_install = self._resolve_auth_install(

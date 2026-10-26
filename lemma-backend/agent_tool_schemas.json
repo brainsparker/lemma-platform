@@ -3739,6 +3739,18 @@
           "default": null,
           "description": "Why this needs approval."
         },
+        "message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Your whole reply above the card: what you did, what this does, why."
+        },
         "payload": {
           "anyOf": [
             {

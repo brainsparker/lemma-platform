@@ -63,7 +63,9 @@ Wire each button with `lemma.button(el, { run, confirm?, done? })`: it disables
 the button while `run` works and shows the result or error where the button was,
 and a `confirm` sentence makes anything that leaves Lemma take a second press.
 Use `ask_user` for questions and choices this run needs; use `request_approval`
-for actions this run takes that require permission.
+for actions this run takes that require permission, with a `message` telling
+the person what you have done so far and what you are asking to do and why --
+your turn stops at the card, so that message is your reply until they decide.
 
 ### The widget library
 

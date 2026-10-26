@@ -83,6 +83,18 @@ context; destructive operations require a standing grant or session approval.
 Agent Host runs are fenced by a per-run lease row, so a host that reconnects
 cannot double-dispatch a run already in flight.
 
+Every harness's events pass one place before anything reads them
+(`run_event_pump._split_message_event`): reasoning a model wrote into its text
+becomes a thought (`core/text/thinking_tags`, which also catches a block the
+prompt opened and only `</think>` closes, and on the live stream withdraws what
+it showed with a `stream_reset`), and an approval the agent asks for is
+preceded by its `message` to the person (`domain/approval_message`), so a run
+that stops for one never ends on a half sentence. A provider's tool call ids
+are not trusted to be unique: a response is executed and stored with one call
+per id (`domain/tool_call_ids`), and a call reusing an id the conversation
+already holds is stored under a new one, its return following it
+(`RunMessageWriter._unique_call_id`).
+
 Subagents are child conversations with inherited workspace context and reduced
 toolsets. Widgets are tool outputs stored in conversation context and served
 through signed, purpose-bound embed access.

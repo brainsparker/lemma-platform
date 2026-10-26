@@ -17,8 +17,10 @@ from app.modules.connectors.api.schemas.connector_operation_schemas import (
 from app.modules.connectors.domain.connector import kind_to_provider
 from app.modules.connectors.domain.errors import (
     ConnectorNotFoundError,
+    ConnectorReauthRequiredError,
     OperationNotFoundError,
 )
+from app.modules.connectors.domain.pod_connector_errors import ReauthRequiredError
 from app.modules.connectors.domain.ports import (
     ConnectorOperationRepositoryPort,
     ConnectorRepositoryPort,
@@ -33,10 +35,12 @@ from app.modules.connectors.services.operation_visibility import (
     find_install_or_catalog_operation,
     list_operations_for_install,
 )
+from app.modules.connectors.services.pod_account_rule import connect_url
 from app.modules.connectors.services.pod_connector_resolution import (
     PodConnectorResolver,
+    acting_person,
 )
-from app.modules.connectors.domain.account import AccountEntity
+from app.modules.connectors.domain.account import AccountEntity, AccountStatus
 from app.modules.connectors.domain.auth_config import AuthConfigEntity
 from app.modules.connectors.services.auth.github_bindings import routable_external_ref
 from app.modules.connectors.services.connector_service import ConnectorService
@@ -478,14 +482,28 @@ class ConnectorOperationService:
         """
         pod_connector = await self.pod_connector_resolver.connector(pod_id, slug)
         resolved = await self.pod_connector_resolver.resolve(ctx, pod_connector)
-        return await self.execution_for(
-            ctx,
-            auth_config=resolved.auth_config,
-            account=resolved.account,
-            operation_name=operation_name,
-            payload=payload,
-            act_as=act_as,
-        )
+        try:
+            return await self.execution_for(
+                ctx,
+                auth_config=resolved.auth_config,
+                account=resolved.account,
+                operation_name=operation_name,
+                payload=payload,
+                act_as=act_as,
+            )
+        except ConnectorReauthRequiredError as exc:
+            # A marked account resolution let through, and the refresh that was
+            # to vouch for it confirmed the grant is gone: the same answer
+            # resolution gives an account it refuses outright, with the pod's
+            # reconnect link rather than the bare account one.
+            raise ReauthRequiredError(
+                slug=pod_connector.slug,
+                connector_id=resolved.auth_config.connector_id,
+                connect_url=connect_url(pod_connector.pod_id, pod_connector.slug),
+                acting_person_is_owner=(
+                    acting_person(ctx) == resolved.pod_account.owner_user_id
+                ),
+            ) from exc
 
     async def execution_for(
         self,
@@ -535,6 +553,7 @@ class ConnectorOperationService:
             third_party_credentials=credentials,
             payload=payload or {},
             account_id=account.id,
+            account_reauth_pending=account.status is AccountStatus.REAUTH_REQUIRED,
             account_external_ref=await self._routable_external_ref(account),
             act_as=act_as,
             account_user_id=account.user_id,

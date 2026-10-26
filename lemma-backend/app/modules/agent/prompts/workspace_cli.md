@@ -35,7 +35,7 @@ lemma functions run <fn> --data '{}'
 lemma workflows run <wf> --data '{}'       # waits by default
 lemma surfaces list                       # chat and email the pod already answers on
 lemma surfaces get resend-assistant       # an email surface, and its address
-lemma connectors operations search <auth-config> "send email"
+lemma connectors run gmail "send an email" --dry-run  # a pod connector, an app of yours, or a catalog id
 ```
 
 A pod is reached on chat and email through its **surfaces**, and they already

@@ -455,14 +455,32 @@ Either way the authorization is identical: a `connector:<name>:use` grant per
 app, executed through the invoking user's connected account. Having the toolset
 is not having access to any particular app.
 
-**Neither way creates a connector.** The `CONNECTORS` tools are execution-only —
-four of them, all for finding and running operations on installs that already
-exist. Reaching an app nobody has connected yet means the CLI, and it means
-asking a person for the credential at the end: the catalog has generic
-`openapi` / `mcp` / `sql` entries that become any API, MCP server or Postgres
-database you point them at. The `lemma-builder` skill's `connectors.md` has the
-commands, under *Custom connectors* and *An agent setting a connector up for
-itself*.
+**Nothing has to be set up before the first call.** Name the app and run the
+operation — one call:
+
+- a pod connector by its slug (`gmail`, `support-inbox`);
+- one of your person's own apps by its installation name — the first run adds
+  it to the pod as their own account, and a refused call adds nothing;
+- a catalog id (`gmail`, `notion`) nobody has connected yet — the answer is
+  `CONNECTION_REQUIRED` with a `connect_url`. Hand the person that link as it
+  is (it opens Lemma's own page for connecting it, installing the app for the
+  organization on the way when they may) and run the call again once they say
+  they are done. `connect_connector` gives the same link when the person asks
+  to connect something. Never describe menus instead: the link is the
+  instruction. `CONNECTOR_NOT_INSTALLED` means the person may not install it;
+  pass on who can, as the error says.
+
+So a first-time operation is one call (two if you search for the operation
+first) plus, if nothing is connected, one click for the person; a repeat is one
+call. Describe connectors as `list_connectors` reports them — `your_account`
+says whether the person has connected a per-member one — and never call one
+connected or working until a call through it has succeeded.
+
+Apps outside the catalog — any API, MCP server or Postgres database — are
+added with the CLI and a credential from a person: the catalog has generic
+`openapi` / `mcp` / `sql` entries for them. The `lemma-builder` skill's
+`connectors.md` has the commands, under *Custom connectors* and *An agent
+setting a connector up for itself*.
 
 ### As direct tools
 
@@ -515,7 +533,8 @@ building MIME for `messages_send`.
 ### From the CLI
 
 Third-party connector operations — **`run` does the whole thing in one call**:
-it picks the operation on one of the pod's connectors and executes. Still never guess a
+it picks the operation on one of the pod's connectors (or your own app, or a
+catalog id — see above) and executes. Still never guess a
 payload; let `--dry-run` hand you the schema.
 
 ```bash
@@ -531,7 +550,8 @@ lemma connectors run gmail GMAIL_SEND_EMAIL \
 list). `@./local.pdf` uploads a local file to `/me/connector-uploads/` first.
 
 The first argument is the **pod connector's slug** (`lemma connectors pod-list`
-shows them); the connector decides whose account it runs as — yours for a
+shows them), your own installation's name, or a catalog id; `--pod` runs it in
+another pod. The connector decides whose account it runs as — yours for a
 per-member connector, the shared one for a shared connector — so there is no
 account to pass. A refusal names its remedy: `CONNECTION_REQUIRED` /
 `REAUTH_REQUIRED` come with a `connect_url` to hand to the person. The second
@@ -551,8 +571,8 @@ lemma connectors overview             # installed connectors: auth-config name, 
 lemma connectors status               # installed apps + your connected accounts
 lemma connectors describe gmail       # per-connector usage guide, per kind
                                       # (kinds: composio, http, sql, mcp)
-lemma connectors operations search "send email"                    # searches EVERY installed connector
-lemma connectors operations search gmail "send email" --limit 5    # scoped; hits include their input schema
+lemma connectors pod-operations gmail "send email"   # one pod connector (or app, or catalog id)
+lemma connectors connect-requests create gmail        # a sign-in link for the person (installs it if they may)
 ```
 
 Workloads execute operations through the pod's connectors — they never touch raw

@@ -480,6 +480,9 @@ def _resolver(account: SimpleNamespace) -> SimpleNamespace:
     )
     return SimpleNamespace(
         connector=AsyncMock(return_value=SimpleNamespace()),
+        pod_connectors=SimpleNamespace(
+            get_by_slug=AsyncMock(return_value=SimpleNamespace())
+        ),
         resolve=AsyncMock(
             return_value=SimpleNamespace(auth_config=auth_config, account=account)
         ),

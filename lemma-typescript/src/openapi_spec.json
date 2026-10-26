@@ -3182,6 +3182,7 @@
         "type": "object"
       },
       "AuthConfigUpdateSchema": {
+        "additionalProperties": false,
         "properties": {
           "config": {
             "anyOf": [
@@ -15842,6 +15843,7 @@
         "type": "string"
       },
       "PodAccountUpdateRequest": {
+        "additionalProperties": false,
         "properties": {
           "allow_sandbox_use": {
             "anyOf": [
@@ -16005,14 +16007,34 @@
       "PodConnectorCreateRequest": {
         "properties": {
           "auth_config_id": {
-            "description": "The organization installation this connector uses.",
-            "format": "uuid",
-            "title": "Auth Config Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The organization installation this connector uses. Give this or `connector_id`.",
+            "title": "Auth Config Id"
+          },
+          "connector_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A catalog connector (`gmail`) instead of an installation: its organization default, or -- when the organization has none and you may install connectors -- Lemma's own app for it, installed now.",
+            "title": "Connector Id"
           },
           "mode": {
             "$ref": "#/components/schemas/PodConnectorMode",
-            "description": "PER_MEMBER: each call uses the acting member's own account. SHARED: every call uses the one account set as `shared_pod_account_id`."
+            "default": "PER_MEMBER",
+            "description": "PER_MEMBER (the default): each call uses the acting member's own account. SHARED: every call uses the one account set as `shared_pod_account_id`."
           },
           "purpose": {
             "anyOf": [
@@ -16047,20 +16069,22 @@
             "title": "Shared Pod Account Id"
           },
           "slug": {
-            "description": "Pod-local name apps, agents and bundles address it by, e.g. `gmail` or `support-inbox`.",
-            "title": "Slug",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Pod-local name apps, agents and bundles address it by, e.g. `gmail` or `support-inbox`. Left out: the installation's name, made free in this pod.",
+            "title": "Slug"
           },
           "visibility": {
             "$ref": "#/components/schemas/PodConnectorVisibility",
             "default": "POD"
           }
         },
-        "required": [
-          "slug",
-          "auth_config_id",
-          "mode"
-        ],
         "title": "PodConnectorCreateRequest",
         "type": "object"
       },
@@ -16256,7 +16280,8 @@
         "type": "string"
       },
       "PodConnectorUpdateRequest": {
-        "description": "Fields left out are unchanged; `shared_pod_account_id: null` clears it.",
+        "additionalProperties": false,
+        "description": "Fields left out are unchanged; `shared_pod_account_id: null` clears it.\nIts slug and installation are fixed: a different one is a different\nconnector, which apps, agents and bundles already address.",
         "properties": {
           "mode": {
             "anyOf": [
@@ -37388,6 +37413,7 @@
         }
       },
       "post": {
+        "description": "Declare a connector by an organization installation (`auth_config_id`) or by a catalog connector (`connector_id`): its organization default, or Lemma's own app for it installed now when the organization has none and the caller may install connectors. `slug` defaults to the installation's name; `mode` to PER_MEMBER.",
         "operationId": "pod.connector.create",
         "parameters": [
           {

@@ -14,6 +14,8 @@ both are claims about I/O that no amount of reading the code can settle.
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
+
 from app.core.bounded import BoundedDict
 from pathlib import Path
 from typing import Any
@@ -37,6 +39,7 @@ from sandbox_runtime.protocol import (
     ProcessOutputChunk,
     ProcessOutputSnapshot,
     ProcessState,
+    WorkloadKind,
 )
 
 _BUNDLE = RuntimeBundle(
@@ -436,8 +439,16 @@ class _ErrorThenExit(_Client):
         self.polls = 0
 
     async def read_process_output(
-        self, _kind: Any, _user_id: UUID, _operation_id: UUID, **_kwargs: Any
+        self,
+        kind: WorkloadKind,
+        user_id: UUID,
+        operation_id: UUID,
+        *,
+        deadline_at: datetime,
+        after_sequence: int,
+        wait_seconds: int,
     ) -> ProcessOutputSnapshot:
+        del kind, user_id, operation_id, deadline_at, after_sequence, wait_seconds
         self.polls += 1
         if self.polls == 1:
             return ProcessOutputSnapshot(

@@ -21,6 +21,7 @@ is the status quo, not a regression this introduced.
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from collections.abc import Sequence
 from dataclasses import replace
 from typing import Protocol
@@ -84,6 +85,10 @@ _INSTALL_BUDGET_SECONDS = 180.0
 
 #: One round trip. A probe that has to retry is a sandbox with worse problems.
 _PROBE_BUDGET_SECONDS = 20.0
+
+#: How many of the installer's output chunks a failure report keeps -- its
+#: tail, which is where an error is.
+_RETAINED_OUTPUT_CHUNKS = 64
 
 #: How many sandboxes' installed versions one process remembers. Generous
 #: next to any real fleet, and an eviction costs a probe rather than a
@@ -438,13 +443,15 @@ class WorkspaceRuntimeBundleMixin:
     ) -> ProcessOutputSnapshot | None:
         """Wait on the process's own completion, never on the clock.
 
-        Returns the final state with *all* the output read on the way: each
-        read starts after the last, so keeping only the final one dropped
-        whatever the installer printed before it exited -- its error included,
-        and every failure was reported as "no output".
+        Returns the final state with the output read on the way: each read
+        starts after the last, so keeping only the final one dropped whatever
+        the installer printed before it exited -- its error included, and
+        every failure was reported as "no output". A bounded tail, since only
+        the end of it is ever reported (`_tail`) and an installer may print for
+        the whole install budget.
         """
         after = 0
-        chunks: list[ProcessOutputChunk] = []
+        chunks: deque[ProcessOutputChunk] = deque(maxlen=_RETAINED_OUTPUT_CHUNKS)
         while datetime.now(timezone.utc) < deadline_at:
             snapshot = await client.read_process_output(
                 WorkloadKind.WORKSPACE,

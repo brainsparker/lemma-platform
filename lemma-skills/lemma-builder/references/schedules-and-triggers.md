@@ -71,13 +71,15 @@ CLI flags cover the common cases. Exactly one of `--agent` / `--workflow` is
 required:
 
 ```bash
-# TIME — cron (5-field) or one-shot ISO timestamp. UTC unless config.timezone says
-# otherwise, and there is no flag for it: merge an IANA zone through --data.
-lemma schedules create --agent triage-agent --cron "0 9 * * 1-5" --name weekday-triage
-lemma schedules create --workflow nightly-review --cron "0 2 * * *"
+# TIME — cron (5-field) or one-shot ISO timestamp. Read in UTC unless
+# --timezone (an IANA zone, sent as config.timezone) says otherwise. The reply's
+# next_fire_at (UTC) and next_fire_at_local say when it fires — read them rather
+# than creating a test schedule and waiting.
+lemma schedules create --agent triage-agent --cron "0 9 * * 1-5" --timezone Europe/Berlin --name weekday-triage
+lemma schedules create --workflow nightly-review --cron "0 2 * * *"          # 02:00 UTC
 lemma schedules create --workflow intake --at "2026-06-14T09:00:00Z"
-lemma schedules create --agent daily-digest --cron "0 9 * * 1-5" \
-  --data '{"config": {"timezone": "Europe/Berlin"}}'
+lemma schedules create --agent POD_DEFAULT --name daily-digest --cron "0 9 * * 1-5" \
+  --timezone America/New_York --instruction "Summarise yesterday's tickets and message me."
 
 # DATASTORE — table row events; --on is REQUIRED (insert | update | delete | all)
 lemma schedules create --workflow ticket-intake --datastore tickets --on insert --on update
@@ -404,8 +406,12 @@ suspended execution — invisible in `schedules`, resolves exactly once, and cap
 
 ## Limits & gotchas
 
-- **Pause or delete test schedules.** A near-future cron you set to verify keeps
-  firing after you move on — `lemma schedules pause` it the moment you're done.
+- **Don't create throwaway test schedules.** To check *when* a schedule fires,
+  read `next_fire_at` / `next_fire_at_local` from the create reply. To check
+  *what* it does, run the target directly (`lemma workflows run`, or do the
+  agent's instruction in your own conversation). If you did make one, delete it
+  — `lemma schedules delete <name> --yes`; an agent may delete a schedule it
+  created itself without asking for approval.
 - **Trigger loops.** If a `DATASTORE` schedule fires on `UPDATE` of a table and its
   target workflow **writes that same table**, each write re-fires the schedule —
   an infinite loop. Write to a different table, fire only on `INSERT`, or guard the
@@ -428,9 +434,11 @@ suspended execution — invisible in `schedules`, resolves exactly once, and cap
 
 ```bash
 lemma schedules get <name>                  # active? right target? right config?
+                                            # TIME: next_fire_at (UTC) / next_fire_at_local
 
-# TIME: set a near-future cron / --at, wait, then check the run, then PAUSE it
-lemma workflows runs list <workflow>        # or: lemma conversations list --agent <agent>
+# TIME: don't wait for a fire — run the target once directly instead
+lemma workflows run <workflow> --data '{}'  # or do the agent's instruction yourself
+lemma workflows runs list <workflow>        # after a real fire: lemma schedules runs list <name>
 
 # DATASTORE: create a test row, confirm a run started with the row in start.payload
 lemma records create tickets --data '{"title":"smoke","status":"new"}'

@@ -65,6 +65,11 @@ RLS scopes *which rows* a caller touches; it does **not** change *what permissio
 | `SERIAL` | auto-incrementing human-friendly numbers | `1001` |
 | `ENUM` | lifecycle states, constrained categories | `"approved"` |
 
+Common names from other databases are accepted and stored as these:
+`TIMESTAMP`/`TIMESTAMPTZ` → `DATETIME`, `NUMBER`/`NUMERIC`/`DECIMAL`/`DOUBLE`/`REAL`
+→ `FLOAT`, `INT` → `INTEGER`, `STRING`/`VARCHAR` → `TEXT`, `BOOL` → `BOOLEAN`,
+`JSONB` → `JSON`. Types are case-insensitive. `BIGINT` is not: `INTEGER` is 32-bit.
+
 ## Column Fields
 
 - `required`, `unique`, `default`, `description`

@@ -26,3 +26,4 @@ fixed_test_org = e2e_fixtures.module_test_org
 db_session = e2e_fixtures.db_session
 scenario = e2e_fixtures.scenario
 pod = channel_pod.pod
+channel_world = channel_pod.channel_world

@@ -1438,8 +1438,13 @@ async def _ensure_schema_once(database_url: str) -> None:
 _IDENTITY_SNAPSHOT_SCHEMA = "e2e_module_identity"
 
 #: Queue tables never restored from a snapshot: a work item copied back for
-#: every test would be run again for every test.
-_SNAPSHOT_EXCLUDED_TABLES = ("work_items", "work_queues", "work_rate_buckets")
+#: every test would be run again for every test, and a rate bucket would carry
+#: one test's spent budget into the next. ``work_queues`` is restored: it is
+#: each namespace's configuration, which a test starting from a fresh pod had
+#: already. Without it a pod's first concurrent writes each open a side
+#: connection to create the row, and nineteen of them on a ten-connection
+#: pool time out (`test_lines_written_at_once_are_numbered_without_gaps`).
+_SNAPSHOT_EXCLUDED_TABLES = ("work_items", "work_rate_buckets")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1465,11 +1470,18 @@ async def _forget_cached_identity(redis_url: str, ids: tuple[str, ...]) -> None:
     import redis.asyncio as redis
 
     client = redis.from_url(redis_url, decode_responses=False)
+    # One pass over the keyspace for every id, not one per id: a module that
+    # extends its identity names a dozen of them, and this runs before every
+    # test.
+    needles = tuple(identity_id.encode() for identity_id in ids)
     try:
-        for identity_id in ids:
-            stale = [key async for key in client.scan_iter(match=f"*{identity_id}*")]
-            if stale:
-                await client.delete(*stale)
+        stale = [
+            key
+            async for key in client.scan_iter(count=1000)
+            if any(needle in key for needle in needles)
+        ]
+        if stale:
+            await client.delete(*stale)
     finally:
         await client.aclose()
 
@@ -1816,6 +1828,60 @@ async def module_identity(e2e_settings) -> AsyncGenerator[ModuleIdentity, None]:
         _IDENTITY_SNAPSHOTS.pop(url, None)
         await manager.drop_snapshot(snapshot)
         await manager.close()
+
+
+async def extend_module_identity(
+    database_url: str,
+    build: Callable[["AsyncClient"], Any],
+) -> Any:
+    """Add rows to the module's shared identity, once per module.
+
+    For a module whose every test starts from the same world -- an
+    organization, a pod and the people in it -- and was building it test by
+    test, mostly in sign-ups. ``build`` gets a client signed in as the module's
+    user on a fresh app, starting from the identity's rows alone, and returns
+    ``(value, ids)``: what the tests need, and the ids of what it made, so their
+    cached Redis keys are dropped before each test the way the identity's are.
+    Its rows then join the snapshot ``db_manager`` restores, so every later
+    test of the module starts from them, and from nothing a test wrote.
+
+    Call it from a module-scoped fixture that depends on ``module_identity``.
+    """
+    from httpx import ASGITransport, AsyncClient
+
+    identity = _IDENTITY_SNAPSHOTS.get(database_url)
+    if identity is None:
+        raise RuntimeError("extend_module_identity needs module_identity first")
+    manager = _shared_db_manager(database_url)
+    await manager.truncate_all(restore=identity.rows)
+    _reset_supertokens_testing_state()
+    app = _test_app_factory() if _test_app_factory is not None else None
+    if app is None:
+        from app.app import create_app
+
+        app = create_app()
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://testserver"
+        ) as client:
+            value, ids = await build(client)
+        rows = await manager.snapshot(
+            _IDENTITY_SNAPSHOT_SCHEMA, exclude=_SNAPSHOT_EXCLUDED_TABLES
+        )
+        # Every user, organization and pod now in the snapshot is one a test
+        # may cache something under.
+        async with manager.engine.connect() as conn:
+            for table in ("users", "organizations", "pods"):
+                ids = [
+                    *ids,
+                    *(await conn.scalars(text(f"SELECT id::text FROM {table}"))),
+                ]
+    finally:
+        await _close_e2e_process_clients()
+    _IDENTITY_SNAPSHOTS[database_url] = _IdentitySnapshot(
+        rows=rows, ids=tuple({*identity.ids, *(str(i) for i in ids if i)})
+    )
+    return value
 
 
 @pytest_asyncio.fixture(scope="function")

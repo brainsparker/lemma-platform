@@ -568,7 +568,7 @@ test("the Connections page draws each connector's badge and my standing, and edi
     assert.equal(slugInput().value, "");
     assert.equal(form.querySelector<HTMLButtonElement>("button[type=submit]")?.disabled, true);
     await act(async () => {
-        install.value = "ac-gmail";
+        install.value = "install:ac-gmail";
         install.dispatchEvent(new window.Event("change", { bubbles: true }));
     });
     assert.equal(slugInput().value, "gmail-2", "named for its app once there is one");
@@ -590,6 +590,45 @@ test("the Connections page draws each connector's badge and my standing, and edi
     const seen = [...viewer.holder.querySelectorAll("button")].map((one) => one.textContent);
     assert.ok(!seen.includes("Connect") && !seen.includes("Reconnect"), "a viewer is offered no account nothing would use");
     assert.match(viewer.holder.textContent ?? "", /Not one you can use in Kit/);
+});
+
+test("a link naming an app the pod has no connector for offers to connect it, and the add picker offers the catalog", async (t) => {
+    const window = dom();
+    const { PodConnections } = await import("../src/connect/pod-connections.tsx");
+    const { createRoot } = await import("react-dom/client");
+    const cache = seeded(["pod.read", "pod.connector.manage", "connector.use"]);
+    const signInReady = [{ kind: "composio", auth_scheme: "OAUTH2", system_default_available: true }];
+    cache.setQueryData(["connectors"], [
+        { id: "gmail", title: "Gmail", description: "", icon: "", active: true, kinds: signInReady },
+        { id: "notion", title: "Notion", description: "", icon: "", active: true, kinds: [] },
+        { id: "linear", title: "Linear", description: "", icon: "", active: true, kinds: signInReady },
+    ]);
+    const draw = async (focus: string) => {
+        const holder = window.document.createElement("div");
+        window.document.body.append(holder);
+        const root = createRoot(holder);
+        t.after(() => act(async () => root.unmount()));
+        await act(async () => {
+            root.render(createElement(QueryClientProvider, { client: cache }, createElement(PodConnections, { pod: POD, focus })));
+        });
+        return holder;
+    };
+
+    const offered = await draw("linear");
+    const offer = offered.querySelector(".podconn__offer");
+    assert.match(offer?.textContent ?? "", /Connect Linear for Kit/);
+    assert.ok([...(offer?.querySelectorAll("button") ?? [])].some((one) => one.textContent === "Connect"));
+    assert.doesNotMatch(offered.textContent ?? "", /no connector called/, "a catalog app is not a connector that is gone");
+
+    const gone = await draw("nothing-like-it");
+    assert.match(gone.textContent ?? "", /Kit has no connector called nothing-like-it any more/);
+    assert.equal(gone.querySelector(".podconn__offer"), null);
+
+    const add = [...offered.querySelectorAll("button")].find((one) => one.textContent?.includes("Add a connector"));
+    await act(async () => { add?.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
+    const form = window.document.querySelector(".podconn__form")!;
+    const values = [...form.querySelectorAll("option")].map((one) => one.value);
+    assert.deepEqual(values, ["", "install:ac-gmail", "catalog:linear"], "the installation, then the catalog's apps it has none of");
 });
 
 test("a shared account of mine offers the sandbox switch, saying plainly who gets its token", async (t) => {

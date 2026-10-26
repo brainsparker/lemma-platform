@@ -33,6 +33,9 @@ class ResolvedConnectorExecution:
     # Plain identifiers (never session-bound) so the execute phase can flag the
     # account for re-auth on an unauthorized failure without re-resolving it.
     account_id: UUID | None = None
+    #: The account was marked ``REAUTH_REQUIRED`` when resolved and resolution
+    #: let it be tried anyway; the provider accepting the credential clears it.
+    account_reauth_pending: bool = False
     #: `accounts.external_ref` for the resolved account -- the upstream tenant
     #: it speaks for. Read in the resolve phase because it lives on the row;
     #: used in the execute phase, which holds no connection to read it with.

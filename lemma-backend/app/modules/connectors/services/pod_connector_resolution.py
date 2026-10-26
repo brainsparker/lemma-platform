@@ -40,7 +40,7 @@ from app.core.authorization.permissions import Permissions
 from app.core.authorization.workload_authority import invoking_person_context
 from app.core.config import settings
 from app.core.domain.errors import DomainError
-from app.modules.connectors.domain.account import AccountEntity, AccountStatus
+from app.modules.connectors.domain.account import AccountEntity
 from app.modules.connectors.domain.auth_config import (
     AuthConfigEntity,
     AuthConfigStatus,
@@ -78,6 +78,7 @@ from app.modules.connectors.services.pod_account_rule import (
     connect_url,
     needs_account,
 )
+from app.modules.connectors.services.reauth_recovery import reauth_blocks_use
 
 #: ``(user_id, pod_id) -> Context``: a person, as themselves, in a pod. For the
 #: account half of a standing binding, whose person is not the one asking.
@@ -342,7 +343,7 @@ class PodConnectorResolver:
                 "You can only use your own account for this installation.",
                 details={"reason": "not_your_account"},
             )
-        if account.status is AccountStatus.REAUTH_REQUIRED:
+        if reauth_blocks_use(account, auth_config):
             raise ReauthRequiredError(
                 slug=auth_config.name,
                 connector_id=auth_config.connector_id,

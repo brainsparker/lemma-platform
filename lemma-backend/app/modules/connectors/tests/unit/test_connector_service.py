@@ -638,54 +638,6 @@ async def test_create_account_rejects_oauth2_scheme():
         )
 
 
-async def test_get_account_credentials_marks_reauth_required_on_refresh_failure():
-    user_id = uuid4()
-    expired = OAuthCredentials(
-        access_token="old",
-        refresh_token="refresh",
-        expires_at=datetime.now() - timedelta(minutes=5),
-    )
-    account = AccountEntity(
-        id=uuid4(),
-        user_id=user_id,
-        organization_id=ORG_ID,
-        auth_config_id=uuid4(),
-        connector_id="slack",
-        credentials=expired,
-    )
-    account_repo = AsyncMock()
-    account_repo.get.return_value = account
-    account_repo.update.side_effect = lambda entity: entity
-    auth_provider = _auth_provider()
-    auth_provider.refresh_credentials.side_effect = RuntimeError("token revoked")
-    registry = Mock()
-    registry.get.return_value = auth_provider
-    uow = AsyncMock()
-
-    service = _service(
-        uow=uow,
-        connector_repository=AsyncMock(get=AsyncMock(return_value=_connector())),
-        auth_config_repository=_auth_config_repo(
-            AuthConfigEntity(
-                id=account.auth_config_id,
-                organization_id=ORG_ID,
-                connector_id="slack",
-                kind=ConnectorKind.HTTP,
-                config_source=AuthConfigSource.SYSTEM_DEFAULT,
-                name="slack",
-            )
-        ),
-        account_repository=account_repo,
-        auth_provider_registry=registry,
-    )
-
-    with pytest.raises(OAuthWorkflowError):
-        await service.get_account_credentials(account.id, user_id)
-
-    assert account.status == AccountStatus.REAUTH_REQUIRED
-    account_repo.update.assert_awaited()
-
-
 def _refreshing_service(
     credentials: OAuthCredentials, *, refresh_error: Exception | None = None
 ):
@@ -789,6 +741,72 @@ async def test_an_unreachable_provider_is_still_a_502():
         await service.get_account_credentials(account.id, account.user_id)
 
     assert raised.value.status_code == 502
+
+
+def _status_error(status: int) -> httpx.HTTPStatusError:
+    request = httpx.Request("POST", "https://oauth2.googleapis.com/token")
+    return httpx.HTTPStatusError(
+        "refresh failed",
+        request=request,
+        response=httpx.Response(status, request=request),
+    )
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        _status_error(503),
+        _status_error(429),
+        httpx.ConnectTimeout("token endpoint timed out"),
+        httpx.ConnectError("connection refused"),
+        RuntimeError("anything the provider SDK raises"),
+    ],
+    ids=["5xx", "429", "timeout", "network", "unclassified"],
+)
+async def test_a_transient_refresh_failure_never_marks_the_account(failure):
+    """An expired token whose refresh fails for a passing reason stays usable.
+
+    It used to be marked ``REAUTH_REQUIRED`` -- a single slow token endpoint
+    disabled the account, resolution then refused it before every call, and
+    nothing ever unmarked it. This call still cannot proceed, and says so as
+    the provider's failure; the next one tries the refresh again.
+    """
+    service, account = _refreshing_service(
+        OAuthCredentials(
+            access_token="old",
+            refresh_token="refresh",
+            expires_at=datetime.now() - timedelta(minutes=5),
+        ),
+        refresh_error=failure,
+    )
+
+    with pytest.raises(OAuthWorkflowError) as raised:
+        await service.get_account_credentials(account.id, account.user_id)
+
+    assert raised.value.status_code == 502
+    assert account.status == AccountStatus.CONNECTED
+
+
+async def test_a_successful_refresh_clears_a_reauth_mark():
+    service, account = _refreshing_service(
+        OAuthCredentials(
+            access_token="old",
+            refresh_token="refresh",
+            expires_at=datetime.now() + timedelta(hours=1),
+        )
+    )
+    account.status = AccountStatus.REAUTH_REQUIRED
+    provider = service.auth_provider_registry.get()
+    provider.refresh_credentials.return_value = OAuthCredentials(
+        access_token="new", refresh_token="refresh"
+    )
+
+    credentials = await service.get_account_credentials(
+        account.id, account.user_id, force_refresh=True
+    )
+
+    assert credentials.access_token == "new"
+    assert account.status == AccountStatus.CONNECTED
 
 
 async def test_handle_oauth_callback_resets_status_to_connected():

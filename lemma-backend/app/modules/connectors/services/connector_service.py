@@ -970,22 +970,16 @@ class ConnectorService:
                         user_id=account.user_id,
                     )
                 except Exception as exc:
-                    # An expired token we cannot refresh, or a withdrawn grant:
-                    # the account is unusable until the user reconnects.
-                    if is_expired or isinstance(exc, ConnectorReauthRequiredError):
+                    # Only the issuer withdrawing the grant marks the account.
+                    # A timeout, 5xx or 429 says nothing about the grant, and
+                    # marking on it disabled accounts that never recovered: an
+                    # expired token fails this call, an unexpired one carries
+                    # on, and the next use tries again either way.
+                    if isinstance(exc, ConnectorReauthRequiredError):
                         await self._persist_account_status(
                             account, AccountStatus.REAUTH_REQUIRED
                         )
                         raise_refresh_failure(account, exc)
-                    if isinstance(exc, DomainError):
-                        raise
-                    # The stored token has not expired yet, so the account
-                    # keeps working -- for now. But a provider that rejects a
-                    # refresh has usually revoked the grant, which is exactly
-                    # the case an expiry check cannot see, and at debug this
-                    # left no trace at all in production: the first signal was
-                    # the account flipping to REAUTH_REQUIRED hours later, with
-                    # nothing saying when it actually broke.
                     logger.warning(
                         "connectors.connector_service.credential_refresh_rejected.degraded",
                         account_id=str(account_id),
@@ -993,6 +987,8 @@ class ConnectorService:
                         error_type=type(exc).__name__,
                         exc_info=True,
                     )
+                    if is_expired or isinstance(exc, DomainError):
+                        raise_refresh_failure(account, exc)
                 else:
                     account.credentials = new_credentials
                     # A successful refresh restores a previously-degraded account.

@@ -27,6 +27,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import UUID, uuid4
 
+from opentelemetry import trace
+
 from app.core.bounded import BoundedDict
 from app.core.log.log import get_logger
 from app.core.request_context import create_inherited_task
@@ -58,6 +60,7 @@ from sandbox_runtime.protocol import (
 )
 
 logger = get_logger(__name__)
+_tracer = trace.get_tracer(__name__)
 
 #: Where the overlay lives. Outside `/workspace` on purpose: this is platform
 #: code, not the user's, and putting it in their project root would put it in
@@ -323,8 +326,17 @@ class WorkspaceRuntimeBundleMixin:
         try:
             if await self._installed_version(client, user_id) == bundle.version:
                 return True
-            await self._deliver(client, user_id, bundle)
-            await self._run_installer(client, user_id, bundle)
+            # Separate spans: on a new sandbox these are most of the first
+            # tool call's wait, and the upload and the installer's unzip and
+            # smoke test are fixed in different places.
+            with _tracer.start_as_current_span(
+                "lemma.workspace.runtime_bundle.deliver"
+            ):
+                await self._deliver(client, user_id, bundle)
+            with _tracer.start_as_current_span(
+                "lemma.workspace.runtime_bundle.install"
+            ):
+                await self._run_installer(client, user_id, bundle)
         except _SANDBOX_FAILURES as exc:
             # Deliberately swallowed, and deliberately logged in full. The
             # sandbox keeps the image's copy of the first-party code, so the
@@ -378,12 +390,27 @@ class WorkspaceRuntimeBundleMixin:
         putting 1.6 MB of base64 there were a reasonable thing to do.
         """
         deadline_at = _deadline(_INSTALL_BUDGET_SECONDS)
-        await client.write_file(
-            user_id,
-            INSTALLER_PATH,
-            Path(runtime_install.__file__).read_bytes(),
-            deadline_at=deadline_at,
+        # Together: they are independent files, and this is on the path of a
+        # new sandbox's first tool call, which otherwise waits out two
+        # sequential round trips to the sandbox. Both land before the installer
+        # runs either way.
+        await asyncio.gather(
+            client.write_file(
+                user_id,
+                INSTALLER_PATH,
+                Path(runtime_install.__file__).read_bytes(),
+                deadline_at=deadline_at,
+            ),
+            self._deliver_archive(client, user_id, bundle, deadline_at),
         )
+
+    async def _deliver_archive(
+        self,
+        client: _ManagerClient,
+        user_id: UUID,
+        bundle: RuntimeBundle,
+        deadline_at: datetime,
+    ) -> None:
         await client.write_file(
             user_id,
             ARCHIVE_PATH,

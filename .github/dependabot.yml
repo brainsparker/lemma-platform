@@ -107,6 +107,14 @@ updates:
       time: "04:45"
       timezone: Asia/Kolkata
     open-pull-requests-limit: 2
+    # The guest image installs a pinned kernel (UBUNTU_KERNEL_RELEASE) from its
+    # base release's archive. Dependabot moved the base from 24.04 to 26.04 on
+    # its own, apt could no longer find the kernel, and no macOS guest -- so no
+    # Desktop release -- built for weeks. A new Ubuntu release is the two-line
+    # change the Dockerfile describes; digest refreshes within one still come.
+    ignore:
+      - dependency-name: ubuntu
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
     groups:
       docker-updates:
         applies-to: version-updates

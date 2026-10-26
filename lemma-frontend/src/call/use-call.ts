@@ -5,6 +5,9 @@ import { foldTranscript, type CallLine } from "./call-transcript";
 import { canvasItemFrom, type CanvasItem } from "./canvas";
 import { callSocketUrl, openCallSocket, type CallConnection, type CallFrame, type CallStart } from "./call-socket";
 
+/** Times a dropped call is joined again before it is given up as ended. */
+const MAX_REJOINS = 2;
+
 export type CallStatus = "idle" | "connecting" | "live" | "ended" | "error";
 
 /** One call, held by the server.
@@ -23,6 +26,18 @@ export function useCall({ podId }: { podId: string }) {
     const [working, setWorking] = useState(false);
     const [canvas, setCanvas] = useState<CanvasItem[]>([]);
     const [level, setLevel] = useState(0);
+    /** The last call the server has finished with, transcript saved, and a
+     *  count that moves each time so its conversation can reload on it. The
+     *  transcript is written as the server ends the call, after this tab has
+     *  stopped listening; the id goes with it because the next call may
+     *  already have started by then. */
+    const [settled, setSettled] = useState<{ callId: string; count: number } | null>(null);
+    const callIdRef = useRef<string | null>(null);
+    const rejoinsRef = useRef(0);
+    const startRef = useRef<((callId: string, details: CallStart, rejoin?: boolean) => Promise<void>) | null>(null);
+    const settle = useCallback((callId: string | null) => {
+        if (callId) setSettled((last) => ({ callId, count: (last?.count ?? 0) + 1 }));
+    }, []);
 
     const attemptRef = useRef(0);
     const connectionRef = useRef<CallConnection | null>(null);
@@ -39,12 +54,14 @@ export function useCall({ podId }: { podId: string }) {
 
     const end = useCallback(() => {
         ++attemptRef.current;
-        connectionRef.current?.close();
+        const connection = connectionRef.current;
+        const callId = callIdRef.current;
         teardown();
+        void connection?.close().then((saved) => { if (saved) settle(callId); });
         setMuted(false); mutedRef.current = false;
         setWorking(false);
         setStatus((current) => (current === "error" ? current : "ended"));
-    }, [teardown]);
+    }, [teardown, settle]);
 
     useEffect(() => end, [end]);
 
@@ -73,10 +90,15 @@ export function useCall({ podId }: { podId: string }) {
         }
     }, []);
 
-    const start = useCallback(async (callId: string, details: CallStart) => {
+    const start = useCallback(async (callId: string, details: CallStart, rejoin = false) => {
         if (connectionRef.current) return;
+        if (!rejoin) rejoinsRef.current = 0;
+        callIdRef.current = callId;
         const attempt = ++attemptRef.current;
-        setError(null); setTranscript([]); setCanvas([]); setWorking(false);
+        // A rejoin keeps what is on screen: the server replays the canvas and
+        // it lands on the same items, so the person never sees it blank out.
+        setError(null); setWorking(false);
+        if (!rejoin) { setTranscript([]); setCanvas([]); }
         setStatus("connecting");
         try {
             const token = await lemma(podId).auth.getAccessToken().catch(() => null);
@@ -89,10 +111,21 @@ export function useCall({ podId }: { podId: string }) {
                     setLevel(0.85);
                     window.setTimeout(() => setLevel((current) => (current > 0.2 ? current * 0.5 : 0)), 180);
                 },
-                onClose: (reason) => {
+                onClose: (reason, dropped) => {
                     if (attempt !== attemptRef.current) return;
                     ++attemptRef.current;
                     teardown();
+                    /* A drop is not the end of the call: the server still holds
+                       its conversation, its agents and its canvas. Join it
+                       again, a couple of times at most, so a flaky network
+                       does not leave the person on a screen that has nothing
+                       to do with what the voice says. */
+                    if (dropped && rejoinsRef.current < MAX_REJOINS) {
+                        rejoinsRef.current += 1;
+                        void startRef.current?.(callId, details, true);
+                        return;
+                    }
+                    if (!reason) settle(callId);
                     if (reason) { setError(reason); setStatus("error"); } else setStatus("ended");
                 },
             });
@@ -108,7 +141,8 @@ export function useCall({ podId }: { podId: string }) {
             setStatus("error");
             end();
         }
-    }, [podId, onFrame, end, teardown]);
+    }, [podId, onFrame, end, teardown, settle]);
+    startRef.current = start;
 
     /* The ref first, outside React's updater: the microphone callback reads it
        on its own schedule, and an updater runs when React gets to it (twice in
@@ -131,7 +165,7 @@ export function useCall({ podId }: { podId: string }) {
     }, []);
 
     return {
-        status, error, muted, working, transcript, canvas, level,
+        status, error, muted, working, transcript, canvas, level, settled,
         start, end, toggleMute, looking, renderFailed,
         active: status === "live" || status === "connecting",
     };

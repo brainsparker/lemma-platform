@@ -637,6 +637,10 @@ test("turning sandbox use off draws the account as saved, and the server's notic
     assert.deepEqual(sent, [["pa-mine", { sandboxes: false }]]);
     assert.equal(holder.querySelector<HTMLInputElement>("input[role=switch]")?.checked, false, "the answer is drawn, not the old row");
     assert.match(holder.textContent ?? "", /loses it on its next git command/);
+    /* A save refreshes the pod's accounts and connectors. Left running, that
+       refetch outlived this test, reached for the window the next test had
+       replaced, and failed the whole file on another test's turn. */
+    await act(async () => { await cache.cancelQueries(); });
 });
 
 test("the banner asks for the required connectors I have not connected, and nothing when I have", async (t) => {

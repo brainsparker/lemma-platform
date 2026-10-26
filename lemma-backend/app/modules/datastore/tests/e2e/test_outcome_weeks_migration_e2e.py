@@ -1,4 +1,4 @@
-"""Migration 0065 adds the week rows of what a pod owns, and the sweep's index.
+"""Migration 0066 adds the week rows of what a pod owns, and the sweep's index.
 
 A pod already there when it runs is untouched: its config is not read or
 rewritten, and the index covers a pod only once its outcome has a measure. The
@@ -26,8 +26,8 @@ from app.core.test_utils import get_postgres_container, get_postgres_url
 pytestmark = [pytest.mark.e2e, pytest.mark.slow]
 
 BACKEND = Path(__file__).resolve().parents[5]
-BEFORE = "0064_grants_every_install"
-REVISION = "0065_outcome_weeks"
+BEFORE = "0065_schedule_reset_and_author"
+REVISION = "0066_outcome_weeks"
 
 MEASURED = {
     "outcome": {
@@ -52,7 +52,7 @@ def _migrate(database_url: str, direction: str, revision: str) -> None:
 
 
 def _pods(plain_url: str) -> dict[str, UUID]:
-    """Two pods written before 0065: one whose config says it owns a measured
+    """Two pods written before 0066: one whose config says it owns a measured
     outcome, and one that owns nothing."""
     org, owner = uuid4(), uuid4()
     pods = {"measured": uuid4(), "plain": uuid4()}

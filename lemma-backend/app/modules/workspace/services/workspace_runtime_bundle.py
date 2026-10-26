@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Sequence
+from dataclasses import replace
 from typing import Protocol
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -52,6 +53,7 @@ from sandbox_runtime import runtime_install
 from sandbox_runtime.paths import RUNTIME_OVERLAY_ROOT
 from sandbox_runtime.errors import SandboxError
 from sandbox_runtime.protocol import (
+    ProcessOutputChunk,
     ProcessOutputSnapshot,
     ProcessState,
     WorkloadKind,
@@ -434,8 +436,15 @@ class WorkspaceRuntimeBundleMixin:
         operation_id: UUID,
         deadline_at: datetime,
     ) -> ProcessOutputSnapshot | None:
-        """Wait on the process's own completion, never on the clock."""
+        """Wait on the process's own completion, never on the clock.
+
+        Returns the final state with *all* the output read on the way: each
+        read starts after the last, so keeping only the final one dropped
+        whatever the installer printed before it exited -- its error included,
+        and every failure was reported as "no output".
+        """
         after = 0
+        chunks: list[ProcessOutputChunk] = []
         while datetime.now(timezone.utc) < deadline_at:
             snapshot = await client.read_process_output(
                 WorkloadKind.WORKSPACE,
@@ -445,9 +454,10 @@ class WorkspaceRuntimeBundleMixin:
                 after_sequence=after,
                 wait_seconds=5,
             )
+            chunks.extend(snapshot.chunks)
             after = snapshot.next_sequence
             if snapshot.state in TERMINAL_PROCESS_STATES:
-                return snapshot
+                return replace(snapshot, chunks=tuple(chunks))
         return None
 
     async def _ensure_browser_proxy(
